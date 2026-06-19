@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- LaunchAgent (per-user, runs in the GUI session — required for Photos/TCC). NOT a LaunchDaemon. -->
+  <key>Label</key>
+  <string>com.coldstorage.photos-spike</string>
+  <key>ProgramArguments</key>
+  <array>
+    <!-- EDIT to the absolute path of your signed binary, e.g. /Users/you/.../.build/release/photos-spike -->
+    <string>/ABSOLUTE/PATH/TO/.build/release/photos-spike</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/photos-spike.out</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/photos-spike.err</string>
+</dict>
+</plist>

@@ -1,0 +1,34 @@
+version: '3'
+
+# Phase 0 spike #2 — Photos TCC + full-res original. Run on a real Mac with photos in the library.
+
+tasks:
+  build:
+    desc: "Build release, embed Info.plist into the binary, codesign (IDENTITY defaults to ad-hoc '-')"
+    cmds:
+      - swift build -c release -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker Info.plist
+      - codesign --force --sign "{{.IDENTITY | default \"-\"}}" .build/release/photos-spike
+      - 'echo "Signed with: {{.IDENTITY | default \"ad-hoc (-)\"}} — keep this identity STABLE across runs or the TCC grant resets."'
+
+  run:
+    desc: "Run from your GUI session (triggers/uses the TCC grant)"
+    cmds:
+      - .build/release/photos-spike
+
+  install-agent:
+    desc: "Install + load the LaunchAgent (proves the grant survives a launchd-spawned process)"
+    cmds:
+      - 'echo "Edit the absolute path in com.coldstorage.photos-spike.plist first."'
+      - cp com.coldstorage.photos-spike.plist ~/Library/LaunchAgents/
+      - launchctl load ~/Library/LaunchAgents/com.coldstorage.photos-spike.plist
+      - 'echo "Check /tmp/photos-spike.out — it should read an original WITHOUT a new prompt."'
+
+  uninstall-agent:
+    cmds:
+      - launchctl unload ~/Library/LaunchAgents/com.coldstorage.photos-spike.plist || true
+      - rm -f ~/Library/LaunchAgents/com.coldstorage.photos-spike.plist
+
+  reset-tcc:
+    desc: "Reset the Photos grant to re-test the prompt from scratch"
+    cmds:
+      - tccutil reset Photos com.coldstorage.photos-spike

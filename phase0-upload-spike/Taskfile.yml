@@ -1,0 +1,22 @@
+version: '3'
+
+# Phase 0 upload spike. Run from this directory.
+# Assumes AWS creds in the environment / default profile and a bucket you own.
+
+tasks:
+  testfile:
+    desc: "Create a 256 MiB test file (test.bin) — works on macOS and Linux"
+    cmds:
+      - dd if=/dev/zero of=test.bin bs=1048576 count=256
+
+  spike:
+    desc: "Run the kill/resume multipart upload (BUCKET=… [FILE=test.bin] [REGION=us-east-1] [SPIKE_DELAY_MS=400])"
+    requires:
+      vars: [BUCKET]
+    cmds:
+      - swift run upload-spike {{.BUCKET}} {{.FILE | default "test.bin"}} {{.REGION | default "us-east-1"}}
+
+  clean:
+    desc: "Remove the local journal + test file"
+    cmds:
+      - rm -f spike-journal.json spike-journal.json.tmp test.bin
