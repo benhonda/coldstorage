@@ -1,0 +1,174 @@
+version: "3"
+
+# https://taskfile.dev/usage/#output-syntax
+output: prefixed
+
+# ColdStorage command surface — ONE assembled SSOT file (no go-task `includes:`).
+# CORE cross-cutting tasks + per-domain blocks namespaced by component:
+#   daemon:*          → the Swift core / container dev loop (domain: coldstorage/)
+#   tf:coldstorage:*  → infra (domain: infra/coldstorage) — Terragrunt, ENV-scoped, shared first
+vars:
+  AWS_PROFILE: "pharmer"
+
+dotenv:
+  - .env
+
+tasks:
+  default:
+    cmds:
+      - task --list-all
+
+  # ------------------------------------------------------------------ AWS identity (core)
+  login:
+    desc: Log in to AWS SSO
+    requires:
+      vars: [AWS_PROFILE]
+    cmds:
+      - aws sso login --profile {{.AWS_PROFILE}}
+
+  check-aws-identity:
+    desc: Fail early if the AWS profile isn't logged in
+    requires:
+      vars: [AWS_PROFILE]
+    silent: true
+    cmds:
+      - |
+        if ! aws sts get-caller-identity --profile {{.AWS_PROFILE}}; then
+          echo "\nYour '{{.AWS_PROFILE}}' AWS profile is not logged in. Run 'task login'."
+          exit 1
+        fi
+
+  # ------------------------------------------------------------------ daemon (domain: coldstorage/)
+  # Native — no Docker. Swift toolchain (swiftly) + a standalone MinIO binary.
+  # `task daemon:setup` installs both if missing; the devcontainer post-create does it on rebuild.
+  daemon:setup:
+    desc: Install the Swift toolchain + MinIO/mc binaries if missing (idempotent)
+    cmds:
+      - bash .devcontainer/install-swift.sh
+      - 'command -v minio >/dev/null || { sudo curl -fsSL https://dl.min.io/server/minio/release/linux-arm64/minio -o /usr/local/bin/minio && sudo chmod +x /usr/local/bin/minio; }'
+      - 'command -v mc    >/dev/null || { sudo curl -fsSL https://dl.min.io/client/mc/release/linux-arm64/mc    -o /usr/local/bin/mc    && sudo chmod +x /usr/local/bin/mc; }'
+
+  daemon:minio:
+    desc: Start a local MinIO (background) + create the coldstorage bucket
+    dir: coldstorage
+    cmds:
+      - 'pgrep -x minio >/dev/null || { mkdir -p .minio-data && MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin nohup minio server .minio-data --address :9000 --console-address :9001 > .minio.log 2>&1 & }'
+      - sleep 2
+      - mc alias set local http://localhost:9000 minioadmin minioadmin
+      - mc mb local/coldstorage 2>/dev/null || true
+  daemon:minio:stop:
+    desc: Stop the local MinIO
+    cmds: ['pkill -x minio || true']
+
+  daemon:build:
+    desc: Build the Swift core (first run fetches deps — a few minutes)
+    dir: coldstorage
+    cmds: [swift build]
+  daemon:test:
+    desc: Run the portable Core tests
+    dir: coldstorage
+    cmds: [swift test]
+
+  daemon:testdata:
+    desc: Generate sample files to archive (coldstorage/testdata)
+    dir: coldstorage
+    cmds:
+      - mkdir -p testdata
+      - dd if=/dev/zero    of=testdata/big.bin     bs=1048576 count=400
+      - dd if=/dev/urandom of=testdata/small-1.bin bs=1048576 count=10
+      - dd if=/dev/urandom of=testdata/small-2.bin bs=1048576 count=20
+
+  daemon:archive:
+    desc: "Archive coldstorage/testdata to MinIO (Ctrl-C mid-run, re-run → resumes). DIR= overrides."
+    dir: coldstorage
+    env:
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_REGION: us-east-1
+      COLDSTORE_PART_DELAY_MS: "800"   # slows parts so kill/resume is visible; set 0 for full speed
+    cmds:
+      - swift run coldstore-cli {{.DIR | default "testdata"}} coldstorage http://localhost:9000
+
+  # ------------------------------------------------------------------ infra — tf:coldstorage:* (domain: infra/coldstorage)
+  # Storage buckets (S3 Glacier Deep Archive + R2) + lifecycle rules. State in
+  # terraform-state-sensitive (pharmer / ca-central-1); ENV-scoped; shared planned first.
+  # NOTE: infra/coldstorage scaffolding is the next build chunk — surface wired per convention.
+  tf:coldstorage:_validate-env:
+    internal: true
+    requires:
+      vars: [ENV]
+    cmds:
+      - 'case "{{.ENV}}" in production|staging) ;; *) echo "ENV must be production|staging"; exit 1 ;; esac'
+
+  tf:coldstorage:plan:
+    desc: Terragrunt plan (ENV=production|staging) — plans shared first
+    requires:
+      vars: [ENV]
+    deps: [check-aws-identity]
+    dir: infra/coldstorage/live/{{.ENV}}
+    cmds:
+      - task: tf:coldstorage:_validate-env
+      - task: tf:coldstorage:plan:shared
+      - terragrunt plan {{.CLI_ARGS}}
+  tf:coldstorage:plan:shared:
+    deps: [check-aws-identity]
+    dir: infra/coldstorage/live/shared
+    cmds:
+      - terragrunt plan {{.CLI_ARGS}}
+
+  tf:coldstorage:apply:
+    desc: Terragrunt apply (ENV=…) — applies shared then env. Never run without a reviewed plan.
+    interactive: true
+    prompt: "Apply ColdStorage infra to {{.ENV}}?"
+    requires:
+      vars: [ENV]
+    deps: [check-aws-identity]
+    dir: infra/coldstorage/live/{{.ENV}}
+    cmds:
+      - task: tf:coldstorage:_validate-env
+      - task: tf:coldstorage:apply:shared
+      - terragrunt apply {{.CLI_ARGS}}
+  tf:coldstorage:apply:shared:
+    internal: true
+    interactive: true
+    dir: infra/coldstorage/live/shared
+    cmds:
+      - terragrunt apply {{.CLI_ARGS}}
+
+  tf:coldstorage:init:
+    requires:
+      vars: [ENV]
+    deps: [check-aws-identity]
+    dir: infra/coldstorage/live/{{.ENV}}
+    cmds:
+      - task: tf:coldstorage:_validate-env
+      - terragrunt init {{.CLI_ARGS}}
+
+  tf:fmt:
+    desc: terraform fmt across infra/
+    cmds:
+      - terraform fmt -recursive infra/
+
+  # ------------------------------------------------------------------ One-offs (temp) — quarantined + dated
+  # A throwaway is STILL a task (so .env/AWS load the same). Convention:
+  #   1. script → scripts/tmp/<slug>.ts   (scripts/tmp/ is gitignored — never committed)
+  #   2. add a dated `tmp-<slug>` block below with a DELETE-AFTER-RUN banner
+  #   3. once run: delete the block + script, then `task tmp-sweep` to confirm nothing lingers
+  tmp-sweep:
+    desc: List lingering one-offs (tmp-* tasks + scripts/tmp/ files) so they can be removed
+    aliases: [tmp:sweep]
+    silent: true
+    cmds:
+      - |
+        echo "── tmp-* task blocks still in Taskfile.yml ──"
+        grep -nE '^  tmp-[a-z0-9-]+:' Taskfile.yml | grep -v 'tmp-sweep:' || echo "  (none — clean)"
+        echo "── files in scripts/tmp/ ──"
+        ls -1 scripts/tmp/ 2>/dev/null | grep -v '^\.gitkeep$' || echo "  (none — clean)"
+
+  # ---- one-off task blocks go below; DELETE each (block + script) once it has run ----
+  # tmp-backfill-foo:        # added 2026-06-19 — DELETE AFTER RUN
+  #   desc: '[ONE-OFF 2026-06-19] backfill foo, then remove this task + its script'
+  #   aliases: [tmp:backfill-foo]
+  #   deps: [check-aws-identity]      # only if it touches AWS
+  #   cmds:
+  #     - bun run scripts/tmp/backfill-foo.ts {{.CLI_ARGS}}

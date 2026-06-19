@@ -1,0 +1,95 @@
+# Dependencies (bun install)
+node_modules/
+jspm_packages/
+web_modules/
+.npm
+
+# Build output
+dist/
+dist-*/
+out/
+build/Release/
+*.tgz
+
+# TypeScript / tool caches
+*.tsbuildinfo
+.cache
+.eslintcache
+.stylelintcache
+.parcel-cache
+
+# Test output / coverage
+coverage/
+*.lcov
+.nyc_output
+test-results/
+playwright-report/
+
+# Logs
+logs/
+*.log
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# dotenv
+.env
+.env.*
+!.env.example
+
+# Astro
+.astro/
+# analytics-docs: partials generated from the lib types (regenerated on build)
+apps/analytics-docs/src/generated/
+
+# Vercel
+.vercel/
+
+# Cloudflare / Wrangler
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.wrangler/
+
+# Terraform / Terragrunt
+**/.terraform/*
+**/.terragrunt-cache/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+.terraform.tfstate.lock.info
+
+# Editors / OS
+.idea/
+.vscode/
+.vscode-test/
+.DS_Store
+
+# Claude
+.claude/settings.local.json
+.vercel
+
+# purposefully ignoring tf
+infra/
+
+# Business/strategy docs — PRIVATE, never pushed to the public repo
+# (SPEC economics/margins, brand voice, marketing copy). Kept local; back up separately.
+strategy/
+
+# Swift / SwiftPM — global across all packages (coldstorage + phase0 spikes)
+# Package.resolved is intentionally committed for reproducible app builds.
+.build/
+.swiftpm/
+Packages/
+
+# Xcode (in case packages are opened in the IDE)
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+
+# Project-local runtime artifacts (sqlite, minio data, key material) are owned
+# by each package's own .gitignore — e.g. coldstorage/.gitignore
+
+# one-off scripts (taskfile convention) — never committed
+scripts/tmp/*
+!scripts/tmp/.gitkeep

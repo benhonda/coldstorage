@@ -1,0 +1,39 @@
+#!/bin/bash
+set -e
+
+# install psql (postgresql-client) (UNTESTED)
+sudo apt-get update && sudo apt-get install -y postgresql-client xdg-utils
+
+echo "Installing Bun"
+curl -fsSL https://bun.sh/install | bash
+
+# echo "Installing Claude CLI"
+# ~/.bun/bin/bun add -g @anthropic-ai/claude-code
+
+# Try to trust the package, but don't fail if it's already trusted or has no scripts
+# echo "Trusting Claude CLI package (if needed)..."
+# ~/.bun/bin/bun pm -g trust @anthropic-ai/claude-code 2>/dev/null || true
+
+# Install Claude CLI
+curl -fsSL https://claude.ai/install.sh | bash
+
+# Swift toolchain (for the ColdStorage daemon) — idempotent
+bash "$(dirname "$0")/install-swift.sh"
+
+# MinIO + mc binaries (local S3 for daemon tests — no Docker)
+ARCH=$(uname -m); case "$ARCH" in aarch64) MA=arm64 ;; x86_64) MA=amd64 ;; *) MA=arm64 ;; esac
+sudo curl -fsSL "https://dl.min.io/server/minio/release/linux-${MA}/minio" -o /usr/local/bin/minio
+sudo curl -fsSL "https://dl.min.io/client/mc/release/linux-${MA}/mc" -o /usr/local/bin/mc
+sudo chmod +x /usr/local/bin/minio /usr/local/bin/mc
+
+# echo "Running init-firewall.sh..."
+# sudo /usr/local/bin/init-firewall.sh
+
+# Playwright: OS-level apt deps (needs root) + browser binaries (must run as
+# the invoking user so they land in ~/.cache/ms-playwright, where tests look —
+# do NOT sudo the browser install or they go to /root and the runner can't find
+# them). bunx, not npx: this is a bun workspace, only bunx resolves playwright.
+# Browser list must match the matrix in playwright.config.ts / `task analytics:test:install`.
+# sudo "$(which bunx)" playwright install-deps
+# bunx playwright install chromium webkit
+

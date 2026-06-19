@@ -1,0 +1,91 @@
+{
+  "name": "coldstorage",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      "TZ": "${localEnv:TZ:America/New_York}"
+    }
+  },
+  // all features added manually
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "nodeGypDependencies": true,
+      "installYarnUsingApt": true,
+      "version": "lts",
+      "nvmVersion": "latest"
+    },
+    "ghcr.io/devcontainers/features/python:1": {
+      "installTools": true,
+      "version": "latest"
+    },
+    // "ghcr.io/swift-server-community/swift-devcontainer-features/sqlite:1": {},
+    // "ghcr.io/devcontainers/features/docker-in-docker:2": {
+    //   "moby": true,
+    //   "azureDnsAutoDetection": true,
+    //   "installDockerBuildx": true,
+    //   "installDockerComposeSwitch": true,
+    //   "version": "latest",
+    //   "dockerDashComposeVersion": "latest"
+    // },
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/aws-cli:1": {},
+    "ghcr.io/eitsupi/devcontainer-features/go-task:1": {},
+    "ghcr.io/devcontainers/features/terraform:1": {}
+  },
+  "runArgs": ["--cap-add=NET_ADMIN", "--cap-add=NET_RAW", "--privileged"],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "eamodio.gitlens",
+        // added
+        "HashiCorp.HCL",
+        "yoavbls.pretty-ts-errors",
+        "anthropic.claude-code",
+        // "continue.continue",
+        "bradlc.vscode-tailwindcss",
+        "heybourn.headwind",
+        "esbenp.prettier-vscode"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "terminal.integrated.profiles.linux": {
+          "bash": {
+            "path": "bash",
+            "icon": "terminal-bash"
+          },
+          "zsh": {
+            "path": "zsh"
+          }
+        }
+      }
+    }
+  },
+  // "remoteUser": "node",
+  "mounts": [
+    // Literal repo suffix (not ${devcontainerId}) so image prunes/rebuilds can't orphan history,
+    // while staying isolated from other repos' devcontainers
+    "source=claude-code-bashhistory-coldstorage,target=/commandhistory,type=volume",
+    "source=claude-code-config-coldstorage,target=/home/vscode/.claude,type=volume",
+    // Mount the host's .aws directory into the container for AWS CLI access
+    "source=${localEnv:HOME}/.aws,target=/home/vscode/.aws,type=bind,consistency=cached",
+    // Mount the host's ssh directory into the container for SSH access
+    "source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached",
+    // Mount the host's git identity so commit author info persists across container rebuilds
+    "source=${localEnv:HOME}/.gitconfig,target=/home/vscode/.gitconfig,type=bind,consistency=cached"
+  ],
+  "remoteEnv": {
+    "NODE_OPTIONS": "--max-old-space-size=4096",
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
+    "POWERLEVEL9K_DISABLE_GITSTATUS": "true",
+    // increase the max output tokens for claude code from 32000 to 64000
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": 64000
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
+  "workspaceFolder": "/workspace",
+  // "postCreateCommand": "sudo /usr/local/bin/init-firewall.sh"
+  "postCreateCommand": "bash .devcontainer/post-create.sh"
+}
