@@ -1,0 +1,19 @@
+# ColdStorage runtime / local-dev artifacts.
+# Swift build dirs (.build/, .swiftpm/) are handled globally in the root .gitignore.
+
+# Local DB
+coldstore.sqlite
+coldstore.sqlite-shm
+coldstore.sqlite-wal
+
+# Local staging + test fixtures
+.staging/
+testdata/
+
+# Local MinIO (S3 emulator) state
+.minio-data/
+.minio.log
+
+# Key material — NEVER commit (public repo)
+dev-kek.bin
+*.bin

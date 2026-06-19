@@ -1,0 +1,196 @@
+import Foundation
+import Csqlite3
+
+// Durable, crash-safe state — SQLite/WAL via the system library directly (no ORM dependency).
+// The resumability guarantee AND the metadata-index SPOF (§6.6). "Archived" is written only after
+// a blob verifies. Access is serialized (an internal lock; callers are single-actor anyway).
+
+private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+public struct PartRow: Sendable {
+    public var blobId: String
+    public var partNumber: Int
+    public var eTag: String
+    public var sha256: String
+    public var status: PartStatus
+    public init(blobId: String, partNumber: Int, eTag: String, sha256: String, status: PartStatus) {
+        self.blobId = blobId; self.partNumber = partNumber; self.eTag = eTag
+        self.sha256 = sha256; self.status = status
+    }
+}
+
+public final class Journal: @unchecked Sendable {
+    private let db: OpaquePointer
+    private let lock = NSLock()
+
+    public init(path: String) throws {
+        var handle: OpaquePointer?
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+        guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK, let h = handle else {
+            throw ColdStorageError.staging("cannot open journal at \(path)")
+        }
+        db = h
+        try exec("PRAGMA journal_mode=WAL;")
+        try exec("PRAGMA busy_timeout=5000;")
+        try migrate()
+    }
+
+    private func migrate() throws {
+        try exec("""
+            CREATE TABLE IF NOT EXISTS files(
+              id TEXT PRIMARY KEY, relativePath TEXT NOT NULL, size INTEGER NOT NULL,
+              contentHash TEXT NOT NULL, status TEXT NOT NULL, blobId TEXT,
+              "offset" INTEGER, length INTEGER, firstFrame INTEGER, plaintextSha256 TEXT, error TEXT);
+            CREATE TABLE IF NOT EXISTS blobs(
+              id TEXT PRIMARY KEY, s3Key TEXT NOT NULL, uploadId TEXT,
+              noncePrefix BLOB, wrappedDEK BLOB, status TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS parts(
+              blobId TEXT NOT NULL, partNumber INTEGER NOT NULL, eTag TEXT NOT NULL,
+              sha256 TEXT NOT NULL, status TEXT NOT NULL, PRIMARY KEY(blobId, partNumber));
+            """)
+    }
+
+    // MARK: - tiny SQLite layer
+    private enum Bind { case text(String), int(Int), blob(Data), null }
+
+    private func exec(_ sql: String) throws {
+        var err: UnsafeMutablePointer<CChar>?
+        guard sqlite3_exec(db, sql, nil, nil, &err) == SQLITE_OK else {
+            let m = err.map { String(cString: $0) } ?? "unknown"; sqlite3_free(err)
+            throw ColdStorageError.staging("sqlite exec: \(m)")
+        }
+    }
+
+    @discardableResult
+    private func run(_ sql: String, _ binds: [Bind] = []) throws -> [[String: Any]] {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw ColdStorageError.staging("sqlite prepare: \(String(cString: sqlite3_errmsg(db)))")
+        }
+        defer { sqlite3_finalize(stmt) }
+        for (i, b) in binds.enumerated() {
+            let idx = Int32(i + 1)
+            switch b {
+            case .text(let s): sqlite3_bind_text(stmt, idx, s, -1, SQLITE_TRANSIENT)
+            case .int(let n):  sqlite3_bind_int64(stmt, idx, Int64(n))
+            case .blob(let d): _ = d.withUnsafeBytes { sqlite3_bind_blob(stmt, idx, $0.baseAddress, Int32(d.count), SQLITE_TRANSIENT) }
+            case .null:        sqlite3_bind_null(stmt, idx)
+            }
+        }
+        var rows: [[String: Any]] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            var row: [String: Any] = [:]
+            for col in 0..<sqlite3_column_count(stmt) {
+                let nm = String(cString: sqlite3_column_name(stmt, col))
+                switch sqlite3_column_type(stmt, col) {
+                case SQLITE_INTEGER: row[nm] = Int(sqlite3_column_int64(stmt, col))
+                case SQLITE_TEXT:    if let t = sqlite3_column_text(stmt, col) { row[nm] = String(cString: t) }
+                case SQLITE_BLOB:    if let p = sqlite3_column_blob(stmt, col) { row[nm] = Data(bytes: p, count: Int(sqlite3_column_bytes(stmt, col))) }
+                default: break  // NULL
+                }
+            }
+            rows.append(row)
+        }
+        return rows
+    }
+
+    // MARK: - operations
+    /// Upsert discovered files; skip ones already archived with the same hash (idempotent re-scan).
+    public func upsert(_ items: [IngestItem]) throws {
+        lock.lock(); defer { lock.unlock() }
+        try exec("BEGIN;")
+        for it in items {
+            let cur = try run("SELECT status, contentHash FROM files WHERE id=?1", [.text(it.id)])
+            if let r = cur.first, (r["status"] as? String) == FileStatus.archived.rawValue,
+               (r["contentHash"] as? String) == it.contentHash { continue }
+            try run("""
+                INSERT INTO files(id, relativePath, size, contentHash, status) VALUES(?1,?2,?3,?4,?5)
+                ON CONFLICT(id) DO UPDATE SET relativePath=excluded.relativePath, size=excluded.size,
+                    contentHash=excluded.contentHash, status=excluded.status
+                """, [.text(it.id), .text(it.relativePath), .int(it.size), .text(it.contentHash), .text(FileStatus.planned.rawValue)])
+        }
+        try exec("COMMIT;")
+    }
+
+    public func ensureBlob(_ plan: BlobPlan, noncePrefix: Data, wrappedDEK: Data) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("""
+            INSERT INTO blobs(id, s3Key, status, noncePrefix, wrappedDEK) VALUES(?1,?2,?3,?4,?5)
+            ON CONFLICT(id) DO NOTHING
+            """, [.text(plan.id), .text(plan.s3Key), .text(BlobStatus.open.rawValue), .blob(noncePrefix), .blob(wrappedDEK)])
+    }
+
+    public func uploadId(of blobId: String) throws -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return try run("SELECT uploadId FROM blobs WHERE id=?1", [.text(blobId)]).first?["uploadId"] as? String
+    }
+
+    /// Stored key material for an existing blob — so a resumed upload re-stages identical ciphertext.
+    public func blobCrypto(_ blobId: String) throws -> (noncePrefix: Data, wrappedDEK: Data)? {
+        lock.lock(); defer { lock.unlock() }
+        guard let r = try run("SELECT noncePrefix, wrappedDEK FROM blobs WHERE id=?1", [.text(blobId)]).first,
+              let np = r["noncePrefix"] as? Data, let wd = r["wrappedDEK"] as? Data else { return nil }
+        return (np, wd)
+    }
+
+    public func isBlobVerified(_ blobId: String) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return (try run("SELECT status FROM blobs WHERE id=?1", [.text(blobId)]).first?["status"] as? String) == BlobStatus.verified.rawValue
+    }
+
+    /// Snapshot counts for the daemon status surface.
+    public func summary() throws -> (total: Int, archived: Int, blobsVerified: Int) {
+        lock.lock(); defer { lock.unlock() }
+        func count(_ sql: String) -> Int { (try? run(sql).first?["c"] as? Int) ?? 0 }
+        return (count("SELECT count(*) c FROM files"),
+                count("SELECT count(*) c FROM files WHERE status='archived'"),
+                count("SELECT count(*) c FROM blobs WHERE status='verified'"))
+    }
+
+    public func setUploadId(_ blobId: String, _ uploadId: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("UPDATE blobs SET uploadId=?1, status=?2 WHERE id=?3",
+                [.text(uploadId), .text(BlobStatus.uploading.rawValue), .text(blobId)])
+    }
+
+    public func completedParts(_ blobId: String) throws -> [PartRow] {
+        lock.lock(); defer { lock.unlock() }
+        return try run("SELECT blobId, partNumber, eTag, sha256, status FROM parts WHERE blobId=?1 ORDER BY partNumber",
+                       [.text(blobId)]).map {
+            PartRow(blobId: $0["blobId"] as? String ?? "",
+                    partNumber: $0["partNumber"] as? Int ?? 0,
+                    eTag: $0["eTag"] as? String ?? "",
+                    sha256: $0["sha256"] as? String ?? "",
+                    status: PartStatus(rawValue: $0["status"] as? String ?? "") ?? .uploaded)
+        }
+    }
+
+    public func recordPart(_ p: PartRow) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("""
+            INSERT INTO parts(blobId, partNumber, eTag, sha256, status) VALUES(?1,?2,?3,?4,?5)
+            ON CONFLICT(blobId, partNumber) DO UPDATE SET eTag=excluded.eTag, sha256=excluded.sha256, status=excluded.status
+            """, [.text(p.blobId), .int(p.partNumber), .text(p.eTag), .text(p.sha256), .text(p.status.rawValue)])
+    }
+
+    public func markBlobVerified(_ blobId: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("UPDATE blobs SET status=?1 WHERE id=?2", [.text(BlobStatus.verified.rawValue), .text(blobId)])
+    }
+
+    public func markFileArchived(_ id: String, blobId: String, offset: Int, length: Int, firstFrame: Int, plaintextSha256: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("""
+            UPDATE files SET status=?1, blobId=?2, "offset"=?3, length=?4, firstFrame=?5, plaintextSha256=?6 WHERE id=?7
+            """, [.text(FileStatus.archived.rawValue), .text(blobId), .int(offset), .int(length), .int(firstFrame), .text(plaintextSha256), .text(id)])
+    }
+
+    /// Everything restore needs to locate + decrypt a logical file.
+    public func fileMapping(_ id: String) throws -> (blobId: String, offset: Int, length: Int, firstFrame: Int, plaintextSha256: String)? {
+        lock.lock(); defer { lock.unlock() }
+        guard let r = try run("SELECT blobId, \"offset\", length, firstFrame, plaintextSha256 FROM files WHERE id=?1", [.text(id)]).first,
+              let b = r["blobId"] as? String, let o = r["offset"] as? Int, let l = r["length"] as? Int,
+              let ff = r["firstFrame"] as? Int, let sha = r["plaintextSha256"] as? String else { return nil }
+        return (b, o, l, ff, sha)
+    }
+}
