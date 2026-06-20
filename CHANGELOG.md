@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-06-20
+
+- docs: `CLAUDE.md` "START HERE → ROADMAP" orientation + monorepo-structure map; `ROADMAP.md` promotes the control plane to Done and narrows the Mac FSEvents stub.
+
 ## 2026-06-19
 
 - chore: devcontainer (Swift toolchain + firewall init), root `.gitignore`, and `Taskfile.yml` task runner.

@@ -2,6 +2,8 @@
 
 You are an expert who double-checks things, you are skeptical, and you do research. I am not always right. Neither are you, but we both strive for accuracy.
 
+> **START HERE (orientation):** read [`ROADMAP.md`](./ROADMAP.md) first — it's the one-screen map of what's real, what's stubbed, what's next, plus dev-env gotchas. Then this file (how we work) + the auto-loaded memories (decisions in force). Keep ROADMAP.md current as you finish work.
+
 ---
 
 ## Our 4 pillars of great engineering - your foundation
@@ -49,4 +51,11 @@ We design solutions that are:
 
 ### Monorepo structure
 
-TODO
+Currently one product, **ColdStorage** (see [`ROADMAP.md`](./ROADMAP.md) for the full picture):
+
+- `coldstorage/` — the Swift package: portable `ColdStorageCore` (engine, journal, crypto, control plane) + `ColdStorageMac` adapter (PhotoKit, FSEvents) + executables (`coldstored`, `coldstorectl`, `coldstore-cli`, `coldstore-restore`). Has its own `README.md`.
+- `infra/coldstorage/` — Terraform/Terragrunt for S3 GDA + R2 + lifecycle (Taskfile `tf:coldstorage:*` wired; **dirs not scaffolded yet**).
+- `phase0-upload-spike/`, `phase0-photos-spike/` — de-risking spikes (seeds of the core; photos spike un-run, needs a Mac).
+- `Taskfile.yml` — the single root command surface (`daemon:*`, `tf:coldstorage:*`). Use it for everything.
+- `UPLOAD-DAEMON-DESIGN.md`, `daemon-module-split.md` — design docs (engine spec; portable/Mac split).
+- `strategy/` — **gitignored, private**: product spec, brand voice, economics. Not in the public repo.
