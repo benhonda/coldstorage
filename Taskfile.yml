@@ -89,6 +89,16 @@ tasks:
     cmds:
       - swift run coldstore-cli {{.DIR | default "testdata"}} coldstorage http://localhost:9000
 
+  daemon:restore:
+    desc: "Restore one archived file from MinIO: FILE=<fileId> [OUT=/tmp/restored.bin] [TIER=standard]. On real AWS the first run thaws (exit 75) — re-run to download."
+    dir: coldstorage
+    env:
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_REGION: us-east-1
+    cmds:
+      - swift run coldstore-restore {{.FILE}} {{.OUT | default "/tmp/restored.bin"}} coldstorage http://localhost:9000 --tier {{.TIER | default "standard"}}
+
   daemon:run:
     desc: "Run coldstored (loop + control socket) against MinIO. Drive it with `task daemon:ctl`."
     dir: coldstorage

@@ -21,6 +21,7 @@ let package = Package(
             name: "ColdStorageCore",
             dependencies: [
                 .product(name: "AWSS3", package: "aws-sdk-swift"),
+                .product(name: "AWSClientRuntime", package: "aws-sdk-swift"),   // AWSServiceError (thaw idempotency)
                 .product(name: "Crypto", package: "swift-crypto"),
                 "Csqlite3",
             ]

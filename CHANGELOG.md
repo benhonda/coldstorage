@@ -2,6 +2,8 @@
 
 ## 2026-06-20
 
+- feat: Glacier Deep Archive thaw-aware restore — `S3Store.thawState`/`requestThaw` + idempotent `RestoreEngine.restore`; `coldstore-restore --tier`, exit 75 = still thawing; `task daemon:restore`. Live thaw leg needs real AWS.
+
 - docs: `CLAUDE.md` "START HERE → ROADMAP" orientation + monorepo-structure map; `ROADMAP.md` promotes the control plane to Done and narrows the Mac FSEvents stub.
 
 ## 2026-06-19

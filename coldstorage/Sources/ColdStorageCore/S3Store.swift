@@ -1,5 +1,6 @@
 import Foundation
 import AWSS3
+import AWSClientRuntime   // AWSServiceError.errorCode — to treat "already thawing" as success
 import Smithy   // ByteStream; if it doesn't resolve in your SDK version, try `import ClientRuntime`
 import Crypto
 
@@ -49,11 +50,39 @@ public struct S3Store: Sendable {
     public func verify(key: String) async throws { _ = try await client.headObject(input: .init(bucket: bucket, key: key)) }
 
     /// Ranged GET of an object's byte span (a logical file's ciphertext within its blob).
-    /// NOTE: real Glacier Deep Archive needs a RestoreObject thaw first; MinIO/STANDARD serves directly.
+    /// Assumes the object is downloadable now — Deep Archive callers must `thawState`/`requestThaw` first
+    /// (RestoreEngine orchestrates this); STANDARD/MinIO/GLACIER_IR serve directly.
     public func getRange(key: String, offset: Int, length: Int) async throws -> Data {
         let out = try await client.getObject(input: .init(
             bucket: bucket, key: key, range: "bytes=\(offset)-\(offset + length - 1)"))
         guard let data = try await out.body?.readData() else { throw ColdStorageError.s3("empty body for \(key)") }
         return data
+    }
+
+    // MARK: - Glacier thaw (Deep Archive restore-before-GET)
+
+    /// Whether `key` can be ranged-GET right now, per its (server-reported) storage class + restore header.
+    /// Reads truth from S3 rather than our upload-time config, so it's correct regardless of how we stored it.
+    public func thawState(key: String) async throws -> ThawState {
+        let out = try await client.headObject(input: .init(bucket: bucket, key: key))
+        return ThawState.from(storageClassRaw: out.storageClass?.rawValue, restoreHeader: out.restore)
+    }
+
+    /// Initiate a Glacier retrieval ("thaw") — a temporary `days`-day downloadable copy at `tier` speed.
+    /// Idempotent: a concurrent duplicate yields 409 RestoreAlreadyInProgress, which we treat as success.
+    public func requestThaw(key: String, days: Int, tier: RestoreTier) async throws {
+        do {
+            _ = try await client.restoreObject(input: .init(
+                bucket: bucket, key: key,
+                restoreRequest: .init(days: days, glacierJobParameters: .init(tier: tier.s3Tier))))
+        } catch let e as AWSServiceError where e.errorCode == "RestoreAlreadyInProgress" {
+            return   // already thawing — nothing to do
+        }
+    }
+}
+
+private extension RestoreTier {
+    var s3Tier: S3ClientTypes.Tier {
+        switch self { case .expedited: .expedited; case .standard: .standard; case .bulk: .bulk }
     }
 }

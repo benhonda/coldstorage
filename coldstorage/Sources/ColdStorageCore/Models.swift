@@ -44,3 +44,38 @@ public enum BlobStatus: String, Codable, Sendable { case open, uploading, comple
 public enum PartStatus: String, Codable, Sendable { case pending, uploaded, verified }
 
 public enum ColdStorageError: Error { case s3(String), integrity(String), staging(String) }
+
+// MARK: - Restore / Glacier thaw
+
+/// Glacier retrieval speed/cost tier. Deep Archive supports only `.standard` (~12h) and `.bulk` (~48h);
+/// `.expedited` is Glacier-Flexible-only (S3 rejects it for Deep Archive) — kept for completeness.
+public enum RestoreTier: String, Sendable, CaseIterable { case expedited, standard, bulk
+    /// Human-readable retrieval wait for CLI/UX copy (calm, factual — no drama).
+    public var typicalWait: String {
+        switch self {
+        case .expedited: return "minutes (Glacier Flexible only — not Deep Archive)"
+        case .standard:  return "~12 hours"
+        case .bulk:      return "~48 hours"
+        }
+    }
+}
+
+/// Whether a blob object can be ranged-GET *right now*. Deep Archive / Glacier Flexible objects must be
+/// thawed (RestoreObject) first; everything else (STANDARD/MinIO, GLACIER_IR) serves directly.
+public enum ThawState: Sendable, Equatable { case ready, needed, inProgress
+    /// Pure map of a HeadObject's storage class + raw `x-amz-restore` header → state (unit-testable, no I/O).
+    public static func from(storageClassRaw: String?, restoreHeader: String?) -> ThawState {
+        let needsThaw = storageClassRaw == "DEEP_ARCHIVE" || storageClassRaw == "GLACIER"
+        guard needsThaw else { return .ready }                       // STANDARD (nil on MinIO), GLACIER_IR, …
+        guard let restoreHeader else { return .needed }              // archived, never requested
+        // `x-amz-restore: ongoing-request="false", expiry-date="…"` once the temporary copy is downloadable.
+        return restoreHeader.contains("ongoing-request=\"false\"") ? .ready : .inProgress
+    }
+}
+
+/// Result of an idempotent restore step. Re-run a restore until it returns `.restored`.
+public enum RestoreOutcome: Sendable, Equatable {
+    case restored                          // bytes on disk, hash-verified
+    case thawRequested(tier: RestoreTier)  // a Glacier retrieval was just kicked off
+    case thawInProgress                    // retrieval underway; not downloadable yet
+}

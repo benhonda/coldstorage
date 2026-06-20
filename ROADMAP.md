@@ -16,7 +16,7 @@ A Mac app that works like a **remote SSD for the stuff you can't lose**: drag ph
 ## Built & PROVEN ✅ (verified end-to-end against MinIO)
 The Swift package in [`coldstorage/`](./coldstorage/):
 - **Pipeline:** scan → per-file SHA-256 → AES-GCM frame encryption (per-blob DEK, deterministic counter nonces) → batch small files into locality blobs → **resumable S3 multipart** → HeadObject verify → **SQLite/WAL journal** (the SPOF).
-- **Restore:** ranged GET → decrypt → reassemble → hash-verify (`coldstore-restore`).
+- **Restore:** thaw-aware + idempotent — Deep Archive `RestoreObject` thaw (when needed) → ranged GET → decrypt → reassemble → hash-verify (`coldstore-restore`; re-run until it lands). Live thaw leg untested off real AWS (see Stub).
 - **Verified by real checks:** unit tests pass · encryption is genuine ciphertext · **resume across a hard kill** (same uploadId reused, zero orphans) · idempotent re-runs · **round-trip byte-identical** for solo *and* batched/offset files.
 - **Control plane (verified end-to-end vs MinIO):** registry-driven `coldstored` actor + portable unix-socket JSONL IPC (`ControlServer`/`ControlClient`, socket `0600` = owner-only). Commands `getStatus · listSources · addSource · removeSource · triggerNow · pause · resume · ping`; pushed events `runStarted · fileArchived{file,blob} · runFinished · sourcesChanged · paused/resumed · error`. Sources are a **journal-backed registry (SSOT)** — `COLDSTORE_SOURCES` is just a seed; add/remove survive restart (proven: relaunch w/ no env → folders persist, no re-upload). **launchd LaunchAgent** plist template + `task daemon:install`/`daemon:uninstall` (RunAtLoad+KeepAlive). Drive it with `coldstorectl` (`task daemon:run` / `daemon:ctl -- getStatus`; `coldstorectl <sock> watch` for live events).
 - **Dev loop (no Docker):** native Swift (swiftly) + MinIO binary. `task daemon:setup → daemon:minio → daemon:build → daemon:test → daemon:archive`. Live daemon: `task daemon:run` then `task daemon:ctl -- getStatus`.
@@ -24,7 +24,7 @@ The Swift package in [`coldstorage/`](./coldstorage/):
 
 ## Stub / NOT done yet ⛔
 - **FSEvents re-scan on a real Mac** — `FolderWatcher` (Mac adapter, `canImport(CoreServices)`) is written + wired to `triggerNow`, but un-compiled/un-run off-Mac (folds into the PhotoKit Mac spike). The daemon falls back to its poll interval until then.
-- **Glacier Deep Archive thaw** (`RestoreObject`) before the restore GET — round-trip proven against STANDARD/MinIO only; decrypt logic is proven, the thaw call isn't wired (TODO in `S3Store.getRange`).
+- **Glacier Deep Archive thaw — live-AWS leg only.** The thaw path is now built (`S3Store.thawState`/`requestThaw`; `RestoreEngine.restore` is idempotent — request thaw → report progress → download when ready; `coldstore-restore` re-run UX, exit 75 = still thawing). The decision logic is unit-tested (`ThawStateTests`) and the *ready* leg is round-trip-proven vs MinIO. **Unverifiable here:** the actual Deep Archive `RestoreObject` + hours-long retrieval needs real AWS — exercise on first real-bucket restore.
 - **macOS PhotoKit ingest on a real Mac** — TCC-grant-persists-under-launchd is the riskiest open unknown.
 - **Graceful S3 error handling** — errors currently crash (e.g. the InvalidStorageClass fatal we hit).
 - **Cross-blob concurrency / adaptive throughput** — sequential today.
@@ -33,11 +33,10 @@ The Swift package in [`coldstorage/`](./coldstorage/):
 - **Commercial layer (deferred by decision):** web subscription/payment/MoR, dunning, ZK, legacy/death.
 
 ## Next (priority order)
-1. **Glacier thaw path** for real-AWS restore (`RestoreObject` before the GET; decrypt already proven).
-2. **macOS PhotoKit + FSEvents spike** on a real Mac — TCC-under-launchd grant + compile/run the `FolderWatcher`.
-3. **`infra/coldstorage` Terraform.**
-4. Graceful error handling (the loop now *surfaces* errors as `error` events instead of crashing, but per-error classification/retry is still TODO) + cross-blob concurrency.
-5. R2 browse index → Electron UI (the UI is a thin client over the now-built control socket — see `ControlClient`).
+1. **macOS PhotoKit + FSEvents spike** on a real Mac — TCC-under-launchd grant + compile/run the `FolderWatcher`.
+2. **`infra/coldstorage` Terraform.**
+3. Graceful error handling (the loop now *surfaces* errors as `error` events instead of crashing, but per-error classification/retry is still TODO) + cross-blob concurrency.
+4. **Restore over IPC** — expose `RestoreEngine.restore` as a control command + event (the thaw path is built; the daemon/UI just need to drive it) → R2 browse index → Electron UI (thin client over the control socket — see `ControlClient`).
 
 ## Verify locally
 ```sh

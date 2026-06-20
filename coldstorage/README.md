@@ -7,11 +7,12 @@ to the four pillars: simple, best-practice, DRY, type-safe.
 ## Layout
 ```
 Sources/ColdStorageCore/   # portable — builds/tests on Linux + macOS
-  Models, IngestSource, LocalDirSource, Crypto, BlobPlanner, Journal, S3Store, UploadEngine
+  Models, IngestSource, LocalDirSource, Crypto, BlobPlanner, Journal, S3Store, UploadEngine, RestoreEngine
   DaemonService            # the run loop + command surface (registry-driven, wakeable, paused/running)
   EventBus, ControlProtocol, UnixSocket, ControlServer, ControlClient   # the unix-socket control plane
 Sources/ColdStorageMac/    # macOS-only adapter (PhotoKitSource, FolderWatcher), canImport-guarded
 Sources/coldstore-cli/     # portable runner — archive a dir to S3/MinIO from your container
+Sources/coldstore-restore/ # get one file back — thaw (if Deep Archive) → ranged GET → decrypt → verify
 Sources/coldstorectl/      # thin client over the daemon control socket (getStatus, addSource, watch, …)
 Sources/coldstored/        # daemon entrypoint — wires engine + EventBus + ControlServer (+ FSEvents on Mac)
 launchd/                   # com.theadpharm.coldstored.plist.template (LaunchAgent; task daemon:install)
@@ -43,6 +44,20 @@ The **journal is the SSOT for sources** — add/remove via the socket survives r
 is only a one-time seed). The socket is `0600` (owner-only). On macOS, `task daemon:install` renders the
 LaunchAgent plist (RunAtLoad + KeepAlive) and bootstraps it; `daemon:uninstall` removes it.
 
+## Get a file back (restore)
+```sh
+task daemon:restore FILE=<fileId> OUT=/tmp/got.bin     # fileId = the relative path shown at archive time
+```
+Restore is **idempotent and self-progressing** — re-run the same command until it lands:
+- **STANDARD/MinIO** (and `GLACIER_IR`): downloads, decrypts, hash-verifies, writes → exit `0`.
+- **Deep Archive**: the first run issues a Glacier **thaw** (`RestoreObject`) and exits `75` (`EX_TEMPFAIL`);
+  retrieval takes ~12 h (`--tier standard`) or ~48 h (`--tier bulk`). Re-run later → it downloads once ready.
+
+`RestoreEngine.restore` returns `.restored / .thawRequested / .thawInProgress`; the thaw decision (`ThawState`)
+reads the object's real storage class + `x-amz-restore` header from `HeadObject`, so it's correct regardless
+of how we stored it. The decision logic is unit-tested (`ThawStateTests`); the live Deep Archive thaw can only
+be exercised against real AWS (MinIO serves directly).
+
 ## How robustness works (the crown jewel)
 - **Deterministic encryption** — per-blob DEK + AES-GCM frames with counter nonces → a sealed blob is
   byte-reproducible, so re-staging on resume yields identical parts whose ETags match what's already up.
@@ -54,13 +69,16 @@ LaunchAgent plist (RunAtLoad + KeepAlive) and bootstraps it; `daemon:uninstall` 
 
 ## Status
 Builds and tests green on Linux (swiftly); the engine **and** control plane are proven end-to-end against
-MinIO (archive + resume + round-trip; IPC add/remove/trigger + restart persistence + live events). The
-only off-Mac-unverified bit is the macOS adapter (`PhotoKitSource`, `FolderWatcher`) — guarded so the
-portable build stays clean. `S3ClientConfiguration`/`*Input` deprecation warnings remain (SDK moved to
+MinIO (archive + resume + round-trip restore; IPC add/remove/trigger + restart persistence + live events).
+The restore path is now **thaw-aware** — Deep Archive thaw logic is unit-tested, the download/decrypt leg is
+round-trip-proven, but the live multi-hour `RestoreObject` retrieval needs real AWS to exercise. The other
+off-Mac-unverified bit is the macOS adapter (`PhotoKitSource`, `FolderWatcher`) — guarded so the portable
+build stays clean. `S3ClientConfiguration`/`*Input` deprecation warnings remain (SDK moved to
 `S3ClientConfig`); a non-urgent cleanup.
 
 ## Known stubs / TODO (next build chunks)
-- Glacier Deep Archive **thaw** (`RestoreObject`) before the restore GET — decrypt is proven, the thaw isn't wired.
+- Live Deep Archive **thaw** leg — `RestoreObject` + hours-long retrieval is built but only exercisable on real AWS.
+- Restore **over IPC** — `RestoreEngine.restore` is built; the daemon/UI just need a `requestRestore` command + event.
 - `PhotoKitSource`: real plaintext hashing pre-pass (currently keys on `localIdentifier`); `FolderWatcher` un-run off-Mac.
 - Error handling: the loop now emits `error` events instead of crashing, but per-error classify/backoff/retry is TODO.
 - Cross-blob concurrency + adaptive throughput (engine is correct sequential today).
