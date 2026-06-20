@@ -28,6 +28,7 @@ let package = Package(
         .target(name: "ColdStorageMac", dependencies: ["ColdStorageCore"]),
         .executableTarget(name: "coldstore-cli", dependencies: ["ColdStorageCore"]),
         .executableTarget(name: "coldstore-restore", dependencies: ["ColdStorageCore"]),
+        .executableTarget(name: "coldstorectl", dependencies: ["ColdStorageCore"]),
         .executableTarget(name: "coldstored", dependencies: ["ColdStorageCore", "ColdStorageMac"]),
         .testTarget(name: "ColdStorageCoreTests", dependencies: ["ColdStorageCore"]),
     ]

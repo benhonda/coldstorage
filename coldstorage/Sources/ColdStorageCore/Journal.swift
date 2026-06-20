@@ -47,6 +47,8 @@ public final class Journal: @unchecked Sendable {
             CREATE TABLE IF NOT EXISTS parts(
               blobId TEXT NOT NULL, partNumber INTEGER NOT NULL, eTag TEXT NOT NULL,
               sha256 TEXT NOT NULL, status TEXT NOT NULL, PRIMARY KEY(blobId, partNumber));
+            CREATE TABLE IF NOT EXISTS sources(
+              id TEXT PRIMARY KEY, kind TEXT NOT NULL, path TEXT, addedAt INTEGER NOT NULL DEFAULT 0);
             """)
     }
 
@@ -110,6 +112,30 @@ public final class Journal: @unchecked Sendable {
                 """, [.text(it.id), .text(it.relativePath), .int(it.size), .text(it.contentHash), .text(FileStatus.planned.rawValue)])
         }
         try exec("COMMIT;")
+    }
+
+    // MARK: - sources registry (SSOT for what we archive; mutated via IPC)
+    /// Register a source; idempotent on `id` (re-adding a folder just refreshes it).
+    public func addSource(_ s: SourceRow) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("""
+            INSERT INTO sources(id, kind, path) VALUES(?1,?2,?3)
+            ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, path=excluded.path
+            """, [.text(s.id), .text(s.kind.rawValue), s.path.map(Bind.text) ?? .null])
+    }
+
+    public func removeSource(_ id: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("DELETE FROM sources WHERE id=?1", [.text(id)])
+    }
+
+    public func listSources() throws -> [SourceRow] {
+        lock.lock(); defer { lock.unlock() }
+        return try run("SELECT id, kind, path FROM sources ORDER BY id").map {
+            SourceRow(id: $0["id"] as? String ?? "",
+                      kind: SourceKind(rawValue: $0["kind"] as? String ?? "") ?? .folder,
+                      path: $0["path"] as? String)
+        }
     }
 
     public func ensureBlob(_ plan: BlobPlan, noncePrefix: Data, wrappedDEK: Data) throws {

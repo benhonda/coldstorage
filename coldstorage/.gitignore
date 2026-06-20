@@ -10,6 +10,10 @@ coldstore.sqlite-wal
 .staging/
 testdata/
 
+# Daemon runtime artifacts (written by coldstored)
+status.json
+*.sock
+
 # Local MinIO (S3 emulator) state
 .minio-data/
 .minio.log

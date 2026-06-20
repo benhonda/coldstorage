@@ -17,11 +17,10 @@ if let endpoint { config.endpoint = endpoint; config.forcePathStyle = true }   /
 let client = S3Client(config: config)
 
 let engine = UploadEngine(
-    source: LocalDirSource(root: dir),
     journal: try Journal(path: "coldstore.sqlite"),
     store: S3Store(client: client, bucket: bucket, storageClass: endpoint != nil ? nil : .deepArchive),
     keys: LocalFileKEK(path: "dev-kek.bin"),
     stagingDir: URL(fileURLWithPath: ".staging"))
 
-try await engine.run()
+try await engine.run(source: LocalDirSource(root: dir))
 print("✅ archived \(dir.path) → s3://\(bucket)  (kill it mid-run and re-run — it resumes)")

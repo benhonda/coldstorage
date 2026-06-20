@@ -28,6 +28,17 @@ public struct BlobPlan: Sendable {
     public var s3Key: String { "blobs/\(id)" }
 }
 
+/// A configured ingest source (design §3 `sources` table). Folders carry a `path`; the Photos
+/// library is a single platform source with no path. The journal is the SSOT — add/remove flows
+/// through IPC into this table, so sources survive daemon restarts.
+public enum SourceKind: String, Codable, Sendable { case folder, photos }
+public struct SourceRow: Sendable {
+    public let id: String          // stable key — the absolute path for folders
+    public let kind: SourceKind
+    public let path: String?
+    public init(id: String, kind: SourceKind, path: String?) { self.id = id; self.kind = kind; self.path = path }
+}
+
 public enum FileStatus: String, Codable, Sendable { case discovered, planned, staging, uploading, verifying, archived, failed }
 public enum BlobStatus: String, Codable, Sendable { case open, uploading, completed, verified, aborted }
 public enum PartStatus: String, Codable, Sendable { case pending, uploaded, verified }

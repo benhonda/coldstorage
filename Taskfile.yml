@@ -89,6 +89,55 @@ tasks:
     cmds:
       - swift run coldstore-cli {{.DIR | default "testdata"}} coldstorage http://localhost:9000
 
+  daemon:run:
+    desc: "Run coldstored (loop + control socket) against MinIO. Drive it with `task daemon:ctl`."
+    dir: coldstorage
+    env:
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_REGION: us-east-1
+      COLDSTORE_ENDPOINT: http://localhost:9000
+      COLDSTORE_SOURCES: testdata          # one-time seed → journal registry (SSOT thereafter)
+      COLDSTORE_SOCKET: coldstored.sock
+      COLDSTORE_INTERVAL: "30"
+    cmds:
+      - swift run coldstored
+
+  daemon:ctl:
+    desc: 'Send a control command, e.g. `task daemon:ctl -- getStatus` or `-- addSource path=/abs/dir`.'
+    dir: coldstorage
+    cmds:
+      - swift run coldstorectl coldstored.sock {{.CLI_ARGS | default "getStatus"}}
+
+  daemon:install:
+    desc: "[macOS] Build release + install the coldstored LaunchAgent (RunAtLoad/KeepAlive)."
+    dir: coldstorage
+    vars:
+      DATA_DIR: '{{.HOME}}/Library/Application Support/ColdStorage'
+      PLIST: '{{.HOME}}/Library/LaunchAgents/com.theadpharm.coldstored.plist'
+    cmds:
+      - swift build -c release
+      - mkdir -p "{{.DATA_DIR}}" "{{.HOME}}/Library/LaunchAgents"
+      - |
+        sed -e "s#__BINARY__#$(pwd)/.build/release/coldstored#g" \
+            -e "s#__DATA_DIR__#{{.DATA_DIR}}#g" \
+            -e "s#__SOCKET__#{{.DATA_DIR}}/coldstored.sock#g" \
+            -e "s#__BUCKET__#${COLDSTORE_BUCKET:-coldstorage}#g" \
+            -e "s#__REGION__#${AWS_REGION:-us-east-1}#g" \
+            launchd/com.theadpharm.coldstored.plist.template > "{{.PLIST}}"
+      - launchctl bootout "gui/$(id -u)/com.theadpharm.coldstored" 2>/dev/null || true
+      - launchctl bootstrap "gui/$(id -u)" "{{.PLIST}}"
+      - 'echo "installed → {{.PLIST}}  (socket: {{.DATA_DIR}}/coldstored.sock)"'
+
+  daemon:uninstall:
+    desc: "[macOS] Stop + remove the coldstored LaunchAgent."
+    vars:
+      PLIST: '{{.HOME}}/Library/LaunchAgents/com.theadpharm.coldstored.plist'
+    cmds:
+      - launchctl bootout "gui/$(id -u)/com.theadpharm.coldstored" 2>/dev/null || true
+      - rm -f "{{.PLIST}}"
+      - 'echo "removed {{.PLIST}}"'
+
   # ------------------------------------------------------------------ infra — tf:coldstorage:* (domain: infra/coldstorage)
   # Storage buckets (S3 Glacier Deep Archive + R2) + lifecycle rules. State in
   # terraform-state-sensitive (pharmer / ca-central-1); ENV-scoped; shared planned first.

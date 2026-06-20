@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  coldstored LaunchAgent (per-user). A LaunchAgent, NOT a LaunchDaemon, because it must run in the
+  user's GUI session to reach the Photos library (TCC) and the login Keychain (design §1).
+  RunAtLoad + KeepAlive ⇒ starts at login and auto-restarts after a crash/logout — the resume
+  protocol (journal + ListParts) makes restart-after-anything safe.
+
+  Placeholders are substituted by `task daemon:install` (which writes the rendered copy to
+  ~/Library/LaunchAgents/): __BINARY__, __DATA_DIR__, __SOCKET__, __BUCKET__, __REGION__.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.theadpharm.coldstored</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__BINARY__</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>COLDSTORE_BUCKET</key>   <string>__BUCKET__</string>
+        <key>COLDSTORE_JOURNAL</key>  <string>__DATA_DIR__/coldstore.sqlite</string>
+        <key>COLDSTORE_STATUS</key>   <string>__DATA_DIR__/status.json</string>
+        <key>COLDSTORE_SOCKET</key>   <string>__SOCKET__</string>
+        <key>COLDSTORE_STAGING</key>  <string>__DATA_DIR__/staging</string>
+        <key>COLDSTORE_KEK</key>      <string>__DATA_DIR__/dev-kek.bin</string>
+        <key>COLDSTORE_INTERVAL</key> <string>300</string>
+        <key>AWS_REGION</key>        <string>__REGION__</string>
+    </dict>
+
+    <!-- Run in-session at login; restart after a crash. -->
+    <key>RunAtLoad</key>      <true/>
+    <key>KeepAlive</key>      <true/>
+
+    <!-- Working dir + logs under the per-user data dir. -->
+    <key>WorkingDirectory</key>  <string>__DATA_DIR__</string>
+    <key>StandardOutPath</key>   <string>__DATA_DIR__/coldstored.out.log</string>
+    <key>StandardErrorPath</key> <string>__DATA_DIR__/coldstored.err.log</string>
+
+    <!-- Background work: low CPU/IO priority so the Mac stays responsive. -->
+    <key>ProcessType</key>       <string>Background</string>
+    <key>LowPriorityIO</key>     <true/>
+    <key>Nice</key>             <integer>5</integer>
+</dict>
+</plist>

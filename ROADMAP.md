@@ -18,11 +18,12 @@ The Swift package in [`coldstorage/`](./coldstorage/):
 - **Pipeline:** scan → per-file SHA-256 → AES-GCM frame encryption (per-blob DEK, deterministic counter nonces) → batch small files into locality blobs → **resumable S3 multipart** → HeadObject verify → **SQLite/WAL journal** (the SPOF).
 - **Restore:** ranged GET → decrypt → reassemble → hash-verify (`coldstore-restore`).
 - **Verified by real checks:** unit tests pass · encryption is genuine ciphertext · **resume across a hard kill** (same uploadId reused, zero orphans) · idempotent re-runs · **round-trip byte-identical** for solo *and* batched/offset files.
-- **Dev loop (no Docker):** native Swift (swiftly) + MinIO binary. `task daemon:setup → daemon:minio → daemon:build → daemon:test → daemon:archive`.
+- **Control plane:** registry-driven `coldstored` actor + a portable unix-socket IPC (`ControlServer`/`ControlClient`) with a pushed event stream; journal is the SSOT for sources. Drive it with `coldstorectl`.
+- **Dev loop (no Docker):** native Swift (swiftly) + MinIO binary. `task daemon:setup → daemon:minio → daemon:build → daemon:test → daemon:archive`. Live daemon: `task daemon:run` then `task daemon:ctl -- getStatus`.
 - Spikes that de-risked it: [`phase0-upload-spike/`](./phase0-upload-spike/), [`phase0-photos-spike/`](./phase0-photos-spike/) (latter un-run, needs a real Mac).
 
 ## Stub / NOT done yet ⛔
-- **`coldstored` daemon — v0 DONE:** env-configured service that scans sources, runs the engine on a loop, and writes `status.json` (verified on Linux). **Remaining:** unix-socket IPC for live commands (add/remove source, trigger-now, progress stream) + the launchd LaunchAgent plist + FSEvents-driven re-scan. ← *next*
+- **`coldstored` daemon — control plane DONE ✅ (verified end-to-end against MinIO):** the loop+status v0 now has a **unix-socket JSONL IPC** (portable Core): commands `ping · getStatus · listSources · addSource · removeSource · triggerNow · pause · resume` + a **server-push event stream** (`runStarted · fileArchived{file,blob} · runFinished · sourcesChanged · paused/resumed · error`). **Sources are a journal-backed registry (SSOT)** — `COLDSTORE_SOURCES` is now just a one-time seed; add/remove flow through IPC and **survive restart** (proven: relaunch w/ no env → both folders persist, no re-upload). Socket is `0600` (owner-only local auth). Driven by **`coldstorectl`** (`task daemon:run` / `daemon:ctl`); live per-file `fileArchived` events proven via `coldstorectl watch`. **launchd LaunchAgent** plist template + `task daemon:install`/`daemon:uninstall` (RunAtLoad+KeepAlive, Background/LowPriorityIO). **Remaining (needs a real Mac):** the **FSEvents `FolderWatcher`** is written (Mac adapter, `canImport(CoreServices)`) + wired to `triggerNow`, but un-compiled/un-run off-Mac.
 - **Glacier Deep Archive thaw** (`RestoreObject`) before the restore GET — round-trip proven against STANDARD/MinIO only; decrypt logic is proven, the thaw call isn't wired (TODO in `S3Store.getRange`).
 - **macOS PhotoKit ingest on a real Mac** — TCC-grant-persists-under-launchd is the riskiest open unknown.
 - **Graceful S3 error handling** — errors currently crash (e.g. the InvalidStorageClass fatal we hit).
@@ -32,12 +33,11 @@ The Swift package in [`coldstorage/`](./coldstorage/):
 - **Commercial layer (deferred by decision):** web subscription/payment/MoR, dunning, ZK, legacy/death.
 
 ## Next (priority order)
-1. **`coldstored` IPC + launchd** — v0 loop+status done; add the unix-socket command channel + LaunchAgent plist + FSEvents re-scan.
-2. **Glacier thaw path** for real-AWS restore.
-3. **macOS PhotoKit spike** on a real Mac.
-4. **`infra/coldstorage` Terraform.**
-5. Graceful error handling + cross-blob concurrency.
-6. R2 browse index → Electron UI.
+1. **Glacier thaw path** for real-AWS restore (`RestoreObject` before the GET; decrypt already proven).
+2. **macOS PhotoKit + FSEvents spike** on a real Mac — TCC-under-launchd grant + compile/run the `FolderWatcher`.
+3. **`infra/coldstorage` Terraform.**
+4. Graceful error handling (the loop now *surfaces* errors as `error` events instead of crashing, but per-error classification/retry is still TODO) + cross-blob concurrency.
+5. R2 browse index → Electron UI (the UI is a thin client over the now-built control socket — see `ControlClient`).
 
 ## Verify locally
 ```sh
