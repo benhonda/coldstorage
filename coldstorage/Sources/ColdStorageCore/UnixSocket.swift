@@ -35,6 +35,15 @@ enum UnixSocket {
         return (addr, socklen_t(MemoryLayout<sockaddr_un>.size))
     }
 
+    /// Set a receive timeout (SO_RCVTIMEO) so a stalled/silent peer surfaces as a read error instead of
+    /// an unbounded block. `read()` then returns -1/EAGAIN once `seconds` elapse with no data.
+    static func setReadTimeout(_ fd: Int32, seconds: TimeInterval) {
+        var tv = timeval()
+        tv.tv_sec = .init(seconds)                                   // truncates to whole seconds
+        tv.tv_usec = .init((seconds - seconds.rounded(.down)) * 1_000_000)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+    }
+
     /// Write all bytes, looping past partial writes. Returns false if the peer is gone.
     @discardableResult
     static func writeAll(_ fd: Int32, _ data: Data) -> Bool {

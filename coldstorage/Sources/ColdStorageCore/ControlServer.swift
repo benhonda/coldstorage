@@ -5,9 +5,6 @@ import Glibc
 import Darwin
 #endif
 
-/// Box for ferrying an async result back across a blocking-thread/`Task` bridge.
-final class Box<T>: @unchecked Sendable { var value: T? }
-
 /// Local unix-domain socket control plane for `coldstored` (design §9). Newline-delimited JSON:
 /// each client line is a `ControlRequest`; we reply with a `ControlResponseLine` (same id) and also
 /// push `ControlEventLine`s as the daemon makes progress. The journal stays the source of truth —
@@ -40,7 +37,6 @@ public final class ControlServer: @unchecked Sendable {
     private let lock = NSLock()
     private var conns: [ObjectIdentifier: Conn] = [:]
     private var listenFD: Int32 = -1
-    private let encoder = JSONEncoder()
 
     public init(path: String, bus: EventBus,
                 handler: @escaping @Sendable (ControlRequest) async -> ControlResponseLine) {
@@ -104,26 +100,27 @@ public final class ControlServer: @unchecked Sendable {
 
     private func handleLine(_ line: Data, _ conn: Conn) {
         guard !line.isEmpty else { return }
-        let resp: ControlResponseLine
-        if let req = try? JSONDecoder().decode(ControlRequest.self, from: line) {
-            resp = callHandler(req)
-        } else {
-            resp = ControlResponseLine(id: 0, result: nil, error: "malformed request")
+        guard let req = try? JSONDecoder().decode(ControlRequest.self, from: line) else {
+            send(ControlResponseLine(id: 0, result: nil, error: "malformed request"), to: conn)
+            return
         }
-        if let data = try? encoder.encode(resp) { conn.send(data + Data([0x0A])) }
+        // Run the async handler on the concurrency pool — never block the read thread on it. The old
+        // `DispatchSemaphore.wait()`-gates-`Task.detached` bridge was a forward-progress hazard that
+        // hung under load. The reply is written from the Task; `Conn` serializes writes, so ordering
+        // vs. pushed events stays correct.
+        Task { [weak self] in
+            guard let self else { return }
+            self.send(await self.handler(req), to: conn)
+        }
     }
 
-    /// Bridge the blocking read thread to the async command handler (the daemon actor).
-    private func callHandler(_ req: ControlRequest) -> ControlResponseLine {
-        let sem = DispatchSemaphore(value: 0)
-        let box = Box<ControlResponseLine>()
-        Task.detached { box.value = await self.handler(req); sem.signal() }
-        sem.wait()
-        return box.value ?? ControlResponseLine(id: req.id, result: nil, error: "handler produced no result")
+    /// Encode + frame a response/line and write it (a fresh encoder — JSONEncoder isn't concurrency-safe).
+    private func send(_ resp: ControlResponseLine, to conn: Conn) {
+        if let data = try? JSONEncoder().encode(resp) { conn.send(data + Data([0x0A])) }
     }
 
     private func broadcast(_ e: DaemonEvent) {
-        guard let data = try? encoder.encode(ControlEventLine(event: e.name, data: e.data)) else { return }
+        guard let data = try? JSONEncoder().encode(ControlEventLine(event: e.name, data: e.data)) else { return }
         let payload = data + Data([0x0A])
         lock.lock(); let targets = Array(conns.values); lock.unlock()
         for c in targets { c.send(payload) }

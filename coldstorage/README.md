@@ -16,7 +16,7 @@ Sources/coldstore-restore/ # get one file back — thaw (if Deep Archive) → ra
 Sources/coldstorectl/      # thin client over the daemon control socket (getStatus, addSource, watch, …)
 Sources/coldstored/        # daemon entrypoint — wires engine + EventBus + ControlServer (+ FSEvents on Mac)
 launchd/                   # com.theadpharm.coldstored.plist.template (LaunchAgent; task daemon:install)
-Tests/                     # Core tests, run in CI on Linux
+Tests/                     # Core tests (swift-testing — NOT XCTest; XCTest deadlocks on Linux, see ROADMAP)
 ```
 
 ## Run the whole pipeline (native — no Docker, no Mac)
@@ -38,16 +38,28 @@ task daemon:run                              # coldstored: scan loop + unix-sock
 task daemon:ctl -- getStatus                 # counts, sources, paused/running
 task daemon:ctl -- addSource path=/abs/dir   # register a source (persists in the journal; triggers a run)
 task daemon:ctl -- triggerNow                # archive now instead of waiting the interval
-swift run coldstorectl coldstored.sock watch # live event stream (runStarted/fileArchived/runFinished)
+task daemon:restore-ipc FILE=<fileId>        # restore over the socket (idempotent; re-run until state=restored)
+swift run coldstorectl coldstored.sock watch # live event stream (runStarted/fileArchived/runFinished/restore*)
 ```
 The **journal is the SSOT for sources** — add/remove via the socket survives restarts (`COLDSTORE_SOURCES`
 is only a one-time seed). The socket is `0600` (owner-only). On macOS, `task daemon:install` renders the
 LaunchAgent plist (RunAtLoad + KeepAlive) and bootstraps it; `daemon:uninstall` removes it.
 
+The server runs each command's async handler **off** the connection's read thread (no semaphore bridge —
+that was a forward-progress hazard); writes per connection are serialized. Client API: `ControlClient(path:
+readTimeout:)` — pass a `readTimeout` (seconds) for request/response calls so a stalled daemon fails fast;
+omit it for a live event tail (`watch`), which blocks indefinitely by design. A UI is just a long-lived
+`ControlClient`.
+
 ## Get a file back (restore)
 ```sh
-task daemon:restore FILE=<fileId> OUT=/tmp/got.bin     # fileId = the relative path shown at archive time
+task daemon:restore FILE=<fileId> OUT=/tmp/got.bin     # standalone (coldstore-restore); fileId = the relative path shown at archive time
+task daemon:restore-ipc FILE=<fileId> OUT=/tmp/got.bin # same, but driven over a running daemon's control socket
 ```
+Two front-ends, one engine (`RestoreEngine`): the standalone `coldstore-restore` binary, and the daemon's
+`restore` control command (so the UI restores over the same socket it watches). Both are idempotent — re-run
+until the bytes land. Over IPC the response carries `state` (`restored` | `thawRequested` | `thawInProgress`)
+plus the quoted `typicalWait` while thawing, and a `restore*` event is pushed to live watchers.
 Restore is **idempotent and self-progressing** — re-run the same command until it lands:
 - **STANDARD/MinIO** (and `GLACIER_IR`): downloads, decrypts, hash-verifies, writes → exit `0`.
 - **Deep Archive**: the first run issues a Glacier **thaw** (`RestoreObject`) and exits `75` (`EX_TEMPFAIL`);

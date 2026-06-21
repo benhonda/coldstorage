@@ -119,6 +119,12 @@ tasks:
     cmds:
       - swift run coldstorectl coldstored.sock {{.CLI_ARGS | default "getStatus"}}
 
+  daemon:restore-ipc:
+    desc: "Restore a file *over the running daemon's socket*: FILE=<fileId> [OUT=/tmp/restored.bin] [TIER=standard]. Idempotent — on real AWS re-run until state=restored (thaw takes hours)."
+    dir: coldstorage
+    cmds:
+      - swift run coldstorectl coldstored.sock restore file={{.FILE}} out={{.OUT | default "/tmp/restored.bin"}} tier={{.TIER | default "standard"}}
+
   daemon:install:
     desc: "[macOS] Build release + install the coldstored LaunchAgent (RunAtLoad/KeepAlive)."
     dir: coldstorage

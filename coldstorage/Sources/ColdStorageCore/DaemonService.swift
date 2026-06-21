@@ -6,6 +6,9 @@ import Foundation
 /// this actor holds only transient run state (paused, running, the loop's wake latch).
 public actor DaemonService {
     let engine: UploadEngine
+    /// Drives get-a-file-back over the same store/keys as the upload engine. Idempotent + self-progressing:
+    /// each `restore` command does the next step (request thaw → report progress → download + verify).
+    let restoreEngine: RestoreEngine
     let journal: Journal
     let bus: EventBus
     let statusPath: String
@@ -19,9 +22,9 @@ public actor DaemonService {
     private var sleeper: CheckedContinuation<Void, Never>?
     private var triggerPending = false
 
-    public init(engine: UploadEngine, journal: Journal, bus: EventBus,
+    public init(engine: UploadEngine, restoreEngine: RestoreEngine, journal: Journal, bus: EventBus,
                 statusPath: String, platformSources: [IngestSource] = []) {
-        self.engine = engine; self.journal = journal; self.bus = bus
+        self.engine = engine; self.restoreEngine = restoreEngine; self.journal = journal; self.bus = bus
         self.statusPath = statusPath; self.platformSources = platformSources
     }
 
@@ -92,7 +95,7 @@ public actor DaemonService {
 
     /// Map a request to a wire response — the closure handed to `ControlServer`.
     public func respond(to req: ControlRequest) async -> ControlResponseLine {
-        do { return ControlResponseLine(id: req.id, result: try handle(req.method, req.params ?? [:]), error: nil) }
+        do { return ControlResponseLine(id: req.id, result: try await handle(req.method, req.params ?? [:]), error: nil) }
         catch { return ControlResponseLine(id: req.id, result: nil, error: "\(error)") }
     }
 
@@ -103,12 +106,32 @@ public actor DaemonService {
     }
     private struct SourceDTO: Encodable { let id, kind: String; let path: String? }
     private struct AckDTO: Encodable { let ok: Bool }
+    /// One idempotent restore step's outcome. `state` ∈ restored | thawRequested | thawInProgress —
+    /// re-issue `restore` until it's `restored`. `out` is set only when bytes landed; `tier`/`typicalWait`
+    /// only while thawing, so the UI can show the quoted wait.
+    private struct RestoreDTO: Encodable { let file, state: String; let out, tier, typicalWait: String? }
 
     private func sourceDTOs() throws -> [SourceDTO] {
         try journal.listSources().map { SourceDTO(id: $0.id, kind: $0.kind.rawValue, path: $0.path) }
     }
 
-    private func handle(_ method: String, _ p: [String: String]) throws -> AnyEncodable {
+    /// Map an idempotent restore step's outcome to its wire DTO, and push a matching progress event so a
+    /// live `watch`er (the future UI) sees it without polling. Re-issue `restore` until `state == "restored"`.
+    private func restoreResult(file: String, out: String, outcome: RestoreOutcome) -> RestoreDTO {
+        switch outcome {
+        case .restored:
+            bus.publish(DaemonEvent("restoreCompleted", ["file": file, "out": out]))
+            return RestoreDTO(file: file, state: "restored", out: out, tier: nil, typicalWait: nil)
+        case .thawRequested(let tier):
+            bus.publish(DaemonEvent("restoreRequested", ["file": file, "tier": tier.rawValue]))
+            return RestoreDTO(file: file, state: "thawRequested", out: nil, tier: tier.rawValue, typicalWait: tier.typicalWait)
+        case .thawInProgress:
+            bus.publish(DaemonEvent("restoreInProgress", ["file": file]))
+            return RestoreDTO(file: file, state: "thawInProgress", out: nil, tier: nil, typicalWait: nil)
+        }
+    }
+
+    private func handle(_ method: String, _ p: [String: String]) async throws -> AnyEncodable {
         switch method {
         case "ping":
             return AnyEncodable(AckDTO(ok: true))
@@ -131,6 +154,15 @@ public actor DaemonService {
             try journal.removeSource(id)
             bus.publish(DaemonEvent("sourcesChanged", ["removed": id]))
             return AnyEncodable(AckDTO(ok: true))
+        case "restore":
+            guard let file = p["file"] else { throw ColdStorageError.staging("restore requires params.file (the fileId)") }
+            guard let out = p["out"] else { throw ColdStorageError.staging("restore requires params.out (output path)") }
+            let tier = p["tier"].flatMap { RestoreTier(rawValue: $0.lowercased()) } ?? .standard
+            let days = p["days"].flatMap { Int($0) } ?? 7
+            // One step toward getting the file back. Network I/O is awaited off the actor (reentrancy keeps
+            // other commands responsive); a `.ready` download blocks only this call until bytes are verified.
+            let outcome = try await restoreEngine.restore(fileId: file, to: URL(fileURLWithPath: out), tier: tier, days: days)
+            return AnyEncodable(restoreResult(file: file, out: out, outcome: outcome))
         case "triggerNow":
             trigger()
             return AnyEncodable(AckDTO(ok: true))

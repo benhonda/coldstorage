@@ -43,14 +43,18 @@ if photoStatus == .authorized || photoStatus == .limited {
 }
 #endif
 
+// Shared store + keys: the upload engine PUTs with them, the restore engine GETs/thaws + decrypts with
+// them. storageClass only affects PUT, so sharing one store is correct (restore ignores it).
+let store = S3Store(client: client, bucket: bucket, storageClass: endpoint != nil ? nil : .deepArchive)
+let keys = LocalFileKEK(path: env["COLDSTORE_KEK"] ?? "dev-kek.bin")
+
 let engine = UploadEngine(
-    journal: journal,
-    store: S3Store(client: client, bucket: bucket, storageClass: endpoint != nil ? nil : .deepArchive),
-    keys: LocalFileKEK(path: env["COLDSTORE_KEK"] ?? "dev-kek.bin"),
+    journal: journal, store: store, keys: keys,
     stagingDir: URL(fileURLWithPath: env["COLDSTORE_STAGING"] ?? ".staging"))
+let restoreEngine = RestoreEngine(journal: journal, store: store, keys: keys)
 
 let bus = EventBus()
-let daemon = DaemonService(engine: engine, journal: journal, bus: bus,
+let daemon = DaemonService(engine: engine, restoreEngine: restoreEngine, journal: journal, bus: bus,
                            statusPath: env["COLDSTORE_STATUS"] ?? "status.json",
                            platformSources: platformSources)
 
