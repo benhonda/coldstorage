@@ -8,6 +8,7 @@
 - docs: `ELECTRON-UI-DESIGN.md` — Electron/React UI brief; UI is a thin client speaking the daemon's JSONL protocol directly over the socket (no `coldstorectl` spawn).
 - feat: graceful error handling — `Failure.swift` `FailureKind` classification (permanent vs transient, SSOT) + per-blob isolation; poison blobs surface as `blobFailed` events, permanent ones skip-listed (`getStatus.permanentlyFailedBlobs`). SDK owns transient retry.
 - feat: Electron UI layer 1 — `ui/` Node IPC bridge (typed `DaemonClient` over the control socket, `node:net`); `task ui:setup`/`ui:typecheck`/`ui:prove`. Round-trip + event stream proven vs the live daemon.
+- feat: Electron UI layer 2 — electron-vite shell (main/preload/renderer) + secure `contextBridge` IPC (`window.coldstore`) + event-stream→`AppState` fold (`useSyncExternalStore`); `task ui:dev`/`ui:build`/`ui:test`. Reducer+controller tested headless.
 
 ## 2026-06-20
 

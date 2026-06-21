@@ -43,10 +43,18 @@ other clients of it). A Node client is ~30 lines and keeps the UI a pure consume
    wire SSOT. **Proven** vs `task daemon:run`: `task ui:prove` — `getStatus` round-trips and `triggerNow`
    streams `runStarted → fileArchived → runFinished`. Dev/test on Bun; runs unchanged on Electron's Node
    (only `node:net`).
-2. **Shell + typed state layer** — Electron window, main↔renderer IPC, a typed client mirroring the
-   protocol, event-stream → app state (status, sources, run progress, failures). *No design system.*
-3. **React views** — status, sources, browse, restore. **← hand the design system over here.** Build
-   layers 1–2 functional-but-unstyled so views get skinned with the real system, not thrown-away CSS.
+2. **Shell + typed state layer — DONE ✅** — electron-vite shell (main/preload/renderer), secure
+   main↔renderer IPC (`contextIsolation` + `contextBridge` → `window.coldstore`), and the
+   event-stream → app-state fold (status, sources, run progress, failures, restores). *No design
+   system.* Main process owns the one `DaemonClient`; renderer is a pure consumer of `window.coldstore`.
+   `src/shared/ipc.ts` is the typed seam (channels + `ColdstoreApi`); `src/renderer/src/state/`
+   is `reducer` (pure fold) → `store` (`useSyncExternalStore`) → `controller` (api→store + refetch
+   policy). **Proven:** `task ui:typecheck` + `task ui:build` (all 3 processes compile) +
+   `task ui:test` (real reducer + controller, headless); **GUI window + live IPC round-trip
+   smoke-tested on macOS** (`task ui:dev` vs `task daemon:run`).
+3. **React views** — status, sources, browse, restore. **← hand the design system over here.** Views
+   exist functional-but-unstyled (`src/renderer/src/App.tsx`); skin them with the real system — no
+   thrown-away CSS.
 
 ## Dependencies & gotchas (save the next agent hours)
 - **R2 browse index is blocked on infra.** The "browse your archive" view needs R2 thumbnails + a browse
@@ -65,10 +73,13 @@ other clients of it). A Node client is ~30 lines and keeps the UI a pure consume
   is the live source — prefer it.
 
 ## Next task for the next agent
-Layer 1 is done ✅ (see build order above; `ui/`, `task ui:prove`). **Build layer 2** on top of the
-`DaemonClient`: the Electron shell + main↔renderer IPC + an event-stream→app-state layer (status, sources,
-run progress, failures). Still no design system — keep views functional-but-unstyled so layer 3 skins them
-with the real system. The `DaemonClient` is the typed seam: main process owns it, renderer talks to main
-over Electron IPC. (This is where the Electron skill earns its keep — reconcile Bun-for-tooling vs
-Electron's bundled Node.) **Pull current docs via the Context7 MCP** before wiring Electron/React/Vite —
-it's 2026, these APIs move; don't build layers 2/3 from memory.
+Layers 1 + 2 are done ✅ (see build order above). **Build layer 3 — the React views + design system.**
+The plumbing is all there and proven: `window.coldstore` (typed `ColdstoreApi`) gives you commands +
+event subscriptions; the store (`src/renderer/src/state/`) already folds the event stream into
+`AppState` (status, sources, run progress, failures, restores) and React binds via
+`useSyncExternalStore`. `src/renderer/src/App.tsx` is the **unstyled** view tree exercising every
+command/event — skin it (and split into status/sources/restore views) with the real design system; no
+plumbing rework needed. **Hold the browse view** — it's blocked on the R2 bucket (infra not scaffolded).
+The window + live IPC round-trip are already smoke-tested on macOS (`task ui:dev` vs `task daemon:run`),
+so you're building on a proven shell. **Pull current docs via the Context7 MCP** before deep
+React/Vite/Electron work — it's 2026, these APIs move.

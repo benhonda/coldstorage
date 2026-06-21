@@ -168,9 +168,9 @@ tasks:
       - 'echo "removed {{.PLIST}}"'
 
   # ------------------------------------------------------------------ ui (domain: ui/)
-  # Electron/React control panel — a THIN client over the daemon's control socket. Layer 1 is the
-  # Node IPC bridge (no Electron, no design system yet). Dev/test with Bun; it runs unchanged on
-  # Electron's bundled Node (only `node:net`). See ELECTRON-UI-DESIGN.md.
+  # Electron/React control panel — a THIN client over the daemon's control socket. Layer 1 = Node IPC
+  # bridge (`node:net`); layer 2 = electron-vite shell (main/preload/renderer) + event-stream→state.
+  # Tooling is Bun; the Electron runtime is its own bundled Node. See ELECTRON-UI-DESIGN.md.
   ui:setup:
     desc: "Install UI deps (Bun)."
     dir: ui
@@ -178,10 +178,28 @@ tasks:
       - bun install
 
   ui:typecheck:
-    desc: "Type-check the UI package (strict)."
+    desc: "Type-check the UI package (strict; node + web projects)."
     dir: ui
     cmds:
       - bun run typecheck
+
+  ui:test:
+    desc: "Run the headless state-layer tests (reducer + controller; no Electron/daemon needed)."
+    dir: ui
+    cmds:
+      - bun run test:state
+
+  ui:dev:
+    desc: "[macOS] Run the Electron app with HMR (electron-vite dev). Start `task daemon:run` first."
+    dir: ui
+    cmds:
+      - bun run dev
+
+  ui:build:
+    desc: "Build all three Electron processes (main/preload/renderer) to ui/out."
+    dir: ui
+    cmds:
+      - bun run build
 
   ui:prove:
     desc: "Prove the layer-1 IPC bridge against a running daemon. Start `task daemon:run` first."

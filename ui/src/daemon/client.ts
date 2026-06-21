@@ -20,6 +20,7 @@ import {
   type DaemonEventName,
   type DaemonEvents,
   type Method,
+  type ParamsArg,
   isEventLine,
   isResponseLine,
 } from "./protocol.ts";
@@ -52,10 +53,6 @@ type PendingResolver = {
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 };
-
-/** Params helper: a command with no fields can be called with no argument. */
-type ParamsArg<M extends Method> =
-  Commands[M]["params"] extends Record<string, never> ? [] : [params: Commands[M]["params"]];
 
 export class DaemonClient {
   private readonly socketPath: string;

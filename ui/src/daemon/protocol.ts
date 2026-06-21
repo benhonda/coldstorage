@@ -103,6 +103,13 @@ export interface Commands {
 
 export type Method = keyof Commands;
 
+/**
+ * Call-args helper: a command whose params object has no fields takes NO argument; any other takes
+ * its params object. Drives the variadic signature of both the layer-1 client and the IPC bridge.
+ */
+export type ParamsArg<M extends Method> =
+  Commands[M]["params"] extends Record<string, never> ? [] : [params: Commands[M]["params"]];
+
 // ── Events (DaemonEvent call sites) ──────────────────────────────────────────
 
 /**
