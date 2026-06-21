@@ -175,15 +175,80 @@ tasks:
       - swift build -c release
       - mkdir -p "{{.DATA_DIR}}" "{{.HOME}}/Library/LaunchAgents"
       - |
+        # Bucket/region come from the handoff file (written by `task tf:coldstorage:creds-export` in the
+        # devcontainer — the SSOT is the infra outputs). Env vars still override (e.g. a MinIO test).
+        CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
+        [ -f "$CREDS" ] && { set -a; . "$CREDS"; set +a; }
+        bucket="${COLDSTORE_BUCKET:-coldstorage}"
+        region="${AWS_REGION:-us-east-1}"
+        profile="${COLDSTORE_AWS_PROFILE:-coldstorage}"   # creds resolve via this profile's credential_process (task daemon:creds)
         sed -e "s#__BINARY__#$(pwd)/.build/release/coldstored#g" \
             -e "s#__DATA_DIR__#{{.DATA_DIR}}#g" \
             -e "s#__SOCKET__#{{.DATA_DIR}}/coldstored.sock#g" \
-            -e "s#__BUCKET__#${COLDSTORE_BUCKET:-coldstorage}#g" \
-            -e "s#__REGION__#${AWS_REGION:-us-east-1}#g" \
+            -e "s#__BUCKET__#${bucket}#g" \
+            -e "s#__REGION__#${region}#g" \
+            -e "s#__PROFILE__#${profile}#g" \
             launchd/com.theadpharm.coldstored.plist.template > "{{.PLIST}}"
+        echo "wired: bucket=${bucket} region=${region} profile=${profile}"
       - launchctl bootout "gui/$(id -u)/com.theadpharm.coldstored" 2>/dev/null || true
       - launchctl bootstrap "gui/$(id -u)" "{{.PLIST}}"
       - 'echo "installed → {{.PLIST}}  (socket: {{.DATA_DIR}}/coldstored.sock)"'
+
+  daemon:creds:
+    desc: "[macOS] Seed the daemon's IAM-user creds into the login Keychain + wire the `coldstorage` AWS profile. Needs the handoff file — run `task tf:coldstorage:creds-export` in the devcontainer first."
+    dir: coldstorage
+    vars:
+      # SCRIPT_DIR is a SPACE-FREE path on purpose: AWS splits `credential_process` on
+      # whitespace, so the helper can't live under "…/Application Support/…".
+      SCRIPT_DIR: '{{.HOME}}/.coldstorage'
+      CREDS: '{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env'
+    cmds:
+      - mkdir -p "{{.SCRIPT_DIR}}" && chmod 700 "{{.SCRIPT_DIR}}"
+      - |
+        if [ ! -f "{{.CREDS}}" ]; then echo "missing {{.CREDS}} — run 'task tf:coldstorage:creds-export' in the devcontainer first"; exit 1; fi
+        set -a; . "{{.CREDS}}"; set +a
+        # Re-runnable: if the handoff file's secret was already stripped, fall back to the Keychain copy.
+        akid="${DAEMON_AKID:-$(security find-generic-password -s coldstorage-aws-access-key-id     -w 2>/dev/null || true)}"
+        secret="${DAEMON_SECRET:-$(security find-generic-password -s coldstorage-aws-secret-access-key -w 2>/dev/null || true)}"
+        if [ -z "$akid" ] || [ -z "$secret" ]; then echo "no creds in {{.CREDS}} or Keychain — run 'task tf:coldstorage:creds-export' in the devcontainer first"; exit 1; fi
+        # 1. secret + key id → login Keychain (encrypted; -U overwrites, so this doubles as rotate). security is macOS-only.
+        security add-generic-password -a "$USER" -s coldstorage-aws-access-key-id     -w "$akid"   -U
+        security add-generic-password -a "$USER" -s coldstorage-aws-secret-access-key -w "$secret" -U
+        # 2. install the credential_process helper to the space-free path
+        install -m 0755 launchd/coldstore-aws-credential-process.sh "{{.SCRIPT_DIR}}/coldstore-aws-credential-process.sh"
+        # 3. wire the `coldstorage` profile. Prefer the aws CLI (also fixes a stale path on re-run); guarded append if absent.
+        SCRIPT="{{.SCRIPT_DIR}}/coldstore-aws-credential-process.sh"
+        if command -v aws >/dev/null 2>&1; then
+          aws configure set profile.coldstorage.credential_process "$SCRIPT"
+          aws configure set profile.coldstorage.region "$AWS_REGION"
+        else
+          cfg="$HOME/.aws/config"; mkdir -p "$HOME/.aws"; touch "$cfg"
+          grep -q '^\[profile coldstorage\]' "$cfg" || printf '\n[profile coldstorage]\ncredential_process = %s\nregion = %s\n' "$SCRIPT" "$AWS_REGION" >> "$cfg"
+        fi
+        # 4. secret is in the Keychain now — strip it from the on-disk handoff (leave bucket/region/akid for daemon:install)
+        grep -v '^DAEMON_SECRET=' "{{.CREDS}}" > "{{.CREDS}}.tmp" && mv "{{.CREDS}}.tmp" "{{.CREDS}}" && chmod 600 "{{.CREDS}}"
+        echo "✓ Keychain seeded; profile 'coldstorage' wired (region=$AWS_REGION, helper=$SCRIPT); secret stripped from disk."
+        echo "  health check: task daemon:doctor"
+
+  daemon:bootstrap:
+    desc: "[macOS] One-shot daemon setup: seed creds (Keychain + profile) → build + install the LaunchAgent. Run once, after `task tf:coldstorage:creds-export` in the devcontainer. After this, launchd keeps the daemon running (RunAtLoad/KeepAlive) — you don't re-run it to start it."
+    cmds:
+      - task: daemon:creds
+      - task: daemon:install
+
+  daemon:doctor:
+    desc: "[macOS] Health-check the installed daemon: launchd state, AWS auth via the coldstorage profile (Keychain), and getStatus over the control socket."
+    dir: coldstorage
+    vars:
+      SOCK: '{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock'
+      ERRLOG: '{{.HOME}}/Library/Application Support/ColdStorage/coldstored.err.log'
+    cmds:
+      - 'echo "── launchd ──"'
+      - launchctl print "gui/$(id -u)/com.theadpharm.coldstored" 2>/dev/null | grep -iE "state =|pid =|last exit" || echo "not loaded — run task daemon:bootstrap"
+      - 'echo "── AWS auth (coldstorage profile → credential_process → Keychain) ──"'
+      - aws sts get-caller-identity --profile coldstorage || echo "auth FAILED — re-run task daemon:bootstrap (fixes the profile), then re-check"
+      - 'echo "── daemon status (control socket) ──"'
+      - test -S "{{.SOCK}}" && ./.build/release/coldstorectl "{{.SOCK}}" getStatus || echo "no control socket at {{.SOCK}} — last errors:" && tail -n 20 "{{.ERRLOG}}" 2>/dev/null || true
 
   daemon:uninstall:
     desc: "[macOS] Stop + remove the coldstored LaunchAgent."
@@ -323,6 +388,27 @@ tasks:
     cmds:
       - task: tf:coldstorage:_validate-env
       - terragrunt init {{.CLI_ARGS}}
+
+  tf:coldstorage:creds-export:
+    desc: "[devcontainer] Export the daemon's creds from TF state → gitignored handoff file the macOS daemon:* tasks read (so the Mac needs no terragrunt). Run after apply; the file rides the bind mount to the Mac."
+    deps: [check-aws-identity]
+    dir: infra/coldstorage/live/production
+    vars:
+      DIR: '{{.ROOT_DIR}}/coldstorage/.local'
+      OUT: '{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env'
+    cmds:
+      - mkdir -p "{{.DIR}}" && chmod 700 "{{.DIR}}"
+      - |
+        # Lock perms before writing the secret: create empty, chmod 600, then `>` (preserves the mode).
+        touch "{{.OUT}}" && chmod 600 "{{.OUT}}"
+        {
+          echo "COLDSTORE_BUCKET=$(terragrunt output -raw bucket_name)"
+          echo "AWS_REGION=$(terragrunt output -raw aws_region)"
+          echo "DAEMON_AKID=$(terragrunt output -raw daemon_access_key_id)"
+          echo "DAEMON_SECRET=$(terragrunt output -raw daemon_secret_access_key)"
+        } > "{{.OUT}}"
+        echo "✓ wrote {{.OUT}} (0600, gitignored)."
+        echo "  now on the Mac:  task daemon:creds && task daemon:install"
 
   tf:fmt:
     desc: terraform fmt across infra/

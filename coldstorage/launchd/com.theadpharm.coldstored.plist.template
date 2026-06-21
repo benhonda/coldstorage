@@ -7,7 +7,10 @@
   protocol (journal + ListParts) makes restart-after-anything safe.
 
   Placeholders are substituted by `task daemon:install` (which writes the rendered copy to
-  ~/Library/LaunchAgents/): __BINARY__, __DATA_DIR__, __SOCKET__, __BUCKET__, __REGION__.
+  ~/Library/LaunchAgents/): __BINARY__, __DATA_DIR__, __SOCKET__, __BUCKET__, __REGION__, __PROFILE__.
+
+  AWS creds: NOT in this file. AWS_PROFILE points at the `coldstorage` profile in ~/.aws/config,
+  whose `credential_process` reads the IAM-user secret from the Keychain (see `task daemon:creds`).
 -->
 <plist version="1.0">
 <dict>
@@ -29,6 +32,7 @@
         <key>COLDSTORE_KEK</key>      <string>__DATA_DIR__/dev-kek.bin</string>
         <key>COLDSTORE_INTERVAL</key> <string>300</string>
         <key>AWS_REGION</key>        <string>__REGION__</string>
+        <key>AWS_PROFILE</key>       <string>__PROFILE__</string>
     </dict>
 
     <!-- Run in-session at login; restart after a crash. -->

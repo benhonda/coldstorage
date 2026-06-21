@@ -35,6 +35,9 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 .env.*
 !.env.example
 
+# daemon creds handed from the container (terragrunt) to the Mac tasks over the bind mount — never committed
+coldstorage/.local/
+
 # Astro
 .astro/
 # analytics-docs: partials generated from the lib types (regenerated on build)

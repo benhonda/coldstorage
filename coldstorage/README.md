@@ -46,8 +46,13 @@ pushed, and a *permanent* fault (config/auth — e.g. `InvalidStorageClass`/`NoS
 later passes (and counted in `getStatus.permanentlyFailedBlobs`) so the daemon doesn't re-stage a doomed
 blob each interval. Transient faults are already retried by the AWS SDK before they reach us.
 The **journal is the SSOT for sources** — add/remove via the socket survives restarts (`COLDSTORE_SOURCES`
-is only a one-time seed). The socket is `0600` (owner-only). On macOS, `task daemon:install` renders the
-LaunchAgent plist (RunAtLoad + KeepAlive) and bootstraps it; `daemon:uninstall` removes it.
+is only a one-time seed). The socket is `0600` (owner-only). On macOS the full setup is two task runs:
+`task tf:coldstorage:creds-export` (in the devcontainer — TF creds → a gitignored handoff file over the bind
+mount) then `task daemon:bootstrap` (seeds the AWS secret into the login Keychain + wires a `coldstorage`
+profile whose `credential_process` reads it, then renders the LaunchAgent plist (RunAtLoad + KeepAlive) and
+bootstraps it). `task daemon:doctor` health-checks it; `daemon:uninstall` removes it. AWS creds resolve via
+the Keychain — never a plaintext file — and the `credential_process` helper lives at a space-free
+`~/.coldstorage/` (AWS splits that command on whitespace).
 
 The server runs each command's async handler **off** the connection's read thread (no semaphore bridge —
 that was a forward-progress hazard); writes per connection are serialized. Client API: `ControlClient(path:

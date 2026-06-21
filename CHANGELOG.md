@@ -2,6 +2,7 @@
 
 ## 2026-06-21
 
+- feat: daemon AWS-cred wiring — `task tf:coldstorage:creds-export` (container) writes a gitignored `coldstorage/.local/daemon-creds.env` handoff; macOS `task daemon:bootstrap` (`daemon:creds`→`daemon:install`) seeds the secret into the login Keychain + wires a `coldstorage` profile (`credential_process` helper at space-free `~/.coldstorage/`), plist gains `AWS_PROFILE`/`__PROFILE__`; `task daemon:doctor` health-checks launchd+auth+`getStatus`.
 - docs: ROADMAP — `infra/coldstorage` Terragrunt scaffolded, `validate`-clean, and APPLIED vs real AWS (`9 add`); prod GDA S3 vault + least-priv daemon IAM user live. Remaining: wire daemon launchd env from TF outputs; R2 deferred.
 - fix: first macOS daemon run — `PhotoKitSource` Sendable-capture fix (re-resolves `PHAssetResource` off-thread by id), `LocalDirSource` drains via `nextObject()` (NSEnumerator iterator is async-unavailable on macOS), Photos auth now opt-in behind `COLDSTORE_PHOTOS=1` (bare CLI run SIGTRAPs sans Info.plist).
 - chore: cross-platform dev loop — OS-correct minio/mc download (`_minio-binaries`), `task ui:demo`/`daemon:run:bg`/`dev:stop`, container `ui/node_modules` named volume, Electron binary self-heal (`ui:_ensure-electron` + `trustedDependencies`).
