@@ -60,13 +60,26 @@ tasks:
     desc: Stop the local MinIO
     cmds: ['pkill -x minio || true']
 
+  daemon:unlock:
+    desc: "Clear a stale SwiftPM build lock (the 0%-CPU 'hung build' footgun) — only if no build/test is live."
+    dir: coldstorage
+    cmds:
+      - |
+        if pgrep -x swift-build >/dev/null 2>&1 || pgrep -x swift-test >/dev/null 2>&1; then
+          echo "swift build/test is running — leaving .build/.lock alone"
+        elif [ -f .build/.lock ]; then
+          rm -f .build/.lock && echo "removed stale .build/.lock"
+        fi
+
   daemon:build:
     desc: Build the Swift core (first run fetches deps — a few minutes)
     dir: coldstorage
+    deps: [daemon:unlock]   # clear a stale lock left by a previously-killed build
     cmds: [swift build]
   daemon:test:
-    desc: Run the portable Core tests
+    desc: Run the portable Core tests (swift-testing — no XCTest/CFRunLoop hang)
     dir: coldstorage
+    deps: [daemon:unlock]
     cmds: [swift test]
 
   daemon:testdata:

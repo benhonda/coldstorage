@@ -2,7 +2,9 @@
 set -e
 
 # install psql (postgresql-client) (UNTESTED)
-sudo apt-get update && sudo apt-get install -y postgresql-client xdg-utils
+# gdb: debug wedged Swift processes (`gdb -p <pid> -batch -ex 'thread apply all bt'`). The toolchain's
+# lldb is unusable here — it needs libpython3.12, which isn't in the repos (system is 3.14).
+sudo apt-get update && sudo apt-get install -y postgresql-client xdg-utils gdb
 
 echo "Installing Bun"
 curl -fsSL https://bun.sh/install | bash

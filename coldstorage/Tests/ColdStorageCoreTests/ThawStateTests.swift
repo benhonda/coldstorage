@@ -1,33 +1,32 @@
-import XCTest
+import Testing
 @testable import ColdStorageCore
 
 /// The thaw decision is pure (HeadObject storage class + `x-amz-restore` header → state), so it's
 /// fully unit-testable without a live S3 — covering the Deep Archive states we can't exercise vs MinIO.
-final class ThawStateTests: XCTestCase {
-    func testDirectClassesServeImmediately() {
-        XCTAssertEqual(.ready, ThawState.from(storageClassRaw: nil, restoreHeader: nil))              // STANDARD/MinIO (no header)
-        XCTAssertEqual(.ready, ThawState.from(storageClassRaw: "STANDARD", restoreHeader: nil))
-        XCTAssertEqual(.ready, ThawState.from(storageClassRaw: "GLACIER_IR", restoreHeader: nil))     // instant retrieval
+@Suite struct ThawStateTests {
+    @Test func directClassesServeImmediately() {
+        #expect(ThawState.from(storageClassRaw: nil, restoreHeader: nil) == .ready)          // STANDARD/MinIO (no header)
+        #expect(ThawState.from(storageClassRaw: "STANDARD", restoreHeader: nil) == .ready)
+        #expect(ThawState.from(storageClassRaw: "GLACIER_IR", restoreHeader: nil) == .ready) // instant retrieval
     }
 
-    func testArchivedNotYetRequested() {
-        XCTAssertEqual(.needed, ThawState.from(storageClassRaw: "DEEP_ARCHIVE", restoreHeader: nil))
-        XCTAssertEqual(.needed, ThawState.from(storageClassRaw: "GLACIER", restoreHeader: nil))
+    @Test func archivedNotYetRequested() {
+        #expect(ThawState.from(storageClassRaw: "DEEP_ARCHIVE", restoreHeader: nil) == .needed)
+        #expect(ThawState.from(storageClassRaw: "GLACIER", restoreHeader: nil) == .needed)
     }
 
-    func testThawInProgress() {
-        XCTAssertEqual(.inProgress, ThawState.from(storageClassRaw: "DEEP_ARCHIVE",
-                                                   restoreHeader: "ongoing-request=\"true\""))
+    @Test func thawInProgress() {
+        #expect(ThawState.from(storageClassRaw: "DEEP_ARCHIVE", restoreHeader: "ongoing-request=\"true\"") == .inProgress)
     }
 
-    func testThawComplete() {
+    @Test func thawComplete() {
         let ready = "ongoing-request=\"false\", expiry-date=\"Fri, 21 Dec 2012 00:00:00 GMT\""
-        XCTAssertEqual(.ready, ThawState.from(storageClassRaw: "DEEP_ARCHIVE", restoreHeader: ready))
+        #expect(ThawState.from(storageClassRaw: "DEEP_ARCHIVE", restoreHeader: ready) == .ready)
     }
 
-    func testTierWaitsAreSane() {
-        XCTAssertEqual(.standard, RestoreTier(rawValue: "standard"))
-        XCTAssertNil(RestoreTier(rawValue: "turbo"))
-        XCTAssertTrue(RestoreTier.bulk.typicalWait.contains("48"))
+    @Test func tierWaitsAreSane() {
+        #expect(RestoreTier(rawValue: "standard") == .standard)
+        #expect(RestoreTier(rawValue: "turbo") == nil)
+        #expect(RestoreTier.bulk.typicalWait.contains("48"))
     }
 }
