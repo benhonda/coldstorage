@@ -50,8 +50,8 @@ other clients of it). A Node client is ~30 lines and keeps the UI a pure consume
    `src/shared/ipc.ts` is the typed seam (channels + `ColdstoreApi`); `src/renderer/src/state/`
    is `reducer` (pure fold) → `store` (`useSyncExternalStore`) → `controller` (api→store + refetch
    policy). **Proven:** `task ui:typecheck` + `task ui:build` (all 3 processes compile) +
-   `task ui:test` (real reducer + controller, headless); **GUI window + live IPC round-trip
-   smoke-tested on macOS** (`task ui:dev` vs `task daemon:run`).
+   `task ui:test` (real reducer + controller, headless); and **verified on macOS** — the GUI runs and
+   shows `connection: connected` with live status against the daemon (`task ui:dev` vs `task daemon:run`).
 3. **React views** — status, sources, browse, restore. **← hand the design system over here.** Views
    exist functional-but-unstyled (`src/renderer/src/App.tsx`); skin them with the real system — no
    thrown-away CSS.
@@ -80,6 +80,5 @@ event subscriptions; the store (`src/renderer/src/state/`) already folds the eve
 `useSyncExternalStore`. `src/renderer/src/App.tsx` is the **unstyled** view tree exercising every
 command/event — skin it (and split into status/sources/restore views) with the real design system; no
 plumbing rework needed. **Hold the browse view** — it's blocked on the R2 bucket (infra not scaffolded).
-The window + live IPC round-trip are already smoke-tested on macOS (`task ui:dev` vs `task daemon:run`),
-so you're building on a proven shell. **Pull current docs via the Context7 MCP** before deep
-React/Vite/Electron work — it's 2026, these APIs move.
+The GUI is **verified on macOS** — it runs and connects to the daemon (`task ui:dev` vs `task daemon:run`),
+so you're building on a proven shell. **Pull current docs via the Context7 MCP** before deep React/Vite/Electron work.

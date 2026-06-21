@@ -88,15 +88,17 @@ be exercised against real AWS (MinIO serves directly).
 Builds and tests green on Linux (swiftly); the engine **and** control plane are proven end-to-end against
 MinIO (archive + resume + round-trip restore; IPC add/remove/trigger + restart persistence + live events).
 The restore path is now **thaw-aware** — Deep Archive thaw logic is unit-tested, the download/decrypt leg is
-round-trip-proven, but the live multi-hour `RestoreObject` retrieval needs real AWS to exercise. The other
-off-Mac-unverified bit is the macOS adapter (`PhotoKitSource`, `FolderWatcher`) — guarded so the portable
-build stays clean. `S3ClientConfiguration`/`*Input` deprecation warnings remain (SDK moved to
+round-trip-proven, but the live multi-hour `RestoreObject` retrieval needs real AWS to exercise. The macOS
+adapter (`PhotoKitSource`, `FolderWatcher`) now **compiles + the daemon runs on macOS** (2026-06-21, control
+socket up, Electron UI connected); their actual PhotoKit/FSEvents *behavior* is still runtime-untested.
+Photos auth is opt-in behind `COLDSTORE_PHOTOS=1` — a bare CLI run SIGTRAPs without an Info.plist usage
+description (see ROADMAP). `S3ClientConfiguration`/`*Input` deprecation warnings remain (SDK moved to
 `S3ClientConfig`); a non-urgent cleanup.
 
 ## Known stubs / TODO (next build chunks)
 - Live Deep Archive **thaw** leg — `RestoreObject` + hours-long retrieval is built but only exercisable on real AWS.
 - Restore **over IPC** — `RestoreEngine.restore` is built; the daemon/UI just need a `requestRestore` command + event.
-- `PhotoKitSource`: real plaintext hashing pre-pass (currently keys on `localIdentifier`); `FolderWatcher` un-run off-Mac.
+- `PhotoKitSource`: real plaintext hashing pre-pass (currently keys on `localIdentifier`) + launchd `.app`/Info.plist so Photos auth works (CLI run SIGTRAPs); `FolderWatcher` FSEvents behavior runtime-untested (compiles on macOS now).
 - Error handling: the loop now emits `error` events instead of crashing, but per-error classify/backoff/retry is TODO.
 - Cross-blob concurrency + adaptive throughput (engine is correct sequential today).
 - R2 thumbnail/browse index → Electron UI (a thin client over the control socket).
