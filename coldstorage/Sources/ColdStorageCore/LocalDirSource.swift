@@ -12,7 +12,11 @@ public struct LocalDirSource: IngestSource {
         let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
         guard let en = fm.enumerator(at: root, includingPropertiesForKeys: keys) else { return [] }
         var items: [IngestItem] = []
-        for case let url as URL in en {
+        // Drain via nextObject() rather than `for…in`: macOS Foundation marks NSEnumerator's
+        // Sequence iterator unavailable in async contexts (Linux's swift-corelibs doesn't). Lazy, so
+        // we don't materialize the whole tree as an array first.
+        while let obj = en.nextObject() {
+            guard let url = obj as? URL else { continue }
             let v = try url.resourceValues(forKeys: Set(keys))
             guard v.isRegularFile == true else { continue }
             let rel = url.path.replacingOccurrences(of: root.path + "/", with: "")

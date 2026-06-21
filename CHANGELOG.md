@@ -2,6 +2,7 @@
 
 ## 2026-06-21
 
+- fix: first macOS daemon run — `PhotoKitSource` Sendable-capture fix (re-resolves `PHAssetResource` off-thread by id), `LocalDirSource` drains via `nextObject()` (NSEnumerator iterator is async-unavailable on macOS), Photos auth now opt-in behind `COLDSTORE_PHOTOS=1` (bare CLI run SIGTRAPs sans Info.plist).
 - feat: restore over IPC — `coldstored` `restore file=… out=… [tier days]` command drives the idempotent `RestoreEngine` over the socket with pushed `restore*` events; `task daemon:restore-ipc`. Byte-identical vs MinIO.
 - refactor: migrated Core tests XCTest → swift-testing (`@Suite`/`@Test`/`#expect`) — kills the swift-corelibs-XCTest CFRunLoop deadlock on Linux; don't reintroduce `import XCTest`.
 - chore: dev-loop self-heal — `daemon:build`/`daemon:test` depend on new `daemon:unlock` (clears stale `.build/.lock`); `gdb` added in `post-create.sh` for wedged-process backtraces (toolchain lldb is broken here).

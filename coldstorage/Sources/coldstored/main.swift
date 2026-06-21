@@ -32,14 +32,20 @@ for root in folderRoots {
 // Platform sources: the Photos library on macOS, once authorized (TCC). Folders come from the registry.
 var platformSources: [IngestSource] = []
 #if canImport(Photos)
-let photoStatus = await withCheckedContinuation { (c: CheckedContinuation<PHAuthorizationStatus, Never>) in
-    PHPhotoLibrary.requestAuthorization(for: .readWrite) { c.resume(returning: $0) }
-}
-if photoStatus == .authorized || photoStatus == .limited {
-    platformSources.append(PhotoKitSource())
-    print("coldstored: Photos authorized — including the library")
-} else {
-    print("coldstored: Photos not authorized — folders only")
+// Opt-in (COLDSTORE_PHOTOS=1). Requesting Photos authorization needs an NSPhotoLibraryUsageDescription
+// in the app's Info.plist — a plain `swift run` binary has none, so the call hard-crashes the process
+// (SIGTRAP) the instant it touches Photos. The launchd .app bundle (which carries the plist) sets the
+// flag; dev/CLI runs stay folders-only. Wiring the bundle + plist is the PhotoKit spike (see ROADMAP).
+if env["COLDSTORE_PHOTOS"] != nil {
+    let photoStatus = await withCheckedContinuation { (c: CheckedContinuation<PHAuthorizationStatus, Never>) in
+        PHPhotoLibrary.requestAuthorization(for: .readWrite) { c.resume(returning: $0) }
+    }
+    if photoStatus == .authorized || photoStatus == .limited {
+        platformSources.append(PhotoKitSource())
+        print("coldstored: Photos authorized — including the library")
+    } else {
+        print("coldstored: Photos not authorized — folders only")
+    }
 }
 #endif
 
