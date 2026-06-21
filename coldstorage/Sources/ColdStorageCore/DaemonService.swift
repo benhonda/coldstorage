@@ -17,6 +17,10 @@ public actor DaemonService {
 
     private var paused = false
     private var running = false
+    // Blobs that failed *permanently* (config/logic — won't self-heal) this session. Skipped on the next
+    // pass so we don't re-stage+re-attempt a doomed blob every interval. In-memory by design: a restart
+    // retries once (maybe the operator fixed the config). Persisting it would need a journal schema change.
+    private var permanentlyFailedBlobs: Set<String> = []
     // Wakeable sleep: `trigger()` either resumes a sleeping loop or, if none is sleeping yet, latches
     // so the next sleep returns immediately (coalesces bursts of triggers into one extra run).
     private var sleeper: CheckedContinuation<Void, Never>?
@@ -38,10 +42,18 @@ public actor DaemonService {
             bus.publish(DaemonEvent("fileArchived", ["file": id, "blob": blob]))
         }
         defer { running = false }
-        try await engine.run(source: try currentSource(), onFileArchived: onFile)
+        let failures = try await engine.run(source: try currentSource(),
+                                            skipBlobIds: permanentlyFailedBlobs, onFileArchived: onFile)
+        for f in failures {
+            bus.publish(DaemonEvent("blobFailed", ["blob": f.blobId,
+                                                   "kind": f.kind.isPermanent ? "permanent" : "transient",
+                                                   "message": f.kind.message]))
+            if f.kind.isPermanent { permanentlyFailedBlobs.insert(f.blobId) }
+        }
         try writeStatus()
         let s = try journal.summary()
-        bus.publish(DaemonEvent("runFinished", ["filesArchived": "\(s.archived)", "filesTotal": "\(s.total)"]))
+        bus.publish(DaemonEvent("runFinished", ["filesArchived": "\(s.archived)", "filesTotal": "\(s.total)",
+                                                "blobsFailed": "\(failures.count)"]))
     }
 
     public func runForever(intervalSeconds: UInt64) async throws {
@@ -102,6 +114,7 @@ public actor DaemonService {
     private struct StatusDTO: Encodable {
         let filesTotal, filesArchived, blobsVerified: Int
         let paused, running: Bool
+        let permanentlyFailedBlobs: Int   // >0 ⇒ a blob is stuck on a config/logic fault the operator must fix
         let sources: [SourceDTO]
     }
     private struct SourceDTO: Encodable { let id, kind: String; let path: String? }
@@ -138,8 +151,8 @@ public actor DaemonService {
         case "getStatus":
             let s = try journal.summary()
             return AnyEncodable(StatusDTO(filesTotal: s.total, filesArchived: s.archived,
-                                          blobsVerified: s.blobsVerified, paused: paused,
-                                          running: running, sources: try sourceDTOs()))
+                                          blobsVerified: s.blobsVerified, paused: paused, running: running,
+                                          permanentlyFailedBlobs: permanentlyFailedBlobs.count, sources: try sourceDTOs()))
         case "listSources":
             return AnyEncodable(try sourceDTOs())
         case "addSource":
@@ -157,8 +170,12 @@ public actor DaemonService {
         case "restore":
             guard let file = p["file"] else { throw ColdStorageError.staging("restore requires params.file (the fileId)") }
             guard let out = p["out"] else { throw ColdStorageError.staging("restore requires params.out (output path)") }
-            let tier = p["tier"].flatMap { RestoreTier(rawValue: $0.lowercased()) } ?? .standard
-            let days = p["days"].flatMap { Int($0) } ?? 7
+            let tier = try RestoreTier.parse(p["tier"])
+            // Reject a bad `days` rather than silently defaulting (same reason as tier — surface the typo).
+            let days = try p["days"].map { raw -> Int in
+                guard let d = Int(raw), d > 0 else { throw ColdStorageError.staging("bad days '\(raw)' (expected a positive integer)") }
+                return d
+            } ?? 7
             // One step toward getting the file back. Network I/O is awaited off the actor (reentrancy keeps
             // other commands responsive); a `.ready` download blocks only this call until bytes are verified.
             let outcome = try await restoreEngine.restore(fileId: file, to: URL(fileURLWithPath: out), tier: tier, days: days)

@@ -4,10 +4,21 @@ import AWSClientRuntime   // AWSServiceError.errorCode — to treat "already tha
 import Smithy   // ByteStream; if it doesn't resolve in your SDK version, try `import ClientRuntime`
 import Crypto
 
+/// The object-store operations the upload engine depends on — a seam for fault-injection tests and
+/// (later) a concurrency-aware wrapper, without coupling the engine to the concrete S3 client.
+/// `S3Store` is the production conformer.
+public protocol BlobStore: Sendable {
+    func createUpload(key: String) async throws -> String
+    func existingParts(key: String, uploadId: String) async throws -> Set<Int>
+    func uploadPart(key: String, uploadId: String, number: Int, data: Data) async throws -> (etag: String, sha: String)
+    func complete(key: String, uploadId: String, parts: [PartRow]) async throws
+    func verify(key: String) async throws
+}
+
 /// Resumable multipart upload of an already-encrypted local blob file to Glacier Deep Archive.
 /// NOTE: AWS SDK for Swift `*Input` initializers are generated — field names below are correct,
 /// argument ORDER may differ by version; reorder if the compiler objects.
-public struct S3Store: Sendable {
+public struct S3Store: BlobStore {
     let client: S3Client
     let bucket: String
     let storageClass: S3ClientTypes.StorageClass?   // .deepArchive on real AWS; nil (STANDARD) for MinIO/LocalStack

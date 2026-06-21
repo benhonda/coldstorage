@@ -43,7 +43,14 @@ public enum FileStatus: String, Codable, Sendable { case discovered, planned, st
 public enum BlobStatus: String, Codable, Sendable { case open, uploading, completed, verified, aborted }
 public enum PartStatus: String, Codable, Sendable { case pending, uploaded, verified }
 
-public enum ColdStorageError: Error { case s3(String), integrity(String), staging(String) }
+public enum ColdStorageError: Error, CustomStringConvertible {
+    case s3(String), integrity(String), staging(String)
+    /// The bare message — so `"\(error)"` (CLI stderr, daemon wire `error` field) reads cleanly instead
+    /// of leaking the case name (`staging("…")`).
+    public var description: String {
+        switch self { case .s3(let m), .integrity(let m), .staging(let m): return m }
+    }
+}
 
 // MARK: - Restore / Glacier thaw
 
@@ -57,6 +64,17 @@ public enum RestoreTier: String, Sendable, CaseIterable { case expedited, standa
         case .standard:  return "~12 hours"
         case .bulk:      return "~48 hours"
         }
+    }
+
+    /// Parse a CLI/IPC tier argument (SSOT for both `coldstore-restore` and the daemon's `restore` command).
+    /// `nil` → `.standard` (the default); an unrecognized value **throws** rather than silently downgrading —
+    /// tier drives retrieval time + cost, so a typo must surface, not pass as standard.
+    public static func parse(_ raw: String?) throws -> RestoreTier {
+        guard let raw else { return .standard }
+        guard let tier = RestoreTier(rawValue: raw.lowercased()) else {
+            throw ColdStorageError.staging("bad tier '\(raw)' (expected: \(allCases.map(\.rawValue).joined(separator: " | ")))")
+        }
+        return tier
     }
 }
 

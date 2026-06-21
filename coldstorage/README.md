@@ -35,12 +35,16 @@ task daemon:test         # portable Core tests
 ## Run it as the daemon + drive it over the control socket
 ```sh
 task daemon:run                              # coldstored: scan loop + unix-socket control plane
-task daemon:ctl -- getStatus                 # counts, sources, paused/running
+task daemon:ctl -- getStatus                 # counts, sources, paused/running, permanentlyFailedBlobs
 task daemon:ctl -- addSource path=/abs/dir   # register a source (persists in the journal; triggers a run)
 task daemon:ctl -- triggerNow                # archive now instead of waiting the interval
 task daemon:restore-ipc FILE=<fileId>        # restore over the socket (idempotent; re-run until state=restored)
-swift run coldstorectl coldstored.sock watch # live event stream (runStarted/fileArchived/runFinished/restore*)
+swift run coldstorectl coldstored.sock watch # live event stream (runStarted/fileArchived/runFinished/blobFailed/restore*)
 ```
+A failing blob is **isolated**, not fatal: the run continues, a `blobFailed{blob,kind,message}` event is
+pushed, and a *permanent* fault (config/auth — e.g. `InvalidStorageClass`/`NoSuchBucket`) is skipped on
+later passes (and counted in `getStatus.permanentlyFailedBlobs`) so the daemon doesn't re-stage a doomed
+blob each interval. Transient faults are already retried by the AWS SDK before they reach us.
 The **journal is the SSOT for sources** — add/remove via the socket survives restarts (`COLDSTORE_SOURCES`
 is only a one-time seed). The socket is `0600` (owner-only). On macOS, `task daemon:install` renders the
 LaunchAgent plist (RunAtLoad + KeepAlive) and bootstraps it; `daemon:uninstall` removes it.
@@ -49,7 +53,8 @@ The server runs each command's async handler **off** the connection's read threa
 that was a forward-progress hazard); writes per connection are serialized. Client API: `ControlClient(path:
 readTimeout:)` — pass a `readTimeout` (seconds) for request/response calls so a stalled daemon fails fast;
 omit it for a live event tail (`watch`), which blocks indefinitely by design. A UI is just a long-lived
-`ControlClient`.
+`ControlClient`. **Non-Swift clients** (the Electron UI) speak the same JSONL protocol directly over the
+socket — `ControlProtocol.swift` is the wire contract; see [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md).
 
 ## Get a file back (restore)
 ```sh

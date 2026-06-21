@@ -6,12 +6,12 @@ import Crypto
 /// is a tunable later). Resumability comes from deterministic encryption + the journal + ListParts.
 public actor UploadEngine {
     let journal: Journal
-    let store: S3Store
+    let store: any BlobStore
     let keys: KeyProvider
     let stagingDir: URL
     let cipher = EnvelopeCipher()
 
-    public init(journal: Journal, store: S3Store, keys: KeyProvider, stagingDir: URL) {
+    public init(journal: Journal, store: any BlobStore, keys: KeyProvider, stagingDir: URL) {
         self.journal = journal; self.store = store
         self.keys = keys; self.stagingDir = stagingDir
         try? FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
@@ -20,11 +20,26 @@ public actor UploadEngine {
     /// Scan the given source, plan blobs, and archive each. `onFileArchived(fileId, blobId)` fires as
     /// each logical file becomes verified — the hook the daemon turns into live `fileArchived` events.
     /// The source is passed per-run (not stored) so the daemon can rebuild it from the live registry.
+    ///
+    /// **Per-blob fault isolation:** a blob that fails is classified and recorded, and the run *continues*
+    /// to the next blob — one poison blob must not block the rest of the backup. The returned failures let
+    /// the daemon surface them and skip the permanent ones next pass (`skipBlobIds`). Only *whole-run*
+    /// faults (scan / journal upsert) still throw, since there's nothing left to archive.
+    @discardableResult
     public func run(source: IngestSource,
-                    onFileArchived: (@Sendable (String, String) async -> Void)? = nil) async throws {
+                    skipBlobIds: Set<String> = [],
+                    onFileArchived: (@Sendable (String, String) async -> Void)? = nil) async throws -> [BlobFailure] {
         let items = try await source.enumerate()
         try journal.upsert(items)
-        for blob in BlobPlanner().plan(items) { try await archive(blob, onFileArchived: onFileArchived) }
+        var failures: [BlobFailure] = []
+        for blob in BlobPlanner().plan(items) where !skipBlobIds.contains(blob.id) {
+            do { try await archive(blob, onFileArchived: onFileArchived) }
+            catch {
+                failures.append(BlobFailure(blobId: blob.id, kind: FailureKind.classify(error)))
+                try? FileManager.default.removeItem(at: stagingDir.appendingPathComponent(blob.id))   // don't leak a half-staged file
+            }
+        }
+        return failures
     }
 
     private func archive(_ blob: BlobPlan, onFileArchived: (@Sendable (String, String) async -> Void)?) async throws {

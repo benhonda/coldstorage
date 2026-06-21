@@ -22,5 +22,14 @@ let engine = UploadEngine(
     keys: LocalFileKEK(path: "dev-kek.bin"),
     stagingDir: URL(fileURLWithPath: ".staging"))
 
-try await engine.run(source: LocalDirSource(root: dir))
-print("✅ archived \(dir.path) → s3://\(bucket)  (kill it mid-run and re-run — it resumes)")
+// Per-blob isolation: a failed blob is reported here, not fatal — the rest still archive.
+let failures = try await engine.run(source: LocalDirSource(root: dir))
+if failures.isEmpty {
+    print("✅ archived \(dir.path) → s3://\(bucket)  (kill it mid-run and re-run — it resumes)")
+} else {
+    for f in failures {
+        FileHandle.standardError.write(Data("⚠️  blob \(f.blobId) failed (\(f.kind.isPermanent ? "permanent" : "transient")): \(f.kind.message)\n".utf8))
+    }
+    print("archived \(dir.path) → s3://\(bucket) with \(failures.count) failed blob(s) — re-run to retry transient ones")
+    exit(1)
+}

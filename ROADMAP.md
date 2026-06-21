@@ -1,7 +1,7 @@
 # ColdStorage — Roadmap & Orientation
 
 > For us and future agents. One-screen map of *what this is, what's real, what's next.*
-> Architecture: [daemon-module-split.md](./daemon-module-split.md) · Engine design: [UPLOAD-DAEMON-DESIGN.md](./UPLOAD-DAEMON-DESIGN.md)
+> Architecture: [daemon-module-split.md](./daemon-module-split.md) · Engine design: [UPLOAD-DAEMON-DESIGN.md](./UPLOAD-DAEMON-DESIGN.md) · UI plan: [ELECTRON-UI-DESIGN.md](./ELECTRON-UI-DESIGN.md)
 > **Private (local-only, gitignored `strategy/`):** product spec, brand voice, marketing copy — business/economics, not in the public repo.
 
 ## What it is
@@ -10,7 +10,9 @@ A Mac app that works like a **remote SSD for the stuff you can't lose**: drag ph
 ## Decisions in force (don't re-litigate)
 - **Build to dogfood, skip demand validation** — Ben is target user #1. Build the real V1, defer the commercial layer.
 - **Stack:** Electron/React UI (control panel) + a **standalone Swift upload daemon** (launchd). NOT react-native-macos, NOT Tauri/Rust.
+- **UI is a thin client over the control socket** — Electron's main process speaks the JSONL protocol directly (Node `net.Socket`), no `coldstorectl` spawn / native bridge. The control protocol IS the UI contract. See [ELECTRON-UI-DESIGN.md](./ELECTRON-UI-DESIGN.md).
 - **Upload robustness is the V1 crown jewel** — built bulletproof, not deferred.
+- **Correctness before speed** — get it right + proven, *optimize later*. Cross-blob concurrency/throughput is explicitly deferred until there's a real-AWS bench to measure against (local MinIO can't show the win).
 - **Brand:** calm, plainspoken, quietly warm, straight. No catastrophe imagery; no privacy over-claims beyond V1; "remote SSD" is a metaphor, never a literal claim.
 
 ## Built & PROVEN ✅ (verified end-to-end against MinIO)
@@ -18,7 +20,8 @@ The Swift package in [`coldstorage/`](./coldstorage/):
 - **Pipeline:** scan → per-file SHA-256 → AES-GCM frame encryption (per-blob DEK, deterministic counter nonces) → batch small files into locality blobs → **resumable S3 multipart** → HeadObject verify → **SQLite/WAL journal** (the SPOF).
 - **Restore:** thaw-aware + idempotent — Deep Archive `RestoreObject` thaw (when needed) → ranged GET → decrypt → reassemble → hash-verify (`coldstore-restore`; re-run until it lands). Live thaw leg untested off real AWS (see Stub).
 - **Verified by real checks:** unit tests pass · encryption is genuine ciphertext · **resume across a hard kill** (same uploadId reused, zero orphans) · idempotent re-runs · **round-trip byte-identical** for solo *and* batched/offset files.
-- **Control plane (verified end-to-end vs MinIO):** registry-driven `coldstored` actor + portable unix-socket JSONL IPC (`ControlServer`/`ControlClient`, socket `0600` = owner-only). Commands `getStatus · listSources · addSource · removeSource · triggerNow · restore · pause · resume · ping`; pushed events `runStarted · fileArchived{file,blob} · runFinished · sourcesChanged · restoreRequested/restoreInProgress/restoreCompleted · paused/resumed · error`. **Restore over IPC (verified vs MinIO):** `restore file=<id> out=<path> [tier days]` drives the idempotent `RestoreEngine` over the socket — one step per call (request thaw → report progress → download+verify), pushing a progress event for a live watcher; proven byte-identical over the socket (`task daemon:restore-ipc FILE=<id>`). Sources are a **journal-backed registry (SSOT)** — `COLDSTORE_SOURCES` is just a seed; add/remove survive restart (proven: relaunch w/ no env → folders persist, no re-upload). **launchd LaunchAgent** plist template + `task daemon:install`/`daemon:uninstall` (RunAtLoad+KeepAlive). Drive it with `coldstorectl` (`task daemon:run` / `daemon:ctl -- getStatus`; `coldstorectl <sock> watch` for live events).
+- **Control plane (verified end-to-end vs MinIO):** registry-driven `coldstored` actor + portable unix-socket JSONL IPC (`ControlServer`/`ControlClient`, socket `0600` = owner-only). Commands `getStatus · listSources · addSource · removeSource · triggerNow · restore · pause · resume · ping`; pushed events `runStarted · fileArchived{file,blob} · runFinished{…,blobsFailed} · blobFailed{blob,kind,message} · sourcesChanged · restoreRequested/restoreInProgress/restoreCompleted · paused/resumed · error`. **Restore over IPC (verified vs MinIO):** `restore file=<id> out=<path> [tier days]` drives the idempotent `RestoreEngine` over the socket — one step per call (request thaw → report progress → download+verify), pushing a progress event for a live watcher; proven byte-identical over the socket (`task daemon:restore-ipc FILE=<id>`). Sources are a **journal-backed registry (SSOT)** — `COLDSTORE_SOURCES` is just a seed; add/remove survive restart (proven: relaunch w/ no env → folders persist, no re-upload). **launchd LaunchAgent** plist template + `task daemon:install`/`daemon:uninstall` (RunAtLoad+KeepAlive). Drive it with `coldstorectl` (`task daemon:run` / `daemon:ctl -- getStatus`; `coldstorectl <sock> watch` for live events).
+- **Graceful error handling (verified vs MinIO):** transient retry is the **AWS SDK's** job (built-in backoff — we don't re-implement it). Our layer **classifies** every failure (`FailureKind`: permanent vs transient — SSOT in `Failure.swift`) and **isolates per-blob** — a poison blob is recorded + surfaced as a `blobFailed` event and the run *continues*; permanent failures (the `InvalidStorageClass`/`NoSuchBucket` class) go on an in-memory skip list so the daemon stops re-staging a doomed blob, and show in `getStatus.permanentlyFailedBlobs`. The engine takes `any BlobStore` (DI seam). **Proven:** unit tests (classification + real-pipeline fault-injection via a fake `BlobStore`) + live — daemon survives a real `NoSuchBucket`, pushes `blobFailed{kind:permanent}`, keeps answering, archives nothing falsely. *(In-memory skip only — persisting it needs a journal schema change, deferred.)*
 - **Dev loop (no Docker):** native Swift (swiftly) + MinIO binary. `task daemon:setup → daemon:minio → daemon:build → daemon:test → daemon:archive`. Live daemon: `task daemon:run` then `task daemon:ctl -- getStatus`.
 - Spikes that de-risked it: [`phase0-upload-spike/`](./phase0-upload-spike/), [`phase0-photos-spike/`](./phase0-photos-spike/) (latter un-run, needs a real Mac).
 
@@ -26,17 +29,16 @@ The Swift package in [`coldstorage/`](./coldstorage/):
 - **FSEvents re-scan on a real Mac** — `FolderWatcher` (Mac adapter, `canImport(CoreServices)`) is written + wired to `triggerNow`, but un-compiled/un-run off-Mac (folds into the PhotoKit Mac spike). The daemon falls back to its poll interval until then.
 - **Glacier Deep Archive thaw — live-AWS leg only.** The thaw path is now built (`S3Store.thawState`/`requestThaw`; `RestoreEngine.restore` is idempotent — request thaw → report progress → download when ready; `coldstore-restore` re-run UX, exit 75 = still thawing). The decision logic is unit-tested (`ThawStateTests`) and the *ready* leg is round-trip-proven vs MinIO. **Unverifiable here:** the actual Deep Archive `RestoreObject` + hours-long retrieval needs real AWS — exercise on first real-bucket restore.
 - **macOS PhotoKit ingest on a real Mac** — TCC-grant-persists-under-launchd is the riskiest open unknown.
-- **Graceful S3 error handling** — errors currently crash (e.g. the InvalidStorageClass fatal we hit).
-- **Cross-blob concurrency / adaptive throughput** — sequential today.
-- **R2 thumbnails + browse index**; **Electron/React UI**.
+- **Cross-blob concurrency / adaptive throughput** — sequential today (the `any BlobStore` seam + per-blob isolation now set this up). *Persistent* poison-blob state (survive restart) also pending — needs a journal schema change.
+- **Electron/React UI** — not started; plan + decisions in [ELECTRON-UI-DESIGN.md](./ELECTRON-UI-DESIGN.md) (thin client over the control socket; build IPC bridge → shell → views; design system enters at the view layer). **R2 thumbnails + browse index** is the one UI view blocked on infra (needs the R2 bucket).
 - **Infra** — `infra/coldstorage` Terraform (S3 GDA + R2 + abort-incomplete-multipart lifecycle + OIDC). Taskfile `tf:coldstorage:*` wired; dirs not scaffolded.
 - **Commercial layer (deferred by decision):** web subscription/payment/MoR, dunning, ZK, legacy/death.
 
 ## Next (priority order)
 1. **macOS PhotoKit + FSEvents spike** on a real Mac — TCC-under-launchd grant + compile/run the `FolderWatcher`.
 2. **`infra/coldstorage` Terraform.**
-3. Graceful error handling (the loop now *surfaces* errors as `error` events instead of crashing, but per-error classification/retry is still TODO) + cross-blob concurrency.
-4. **Restore over IPC — DONE ✅** (`restore` command + `restore*` events, byte-identical proof vs MinIO). Remaining in this lane: R2 browse index → Electron UI (thin client over the control socket — see `ControlClient`).
+3. **Graceful error handling — DONE ✅** (classification SSOT + per-blob isolation + skip-list, live-proven; SDK owns transient retry). Remaining in this lane: **cross-blob concurrency** (the `BlobStore` seam enables it) + *persistent* poison state (journal schema change).
+4. **Restore over IPC — DONE ✅** (`restore` command + `restore*` events, byte-identical proof vs MinIO). Remaining in this lane → **Electron UI** (next agent, has the Electron skill — plan in [ELECTRON-UI-DESIGN.md](./ELECTRON-UI-DESIGN.md)): build layer 1 (Node `net.Socket` IPC bridge to the JSONL protocol) → layer 2 (shell + typed state) → layer 3 (React views; design system handed over *here*). Status/sources/restore views work against the daemon today; the **R2 browse index/thumbnails view is blocked on infra** (item 2 — the R2 bucket isn't scaffolded), so it slots in after.
 
 ## Verify locally
 ```sh

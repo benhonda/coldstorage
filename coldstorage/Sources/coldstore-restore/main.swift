@@ -8,13 +8,12 @@ import ColdStorageCore
 // Exit 0 = restored to disk · 75 (EX_TEMPFAIL) = still thawing, re-run later · 2 = usage.
 var args = CommandLine.arguments
 
-// --tier <t> (default standard; Deep Archive supports standard/bulk only)
+// --tier <t> (default standard; Deep Archive supports standard/bulk only) — validated by the shared SSOT.
 var tier = RestoreTier.standard
 if let i = args.firstIndex(of: "--tier"), i + 1 < args.count {
-    guard let t = RestoreTier(rawValue: args[i + 1].lowercased()) else {
-        FileHandle.standardError.write(Data("bad --tier '\(args[i + 1])' (expected: standard | bulk | expedited)\n".utf8)); exit(2)
-    }
-    tier = t; args.removeSubrange(i ... i + 1)
+    do { tier = try RestoreTier.parse(args[i + 1]) }
+    catch { FileHandle.standardError.write(Data("\(error)\n".utf8)); exit(2) }
+    args.removeSubrange(i ... i + 1)
 }
 
 guard args.count >= 4 else {
