@@ -42,15 +42,31 @@ tasks:
   # Native — no Docker. Swift toolchain (swiftly) + a standalone MinIO binary.
   # `task daemon:setup` installs both if missing; the devcontainer post-create does it on rebuild.
   daemon:setup:
-    desc: Install the Swift toolchain + MinIO/mc binaries if missing (idempotent)
+    desc: Install the Swift toolchain (Linux) + OS-correct MinIO/mc binaries if missing (idempotent)
     cmds:
       - bash .devcontainer/install-swift.sh
-      - 'command -v minio >/dev/null || { sudo curl -fsSL https://dl.min.io/server/minio/release/linux-arm64/minio -o /usr/local/bin/minio && sudo chmod +x /usr/local/bin/minio; }'
-      - 'command -v mc    >/dev/null || { sudo curl -fsSL https://dl.min.io/client/mc/release/linux-arm64/mc    -o /usr/local/bin/mc    && sudo chmod +x /usr/local/bin/mc; }'
+      - task: _minio-binaries
+
+  _minio-binaries:
+    # Download the minio + mc binaries for THIS OS/arch (macOS or Linux) if missing. Idempotent via
+    # status. A dep of daemon:minio, so the local-S3 loop never needs a manual brew/curl step.
+    internal: true
+    status:
+      - command -v minio
+      - command -v mc
+    cmds:
+      - |
+        os=$(uname -s | tr '[:upper:]' '[:lower:]')          # darwin | linux
+        case "$(uname -m)" in arm64|aarch64) arch=arm64 ;; *) arch=amd64 ;; esac
+        echo "installing minio + mc for ${os}-${arch}"
+        sudo curl -fsSL "https://dl.min.io/server/minio/release/${os}-${arch}/minio" -o /usr/local/bin/minio
+        sudo curl -fsSL "https://dl.min.io/client/mc/release/${os}-${arch}/mc"       -o /usr/local/bin/mc
+        sudo chmod +x /usr/local/bin/minio /usr/local/bin/mc
 
   daemon:minio:
     desc: Start a local MinIO (background) + create the coldstorage bucket
     dir: coldstorage
+    deps: [_minio-binaries]
     cmds:
       - 'pgrep -x minio >/dev/null || { mkdir -p .minio-data && MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin nohup minio server .minio-data --address :9000 --console-address :9001 > .minio.log 2>&1 & }'
       - sleep 2
@@ -115,7 +131,7 @@ tasks:
   daemon:run:
     desc: "Run coldstored (loop + control socket) against MinIO. Drive it with `task daemon:ctl`."
     dir: coldstorage
-    env:
+    env: &daemon_run_env
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
       AWS_REGION: us-east-1
@@ -125,6 +141,17 @@ tasks:
       COLDSTORE_INTERVAL: "30"
     cmds:
       - swift run coldstored
+
+  daemon:run:bg:
+    desc: "Start coldstored in the background (logs → coldstorage/.coldstored.log), wait for its socket. Stop: task dev:stop."
+    dir: coldstorage
+    env: *daemon_run_env                   # same MinIO config as daemon:run (YAML anchor — SSOT)
+    cmds:
+      - 'pgrep -f "coldstored$" >/dev/null || nohup swift run coldstored > .coldstored.log 2>&1 &'
+      - |
+        echo "waiting for the control socket (first run builds, ~1-2 min)…"
+        for _ in $(seq 1 180); do [ -S coldstored.sock ] && { echo "daemon up"; exit 0; }; sleep 1; done
+        echo "timed out — check coldstorage/.coldstored.log" >&2; exit 1
 
   daemon:ctl:
     desc: 'Send a control command, e.g. `task daemon:ctl -- getStatus` or `-- addSource path=/abs/dir`.'
@@ -172,10 +199,25 @@ tasks:
   # bridge (`node:net`); layer 2 = electron-vite shell (main/preload/renderer) + event-stream→state.
   # Tooling is Bun; the Electron runtime is its own bundled Node. See ELECTRON-UI-DESIGN.md.
   ui:setup:
-    desc: "Install UI deps (Bun)."
+    desc: "Install UI deps (Bun) + ensure Electron's native binary."
     dir: ui
     cmds:
       - bun install
+      - task: ui:_ensure-electron
+
+  ui:_ensure-electron:
+    # Bun skips postinstall scripts by default, so Electron's binary download (its postinstall) never
+    # runs → `task ui:dev` dies with "Electron uninstall". This runs the downloader directly, and is
+    # idempotent: the `status` check skips it once the binary is present. A dep of ui:dev so launching
+    # self-heals. (We also list electron in package.json trustedDependencies for fresh installs.)
+    internal: true
+    dir: ui
+    status:
+      - test -f node_modules/electron/path.txt
+      - test -d node_modules/electron/dist
+    cmds:
+      - '[ -d node_modules/electron ] || bun install'
+      - node node_modules/electron/install.js
 
   ui:typecheck:
     desc: "Type-check the UI package (strict; node + web projects)."
@@ -192,6 +234,11 @@ tasks:
   ui:dev:
     desc: "[macOS] Run the Electron app with HMR (electron-vite dev). Start `task daemon:run` first."
     dir: ui
+    deps: [ui:_ensure-electron]
+    env:
+      # Electron runs with cwd=ui/, so the DaemonClient's relative default would miss the daemon's
+      # socket. Point at it explicitly (same path daemon:run creates). Mirrors ui:prove.
+      COLDSTORE_SOCKET: '{{.ROOT_DIR}}/coldstorage/coldstored.sock'
     cmds:
       - bun run dev
 
@@ -200,6 +247,19 @@ tasks:
     dir: ui
     cmds:
       - bun run build
+
+  ui:demo:
+    desc: "[macOS] One command to dogfood locally: MinIO + daemon (background) + the UI. Ctrl-C stops the UI; `task dev:stop` stops the rest."
+    deps: [daemon:minio]       # MinIO (bg) + bucket + OS-correct binaries
+    cmds:
+      - task: daemon:run:bg    # daemon in the background, waits for its socket
+      - task: ui:dev           # the UI in the foreground
+
+  dev:stop:
+    desc: "Stop the background daemon + MinIO left running by `task ui:demo`."
+    cmds:
+      - 'pkill -f "coldstored$" 2>/dev/null || true'
+      - task: daemon:minio:stop
 
   ui:prove:
     desc: "Prove the layer-1 IPC bridge against a running daemon. Start `task daemon:run` first."

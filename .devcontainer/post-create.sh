@@ -9,6 +9,15 @@ sudo apt-get update && sudo apt-get install -y postgresql-client xdg-utils gdb
 echo "Installing Bun"
 curl -fsSL https://bun.sh/install | bash
 
+# UI deps live in a named volume (see devcontainer.json mounts), so the container's Linux-native
+# node_modules never collides with the macOS host's (the Mac runs the GUI via `task ui:dev`). A fresh
+# volume mounts as root-owned and empty — take ownership, then populate. Idempotent.
+if [ -d /workspace/ui ]; then
+  echo "Populating ui/node_modules (named volume)"
+  sudo chown "$(id -u):$(id -g)" /workspace/ui/node_modules 2>/dev/null || true
+  (cd /workspace/ui && "$HOME/.bun/bin/bun" install) || true
+fi
+
 # echo "Installing Claude CLI"
 # ~/.bun/bin/bun add -g @anthropic-ai/claude-code
 
