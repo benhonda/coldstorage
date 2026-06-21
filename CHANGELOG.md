@@ -7,6 +7,7 @@
 - chore: dev-loop self-heal — `daemon:build`/`daemon:test` depend on new `daemon:unlock` (clears stale `.build/.lock`); `gdb` added in `post-create.sh` for wedged-process backtraces (toolchain lldb is broken here).
 - docs: `ELECTRON-UI-DESIGN.md` — Electron/React UI brief; UI is a thin client speaking the daemon's JSONL protocol directly over the socket (no `coldstorectl` spawn).
 - feat: graceful error handling — `Failure.swift` `FailureKind` classification (permanent vs transient, SSOT) + per-blob isolation; poison blobs surface as `blobFailed` events, permanent ones skip-listed (`getStatus.permanentlyFailedBlobs`). SDK owns transient retry.
+- feat: Electron UI layer 1 — `ui/` Node IPC bridge (typed `DaemonClient` over the control socket, `node:net`); `task ui:setup`/`ui:typecheck`/`ui:prove`. Round-trip + event stream proven vs the live daemon.
 
 ## 2026-06-20
 

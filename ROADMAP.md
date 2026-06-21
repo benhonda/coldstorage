@@ -30,7 +30,7 @@ The Swift package in [`coldstorage/`](./coldstorage/):
 - **Glacier Deep Archive thaw — live-AWS leg only.** The thaw path is now built (`S3Store.thawState`/`requestThaw`; `RestoreEngine.restore` is idempotent — request thaw → report progress → download when ready; `coldstore-restore` re-run UX, exit 75 = still thawing). The decision logic is unit-tested (`ThawStateTests`) and the *ready* leg is round-trip-proven vs MinIO. **Unverifiable here:** the actual Deep Archive `RestoreObject` + hours-long retrieval needs real AWS — exercise on first real-bucket restore.
 - **macOS PhotoKit ingest on a real Mac** — TCC-grant-persists-under-launchd is the riskiest open unknown.
 - **Cross-blob concurrency / adaptive throughput** — sequential today (the `any BlobStore` seam + per-blob isolation now set this up). *Persistent* poison-blob state (survive restart) also pending — needs a journal schema change.
-- **Electron/React UI** — not started; plan + decisions in [ELECTRON-UI-DESIGN.md](./ELECTRON-UI-DESIGN.md) (thin client over the control socket; build IPC bridge → shell → views; design system enters at the view layer). **R2 thumbnails + browse index** is the one UI view blocked on infra (needs the R2 bucket).
+- **Electron/React UI** — **layer 1 (Node IPC bridge) DONE ✅** ([`ui/`](./ui/), `task ui:prove` — typed `DaemonClient` over the control socket, round-trip + event-stream proven vs the live daemon); layers 2 (Electron shell + state) and 3 (React views) not started. Plan + decisions in [ELECTRON-UI-DESIGN.md](./ELECTRON-UI-DESIGN.md) (thin client over the control socket; design system enters at the view layer). **R2 thumbnails + browse index** is the one UI view blocked on infra (needs the R2 bucket).
 - **Infra** — `infra/coldstorage` Terraform (S3 GDA + R2 + abort-incomplete-multipart lifecycle + OIDC). Taskfile `tf:coldstorage:*` wired; dirs not scaffolded.
 - **Commercial layer (deferred by decision):** web subscription/payment/MoR, dunning, ZK, legacy/death.
 
@@ -38,13 +38,19 @@ The Swift package in [`coldstorage/`](./coldstorage/):
 1. **macOS PhotoKit + FSEvents spike** on a real Mac — TCC-under-launchd grant + compile/run the `FolderWatcher`.
 2. **`infra/coldstorage` Terraform.**
 3. **Graceful error handling — DONE ✅** (classification SSOT + per-blob isolation + skip-list, live-proven; SDK owns transient retry). Remaining in this lane: **cross-blob concurrency** (the `BlobStore` seam enables it) + *persistent* poison state (journal schema change).
-4. **Restore over IPC — DONE ✅** (`restore` command + `restore*` events, byte-identical proof vs MinIO). Remaining in this lane → **Electron UI** (next agent, has the Electron skill — plan in [ELECTRON-UI-DESIGN.md](./ELECTRON-UI-DESIGN.md)): build layer 1 (Node `net.Socket` IPC bridge to the JSONL protocol) → layer 2 (shell + typed state) → layer 3 (React views; design system handed over *here*). Status/sources/restore views work against the daemon today; the **R2 browse index/thumbnails view is blocked on infra** (item 2 — the R2 bucket isn't scaffolded), so it slots in after.
+4. **Restore over IPC — DONE ✅** (`restore` command + `restore*` events, byte-identical proof vs MinIO). Remaining in this lane → **Electron UI** (next agent, has the Electron skill — plan in [ELECTRON-UI-DESIGN.md](./ELECTRON-UI-DESIGN.md)): layer 1 (Node `net.Socket` IPC bridge to the JSONL protocol) **DONE ✅** ([`ui/`](./ui/), `task ui:prove`) → **next: layer 2** (Electron shell + main↔renderer IPC + event-stream→typed state) → layer 3 (React views; design system handed over *here*). Status/sources/restore views work against the daemon today; the **R2 browse index/thumbnails view is blocked on infra** (item 2 — the R2 bucket isn't scaffolded), so it slots in after.
 
 ## Verify locally
 ```sh
 task daemon:setup && task daemon:minio && task daemon:build && task daemon:test
 task daemon:archive            # encrypt → resumable multipart → verify
 # resume + round-trip proofs: /tmp/verify.sh and /tmp/roundtrip.sh patterns
+
+# UI layer-1 IPC bridge (needs a live daemon):
+task ui:setup                  # bun install (once)
+task daemon:run &              # start the daemon (wait for coldstorage/coldstored.sock)
+task ui:prove                  # getStatus round-trips + triggerNow streams runStarted→…→runFinished
+task ui:typecheck              # strict tsc over ui/
 ```
 
 ## Dev environment & gotchas (read before building — saves hours)

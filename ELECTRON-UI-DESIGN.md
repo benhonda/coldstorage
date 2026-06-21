@@ -34,8 +34,15 @@ other clients of it). A Node client is ~30 lines and keeps the UI a pure consume
   fails fast; none for the event tail. Match request replies by `id`; events interleave.
 
 ## Build order — and where your design system lands
-1. **IPC bridge (main process)** — `net.Socket` client for the JSONL protocol: request/response by id +
-   an event emitter for pushed lines. *No design system.* Verifiable against a running `task daemon:run`.
+1. **IPC bridge (main process) — DONE ✅** — `net.Socket` client for the JSONL protocol: request/response
+   by id + an event emitter for pushed lines. *No design system.* Lives in [`ui/`](./ui/) — see its
+   [`README.md`](./ui/README.md) for the package entry point (layout, commands, the `DaemonClient`
+   usage seam). `src/daemon/{protocol,client}.ts`: typed `DaemonClient` over one long-lived id-multiplexed socket
+   (bounded per-request timeout mirroring `ControlClient(readTimeout:)`; unbounded event tail;
+   auto-reconnect for launchd KeepAlive restarts). `protocol.ts` is a hand-kept TS mirror of the Swift
+   wire SSOT. **Proven** vs `task daemon:run`: `task ui:prove` — `getStatus` round-trips and `triggerNow`
+   streams `runStarted → fileArchived → runFinished`. Dev/test on Bun; runs unchanged on Electron's Node
+   (only `node:net`).
 2. **Shell + typed state layer** — Electron window, main↔renderer IPC, a typed client mirroring the
    protocol, event-stream → app state (status, sources, run progress, failures). *No design system.*
 3. **React views** — status, sources, browse, restore. **← hand the design system over here.** Build
@@ -57,7 +64,11 @@ other clients of it). A Node client is ~30 lines and keeps the UI a pure consume
 - **There's a `status.json`** the daemon writes (`COLDSTORE_STATUS`) as a first-paint seed, but the socket
   is the live source — prefer it.
 
-## First task for the next agent
-Build layer 1 (the Node IPC bridge) and prove it against `task daemon:run`: `getStatus` round-trips and a
-`triggerNow` produces `runStarted`/`fileArchived`/`runFinished` on the event stream. Everything else builds
-on that.
+## Next task for the next agent
+Layer 1 is done ✅ (see build order above; `ui/`, `task ui:prove`). **Build layer 2** on top of the
+`DaemonClient`: the Electron shell + main↔renderer IPC + an event-stream→app-state layer (status, sources,
+run progress, failures). Still no design system — keep views functional-but-unstyled so layer 3 skins them
+with the real system. The `DaemonClient` is the typed seam: main process owns it, renderer talks to main
+over Electron IPC. (This is where the Electron skill earns its keep — reconcile Bun-for-tooling vs
+Electron's bundled Node.) **Pull current docs via the Context7 MCP** before wiring Electron/React/Vite —
+it's 2026, these APIs move; don't build layers 2/3 from memory.

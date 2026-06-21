@@ -167,6 +167,30 @@ tasks:
       - rm -f "{{.PLIST}}"
       - 'echo "removed {{.PLIST}}"'
 
+  # ------------------------------------------------------------------ ui (domain: ui/)
+  # Electron/React control panel — a THIN client over the daemon's control socket. Layer 1 is the
+  # Node IPC bridge (no Electron, no design system yet). Dev/test with Bun; it runs unchanged on
+  # Electron's bundled Node (only `node:net`). See ELECTRON-UI-DESIGN.md.
+  ui:setup:
+    desc: "Install UI deps (Bun)."
+    dir: ui
+    cmds:
+      - bun install
+
+  ui:typecheck:
+    desc: "Type-check the UI package (strict)."
+    dir: ui
+    cmds:
+      - bun run typecheck
+
+  ui:prove:
+    desc: "Prove the layer-1 IPC bridge against a running daemon. Start `task daemon:run` first."
+    dir: ui
+    env:
+      COLDSTORE_SOCKET: '{{.ROOT_DIR}}/coldstorage/coldstored.sock'
+    cmds:
+      - bun run prove
+
   # ------------------------------------------------------------------ infra — tf:coldstorage:* (domain: infra/coldstorage)
   # Storage buckets (S3 Glacier Deep Archive + R2) + lifecycle rules. State in
   # terraform-state-sensitive (pharmer / ca-central-1); ENV-scoped; shared planned first.
