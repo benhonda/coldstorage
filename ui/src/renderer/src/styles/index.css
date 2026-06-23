@@ -1,0 +1,9 @@
+/* Styles entry. Token SSOT (vendored from the coldstorage Design System) first, then app/component
+   styles that consume those tokens. Font FACES are imported as JS side-effects in main.tsx so they
+   bundle as same-origin assets (the renderer's CSP is locked to default-src 'self'). */
+@import "./tokens/colors.css";
+@import "./tokens/typography.css";
+@import "./tokens/spacing.css";
+@import "./tokens/effects.css";
+@import "./tokens/base.css";
+@import "./app.css";

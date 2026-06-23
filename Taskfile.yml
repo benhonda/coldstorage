@@ -165,6 +165,15 @@ tasks:
     cmds:
       - swift run coldstorectl coldstored.sock restore file={{.FILE}} out={{.OUT | default "/tmp/restored.bin"}} tier={{.TIER | default "standard"}}
 
+  daemon:live:
+    desc: '[macOS] Drive the INSTALLED launchd daemon (real prod AWS / Deep Archive), e.g. `task daemon:live -- getStatus` · `-- addSource path=/abs/dir` · `-- triggerNow` · `-- watch`. (daemon:ctl targets the dev/MinIO daemon instead.) Uses the release binary built by daemon:install.'
+    dir: coldstorage
+    vars:
+      SOCK: '{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock'
+    cmds:
+      - test -S "{{.SOCK}}" || { echo "no installed daemon socket at {{.SOCK}} — run task daemon:bootstrap first"; exit 1; }
+      - ./.build/release/coldstorectl "{{.SOCK}}" {{.CLI_ARGS | default "getStatus"}}
+
   daemon:install:
     desc: "[macOS] Build release + install the coldstored LaunchAgent (RunAtLoad/KeepAlive)."
     dir: coldstorage
@@ -304,6 +313,16 @@ tasks:
       # Electron runs with cwd=ui/, so the DaemonClient's relative default would miss the daemon's
       # socket. Point at it explicitly (same path daemon:run creates). Mirrors ui:prove.
       COLDSTORE_SOCKET: '{{.ROOT_DIR}}/coldstorage/coldstored.sock'
+    cmds:
+      - bun run dev
+
+  ui:live:
+    desc: "[macOS] Run the UI against the INSTALLED launchd daemon (real prod AWS), not the dev/MinIO one — dogfood the real thing. Needs task daemon:bootstrap done."
+    dir: ui
+    deps: [ui:_ensure-electron]
+    env:
+      # The launchd daemon's socket (daemon:install path), NOT the dev socket ui:dev/ui:demo use.
+      COLDSTORE_SOCKET: '{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock'
     cmds:
       - bun run dev
 

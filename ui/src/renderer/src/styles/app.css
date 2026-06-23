@@ -1,0 +1,313 @@
+/* App + component styles for the ColdStorage control panel. Native-TSX port of the coldstorage
+   Design System — every value comes from a token var (the vendored DS SSOT in ./tokens), nothing
+   hand-picked. Namespace `cs-` to keep clear of the DS's own `csf-` helpers in base.css. */
+
+/* ── app shell ──────────────────────────────────────────────────── */
+#root { height: 100vh; }
+
+.cs-shell {
+  height: 100vh;
+  display: grid;
+  grid-template-columns: var(--sidebar-width) 1fr;
+  /* the iceberg glow lives behind the whole shell, anchored top-left behind the sidebar */
+  background: var(--bg-glow), var(--bg-app);
+  background-repeat: no-repeat;
+}
+
+/* ── sidebar (transparent over the glow; never a fill or border) ──── */
+.cs-sidebar {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-6) var(--space-4);
+  gap: var(--space-6);
+}
+.cs-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+}
+.cs-brand-mark {
+  width: 28px; height: 28px;
+  display: grid; place-items: center;
+  color: var(--accent-on);
+  background: var(--accent);
+  border-radius: 9px;
+  box-shadow: var(--shadow-card);
+}
+.cs-brand-word {
+  font: var(--type-card-title);
+  letter-spacing: var(--tracking-tight);
+  /* the wordmark is always lowercase */
+  text-transform: lowercase;
+}
+
+.cs-nav { display: flex; flex-direction: column; gap: var(--space-1); }
+.cs-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: var(--control-md);
+  padding: 0 var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: var(--type-body-strong);
+  letter-spacing: var(--tracking-tight);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out);
+}
+.cs-nav-item:hover { background: var(--surface-hover); color: var(--text-primary); }
+.cs-nav-item[aria-current="page"] { background: var(--accent-subtle); color: var(--accent-text); }
+.cs-nav-item:disabled { opacity: 0.5; cursor: default; }
+.cs-nav-item:disabled:hover { background: transparent; color: var(--text-secondary); }
+.cs-nav-spacer { flex: 1; }
+
+/* connection indicator pinned to the sidebar foot — honesty: the daemon link is always visible */
+.cs-conn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  font: var(--type-label);
+  color: var(--text-secondary);
+}
+.cs-dot { width: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--text-tertiary); }
+.cs-dot--connected { background: var(--positive); }
+.cs-dot--connecting { background: var(--amber-500); }
+.cs-dot--disconnected { background: var(--negative); }
+
+/* ── main column ────────────────────────────────────────────────── */
+.cs-main { min-width: 0; overflow: hidden; display: flex; flex-direction: column; }
+.cs-topbar {
+  height: var(--topbar-height);
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--gutter);
+}
+.cs-topbar-title { font: var(--type-page-title); letter-spacing: var(--tracking-tight); }
+.cs-topbar-sub { font: var(--type-label); color: var(--text-secondary); margin-top: 2px; }
+
+.cs-page {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 0 var(--gutter) var(--space-12);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  max-width: var(--content-max);
+  width: 100%;
+}
+
+/* ── primitives: layout helpers ─────────────────────────────────── */
+.cs-stack { display: flex; flex-direction: column; gap: var(--space-4); }
+.cs-cluster { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.cs-grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-4); }
+
+/* ── Button (pill always; primary = solid iceberg) ──────────────── */
+.cs-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: var(--control-md);
+  padding: 0 var(--space-5);
+  border: 0;
+  border-radius: var(--radius-pill);
+  font: var(--type-button);
+  letter-spacing: var(--tracking-tight);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out),
+              filter var(--duration-fast) var(--ease-out);
+}
+.cs-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.cs-btn:disabled { opacity: 0.5; cursor: default; }
+.cs-btn--sm { height: var(--control-sm); padding: 0 var(--space-4); }
+.cs-btn--lg { height: var(--control-lg); padding: 0 var(--space-8); }
+.cs-btn--full { width: 100%; }
+
+.cs-btn--primary { background: var(--btn-primary-bg); color: var(--btn-primary-text); }
+.cs-btn--primary:not(:disabled):hover { background: var(--btn-primary-bg-hover); }
+.cs-btn--primary:not(:disabled):active { filter: brightness(0.95); }
+
+.cs-btn--secondary { background: var(--btn-secondary-bg); color: var(--btn-secondary-text); }
+.cs-btn--secondary:not(:disabled):hover { background: var(--btn-secondary-bg-hover); }
+
+.cs-btn--ghost { background: transparent; color: var(--text-secondary); }
+.cs-btn--ghost:not(:disabled):hover { background: var(--surface-hover); color: var(--text-primary); }
+
+.cs-btn--danger { background: transparent; color: var(--negative); }
+.cs-btn--danger:not(:disabled):hover { background: rgba(222, 77, 59, 0.10); }
+
+/* ── IconButton (circular chrome action) ────────────────────────── */
+.cs-iconbtn {
+  display: inline-grid;
+  place-items: center;
+  width: var(--control-md);
+  height: var(--control-md);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--btn-secondary-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+.cs-iconbtn:hover { background: var(--btn-secondary-bg-hover); }
+.cs-iconbtn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* ── Card (elevation by shadow + hairline, never by lightness alone) ─ */
+.cs-card {
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+  padding: var(--space-6);
+}
+.cs-card--raised { background: var(--surface-raised); border-color: var(--border-subtle); box-shadow: none; }
+.cs-card--flush { padding: 0; }
+.cs-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.cs-card-title { font: var(--type-card-title); letter-spacing: var(--tracking-tight); }
+
+/* ── Stat (big reassuring number) ───────────────────────────────── */
+.cs-stat-value { font: var(--type-stat); letter-spacing: var(--tracking-tighter); }
+.cs-stat-value .cs-stat-total { color: var(--text-tertiary); font-weight: var(--weight-medium); }
+.cs-stat-label { font: var(--type-label); color: var(--text-secondary); margin-top: var(--space-1); }
+
+/* ── Badge (status pill, 24px) ──────────────────────────────────── */
+.cs-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 24px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  font: var(--type-mono);
+  letter-spacing: var(--tracking-mono);
+}
+.cs-badge--neutral  { background: var(--surface-active); color: var(--text-secondary); }
+.cs-badge--accent   { background: var(--accent-subtle); color: var(--accent-text); }
+.cs-badge--success  { background: rgba(31, 157, 107, 0.14); color: var(--positive); }
+.cs-badge--danger   { background: rgba(222, 77, 59, 0.14); color: var(--negative); }
+.cs-badge--warning  { background: rgba(224, 146, 42, 0.16); color: var(--amber-500); }
+
+/* ── KeyValueRow ────────────────────────────────────────────────── */
+.cs-kv {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-height: var(--control-md);
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: var(--space-2) 0;
+}
+button.cs-kv { cursor: pointer; border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); }
+button.cs-kv:hover { background: var(--surface-hover); }
+.cs-kv-label { font: var(--type-label); color: var(--text-secondary); }
+.cs-kv-value { display: inline-flex; align-items: center; gap: var(--space-2); }
+.cs-kv-value--accent { color: var(--accent-text); }
+
+/* ── row (feed / list entry) ────────────────────────────────────── */
+.cs-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--border-subtle);
+}
+.cs-row:first-child { border-top: 0; }
+.cs-row-main { min-width: 0; flex: 1; }
+.cs-row-title { font: var(--type-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-row-sub { font: var(--type-mono); color: var(--text-tertiary); letter-spacing: var(--tracking-mono); }
+
+/* ── EmptyState ─────────────────────────────────────────────────── */
+.cs-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-3);
+  padding: var(--space-10) var(--space-6);
+  color: var(--text-secondary);
+}
+.cs-empty .csf-icon { font-size: 32px; color: var(--text-tertiary); }
+.cs-empty-title { font: var(--type-body); color: var(--text-secondary); }
+
+/* ── Field (floating label, 64px, borderless, label inside) ─────── */
+.cs-field {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  height: var(--input-height);
+  padding: 0 var(--space-4);
+  background: var(--surface-input);
+  border-radius: var(--radius-md);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+.cs-field:focus-within { background: var(--surface-input-hover); box-shadow: var(--focus-ring); }
+.cs-field-label { font: var(--type-label); color: var(--text-secondary); font-size: var(--text-sm); }
+.cs-field--error .cs-field-label { color: var(--negative); }
+.cs-field-input {
+  border: 0;
+  background: transparent;
+  outline: none;
+  font: var(--type-body);
+  color: var(--text-primary);
+  width: 100%;
+  padding: 0;
+}
+.cs-field-input::placeholder { color: var(--text-tertiary); }
+.cs-field-error { font: var(--type-label); color: var(--negative); margin-top: var(--space-1); }
+
+/* ── alert banner (honest, calm — names the problem) ────────────── */
+.cs-alert {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  font: var(--type-body);
+  background: rgba(222, 77, 59, 0.10);
+  color: var(--negative);
+}
+
+/* ── Toast (bottom-center; errors surfaced plainly, dismissable) ── */
+.cs-toast {
+  position: fixed;
+  left: 50%;
+  bottom: var(--space-8);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: min(560px, calc(100vw - var(--space-8)));
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-5);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-toast);
+  font: var(--type-body);
+  z-index: 20;
+}
+.cs-toast .csf-icon { color: var(--negative); }
+.cs-toast-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── helpers ────────────────────────────────────────────────────── */
+.cs-mono { font: var(--type-mono); letter-spacing: var(--tracking-mono); font-feature-settings: "tnum" 1; }
+.cs-muted { color: var(--text-secondary); }
+.cs-help { font: var(--type-label); color: var(--text-secondary); line-height: var(--leading-normal); }

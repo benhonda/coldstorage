@@ -1,0 +1,63 @@
+/* VENDORED from the coldstorage Design System (Claude Design project 41ebafc1).
+   Token SSOT — do not hand-edit; re-sync from the DS if it changes.
+   Font FACES are self-hosted via @fontsource (imported in main.tsx) so the family
+   names below resolve offline / under the renderer's locked-down CSP. */
+
+/* coldstoragefiles — typography tokens. One grotesque UI face + a mono for technical values. */
+:root {
+  --font-ui: "Hanken Grotesk", -apple-system, "Segoe UI", "Helvetica Neue", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", "Menlo", monospace;
+
+  /* ── size scale ───────────────────────────────────────────────
+     FIXED tier (app text — same at mobile and desktop) */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-md: 17px;
+
+  /* FLUID tier (min @375px → max @1440px). Used by app headings AND marketing. */
+  --text-lg:  clamp(18px, calc(17.30px + 0.188vw), 20px);   /* 18 → 20 */
+  --text-xl:  clamp(21px, calc(19.94px + 0.282vw), 24px);   /* 21 → 24 */
+  --text-2xl: clamp(23px, calc(21.24px + 0.469vw), 28px);   /* 23 → 28 */
+  --text-3xl: clamp(27px, calc(24.54px + 0.657vw), 34px);   /* 27 → 34 */
+
+  /* DISPLAY tier — marketing hero & section headlines (restrained top end). */
+  --text-4xl: clamp(32px, calc(27.78px + 1.127vw), 44px);   /* 32 → 44 */
+  --text-5xl: clamp(36px, calc(29.66px + 1.690vw), 54px);   /* 36 → 54 */
+  --text-6xl: clamp(40px, calc(31.55px + 2.254vw), 64px);   /* 40 → 64 — hero */
+
+  /* weights */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* tracking & leading */
+  --tracking-tight: -0.011em;
+  --tracking-tighter: -0.02em;   /* large display — pulls big headlines together */
+  --tracking-normal: 0;
+  --tracking-mono: -0.01em;
+  --leading-tight: 1.2;
+  --leading-normal: 1.45;
+  --leading-display: 1.06;       /* hero / headline */
+
+  /* ── roles (font shorthand) ───────────────────────────────────
+     APP roles — product UI. (2xl/3xl/lg are mildly fluid; small roles are fixed.) */
+  --type-stat: 600 var(--text-3xl) / 1.15 var(--font-ui);
+  --type-page-title: 600 var(--text-2xl) / 1.2 var(--font-ui);
+  --type-card-title: 600 var(--text-lg) / 1.25 var(--font-ui);
+  --type-section-title: 600 var(--text-md) / 1.3 var(--font-ui);
+  --type-body: 400 var(--text-base) / 1.45 var(--font-ui);
+  --type-body-strong: 500 var(--text-base) / 1.45 var(--font-ui);
+  --type-label: 400 var(--text-sm) / 1.3 var(--font-ui);
+  --type-button: 500 var(--text-base) / 1 var(--font-ui);
+  --type-mono: 500 var(--text-sm) / 1.3 var(--font-mono);
+
+  /* MARKETING roles — site display type. Fully fluid; collapse gracefully to mobile. */
+  --type-hero: 700 var(--text-6xl) / var(--leading-display) var(--font-ui);
+  --type-headline: 600 var(--text-5xl) / 1.08 var(--font-ui);
+  --type-title: 600 var(--text-4xl) / 1.12 var(--font-ui);
+  --type-subhead: 600 var(--text-2xl) / 1.25 var(--font-ui);
+  --type-lead: 400 var(--text-xl) / 1.5 var(--font-ui);   /* hero/section intro paragraph */
+  --type-eyebrow: 600 var(--text-sm) / 1 var(--font-ui);  /* small caps label above a headline */
+}

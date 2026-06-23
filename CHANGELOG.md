@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-06-23
+
+- feat: Electron UI layer 3 — React views (Vault/Sources/Restore) skinned in the coldstorage Design System, ported to native React 19 TSX bound to vendored token vars (`ui/src/renderer/src/{styles,ui,views}/`); `App.tsx` now a thin sidebar-routing shell + error toast; self-hosted fonts (Fontsource + `material-symbols`) so they bundle same-origin under the locked-down CSP; `task ui:live` dogfoods the UI against the installed launchd daemon. `task ui:typecheck` + `task ui:build` green; macOS visual-verify pending.
+- feat: daemon LIVE on macOS — `task daemon:bootstrap` + `task daemon:doctor` green; AWS auth resolves end-to-end (`profile → credential_process → Keychain`) as the scoped prod IAM user, LaunchAgent running, `getStatus` answers; new `task daemon:live -- <cmd>` drives the installed daemon against real Deep Archive (first real upload path now open).
+
 ## 2026-06-21
 
 - feat: daemon AWS-cred wiring — `task tf:coldstorage:creds-export` (container) writes a gitignored `coldstorage/.local/daemon-creds.env` handoff; macOS `task daemon:bootstrap` (`daemon:creds`→`daemon:install`) seeds the secret into the login Keychain + wires a `coldstorage` profile (`credential_process` helper at space-free `~/.coldstorage/`), plist gains `AWS_PROFILE`/`__PROFILE__`; `task daemon:doctor` health-checks launchd+auth+`getStatus`.

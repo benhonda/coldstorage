@@ -52,9 +52,20 @@ other clients of it). A Node client is ~30 lines and keeps the UI a pure consume
    policy). **Proven:** `task ui:typecheck` + `task ui:build` (all 3 processes compile) +
    `task ui:test` (real reducer + controller, headless); and **verified on macOS** — the GUI runs and
    shows `connection: connected` with live status against the daemon (`task ui:dev` vs `task daemon:run`).
-3. **React views** — status, sources, browse, restore. **← hand the design system over here.** Views
-   exist functional-but-unstyled (`src/renderer/src/App.tsx`); skin them with the real system — no
-   thrown-away CSS.
+3. **React views + design system — DONE ✅** — skinned with the **coldstorage Design System** (Claude
+   Design project `41ebafc1`). The DS ships as a UMD/Babel-CDN bundle (its native runtime), so it was
+   **ported to native React 19 TSX** bound to the DS token vars — NOT consumed as the bundle. Layout:
+   `src/renderer/src/styles/tokens/` (the 5 token CSS files **vendored verbatim** from the DS — the
+   SSOT, re-sync if it changes) + `styles/app.css` (component/shell styling, all `var(--*)`);
+   `src/renderer/src/ui/` (`primitives.tsx` = Button/Card/Stat/Badge/KeyValueRow/Field/EmptyState/Icon;
+   `layout.tsx` = Sidebar + Page); `src/renderer/src/views/` (Vault = proof-of-safety wall, Sources,
+   Restore). `App.tsx` is now a thin shell (sidebar routing + a shared `exec` + an error toast). **Fonts
+   self-hosted** (`@fontsource/hanken-grotesk`, `@fontsource/jetbrains-mono`, `material-symbols`) so they
+   bundle same-origin under the renderer's locked-down CSP (`default-src 'self'`) — the DS's Google-Fonts
+   `@import` would have been blocked. **Proven:** `task ui:typecheck` + `task ui:build` green.
+   **PENDING Ben (macOS):** visual verify via `task ui:demo` (or `task ui:dev` vs `task daemon:run`) —
+   can't render Electron here. **Browse is held** (R2-blocked) — shown as a disabled nav item.
+   *Later optimization:* subset the 5.3 MB Material Symbols woff2 to the ~12 glyphs used.
 
 ## Dependencies & gotchas (save the next agent hours)
 - **R2 browse index is blocked on infra.** The "browse your archive" view needs R2 thumbnails + a browse
@@ -73,12 +84,19 @@ other clients of it). A Node client is ~30 lines and keeps the UI a pure consume
   is the live source — prefer it.
 
 ## Next task for the next agent
-Layers 1 + 2 are done ✅ (see build order above). **Build layer 3 — the React views + design system.**
-The plumbing is all there and proven: `window.coldstore` (typed `ColdstoreApi`) gives you commands +
-event subscriptions; the store (`src/renderer/src/state/`) already folds the event stream into
-`AppState` (status, sources, run progress, failures, restores) and React binds via
-`useSyncExternalStore`. `src/renderer/src/App.tsx` is the **unstyled** view tree exercising every
-command/event — skin it (and split into status/sources/restore views) with the real design system; no
-plumbing rework needed. **Hold the browse view** — it's blocked on the R2 bucket (infra not scaffolded).
-The GUI is **verified on macOS** — it runs and connects to the daemon (`task ui:dev` vs `task daemon:run`),
-so you're building on a proven shell. **Pull current docs via the Context7 MCP** before deep React/Vite/Electron work.
+Layers 1 + 2 + 3 are done ✅ (see build order above). The control panel is fully skinned in the
+coldstorage Design System (ported to native TSX). **Remaining UI work, in order:**
+1. **macOS visual verify** (Ben) — `task ui:demo` (MinIO + daemon + UI) or `task ui:dev` vs
+   `task daemon:run`. Build + typecheck are green here, but Electron can't render in the container, so
+   the *look* is unverified. Expect small spacing/polish tweaks against the DS specimens.
+2. **Browse view** — held, blocked on the **R2 bucket** (infra not scaffolded). It's a disabled nav
+   item today; build it (thumbnails + browse index) once the bucket exists.
+3. **Native folder picker** for Add-source (main-process `dialog.showOpenDialog`) — today the path is
+   typed. Small, high-value polish.
+4. **Subset Material Symbols** — the bundled rounded woff2 is 5.3 MB (full set); subset to the glyphs
+   actually used (`ac_unit folder cloud_download cloud_upload cloud_done cloud_data description verified
+   pause play_arrow add close error sync check create_new_folder photo_library pause_circle`).
+
+When extending: components live in `src/renderer/src/ui/` (bound to the vendored token vars in
+`styles/tokens/` — the DS SSOT, re-sync don't hand-edit). **Pull current docs via the Context7 MCP**
+before deep React/Vite/Electron work.
