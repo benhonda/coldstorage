@@ -19,6 +19,21 @@ public struct PartRow: Sendable {
     }
 }
 
+/// One logical file as the browser sees it — the journal IS the SSOT for the user's tree (paths/sizes/
+/// status), never S3 keys (we batch+encrypt many files into opaque `blobs/<hash>`). No bytes, no thaw:
+/// this is a pure metadata read, so the UI browses instantly even though contents are frozen.
+public struct FileRow: Sendable {
+    public let id: String
+    public let relativePath: String
+    public let size: Int
+    public let status: FileStatus
+    public let blobId: String?
+    public init(id: String, relativePath: String, size: Int, status: FileStatus, blobId: String?) {
+        self.id = id; self.relativePath = relativePath; self.size = size
+        self.status = status; self.blobId = blobId
+    }
+}
+
 public final class Journal: @unchecked Sendable {
     private let db: OpaquePointer
     private let lock = NSLock()
@@ -135,6 +150,20 @@ public final class Journal: @unchecked Sendable {
             SourceRow(id: $0["id"] as? String ?? "",
                       kind: SourceKind(rawValue: $0["kind"] as? String ?? "") ?? .folder,
                       path: $0["path"] as? String)
+        }
+    }
+
+    /// The browsable file tree (design: the journal is the tree SSOT). A pure metadata `SELECT` — no S3,
+    /// no thaw. Ordered by path so the client renders a stable tree. Unknown/garbage status defaults to
+    /// `.discovered` rather than dropping the row (the file still exists; the UI coarsens status anyway).
+    public func listFiles() throws -> [FileRow] {
+        lock.lock(); defer { lock.unlock() }
+        return try run("SELECT id, relativePath, size, status, blobId FROM files ORDER BY relativePath").map {
+            FileRow(id: $0["id"] as? String ?? "",
+                    relativePath: $0["relativePath"] as? String ?? "",
+                    size: $0["size"] as? Int ?? 0,
+                    status: FileStatus(rawValue: $0["status"] as? String ?? "") ?? .discovered,
+                    blobId: $0["blobId"] as? String)
         }
     }
 

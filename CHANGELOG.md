@@ -2,6 +2,7 @@
 
 ## 2026-06-24
 
+- feat: daemon `listFiles` + `deposit` commands — `Journal.listFiles` (pure metadata SELECT, the browsable-tree SSOT; no S3/no thaw) + ad-hoc drop-to-upload `deposit` (`ExplicitPathsSource` archives dropped paths once with no watched source, fire-and-forget); `task daemon:deposit-ipc`. Proven vs MinIO.
 - feat: UI reorganizable-filesystem redesign — `MyFilesView` browser (drop-to-upload, status icons, row ⋯ menu + Get-info modal, reorganize, request-a-copy) + `SettingsView` replace the 4-tab Vault/Sources/Restore/Browse layout; pure headless-tested `views/files/model.ts` tree (fixtures stand in for `listFiles`); new `Chip`/`Modal` primitives + resizable sidebar; `ui:test` now covers the renderer (28 pass).
 - feat: native folder picker + Downloads dir over IPC (`main/system.ts`, `chooseFolder`/`getDownloadsDir`) for the request-a-copy save dialog.
 - docs: `ELECTRON-UI-DESIGN.md` canonical UI redesign — reorganizable-filesystem (My Files browser + Settings) supersedes the 4-tab layout; adds the daemon contract-gap build spec (`listFiles` unblocks browse).

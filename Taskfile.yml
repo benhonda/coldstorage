@@ -165,6 +165,12 @@ tasks:
     cmds:
       - swift run coldstorectl coldstored.sock restore file={{.FILE}} out={{.OUT | default "/tmp/restored.bin"}} tier={{.TIER | default "standard"}}
 
+  daemon:deposit-ipc:
+    desc: "Deposit (ad-hoc drop-to-upload) over the running daemon's socket: SRC=/abs/path [DEST=folder]. Archives the path(s) once, NO watched source — the same command the UI's drag-drop issues. Fire-and-forget; watch events or check `daemon:ctl -- listFiles`."
+    dir: coldstorage
+    cmds:
+      - swift run coldstorectl coldstored.sock deposit src={{.SRC}} dest={{.DEST | default ""}}
+
   daemon:live:
     desc: '[macOS] Drive the INSTALLED launchd daemon (real prod AWS / Deep Archive), e.g. `task daemon:live -- getStatus` · `-- addSource path=/abs/dir` · `-- triggerNow` · `-- watch`. (daemon:ctl targets the dev/MinIO daemon instead.) Uses the release binary built by daemon:install.'
     dir: coldstorage

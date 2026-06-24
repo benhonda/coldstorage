@@ -36,7 +36,9 @@ task daemon:test         # portable Core tests
 ```sh
 task daemon:run                              # coldstored: scan loop + unix-socket control plane
 task daemon:ctl -- getStatus                 # counts, sources, paused/running, permanentlyFailedBlobs
-task daemon:ctl -- addSource path=/abs/dir   # register a source (persists in the journal; triggers a run)
+task daemon:ctl -- listFiles                 # the browsable tree from the journal (id/relativePath/size/status/blobId)
+task daemon:ctl -- addSource path=/abs/dir   # register a WATCHED source (persists in the journal; triggers a run)
+task daemon:deposit-ipc SRC=/abs/path DEST=folder  # ad-hoc one-shot upload (no watched source); the UI's drag-drop
 task daemon:ctl -- triggerNow                # archive now instead of waiting the interval
 task daemon:restore-ipc FILE=<fileId>        # restore over the socket (idempotent; re-run until state=restored)
 swift run coldstorectl coldstored.sock watch # live event stream (runStarted/fileArchived/runFinished/blobFailed/restore*)
@@ -102,9 +104,12 @@ description (see ROADMAP). `S3ClientConfiguration`/`*Input` deprecation warnings
 
 ## Known stubs / TODO (next build chunks)
 - Live Deep Archive **thaw** leg — `RestoreObject` + hours-long retrieval is built but only exercisable on real AWS.
-- Restore **over IPC** — `RestoreEngine.restore` is built; the daemon/UI just need a `requestRestore` command + event.
+- **UI contract gaps** (the Electron panel needs these — see [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md) "Daemon contract gaps"):
+  - **`uploadProgress {file|blob, bytes, total}` event** from the engine's multipart loop → a real per-file upload progress bar (UI shows an indeterminate bar until then).
+  - **Per-file `failed` status** persisted in the journal + **affected file-ids on `blobFailed`** + a per-run **filesFailed** count — so a real upload failure flips the *file's* row to ⚠ and the UI can name *which* files failed (failures are per-blob today).
+  - **`move` / `rename` / `delete`** (journal `relativePath` edit / prefix sweep / tombstone — cheap, no S3) and **`newFolder`**; **exclude get/set** (gitignore-style globs at scan time); **bytes/size in `Status`** + a **restore fee** estimate.
 - `PhotoKitSource`: real plaintext hashing pre-pass (currently keys on `localIdentifier`) + launchd `.app`/Info.plist so Photos auth works (CLI run SIGTRAPs); `FolderWatcher` FSEvents behavior runtime-untested (compiles on macOS now).
-- Error handling: the loop now emits `error` events instead of crashing, but per-error classify/backoff/retry is TODO.
-- Cross-blob concurrency + adaptive throughput (engine is correct sequential today).
-- R2 thumbnail/browse index → Electron UI (a thin client over the control socket).
-- Bucket lifecycle: abort-incomplete-multipart rule (Terraform).
+- Cross-blob concurrency + adaptive throughput (engine is correct sequential today); persistent poison-blob state (skip-list is in-memory).
+- R2 bucket for photo **thumbnails** + cross-device index portability (the browse *tree* is journal-backed and needs no R2).
+
+> **Done since earlier drafts (no longer stubs):** restore **over IPC** (`restore` command + `restore*` events, byte-identical vs MinIO) · **graceful error handling** (`FailureKind` classify + per-blob isolation + skip-list; SDK owns transient retry) · **`listFiles`** (journal-backed browse tree) · ad-hoc **`deposit`** (drop-to-upload, `ExplicitPathsSource`) · bucket **lifecycle** (abort-incomplete-multipart, applied) · the **Electron UI** (My Files + Settings, wired to the daemon).

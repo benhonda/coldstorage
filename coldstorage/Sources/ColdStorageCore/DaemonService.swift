@@ -35,6 +35,24 @@ public actor DaemonService {
     // MARK: - run loop
 
     public func runOnce() async throws {
+        try await performRun(source: try currentSource())
+    }
+
+    /// Archive an explicit set of dropped paths once — the ad-hoc **deposit** (drop-to-upload / "Choose
+    /// files"). Distinct from `addSource`: it registers NO watched source, it just runs the proven pipeline
+    /// over these paths, journaling them under `dir` (the browser folder dropped into) so they appear in
+    /// `listFiles`. Non-throwing so the command can fire-and-forget it — any setup error surfaces as an
+    /// `error` event; per-blob upload failures surface as `blobFailed` (same as a scheduled run).
+    func deposit(paths: [String], into dir: String) async {
+        let entries = paths.map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: $0), destDir: dir) }
+        do { try await performRun(source: ExplicitPathsSource(entries: entries)) }
+        catch { bus.publish(DaemonEvent("error", ["message": "deposit: \(error)"])) }
+    }
+
+    /// One pass of the pipeline over `source` — the shared core of a scheduled run and an ad-hoc deposit.
+    /// Emits runStarted → fileArchived* → (blobFailed*) → runFinished; isolates per-blob failures and
+    /// skip-lists permanent ones (so a doomed blob isn't re-attempted every pass).
+    private func performRun(source: IngestSource) async throws {
         running = true
         bus.publish(DaemonEvent("runStarted"))
         let bus = self.bus
@@ -42,7 +60,7 @@ public actor DaemonService {
             bus.publish(DaemonEvent("fileArchived", ["file": id, "blob": blob]))
         }
         defer { running = false }
-        let failures = try await engine.run(source: try currentSource(),
+        let failures = try await engine.run(source: source,
                                             skipBlobIds: permanentlyFailedBlobs, onFileArchived: onFile)
         for f in failures {
             bus.publish(DaemonEvent("blobFailed", ["blob": f.blobId,
@@ -118,6 +136,9 @@ public actor DaemonService {
         let sources: [SourceDTO]
     }
     private struct SourceDTO: Encodable { let id, kind: String; let path: String? }
+    /// One browsable file (the `listFiles` element). `status` is the raw journal `FileStatus` — the UI
+    /// coarsens it to its own browse states (frozen/uploading/…); we expose what we actually know.
+    private struct FileDTO: Encodable { let id, relativePath: String; let size: Int; let status: String; let blobId: String? }
     private struct AckDTO: Encodable { let ok: Bool }
     /// One idempotent restore step's outcome. `state` ∈ restored | thawRequested | thawInProgress —
     /// re-issue `restore` until it's `restored`. `out` is set only when bytes landed; `tier`/`typicalWait`
@@ -155,6 +176,11 @@ public actor DaemonService {
                                           permanentlyFailedBlobs: permanentlyFailedBlobs.count, sources: try sourceDTOs()))
         case "listSources":
             return AnyEncodable(try sourceDTOs())
+        case "listFiles":
+            // The browsable tree, straight from the journal — paths/sizes/status, no S3, no thaw.
+            return AnyEncodable(try journal.listFiles().map {
+                FileDTO(id: $0.id, relativePath: $0.relativePath, size: $0.size, status: $0.status.rawValue, blobId: $0.blobId)
+            })
         case "addSource":
             guard let raw = p["path"] else { throw ColdStorageError.staging("addSource requires params.path") }
             let abs = URL(fileURLWithPath: raw).standardizedFileURL.path
@@ -180,6 +206,16 @@ public actor DaemonService {
             // other commands responsive); a `.ready` download blocks only this call until bytes are verified.
             let outcome = try await restoreEngine.restore(fileId: file, to: URL(fileURLWithPath: out), tier: tier, days: days)
             return AnyEncodable(restoreResult(file: file, out: out, outcome: outcome))
+        case "deposit":
+            // Ad-hoc drop-to-upload: archive these paths once, under the browser folder `dest` ("" = root).
+            // `src` is newline-joined absolute paths (one deposit covers a whole multi-file/folder drop).
+            guard let raw = p["src"], !raw.isEmpty else { throw ColdStorageError.staging("deposit requires params.src (newline-joined absolute paths)") }
+            let paths = raw.split(separator: "\n").map(String.init)
+            let dest = p["dest"] ?? ""
+            // Fire-and-forget: archiving can be slow, so don't block the reply. Progress + outcome flow as
+            // runStarted/fileArchived/blobFailed/runFinished events (exactly like a scheduled run).
+            Task { await self.deposit(paths: paths, into: dest) }
+            return AnyEncodable(AckDTO(ok: true))
         case "triggerNow":
             trigger()
             return AnyEncodable(AckDTO(ok: true))
