@@ -11,12 +11,19 @@ commands. Full plan + decisions: [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DES
 |-------|------|-------|
 | 1 | Node IPC bridge (`node:net` → JSONL control socket) | **DONE ✅** |
 | 2 | electron-vite shell + main↔renderer IPC + event-stream→typed state | **DONE ✅** |
-| 3 | React views + design system (coldstorage DS, native-TSX port) | **DONE ✅** — macOS-verified live |
+| 3 | Design system (tokens + primitives) + React views | **DS/plumbing DONE ✅ · LAYOUT REDESIGNED ⟳** |
+
+> ⚠️ **The built 4-tab layout (Vault/Sources/Restore/Browse) is SUPERSEDED** by the
+> **reorganizable-filesystem design** — two surfaces, **My Files** (drill-in file browser: drop-to-archive,
+> reorganize, request-back) + **Settings**. The DS tokens/primitives/fonts and all layer-1/2 plumbing
+> **stay**; the *views, nav, and flows* get rebuilt. **Canonical design + the daemon contract gaps it needs
+> (incl. `listFiles`) are the SSOT in [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md)** — build to
+> that, don't extend the old views. The notes below describe the *current* (to-be-rebuilt) code.
 
 Toolchain: **electron-vite** (Vite, three-process split), **React 19**, secure IPC
 (`contextIsolation: true`, `contextBridge`). Tooling runs on **Bun**; the Electron runtime is its own
-bundled Node. Layer 3 skins the views in the **coldstorage Design System** (see [Design system](#design-system)).
-Verified live on macOS against the installed launchd daemon (`task ui:live`).
+bundled Node. The DS port (tokens + primitives) is verified live on macOS (`task ui:live`); see
+[Design system](#design-system).
 
 ## Layout
 
@@ -55,7 +62,8 @@ src/renderer/     The web app (React). No Node, no socket — talks to window.co
                   don't hand-edit); app.css = component/shell styling (all var(--*)); index.css = entry.
   src/ui/         LAYER 3 — DS primitives ported to native TSX: primitives.tsx (Button, Card, Stat,
                   Badge, KeyValueRow, Field, EmptyState, Icon, Alert) + layout.tsx (Sidebar, Page).
-  src/views/      LAYER 3 — VaultView (proof-of-safety wall), SourcesView, RestoreView + types.ts.
+  src/views/      LAYER 3 — VaultView, SourcesView, RestoreView + types.ts. ⚠️ the OLD 4-tab views,
+                  superseded by the My Files browser + Settings (see ELECTRON-UI-DESIGN.md). To be rebuilt.
 ```
 
 ## Commands (run from repo root)
@@ -115,13 +123,15 @@ the *tokens*, not the bundle.
   `list_files`/`read_file` on project `41ebafc1`) — it has component specimens, the FORM RECIPE (normative
   spacing), and the iOS-app kit for reference. Keep new components in `src/ui/`, bound to the tokens.
 
-**UX polish backlog** (UX is a priority — handled in a dedicated agent track):
-- Stat cards wrap **2-over-1** at narrow widths (auto-fit grid) — decide 3-up fixed vs. responsive.
-- **Catch up now** is a no-op with 0 sources — consider disabling it until a source exists (the subtitle
-  already guides to add a folder).
-- **Native folder picker** for Add-source (main-process `dialog.showOpenDialog`) — today the path is typed.
-- **Subset Material Symbols** — the bundled rounded woff2 is 5.3 MB (full set); subset to the ~12 glyphs used.
-- **Browse view** — held, blocked on the R2 bucket; build (thumbnails + index) once infra lands.
+**Next UI work** (the redesign — full spec in [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md)):
+- **Rebuild views to the canonical design** — collapse 4 tabs → **My Files** browser + **Settings**;
+  reuse the existing primitives/tokens, add the few new ones (tree row, breadcrumb, inspector, modal,
+  drop overlay). *(Supersedes the old Vault-specific polish — e.g. stat-card wrap, the always-live
+  "Catch up now" — those views go away; "Catch up now" moves into Settings.)*
+- **Grow the daemon contract** to match — `listFiles` unblocks the browser (a journal `SELECT`); the rest
+  (ad-hoc deposit, excludes, fee estimate, move/rename/delete, bytes/cost) is the backend lane.
+- **Polish:** native folder picker (`dialog.showOpenDialog`); macOS system notification on restore-ready;
+  subset the 5.3 MB Material Symbols woff2 to the glyphs used.
 
 ## Gotchas
 
@@ -156,5 +166,8 @@ the *tokens*, not the bundle.
   `~/Library/Application Support/ColdStorage/coldstored.sock`. Socket is `0600` (owner-only).
 - **Restore is idempotent/one-step** — `restore` returns `state ∈ restored|thawRequested|thawInProgress`;
   re-issue / reflect `restore*` events until `restored`. Don't expect one call to block for hours.
-- **Browse view is blocked on infra** (R2 bucket not scaffolded) — a disabled nav item until then;
-  Vault/Sources/Restore are built and live.
+- **Browse is NOT R2-blocked — only thumbnails are.** The browse *tree* (paths/sizes/per-file status)
+  renders from the **journal** (`files` table) — needs only a daemon `listFiles` read command, no R2/no
+  thaw. Glacier freezes object *bytes*, never *metadata*; and our tree comes from the journal, not S3
+  listing (we batch+encrypt into opaque `blobs/<hash>`). R2 is needed ONLY for photo **thumbnails** +
+  cross-device index portability. (Corrected 2026-06-24.)

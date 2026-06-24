@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-06-24
+
+- docs: `ELECTRON-UI-DESIGN.md` canonical UI redesign — reorganizable-filesystem (My Files browser + Settings) supersedes the 4-tab layout; adds the daemon contract-gap build spec (`listFiles` unblocks browse).
+- docs: corrected browse as journal-backed (paths/sizes/status from the `files` table, no thaw) — only thumbnails need R2, not the whole view; synced across `ROADMAP.md` + `ui/README.md`.
+
 ## 2026-06-23
 
 - feat: Electron UI layer 3 — React views (Vault/Sources/Restore) skinned in the coldstorage Design System, ported to native React 19 TSX bound to vendored token vars (`ui/src/renderer/src/{styles,ui,views}/`); `App.tsx` now a thin sidebar-routing shell + error toast; self-hosted fonts (Fontsource + `material-symbols`) so they bundle same-origin under the locked-down CSP; `task ui:live` dogfoods the UI against the installed launchd daemon. `task ui:typecheck` + `task ui:build` green; macOS visual-verify pending.
