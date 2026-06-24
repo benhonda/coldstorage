@@ -59,6 +59,20 @@ export interface Source {
   path: string | null;
 }
 
+/**
+ * `FileDTO` — one browsable file from `listFiles`: the journal IS the tree SSOT (paths/sizes/status),
+ * NOT S3 keys. A pure metadata read — no R2, no thaw. `status` is the RAW journal `FileStatus`
+ * (`discovered | planned | staging | uploading | verifying | archived | failed`); the renderer coarsens
+ * it to its own browse states. `id` doubles as the `file` param of the `restore` command.
+ */
+export interface ListedFile {
+  id: string;
+  relativePath: string;
+  size: number;
+  status: string;
+  blobId: string | null;
+}
+
 /** `StatusDTO` — the daemon snapshot. `permanentlyFailedBlobs > 0` ⇒ a config/logic fault to fix. */
 export interface Status {
   filesTotal: number;
@@ -90,8 +104,13 @@ export interface Commands {
   ping: { params: Record<string, never>; result: Ack };
   getStatus: { params: Record<string, never>; result: Status };
   listSources: { params: Record<string, never>; result: Source[] };
+  listFiles: { params: Record<string, never>; result: ListedFile[] };
   addSource: { params: { path: string }; result: Ack };
   removeSource: { params: { id: string }; result: Ack };
+  /** Ad-hoc drop-to-upload: archive these paths once under `dest` (a vault-relative folder; "" = root),
+   * without registering a watched source. `src` is newline-joined absolute paths. Fire-and-forget — the
+   * reply just acks; progress/outcome arrive as runStarted/fileArchived/blobFailed/runFinished events. */
+  deposit: { params: { src: string; dest: string }; result: Ack };
   restore: {
     params: { file: string; out: string; tier?: string; days?: string };
     result: RestoreStep;

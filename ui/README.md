@@ -11,17 +11,26 @@ commands. Full plan + decisions: [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DES
 |-------|------|-------|
 | 1 | Node IPC bridge (`node:net` → JSONL control socket) | **DONE ✅** |
 | 2 | electron-vite shell + main↔renderer IPC + event-stream→typed state | **DONE ✅** |
-| 3 | Design system (tokens + primitives) + React views | **DONE ✅ — My Files + Settings (visual-verify pending)** |
+| 3 | Design system (tokens + primitives) + React views | **DONE ✅ — My Files + Settings, browser on real `listFiles` (visual-verify pending)** |
 
 > ✅ **The reorganizable-filesystem redesign is BUILT (2026-06-24)** — two surfaces, **My Files** (drill-in
 > file browser: drop-to-upload, status icons, row ⋯ dropdown + Get-info modal, reorganize, request-a-copy
 > modal w/ native folder picker) + **Settings** (watched folders, exclude chips, storage). The old 4-tab
 > Vault/Sources/Restore/Browse views are deleted; DS tokens/primitives/fonts + all layer-1/2 plumbing
 > were kept. `task ui:typecheck` + `task ui:test` + `task ui:build` green. **PENDING Ben (macOS): visual
-> verify** (`task ui:demo` / `ui:live` — Electron can't render in the container). The browser tree renders
-> from **fixtures** (a `listFiles` stand-in — see [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md)
-> "Daemon contract gaps"); request-a-copy issues the **real `restore` command**; deposit/move/rename/delete
-> are optimistic-local seams (honest — they're cheap journal edits in the real design).
+> verify** (`task ui:demo` / `ui:live` — Electron can't render in the container). The browser tree is
+> **real journal data** — the daemon's `listFiles` read is built and the fixtures stand-in is deleted
+> (proven vs MinIO, `task ui:prove`); **drop-to-upload / "Choose files" really archive through the daemon**
+> (the `deposit` command, proven vs MinIO); request-a-copy issues the **real `restore` command**.
+> move/rename/delete remain optimistic-local seams (honest — they're cheap journal edits in the real
+> design, reverted to the `listFiles` truth on the next read until those daemon commands land).
+>
+> **Error states (UI side, 2026-06-24):** a failed upload shows ⚠ **couldn't upload** on the row (kept
+> visible), a **light-red error toast**, a persistent sidebar **"N couldn't upload"** → `FailuresPanel`
+> (permanent failures only — transient stays "uploading" and self-heals), and **Retry upload** in the row
+> ⋯ menu (re-issues `deposit` from the row's `srcPath`). Uploading rows show an **indeterminate** activity
+> bar — a real determinate % bar needs a daemon `uploadProgress` event (see [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md)
+> "Daemon contract gaps").
 
 Toolchain: **electron-vite** (Vite, three-process split), **React 19**, secure IPC
 (`contextIsolation: true`, `contextBridge`). Tooling runs on **Bun**; the Electron runtime is its own
@@ -54,6 +63,8 @@ src/main/         Electron main process — owns the one DaemonClient + the wind
 
 src/preload/
   index.ts      contextBridge.exposeInMainWorld("coldstore", api) — the ONLY thing the renderer sees.
+                Also exposes `pathForFile` (webUtils.getPathForFile) so the renderer resolves dropped/picked
+                File objects → absolute paths for `deposit` (Electron 32+ removed File.path).
 
 src/renderer/     The web app (React). No Node, no socket — talks to window.coldstore.
   index.html, src/main.tsx (font + style imports), src/useStore.ts, src/env.d.ts
@@ -71,13 +82,17 @@ src/renderer/     The web app (React). No Node, no socket — talks to window.co
                   (Sidebar w/ foot slot, Page w/ ReactNode title + `fill` mode).
   src/views/      LAYER 3 — MyFilesView (browser) + SettingsView + types.ts (ViewProps/Exec).
     files/        the browser's domain layer:
-      model.ts        PURE, headless-tested: ArchivedFile/Row tree, rollups, path-rewrite ops, formatters.
-      model.test.ts   bun-test coverage of the tree derivation + reorganize math.
-      fixtures.ts     listFiles STAND-IN — realistic vault until the daemon read lands (seam-commented).
-      useFiles.ts     file state + reorganize ops (deposit/move/rename/delete/newFolder); overlays live
-                      restore status from the store. useSettings.ts = exclude chips.
-      Breadcrumb, StatusBadge (StatusIcon), ContextMenu, InfoModal (Get info), RequestBackModal
-                      (request-a-copy + native folder picker), GettingBackPanel (the transfer queue).
+      model.ts        PURE, headless-tested: ArchivedFile/Row tree, rollups, path-rewrite ops, formatters,
+                      and fileFromJournal (raw daemon ListedFile → browser ArchivedFile; status coarsening).
+      model.test.ts   bun-test coverage of the tree derivation + reorganize math + fileFromJournal mapping.
+      useFiles.ts     file state seeded from the daemon's listFiles (App maps state.files → ArchivedFile[]);
+                      deposit() adds optimistic "uploading" rows carrying srcPath (for retry) + setDepositStatus()
+                      flips them uploading⇄failed; move/rename/delete/newFolder are optimistic-local seams;
+                      overlays live restore status from the store. useSettings.ts = exclude chips.
+      Breadcrumb, StatusBadge (StatusIcon: ✓ stored · ↑ uploading · ⚠ couldn't upload · ↓ transferring ·
+                      saved-here), ContextMenu (incl. Retry upload on failed rows), InfoModal (Get info),
+                      RequestBackModal (request-a-copy + native folder picker), GettingBackPanel (transfer
+                      queue), FailuresPanel (the sidebar "N couldn't upload" popover + Try again).
 ```
 
 ## Commands (run from repo root)
@@ -139,15 +154,20 @@ the *tokens*, not the bundle.
 
 **Next UI work** (the redesign is BUILT — full spec in [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md)):
 - **macOS visual verify** (Ben) — `task ui:demo` / `ui:live`. Container can't render Electron.
-- **Grow the daemon contract** to activate the seams — **`listFiles`** (journal `SELECT`) makes the
-  browser tree real (replacing `fixtures.ts`); then ad-hoc **deposit**, **move/rename/delete**, exclude
-  get/set, **fee + bytes/cost** estimates wire up the optimistic-local ops + the storage/quote numbers.
-  As each lands: mirror it in `protocol.ts`, fetch/issue it, swap the stand-in. Request-back already
-  issues the real `restore` command (it resolves once the tree shows real journal ids).
-- **Polish:** native folder picker is **done** for the request-a-copy dialog (`src/main/system.ts`) —
-  still typed for the Settings Add-folder field; `Show in Finder` (`shell.showItemInFolder`
-  via IPC); dropped-file paths via `webUtils.getPathForFile` in the preload (Electron 32+ removed
-  `File.path`); macOS system notification on restore-ready; subset the 5.3 MB Material Symbols woff2.
+- **`listFiles` + ad-hoc `deposit` + error states — DONE ✅ (2026-06-24)** — browser tree is real journal
+  data (`fixtures.ts` deleted), drop-to-upload really archives through the daemon (both proven vs MinIO),
+  and failures surface (⚠ row + sidebar panel + Retry + light-red toast + indeterminate upload bar).
+- **Remaining daemon contract** to activate the rest (each a source-swap, not a rebuild — mirror in
+  `protocol.ts`, fetch/issue, swap the stand-in):
+  - **`uploadProgress {file|blob, bytes, total}` event** → a real determinate upload bar (indeterminate today).
+  - **per-file `failed` status + affected file-ids on `blobFailed`** → flip the failed file's *row* to ⚠ +
+    name files in the panel (today only a deposit *command* rejection flips the row; the panel is per-blob).
+  - **move/rename/delete**, **exclude get/set**, **fee + bytes/cost** estimates (the placeholder numbers).
+- **Retry depth:** row Retry covers up-front (command-rejection) failures — we hold `srcPath`. A failure
+  *after* the daemon accepts the upload (`blobFailed`) has no `srcPath` → needs daemon-side re-deposit/retry.
+- **Polish:** native folder picker + `webUtils.getPathForFile` are **done** (deposit + request-a-copy) —
+  still wanted for the Settings Add-folder field; `Show in Finder` (`shell.showItemInFolder` via IPC);
+  macOS system notification on restore-ready; subset the 5.3 MB Material Symbols woff2.
 
 ## Gotchas
 
@@ -183,7 +203,7 @@ the *tokens*, not the bundle.
 - **Restore is idempotent/one-step** — `restore` returns `state ∈ restored|thawRequested|thawInProgress`;
   re-issue / reflect `restore*` events until `restored`. Don't expect one call to block for hours.
 - **Browse is NOT R2-blocked — only thumbnails are.** The browse *tree* (paths/sizes/per-file status)
-  renders from the **journal** (`files` table) — needs only a daemon `listFiles` read command, no R2/no
-  thaw. Glacier freezes object *bytes*, never *metadata*; and our tree comes from the journal, not S3
+  renders from the **journal** (`files` table) via the daemon's `listFiles` read (**built 2026-06-24**),
+  no R2/no thaw. Glacier freezes object *bytes*, never *metadata*; and our tree comes from the journal, not S3
   listing (we batch+encrypt into opaque `blobs/<hash>`). R2 is needed ONLY for photo **thumbnails** +
   cross-device index portability. (Corrected 2026-06-24.)

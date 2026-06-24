@@ -329,8 +329,9 @@ button.cs-kv:hover { background: var(--surface-hover); }
   gap: var(--space-3);
   max-width: min(560px, calc(100vw - var(--space-8)));
   padding: var(--space-3) var(--space-3) var(--space-3) var(--space-5);
-  background: var(--surface-raised);
-  border: 1px solid var(--border-subtle);
+  /* light-red error surface (opaque mix), calm not alarm-red */
+  background: color-mix(in srgb, var(--negative) 10%, var(--surface-raised));
+  border: 1px solid color-mix(in srgb, var(--negative) 28%, var(--border-subtle));
   border-radius: var(--radius-pill);
   box-shadow: var(--shadow-toast);
   font: var(--type-body);
@@ -396,6 +397,26 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-getting:hover { background: rgba(224, 146, 42, 0.22); }
 .cs-getting .csf-icon { font-size: 16px; }
 
+/* couldn't-upload is a button (opens the failures popover) — calm, not alarm-red */
+.cs-failed {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--negative) 12%, transparent);
+  color: var(--negative);
+  font: var(--type-label);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+.cs-failed:hover { background: color-mix(in srgb, var(--negative) 20%, transparent); }
+.cs-failed .csf-icon { font-size: 16px; }
+
 /* ── getting-back queue popover ─────────────────────────────────── */
 .cs-queue {
   position: fixed;
@@ -415,6 +436,9 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-queue-main { min-width: 0; }
 .cs-queue-name { font: var(--type-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cs-queue-sub { font: var(--type-label); color: var(--text-secondary); }
+/* the same popover, in the failure key — red icon + a foot action */
+.cs-queue--fail .cs-queue-row .csf-icon { color: var(--negative); }
+.cs-queue-foot { padding: var(--space-2) var(--space-2) 0; }
 
 /* ── topbar lead (holds the breadcrumb) ─────────────────────────── */
 .cs-topbar-lead { min-width: 0; display: flex; flex-direction: column; }
@@ -498,11 +522,40 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-fl-row[aria-selected="true"] .cs-fl-more { opacity: 1; }
 .cs-fl-more:focus-visible { opacity: 1; }
 
+/* indeterminate upload activity bar — a looping stripe along the row's bottom edge (NOT a 0–100 fill;
+   we have no real per-file % yet, so this conveys "working" without faking a determinate value) */
+.cs-fl-row { position: relative; }
+.cs-uploading-bar {
+  position: absolute;
+  left: var(--cs-pad-x, 0);
+  right: var(--cs-pad-x, 0);
+  bottom: 0;
+  height: 2px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--accent-subtle);
+}
+.cs-uploading-bar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 35%;
+  border-radius: inherit;
+  background: var(--accent);
+  animation: cs-indeterminate 1.1s var(--ease-in-out, ease-in-out) infinite;
+}
+@keyframes cs-indeterminate {
+  from { left: -35%; }
+  to { left: 100%; }
+}
+
 /* small colored status icon — colors kept from the badges (accent / amber / green) */
 .cs-statusicon { display: inline-grid; place-items: center; flex: 0 0 auto; }
 .cs-statusicon--accent .csf-icon { color: var(--accent); }
 .cs-statusicon--warning .csf-icon { color: var(--amber-500); }
 .cs-statusicon--success .csf-icon { color: var(--positive); }
+.cs-statusicon--danger .csf-icon { color: var(--negative); }
 .cs-fl-head {
   position: sticky;
   top: 0;
@@ -612,30 +665,58 @@ button.cs-kv:hover { background: var(--surface-hover); }
   place-items: center;
   border: 2px dashed var(--accent);
   border-radius: var(--radius-xl);
-  background: var(--accent-subtle);
+  /* opaque (mix of two opaque colors — no transparent) so the list/dashed-empty-state underneath
+     doesn't bleed through and clash with the overlay's own text */
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-card));
   pointer-events: none;
 }
 .cs-drop-inner { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); color: var(--accent-text); }
 .cs-drop-inner .csf-icon { font-size: 40px; }
 .cs-drop-title { font: var(--type-card-title); }
 
-/* ── first-run hero (calm invitation, not three zeros) ──────────── */
+/* ── first-run / empty state — the WHOLE area is one big clickable drop zone ─
+   Same footprint the file list occupies (so it never looks like a stray card), framed by a brand-tinted
+   dashed border = "drop here", content centered, hover lifts it. The element itself is the button. */
 .cs-firstrun {
   flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  text-align: center;
   gap: var(--space-3);
+  text-align: center;
   padding: var(--space-12);
-  margin: var(--space-3);
-  border: 2px dashed var(--border-subtle);
+  background: var(--surface-card);
+  border: 1.5px dashed color-mix(in srgb, var(--accent) 30%, var(--border-card));
   border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-out),
+              background var(--duration-fast) var(--ease-out),
+              box-shadow var(--duration-fast) var(--ease-out);
 }
-.cs-firstrun .csf-icon { font-size: 44px; color: var(--accent); }
-.cs-firstrun-title { font: var(--type-card-title); }
-.cs-firstrun-sub { font: var(--type-label); color: var(--text-secondary); max-width: var(--content-narrow); }
+.cs-firstrun:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface-card));
+  box-shadow: var(--shadow-popover);
+}
+.cs-firstrun:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+/* icon medallion — gives the cloud weight instead of floating bare */
+.cs-dropzone-badge {
+  display: grid;
+  place-items: center;
+  width: 76px;
+  height: 76px;
+  margin-bottom: var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+.cs-dropzone-title { font: var(--type-card-title); color: var(--text-primary); }
+.cs-dropzone-sub { font: var(--type-label); color: var(--text-secondary); max-width: 34ch; line-height: 1.5; }
+/* visual CTA only — the parent button owns the click (so no nested <button>) */
+.cs-dropzone-cta { margin-top: var(--space-3); pointer-events: none; }
 
 /* ── context menu (popover at cursor) ───────────────────────────── */
 .cs-menu {

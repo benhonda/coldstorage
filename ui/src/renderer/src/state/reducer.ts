@@ -10,6 +10,7 @@ import type {
   ConnectionState,
   DaemonEventName,
   DaemonEvents,
+  ListedFile,
   Source,
   Status,
 } from "../../../shared/ipc.ts";
@@ -44,6 +45,9 @@ export interface RestoreActivity {
 export interface AppState {
   connection: ConnectionState;
   status: Status | null;
+  /** The browsable tree, straight from the daemon's `listFiles` (journal-backed). Raw wire shape —
+   * the file-browser maps it to its own model. Empty until the first read lands. */
+  files: ListedFile[];
   run: RunProgress | null;
   failures: BlobFailure[];
   /** Keyed by file id. */
@@ -54,6 +58,7 @@ export interface AppState {
 export const initialState: AppState = {
   connection: "connecting",
   status: null,
+  files: [],
   run: null,
   failures: [],
   restores: {},
@@ -70,6 +75,7 @@ export type Action =
   | { type: "connection"; state: ConnectionState }
   | { type: "statusLoaded"; status: Status }
   | { type: "sourcesLoaded"; sources: Source[] }
+  | { type: "filesLoaded"; files: ListedFile[] }
   | EventAction;
 
 /**
@@ -111,6 +117,9 @@ export const reducer = (state: AppState, action: Action): AppState => {
     case "sourcesLoaded":
       // Patch sources onto the snapshot; if no snapshot yet, hold them until getStatus lands.
       return state.status ? { ...state, status: { ...state.status, sources: action.sources } } : state;
+
+    case "filesLoaded":
+      return { ...state, files: action.files };
 
     case "event":
       return foldEvent(state, action);

@@ -4,7 +4,7 @@
  * real store correctly: initial fetch, refetch-on-(re)connect, and sourcesChanged → listSources.
  */
 import { describe, expect, test } from "bun:test";
-import type { ColdstoreApi, ConnectionState, Source, Status } from "../../../shared/ipc.ts";
+import type { ColdstoreApi, ConnectionState, ListedFile, Source, Status } from "../../../shared/ipc.ts";
 import { connectController } from "./controller.ts";
 import { createStore } from "./store.ts";
 
@@ -24,6 +24,7 @@ const status = (sources: Source[]): Status => ({
 const makeApi = (initial: ConnectionState) => {
   let connectionState = initial;
   let sources: Source[] = [{ id: "s1", kind: "folder", path: "/a" }];
+  let files: ListedFile[] = [{ id: "f1", relativePath: "a/b.jpg", size: 10, status: "archived", blobId: "blob-1" }];
   const calls: string[] = [];
   let eventCb: ((name: never, data: never) => void) | null = null;
   let lifeCb: ((s: ConnectionState) => void) | null = null;
@@ -33,6 +34,7 @@ const makeApi = (initial: ConnectionState) => {
       calls.push(method);
       if (method === "getStatus") return Promise.resolve(status(sources));
       if (method === "listSources") return Promise.resolve(sources);
+      if (method === "listFiles") return Promise.resolve(files);
       return Promise.resolve({ ok: true });
     }) as ColdstoreApi["request"],
     getConnectionState: () => Promise.resolve(connectionState),
@@ -46,12 +48,14 @@ const makeApi = (initial: ConnectionState) => {
     },
     chooseFolder: () => Promise.resolve(null),
     getDownloadsDir: () => Promise.resolve("/tmp/Downloads"),
+    pathForFile: () => "",
   };
 
   return {
     api,
     calls,
     setSources: (s: Source[]) => (sources = s),
+    setFiles: (f: ListedFile[]) => (files = f),
     fireLifecycle: (s: ConnectionState) => {
       connectionState = s;
       lifeCb?.(s);
@@ -70,6 +74,33 @@ describe("controller sync policy", () => {
     expect(f.calls).toContain("getStatus");
     expect(store.getState().status?.sources).toHaveLength(1);
     expect(store.getState().connection).toBe("connected");
+  });
+
+  test("loads the file tree (listFiles) on initial connect", async () => {
+    const f = makeApi("connected");
+    const store = createStore();
+    connectController(f.api, store);
+    await tick();
+    expect(f.calls).toContain("listFiles");
+    expect(store.getState().files).toHaveLength(1);
+    expect(store.getState().files[0]?.relativePath).toBe("a/b.jpg");
+  });
+
+  test("runFinished refetches the file tree (new files may be archived)", async () => {
+    const f = makeApi("connected");
+    const store = createStore();
+    connectController(f.api, store);
+    await tick();
+    const before = f.calls.filter((c) => c === "listFiles").length;
+
+    f.setFiles([
+      { id: "f1", relativePath: "a/b.jpg", size: 10, status: "archived", blobId: "blob-1" },
+      { id: "f2", relativePath: "a/c.jpg", size: 20, status: "archived", blobId: "blob-2" },
+    ]);
+    f.fireEvent("runFinished", { filesArchived: "2", filesTotal: "2", blobsFailed: "0" });
+    await tick();
+    expect(f.calls.filter((c) => c === "listFiles").length).toBe(before + 1);
+    expect(store.getState().files).toHaveLength(2);
   });
 
   test("does NOT fetch while disconnected, then refetches on (re)connect", async () => {

@@ -28,23 +28,39 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
     }
   };
 
+  const refreshFiles = async (): Promise<void> => {
+    try {
+      store.dispatch({ type: "filesLoaded", files: await api.request("listFiles") });
+    } catch {
+      /* same as above */
+    }
+  };
+
   const offEvent = api.onEvent((name, data) => {
     store.dispatch(eventAction(name, data));
     // Resync the authoritative snapshot when the daemon reports the registry or a run changed it.
     if (name === "sourcesChanged") void refreshSources();
-    else if (name === "runFinished") void refreshStatus();
+    // A finished run may have archived new files / changed their status — re-read both the counts
+    // (getStatus) and the tree (listFiles).
+    else if (name === "runFinished") {
+      void refreshStatus();
+      void refreshFiles();
+    }
   });
 
   const offLifecycle = api.onLifecycle((state) => {
     store.dispatch({ type: "connection", state });
-    if (state === "connected") void refreshStatus(); // resync the snapshot after a (re)connect
+    if (state === "connected") {
+      void refreshStatus(); // resync the snapshot after a (re)connect
+      void refreshFiles();
+    }
   });
 
-  // First paint: read the current connection state and, if already connected, the snapshot.
+  // First paint: read the current connection state and, if already connected, the snapshot + tree.
   void (async () => {
     const state = await api.getConnectionState();
     store.dispatch({ type: "connection", state });
-    if (state === "connected") await refreshStatus();
+    if (state === "connected") await Promise.all([refreshStatus(), refreshFiles()]);
   })();
 
   return () => {

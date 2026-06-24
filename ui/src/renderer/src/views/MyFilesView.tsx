@@ -3,8 +3,8 @@
  * drive: drill-in folders, per-file status badges, drop-to-upload as the hero gesture, Finder-style
  * reorganize, and request-back.
  *
- * Holds no upload logic. The tree comes from {@link useFiles} (journal-backed; fixtures until the
- * daemon's `listFiles` lands); request-back issues the real `restore` command via `exec`.
+ * Holds no upload logic. The tree comes from {@link useFiles} (the daemon's journal-backed `listFiles`);
+ * request-back issues the real `restore` command via `exec`.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ColdstoreApi } from "../../../shared/ipc.ts";
@@ -20,6 +20,7 @@ import {
   filesUnder,
   formatBytes,
   formatDate,
+  parentOf,
   rowKey,
   rowStatus,
   targetOf,
@@ -177,8 +178,13 @@ export const MyFilesView = ({
     }
 
     const restorable = filesForTargets(targets).filter((f) => f.status === "frozen");
+    // a single failed upload we still hold the source path for → offer Retry at the top
+    const retryable = single?.type === "file" && single.file.status === "failed" && single.file.srcPath ? single.file : null;
     const items: MenuEntry[] = targets.length
       ? [
+          ...(retryable
+            ? ([{ label: "Retry upload", icon: "refresh", onClick: () => retryDeposit(retryable) }, "separator"] as MenuEntry[])
+            : []),
           { label: "Get info", icon: "info", onClick: () => setInfoOpen(true), disabled: !single },
           { label: "Rename", icon: "edit", onClick: () => single && startRename(rowKey(single)), disabled: !single },
           { label: "Move to…", icon: "drive_file_move", onClick: () => setMoveTargets(targets) },
@@ -191,15 +197,44 @@ export const MyFilesView = ({
     setMenu({ x: e.clientX, y: e.clientY, items });
   };
 
-  // ── deposit (hero) ──
-  const depositNames = (names: string[]): void => {
-    if (names.length) filesApi.deposit(names, dir);
+  // ── deposit (hero) — REAL drop-to-upload ──
+  // Optimistic "uploading" rows give instant feedback; the daemon's `deposit` command does the actual
+  // ingest. Its runStarted/fileArchived/blobFailed/runFinished events drive the truth — on runFinished
+  // the controller refetches listFiles and the optimistic rows are replaced by the real archived files
+  // (✓ stored) or, on failure, surface in the "couldn't upload" panel. Paths are resolved in the preload
+  // (webUtils.getPathForFile — Electron 32+ removed File.path).
+  const depositFiles = (files: File[]): void => {
+    if (files.length === 0) return;
+    const items = files.map((f) => ({ name: f.name, srcPath: api.pathForFile(f) }));
+    const optimisticIds = filesApi.deposit(items, dir); // instant "uploading" feedback; rows carry srcPath
+    const paths = items.map((i) => i.srcPath).filter(Boolean);
+    if (paths.length === 0) {
+      filesApi.setDepositStatus(optimisticIds, "failed"); // couldn't resolve paths → show ⚠, don't vanish
+      return;
+    }
+    issueDeposit(paths, dir, optimisticIds);
+  };
+  // Issue the real deposit; on command rejection flip rows to ⚠ failed (failure stays ON the file) and
+  // rethrow so `exec` surfaces the toast. (A failure of the actual upload arrives later as blobFailed.)
+  const issueDeposit = (paths: string[], dest: string, ids: string[]): void => {
+    exec(() =>
+      api.request("deposit", { src: paths.join("\n"), dest }).catch((e: unknown) => {
+        filesApi.setDepositStatus(ids, "failed");
+        throw e;
+      }),
+    );
+  };
+  // Retry a failed upload: flip the row back to uploading and re-issue its deposit (we kept its srcPath).
+  const retryDeposit = (file: ArchivedFile): void => {
+    if (!file.srcPath) return;
+    filesApi.setDepositStatus([file.id], "uploading");
+    issueDeposit([file.srcPath], parentOf(file.relativePath), [file.id]);
   };
   const onDrop = (e: React.DragEvent): void => {
     e.preventDefault();
     dragDepth.current = 0;
     setDropActive(false);
-    depositNames([...e.dataTransfer.files].map((f) => f.name));
+    depositFiles([...e.dataTransfer.files]);
   };
   const onDragEnter = (e: React.DragEvent): void => {
     if (![...e.dataTransfer.types].includes("Files")) return;
@@ -273,7 +308,7 @@ export const MyFilesView = ({
         multiple
         hidden
         onChange={(e) => {
-          depositNames([...(e.target.files ?? [])].map((f) => f.name));
+          depositFiles([...(e.target.files ?? [])]);
           e.target.value = "";
         }}
       />
@@ -293,7 +328,7 @@ export const MyFilesView = ({
           onContextMenu={(e) => e.target === e.currentTarget && openMenu(e)}
         >
           {rows.length === 0 ? (
-            <FirstRun />
+            <FirstRun onChoose={() => fileInput.current?.click()} />
           ) : view === "list" ? (
             <FileList
               rows={rows}
@@ -315,7 +350,7 @@ export const MyFilesView = ({
               onRowContext={openMenu}
             />
           )}
-          <p className="cs-hint">drop anywhere to upload · right-click for more</p>
+          {rows.length > 0 && <p className="cs-hint">drop anywhere to upload · right-click for more</p>}
         </div>
 
         {dropActive && (
@@ -445,7 +480,7 @@ const FileList = ({
           <span className="cs-fl-size">{row.type === "folder" ? (row.empty ? "—" : formatBytes(row.size)) : formatBytes(row.file.size)}</span>
           <span className="cs-fl-date">{row.type === "file" ? formatDate(row.file.date) : `${row.count} items`}</span>
           <span className="cs-fl-actions">
-            {/* frozen → no icon (resting default); active/local states show a small colored icon */}
+            {/* status icon by the ⋯: ✓ stored · ↑ uploading · ⚠ couldn't upload · ↓ transferring · saved-here */}
             <StatusIcon status={status} />
             <IconButton
               icon="more_horiz"
@@ -457,6 +492,9 @@ const FileList = ({
               }}
             />
           </span>
+          {/* honest activity indicator — an INDETERMINATE bar (no fake %; the daemon emits no per-file
+              byte progress yet). Shows the upload is working, in conjunction with the ↑ icon. */}
+          {status === "uploading" && <span className="cs-uploading-bar" aria-hidden="true" />}
         </div>
       );
     })}
@@ -531,12 +569,20 @@ const Gallery = ({
 
 // ── first run / empty folder ───────────────────────────────────────
 
-const FirstRun = (): React.JSX.Element => (
-  <div className="cs-firstrun">
-    <Icon name="cloud_upload" />
-    <p className="cs-firstrun-title">Drop files or folders here to upload them</p>
-    <p className="cs-firstrun-sub">Drag anything in, or use Add. They're encrypted on your Mac before upload.</p>
-  </div>
+const FirstRun = ({ onChoose }: { onChoose: () => void }): React.JSX.Element => (
+  <button type="button" className="cs-firstrun" onClick={onChoose}>
+    <span className="cs-dropzone-badge">
+      <Icon name="cloud_upload" size={38} />
+    </span>
+    <span className="cs-dropzone-title">Drop files or folders to upload</span>
+    <span className="cs-dropzone-sub">
+      or click to choose. They&apos;re encrypted on your Mac before upload.
+    </span>
+    <span className="cs-btn cs-btn--primary cs-dropzone-cta">
+      <Icon name="add" size={20} />
+      Choose files
+    </span>
+  </button>
 );
 
 // ── move-to folder picker ──────────────────────────────────────────

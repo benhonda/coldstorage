@@ -4,13 +4,20 @@
  * derived from file paths, a move is a `relativePath` edit, the encrypted blob never moves. This module
  * holds that derivation (flat files → the rows at one directory) and the pure reorganize ops.
  *
- * Source of the flat file list today is {@link file:./fixtures.ts} (a stand-in for the daemon's future
- * `listFiles` read — see ELECTRON-UI-DESIGN.md "Daemon contract gaps"). The shapes here are what
- * `listFiles` will return, so swapping the source is the only change when it lands.
+ * The flat file list comes from the daemon's `listFiles` read (journal-backed); {@link fileFromJournal}
+ * maps each raw wire row ({@link ListedFile}) into the {@link ArchivedFile} the browser draws.
  */
+import type { ListedFile } from "../../../../shared/ipc.ts";
 
-/** Per-file state — the journal `FileStatus` folded with live restore activity. */
-export type FileStatus = "frozen" | "uploading" | "gettingBack" | "here";
+/**
+ * Per-file state — the journal `FileStatus` folded with live restore activity.
+ * - `frozen` — stored in deep storage (the common at-rest state; shows a quiet ✓).
+ * - `uploading` — in the upload pipeline, incl. a transient retry (the daemon/SDK keep trying).
+ * - `failed` — upload couldn't complete and the daemon stopped retrying (permanent/stuck) — needs
+ *   attention. Transient blips are NOT this; they stay `uploading` until they self-heal or go permanent.
+ * - `gettingBack` / `here` — restore activity (a copy on its way / saved on this Mac), overlaid live.
+ */
+export type FileStatus = "frozen" | "uploading" | "failed" | "gettingBack" | "here";
 
 /** Coarse type, drives the row icon (and, when R2 lands, whether a thumbnail exists). */
 export type FileKind = "photo" | "video" | "audio" | "document" | "archive" | "other";
@@ -31,6 +38,9 @@ export interface ArchivedFile {
   readyBy?: string | null;
   /** When `here`: the local path the thawed bytes landed at. */
   localPath?: string | null;
+  /** For an optimistic (not-yet-uploaded) drop: the local absolute source path, so a failed upload can be
+   * retried by re-issuing `deposit`. Null/absent for journal-backed files. UI-only — never from the daemon. */
+  srcPath?: string | null;
 }
 
 /** A folder row — synthesized from the paths beneath it; size/count/status are rolled up. */
@@ -107,15 +117,21 @@ export const parentOf = (path: string): string => segments(path).slice(0, -1).jo
 export const isUnder = (path: string, dir: string): boolean =>
   dir === "" || path === dir || path.startsWith(`${dir}/`);
 
-/** Rollup: anything active wins; otherwise it settles on `frozen` (the resting state). */
+/**
+ * Rollup for a folder's aggregate status. `failed` wins first — a stuck upload inside is the thing that
+ * won't resolve itself, so the folder flags it so the user can drill in and find it. Then active states
+ * (uploading/gettingBack), then all-here, else `frozen` (stored).
+ */
 const rollupStatus = (s: Set<FileStatus>): FileStatus =>
-  s.has("uploading")
-    ? "uploading"
-    : s.has("gettingBack")
-      ? "gettingBack"
-      : s.size === 1 && s.has("here")
-        ? "here"
-        : "frozen";
+  s.has("failed")
+    ? "failed"
+    : s.has("uploading")
+      ? "uploading"
+      : s.has("gettingBack")
+        ? "gettingBack"
+        : s.size === 1 && s.has("here")
+          ? "here"
+          : "frozen";
 
 /**
  * The rows shown at directory `dir` (root = ""): immediate subfolders (aggregated) then files, each
@@ -229,3 +245,35 @@ export const kindFromName = (name: string): FileKind => {
   const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
   return EXT_KIND[ext] ?? "other";
 };
+
+/**
+ * Coarsen the daemon's raw journal `FileStatus` to the browser's status. `gettingBack`/`here` are NOT
+ * journal states — they're overlaid live from restore activity (see useFiles), never produced here.
+ * In practice the journal only persists `planned` (queued) and `archived` (at rest) per file today; the
+ * rest are mapped forward-looking. `failed` → `failed` (needs attention) — but note the daemon doesn't
+ * yet PERSIST a per-file `failed` status (failures are reported per-blob via the `blobFailed` event); see
+ * ELECTRON-UI-DESIGN.md "Daemon contract gaps". So a per-row ⚠ lights up only once that contract lands;
+ * until then, failures surface at the run/blob level (the sidebar "couldn't upload" panel).
+ */
+const STATUS_FROM_JOURNAL: Record<string, FileStatus> = {
+  archived: "frozen", // at rest in deep storage — the resting state (a quiet ✓)
+  discovered: "uploading",
+  planned: "uploading",
+  staging: "uploading",
+  uploading: "uploading",
+  verifying: "uploading",
+  failed: "failed",
+};
+
+/**
+ * Map a raw `listFiles` row to the {@link ArchivedFile} the browser draws. The journal carries no
+ * timestamp on the `files` row today, so `date` is null (renders "—"); kind is derived from the name.
+ */
+export const fileFromJournal = (row: ListedFile): ArchivedFile => ({
+  id: row.id,
+  relativePath: row.relativePath,
+  size: row.size,
+  status: STATUS_FROM_JOURNAL[row.status] ?? "uploading",
+  kind: kindFromName(row.relativePath),
+  date: null,
+});

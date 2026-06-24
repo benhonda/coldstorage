@@ -9,7 +9,7 @@
  * plain storage line, a quiet status line only when the background uploader isn't running, and a
  * clickable getting-back indicator that opens the restore queue.
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Icon, IconButton } from "./ui/primitives.tsx";
 import { Sidebar, type NavItem } from "./ui/layout.tsx";
 import type { Store } from "./state/store.ts";
@@ -19,8 +19,10 @@ import { useAppState } from "./useStore.ts";
 import { useResizable } from "./ui/useResizable.ts";
 import { useFiles } from "./views/files/useFiles.ts";
 import { useSettings } from "./views/files/useSettings.ts";
-import { formatBytes, totalBytes } from "./views/files/model.ts";
+import { fileFromJournal, formatBytes, totalBytes } from "./views/files/model.ts";
 import { GettingBackPanel } from "./views/files/GettingBackPanel.tsx";
+import { FailuresPanel } from "./views/files/FailuresPanel.tsx";
+import type { BlobFailure } from "./state/reducer.ts";
 import { MyFilesView } from "./views/MyFilesView.tsx";
 import { SettingsView } from "./views/SettingsView.tsx";
 
@@ -49,6 +51,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   const [route, setRoute] = useState<Route>("files");
   const [cmdError, setCmdError] = useState<string | null>(null);
   const [queueOpen, setQueueOpen] = useState(false);
+  const [failuresOpen, setFailuresOpen] = useState(false);
   const { width: sidebarWidth, onResizeStart } = useResizable("cs-sidebar-width", 232, 200, 360);
 
   const exec: Exec = (fn) => {
@@ -56,13 +59,25 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
     void fn().catch((e: unknown) => setCmdError(e instanceof Error ? e.message : String(e)));
   };
 
-  // Cross-view state: the file tree (live restore status overlaid) + local settings.
-  const filesApi = useFiles(state.restores);
+  // Cross-view state: the file tree (daemon `listFiles`, mapped to the browser model; live restore
+  // status overlaid inside useFiles) + local settings.
+  const daemonFiles = useMemo(() => state.files.map(fileFromJournal), [state.files]);
+  const filesApi = useFiles(daemonFiles, state.restores);
   const settings = useSettings();
 
   const vaultBytes = totalBytes(filesApi.files);
   const gettingBack = filesApi.files.filter((f) => f.status === "gettingBack");
   const notRunning = NOT_RUNNING[state.connection];
+
+  // Only PERMANENT (stuck) failures surface — transient blips stay "uploading" and self-heal. Dedup by
+  // blob (the event log can record the same blob across runs; newest-first, so first seen wins).
+  const stuckFailures = useMemo<BlobFailure[]>(() => {
+    const byBlob = new Map<string, BlobFailure>();
+    for (const f of state.failures) if (f.kind === "permanent" && !byBlob.has(f.blob)) byBlob.set(f.blob, f);
+    return [...byBlob.values()];
+  }, [state.failures]);
+
+  const retryFailures = (): void => exec(() => api.request("triggerNow"));
 
   const footer = (
     <>
@@ -89,6 +104,21 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           Transferring {gettingBack.length}
         </button>
       )}
+      {stuckFailures.length > 0 && (
+        // Persistent (not a toast — a toast was missed): a stuck-upload count, click → the failures panel.
+        // PLACEHOLDER copy — Ben to finalize.
+        <button
+          type="button"
+          className="cs-failed"
+          onClick={(e) => {
+            e.stopPropagation();
+            setFailuresOpen((v) => !v);
+          }}
+        >
+          <Icon name="error" size={16} />
+          {stuckFailures.length} couldn&apos;t upload
+        </button>
+      )}
     </>
   );
 
@@ -110,6 +140,10 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
 
       {queueOpen && gettingBack.length > 0 && (
         <GettingBackPanel files={gettingBack} restores={state.restores} onClose={() => setQueueOpen(false)} />
+      )}
+
+      {failuresOpen && stuckFailures.length > 0 && (
+        <FailuresPanel failures={stuckFailures} onRetry={retryFailures} onClose={() => setFailuresOpen(false)} />
       )}
 
       {route === "files" && (

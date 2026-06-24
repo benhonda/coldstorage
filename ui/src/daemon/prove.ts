@@ -4,7 +4,8 @@
  *
  * Proves the contract the design brief asks for:
  *   1. `getStatus` round-trips (typed reply by id).
- *   2. `triggerNow` produces `runStarted` … `runFinished` on the event stream.
+ *   2. `listFiles` round-trips (the browser's journal-backed tree read).
+ *   3. `triggerNow` produces `runStarted` … `runFinished` on the event stream.
  * `fileArchived` only fires when there's something new to archive (the pipeline is idempotent), so
  * it's reported when seen but not required — runStarted/runFinished are the reliable invariants.
  *
@@ -48,7 +49,17 @@ log(
     `paused=${status.paused} running=${status.running} permFailed=${status.permanentlyFailedBlobs}`,
 );
 
-// 2 — watch the event stream, then triggerNow; expect runStarted … runFinished.
+// 2 — listFiles round-trips: the journal-backed browse tree (paths/sizes/status, no S3/no thaw).
+const files = await client.request("listFiles");
+if (!Array.isArray(files)) fail(`listFiles shape unexpected: ${JSON.stringify(files)}`);
+for (const f of files) {
+  if (typeof f.id !== "string" || typeof f.relativePath !== "string" || typeof f.size !== "number") {
+    fail(`listFiles row malformed: ${JSON.stringify(f)}`);
+  }
+}
+log(`listFiles → ${files.length} file(s)${files[0] ? ` (e.g. ${files[0].relativePath} ${files[0].status})` : ""}`);
+
+// 3 — watch the event stream, then triggerNow; expect runStarted … runFinished.
 const seen = new Set<DaemonEventName>();
 const runFinished = new Promise<Record<string, string>>((resolve) => {
   client.onAnyEvent((name, data) => {

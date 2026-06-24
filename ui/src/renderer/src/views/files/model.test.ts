@@ -4,10 +4,12 @@
  * that make move/rename cheap journal edits.
  */
 import { describe, expect, test } from "bun:test";
+import type { ListedFile } from "../../../../shared/ipc.ts";
 import {
   type ArchivedFile,
   allFolderPaths,
   childrenOf,
+  fileFromJournal,
   filesUnder,
   formatBytes,
   reparent,
@@ -99,5 +101,42 @@ describe("aggregates", () => {
     expect(formatBytes(4_100_000)).toBe("4.1 MB");
     expect(formatBytes(2_000_000_000)).toBe("2 GB");
     expect(formatBytes(512)).toBe("512 B");
+  });
+
+  describe("fileFromJournal", () => {
+    const row = (over: Partial<ListedFile> = {}): ListedFile => ({
+      id: "f1",
+      relativePath: "Photos/2019/beach.jpg",
+      size: 4_100_000,
+      status: "archived",
+      blobId: "blob-1",
+      ...over,
+    });
+
+    test("maps an archived row to a frozen photo, kind from name, no date", () => {
+      const f = fileFromJournal(row());
+      expect(f).toEqual({
+        id: "f1",
+        relativePath: "Photos/2019/beach.jpg",
+        size: 4_100_000,
+        status: "frozen",
+        kind: "photo",
+        date: null,
+      });
+    });
+
+    test("coarsens in-pipeline statuses to uploading", () => {
+      for (const s of ["planned", "staging", "uploading", "verifying", "discovered"]) {
+        expect(fileFromJournal(row({ status: s })).status).toBe("uploading");
+      }
+    });
+
+    test("failed → failed (needs attention), never silently frozen", () => {
+      expect(fileFromJournal(row({ status: "failed" })).status).toBe("failed");
+    });
+
+    test("unknown status defaults to uploading, never silently frozen", () => {
+      expect(fileFromJournal(row({ status: "bogus" })).status).toBe("uploading");
+    });
   });
 });

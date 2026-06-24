@@ -6,7 +6,7 @@
  * The casts here are the unavoidable IPC-boundary seam: invoke/event payloads are `unknown` over the
  * wire, re-typed against the contract exactly once, right here.
  */
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
 import { IPC, type ColdstoreApi } from "../shared/ipc.ts";
 
 const api: ColdstoreApi = {
@@ -31,6 +31,8 @@ const api: ColdstoreApi = {
 
   chooseFolder: (defaultPath?: string) => ipcRenderer.invoke(IPC.chooseFolder, defaultPath),
   getDownloadsDir: () => ipcRenderer.invoke(IPC.downloadsDir),
+  // Resolve a dropped/picked File → absolute path here in the preload (webUtils isn't in the renderer).
+  pathForFile: (file: File) => webUtils.getPathForFile(file),
 };
 
 // contextIsolation is always on (set in main); the else is a defensive no-op path, not a supported mode.

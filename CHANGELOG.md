@@ -2,6 +2,8 @@
 
 ## 2026-06-24
 
+- feat: My Files browser runs on real daemon data — swap `fixtures.ts` for live `listFiles` (journal tree → store `state.files` → `model.fileFromJournal`), drop-to-upload issues the real `deposit` command, request-a-copy resolves end-to-end; `pathForFile` preload (`webUtils.getPathForFile`, Electron 32+). Proven vs MinIO (`task ui:prove`).
+- feat: UI upload error states — `FailuresPanel` + sidebar "N couldn't upload", ⚠ row marker (kept visible), Retry-upload row action (re-issues `deposit`), light-red toast, indeterminate upload bar; `ui:test` 34 pass.
 - feat: daemon `listFiles` + `deposit` commands — `Journal.listFiles` (pure metadata SELECT, the browsable-tree SSOT; no S3/no thaw) + ad-hoc drop-to-upload `deposit` (`ExplicitPathsSource` archives dropped paths once with no watched source, fire-and-forget); `task daemon:deposit-ipc`. Proven vs MinIO.
 - feat: UI reorganizable-filesystem redesign — `MyFilesView` browser (drop-to-upload, status icons, row ⋯ menu + Get-info modal, reorganize, request-a-copy) + `SettingsView` replace the 4-tab Vault/Sources/Restore/Browse layout; pure headless-tested `views/files/model.ts` tree (fixtures stand in for `listFiles`); new `Chip`/`Modal` primitives + resizable sidebar; `ui:test` now covers the renderer (28 pass).
 - feat: native folder picker + Downloads dir over IPC (`main/system.ts`, `chooseFolder`/`getDownloadsDir`) for the request-a-copy save dialog.

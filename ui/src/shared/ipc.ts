@@ -17,6 +17,7 @@ export type {
   Commands,
   DaemonEventName,
   DaemonEvents,
+  ListedFile,
   Method,
   ParamsArg,
   RestoreStep,
@@ -64,4 +65,7 @@ export interface ColdstoreApi {
   chooseFolder(defaultPath?: string): Promise<string | null>;
   /** The OS Downloads directory (absolute) — the default save destination for a requested copy. */
   getDownloadsDir(): Promise<string>;
+  /** Absolute path of a dropped/picked File. Electron 32+ removed `File.path`; resolved in the preload
+   * via `webUtils.getPathForFile`. "" if it can't be resolved (e.g. a synthetic File). Sync — no daemon. */
+  pathForFile(file: File): string;
 }

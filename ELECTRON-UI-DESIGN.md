@@ -22,10 +22,13 @@ factual — a file uploader, not a vault that advertises safety (see the VOICE n
 >
 > **BUILT 2026-06-24 ✅ — pending macOS visual verify.** My Files browser + Settings ship in [`ui/`](./ui/);
 > the old 4-tab views are deleted, primitives/tokens/plumbing kept. `task ui:typecheck` + `ui:test` +
-> `ui:build` green. The browser tree renders from **fixtures** (`ui/src/renderer/src/views/files/fixtures.ts`
-> — a `listFiles` stand-in); request-a-copy issues the **real `restore` command**; deposit/move/rename/delete
-> are optimistic-local seams (honest — cheap journal edits in the real design). See the contract gaps below
-> for what makes each real.
+> `ui:build` green. **The browser tree is now real journal data** — the daemon's `listFiles` read is built
+> and the fixtures stand-in is deleted (proven vs MinIO, `task ui:prove`). Request-a-copy issues the
+> **real `restore` command** (resolves end-to-end now that ids are real journal ids);
+> **drop-to-upload / "Choose files" really archive through the daemon** (the `deposit`
+> command — proven vs MinIO). Still optimistic-local seams: **move/rename/delete** (honest — cheap journal
+> edits in the real design, reverted to `listFiles` truth on the next read until those daemon commands land). See the
+> contract gaps below for what makes each real.
 
 > **VOICE — plain file-uploader, no reassurance theater (Ben, 2026-06-24).** Don't tell the user their
 > files are "safe," don't claim/advertise safety, don't editorialize ("steady", "reassuring"). It's a
@@ -79,8 +82,8 @@ row just selects it; the `⋯` per-row dropdown (and right-click) opens actions,
 │Transferring 1│ ────── drop anywhere to upload · right-click for more ─│
 └────────────┴────────────────────────────────────────────────────────┘
    ⋯ → Get info · Rename · Move to… · New folder · Request a copy… · Delete
-   (status = a small colored icon by the ⋯: ↑ uploading · ↓ transferring · ✓ saved;
-    frozen rows show none — the resting default, not news)
+   (status = a small colored icon by the ⋯: ✓ stored · ↑ uploading · ⚠ couldn't upload ·
+    ↓ transferring · ⤓ saved on this Mac; no icon = nothing in flight. revised 2026-06-24)
 ```
 
 ## My Files — the browser
@@ -90,12 +93,19 @@ row just selects it; the `⋯` per-row dropdown (and right-click) opens actions,
 - **View:** list by default (name / size / date — **no status column**), with a **grid/gallery toggle**
   (`⊞ ⊟`) — file-type icons today, thumbnails when R2 lands (the *only* R2-gated piece).
 - **Status is a small colored ICON by the row's `⋯`, NOT a column or a text pill** (Ben, 2026-06-24).
-  `frozen` is the resting default → **no icon** (a marker on every row is noise). An icon shows only when
-  there's something true to say (fixed-width slot so rows stay aligned with or without one):
-  - upload icon, accent blue — **uploading** (mid-upload).
-  - down-arrow-circle icon, amber — **Transferring** (a copy is on its way; queue shows Preparing →
+  **REVISED 2026-06-24 (later, after a silent upload failure read as "nothing happened"):** stored is
+  **not** blank — it shows a quiet ✓, so the user can tell *stored* from *stuck* at a glance. Explicit
+  success is what makes silence trustworthy; absence of any icon then cleanly means "nothing in flight."
+  The states (circle family, fixed-width slot so rows stay aligned):
+  - green **check** (`check_circle`, quiet) — **stored** (the common at-rest state).
+  - up-arrow-circle, accent blue — **uploading** (mid-upload; **a transient retry stays here** — it
+    self-heals, so we don't alarm).
+  - **error circle, red (muted, not alarm-red)** — **couldn't upload**: a *permanent/stuck* failure the
+    daemon stopped retrying. Also surfaced persistently in the sidebar ("N couldn't upload" → a failures
+    panel + Try again), because a one-shot toast gets missed.
+  - down-arrow-circle, amber — **Transferring** (a copy is on its way; queue shows Preparing →
     Downloading → Ready + ready-by).
-  - green **check** — a copy is saved on this Mac.
+  - `download_done`, green — a copy is **saved on this Mac** (re-glyphed off the plain ✓ now that ✓ = stored).
 - **Selection is just selection** — clicking a row selects it (cmd/shift for multi → batch ops); it does
   **not** auto-open a panel. **Details live behind a dropdown**: a per-row `⋯` (and right-click) opens
   the actions menu; **Get info** opens a details modal. Double-click a file → Get info; a folder → drill
@@ -108,9 +118,11 @@ row just selects it; the `⋯` per-row dropdown (and right-click) opens actions,
   button is **"Start transfer"** and the dialog owns the "ready in ~a day" detail. In-flight status reads
   **Transferring** (not "downloading" — that implies it's actively loading onto the disk, but most of the
   wait is the deep-storage thaw; "transferring" matches the Start-transfer action).
-- **Empty / first-run:** a plain invitation, not three zeros — *"Drop files or folders here to upload
-  them,"* one factual line ("encrypted on your Mac before upload"), collapses to the file list once
-  populated. **Delete-empty-folder skips the confirm** (no bytes at stake → just remove it; the
+- **Empty / first-run:** a plain invitation, not three zeros — a **bounded, clickable drop-zone card**
+  filling the content area (icon medallion + *"Drop files or folders to upload"* + one factual line
+  "encrypted on your Mac before upload" + a **"Choose files"** CTA). The **whole zone is clickable** →
+  opens the native file dialog (same as the header **Add**); hover lifts it. Collapses to the file list
+  once populated. **Delete-empty-folder skips the confirm** (no bytes at stake → just remove it; the
   180-day-cost copy only shows when real uploaded bytes are involved).
 - **Manipulation = standard Finder gestures** (committed to the filesystem feel): rename (double-click →
   inline edit), new folder, drag-to-move, delete (⌫ → confirm). **Delete = instant tombstone** in the
@@ -170,19 +182,47 @@ row just selects it; the `⋯` per-row dropdown (and right-click) opens actions,
 The UI is a thin client; this design needs data/commands the daemon doesn't expose yet. **None block the
 *design*; each is a precise backend ask** (Ben's lane). Most are small reads over the journal, which
 already holds the data.
-- **`listFiles` (read).** Return the browsable tree from the journal — `relativePath, size, status,
-  blobId` already exist in the `files` table (`Journal.swift`). The single command that unblocks the
-  whole browser. *No R2, no thaw.*
-- **Per-file live status.** Browser status icons need `frozen | uploading | gettingBack | here` per file —
-  fold the journal `FileStatus` with the live restore state (today restore state is per-request via
-  `restore*` events, not queryable per file).
+- **`listFiles` (read) — DONE ✅ (2026-06-24).** Returns the browsable tree from the journal —
+  `{id, relativePath, size, status, blobId}` straight off the `files` table (`Journal.listFiles`, a pure
+  `SELECT ORDER BY relativePath`; wired in `DaemonService.handle`, mirrored in `protocol.ts` as
+  `ListedFile`, folded into the store as `state.files`, mapped to the browser model by
+  `model.fileFromJournal`). **The fixtures stand-in is deleted** — the browser tree is real journal data.
+  Proven end-to-end vs MinIO (`task ui:prove` → `listFiles → N file(s)`; raw shape confirmed via
+  `task daemon:ctl -- listFiles`). *No R2, no thaw.* Note `status` is the raw journal `FileStatus`
+  (today only `planned`/`archived` persist per file; the UI coarsens to frozen/uploading).
+- **Per-file live status.** Browser status icons need `frozen | uploading | failed | gettingBack | here`
+  per file — fold the journal `FileStatus` with the live restore state (today restore state is per-request
+  via `restore*` events, not queryable per file).
+- **Upload-failure surfacing (per-file) — the error-UX gap.** *Why it matters:* a failed upload was
+  **invisible** (Ben, 2026-06-24 — "I saw nothing"). The daemon reports failures **per-BLOB** (`blobFailed
+  {blob, kind, message}` + `getStatus.permanentlyFailedBlobs`), but the UI is **per-file**, and a failed
+  file never gets a `blobId` to join on — so we can't mark the *file's* row yet, and a stuck file silently
+  lingers as `planned` (→ shows "uploading" forever). **Build now (done ✅):** a persistent sidebar
+  "couldn't upload" count → a failures panel (from `state.failures`, **permanent only** — transient blips
+  stay "uploading" and self-heal, Ben's call) + "Try again" (`triggerNow`). **Needs the daemon:** persist a
+  per-file **`failed`** status (so `listFiles` returns it → the per-row ⚠, already wired) **and** name the
+  **affected file ids** on `blobFailed` (so the panel/summary can say *which* files, not a blob hash) — and
+  a per-run **filesFailed** count (blobs ≠ files). *Error copy is Ben-gatekept (placeholders in the UI).*
+- **Upload progress (per-file byte %) — for a real determinate bar.** Uploading rows show an **indeterminate**
+  activity bar today, because the daemon emits no per-file progress — only `fileArchived` when a whole file
+  finishes (a determinate "63%" now would be fake, like the old green check). To make it real: emit an
+  **`uploadProgress {file|blob, bytes, total}`** event from the engine's multipart loop; the bar then fills
+  for real, even for one big file. *(Cheap alternative with no daemon change: fold `fileArchived` so rows
+  flip ✓ one-by-one — real aggregate progress for a multi-file drop, but nothing mid-upload for a single
+  large file.)*
 - **Bytes / size in `Status`.** "12 GB stored" + per-folder rollups. Per-file `size` exists in the journal;
   `Status` exposes only counts — add a total-bytes field (and ideally per-prefix sums).
 - **Restore *fee* estimate.** The quote shows cost; `restore`/`RestoreStep` exposes `typicalWait` but
   **no fee**. Add an estimated-cost field (and a combined estimate for batch/folder restore).
-- **Ad-hoc one-shot deposit command.** Distinct from `addSource` (which registers a *watched* source) —
-  "archive these paths once, don't watch." The hero gesture needs an ingest path that doesn't leave a
-  phantom watched folder.
+- **Ad-hoc one-shot deposit command — DONE ✅ (2026-06-24).** `deposit {src, dest}` (newline-joined
+  absolute paths + a vault-relative target folder) archives the dropped paths once with NO watched source
+  — the proven pipeline over an `ExplicitPathsSource`, fire-and-forget, progress via the usual
+  runStarted/fileArchived/blobFailed/runFinished events. The UI's drag-drop + "Choose files" resolve real
+  paths in the preload (`webUtils.getPathForFile`, Electron 32+ removed `File.path`) and issue it. Proven
+  end-to-end vs MinIO (`task daemon:deposit-ipc SRC=… DEST=…` → file reaches `archived`, blob lands in
+  MinIO). *Note:* a deposit that FAILS isn't auto-retried by the run loop (it's not a watched source) — it
+  surfaces via `blobFailed` (→ the "couldn't upload" panel) and needs a re-drop; auto-retry of failed
+  deposits is a later refinement.
 - **Exclude patterns (get/set).** Global + per-source globs, applied at scan time; gitignore semantics.
 - **Skipped-count reporting.** The deposit "skipped 1,203 (node_modules…)" line needs the run to report
   what the excludes filtered (an event field or `runFinished` addition).
@@ -215,8 +255,8 @@ other clients of it). A Node client is ~30 lines and keeps the UI a pure consume
 - **Wire shape:** `Sources/ColdStorageCore/ControlProtocol.swift` — one `ControlRequest` per line
   (`{id, method, params?}`); replies carry `id` (`{id, result|error}`); pushed events carry `event`
   (`{event, data}`). The client distinguishes by which key is present.
-- **Commands (SSOT = `DaemonService.handle`):** `ping · getStatus · listSources · addSource · removeSource ·
-  triggerNow · restore · pause · resume`.
+- **Commands (SSOT = `DaemonService.handle`):** `ping · getStatus · listSources · listFiles · addSource ·
+  removeSource · deposit · triggerNow · restore · pause · resume`.
 - **Events (SSOT = `DaemonEvent(...)` call sites):** `runStarted · fileArchived · runFinished · blobFailed ·
   sourcesChanged · restoreRequested · restoreInProgress · restoreCompleted · paused · resumed · error`.
 - **Connection model:** keep one **long-lived** socket connection for the live event stream (blocks
@@ -286,27 +326,37 @@ other clients of it). A Node client is ~30 lines and keeps the UI a pure consume
   is the live source — prefer it.
 
 ## Next task for the next agent
-Layers 1 + 2 done ✅ + verified on macOS. Layer 3 **rebuilt to the canonical design (2026-06-24)** —
-**My Files** browser + **Settings** ship in [`ui/`](./ui/); old 4-tab views deleted; primitives/tokens/
-plumbing kept + extended (added `Chip`/`Modal`, `Page.fill`, Sidebar foot). `task ui:typecheck`+`ui:test`+
-`ui:build` green. The data model is in `ui/src/renderer/src/views/files/model.ts` (pure, headless-tested);
-the tree is seeded from `fixtures.ts`. **Remaining UI work, in order:**
+Layers 1 + 2 done ✅ + verified on macOS. Layer 3 = the canonical design, BUILT and substantially wired to
+the real daemon (2026-06-24). **My Files** browser + **Settings** ship in [`ui/`](./ui/); old 4-tab views
+deleted. `task ui:typecheck` + `ui:test` (34) + `ui:build` green. The data model is in
+`ui/src/renderer/src/views/files/model.ts` (pure, headless-tested); the tree is the daemon's `listFiles`
+(no more fixtures).
 
-1. **macOS visual verify** (Ben) — `task ui:demo` / `task ui:dev` vs `task daemon:run`. Electron can't
-   render in the container. *(Caveat: against the current fixtures + empty vault, clicking Get-it-back
-   issues the real `restore` command for a fixture id the daemon can't match → an honest "unknown file"
-   error. The modal/quote/confirm flow still verifies; the post-confirm badge transition needs real ids
-   from `listFiles`.)*
-2. **Grow the daemon contract to activate the seams** — see "Daemon contract gaps this design needs"
-   above. **`listFiles`** (journal `SELECT`) is the unblocker: it replaces `fixtures.ts` with real journal
-   files, which also makes request-a-copy resolve end-to-end. Then ad-hoc **deposit**, **move/rename/delete**,
-   exclude get/set, and **fee + bytes/cost** estimates turn the optimistic-local ops (`useFiles.ts`) and
-   placeholder numbers real. As each lands: mirror it in `protocol.ts`, fetch/issue in the controller/view,
-   swap the stand-in. The UI already binds to a clear data model, so this is a source swap, not a rebuild.
-3. **Polish:** native folder picker (`dialog.showOpenDialog`) for Add-folder; `Show in Finder`
-   (`shell.showItemInFolder` via IPC); dropped-file paths via `webUtils.getPathForFile` in the preload
-   (Electron 32+ removed `File.path`); macOS system notification on restore-ready; subset the 5.3 MB
-   Material Symbols woff2 to the glyphs used.
+**Real against the daemon now (all proven vs MinIO):** `listFiles` (browser tree), `deposit`
+(drop-to-upload / "Choose files" — `ExplicitPathsSource`, paths resolved via preload `webUtils.getPathForFile`),
+`restore` (request-a-copy). **Error states built (UI side):** a failed upload shows ⚠ **couldn't upload**
+ON the row (kept visible, not vanished/not stuck-blue), a **light-red error toast**, a persistent sidebar
+**"N couldn't upload"** count → `FailuresPanel` (from `state.failures`, permanent only — transient stays
+"uploading"), and **Retry upload** in the row ⋯ menu (re-issues `deposit` from the row's remembered
+`srcPath`). Uploading rows show an **indeterminate** activity bar (honest — see the progress gap below).
+
+**Remaining UI work, in priority order:**
+1. **macOS visual verify** (Ben) — `task ui:demo` / `ui:live`. Electron can't render in the container.
+   *(`task ui:demo` archives `testdata`, so the tree shows those `*.bin`; the empty prod vault under
+   `ui:live` shows the first-run drop zone until a deposit/source run lands.)*
+2. **Daemon contract gaps** (see that section above) to make the rest real — each a source-swap, not a
+   rebuild: **`uploadProgress` event** (per-file byte % → a real determinate upload bar, replacing the
+   indeterminate one), **per-file `failed` status + affected file-ids on `blobFailed`** (so a real upload
+   failure flips the file's *row* to ⚠ + names files in the panel; today only the deposit *command*
+   rejection flips the row, and the panel is per-blob), **move/rename/delete** commands, **exclude
+   get/set**, **fee + bytes/cost** estimates.
+3. **Retry depth:** row Retry covers deposits we caught up front (we hold `srcPath`). A real upload that
+   fails *after* the daemon accepts it (a `blobFailed`) becomes a journal row with no `srcPath` → retrying
+   those needs daemon support (re-deposit by stored path, or a daemon retry command).
+4. **Polish:** native folder picker for the Settings **Add-folder** field (`webUtils.getPathForFile` +
+   `dialog.showOpenDialog` are already wired for deposit + request-a-copy); `Show in Finder`
+   (`shell.showItemInFolder` via IPC); macOS system notification on restore-ready; subset the 5.3 MB
+   Material Symbols woff2.
 
 When extending: generic primitives live in `src/renderer/src/ui/` (bound to the vendored token vars in
 `styles/tokens/` — the DS SSOT, re-sync don't hand-edit); the browser's domain components + model live in

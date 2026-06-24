@@ -1,20 +1,22 @@
 /**
  * The file-browser state + reorganize ops — the renderer's view of the vault tree.
  *
- * WHY local state: the tree lives in the journal, and the daemon doesn't expose it yet (`listFiles`,
- * deposit, move/rename/delete are the open contract gaps — see ELECTRON-UI-DESIGN.md). So the flat
- * list is seeded from {@link fixtureFiles} and the ops mutate it optimistically. This is honest to the
- * real design: a move/rename/delete genuinely IS a cheap journal `relativePath` edit (no S3, no thaw),
- * so the optimistic edit mirrors what the daemon command will do. Each op marks its daemon seam.
+ * The flat tree is the daemon's `listFiles` (journal-backed), passed in as `daemonFiles` and held in
+ * local state so the reorganize ops can edit it optimistically. The deposit/move/rename/delete ops are
+ * still local-only seams: the daemon doesn't expose those commands yet, so they mutate the local copy
+ * and are reverted to the daemon's truth on the next `listFiles` (re)read. This is honest to the real
+ * design — a move/rename/delete genuinely IS a cheap journal `relativePath` edit (no S3, no thaw) — so
+ * the optimistic edit mirrors what the daemon command will do once it lands. Each op marks its seam.
  *
- * Live restore status IS real, though: request-back calls the daemon's `restore` command, and the
- * `restore*` events fold into the store's `restores` — which we overlay here so a file the user asks
- * back shows `getting back` / `here` in the tree. (Pass the store's `restores` in.)
+ * Live restore status IS real: request-back calls the daemon's `restore` command, and the `restore*`
+ * events fold into the store's `restores` — which we overlay here so a file the user asks back shows
+ * `getting back` / `here` in the tree. (Pass the store's `restores` in.)
  */
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { RestoreActivity } from "../../state/reducer.ts";
 import {
   type ArchivedFile,
+  type FileStatus,
   type RowTarget,
   baseName,
   joinPath,
@@ -24,10 +26,6 @@ import {
   rewritePrefix,
   withName,
 } from "./model.ts";
-import { fixtureFiles } from "./fixtures.ts";
-
-/** How long an optimistic deposit shows `uploading` before settling to `frozen` (UI demo of the flow). */
-const UPLOADING_DEMO_MS = 2200;
 
 let depositSeq = 0;
 
@@ -36,8 +34,13 @@ export interface FilesApi {
   files: ArchivedFile[];
   /** Just-created, still-empty folders (virtual paths) to surface alongside the derived tree. */
   virtualFolders: string[];
-  /** Archive dropped items into `intoDir` (optimistic; real ingest is the daemon's deposit command). */
-  deposit: (names: string[], intoDir: string) => number;
+  /** Add optimistic "uploading" rows for dropped items in `intoDir` (each carrying its local `srcPath` for
+   * retry); returns their ids so the caller can flip status ({@link setDepositStatus}) as the real
+   * `deposit` command resolves. */
+  deposit: (items: { name: string; srcPath?: string }[], intoDir: string) => string[];
+  /** Set optimistic deposit rows' status (uploading ⇄ failed) by id — drives the retry cycle and keeps a
+   * failed upload visible ON the file (⚠ couldn't upload) rather than vanishing or stuck on "uploading". */
+  setDepositStatus: (ids: string[], status: FileStatus) => void;
   /** Rename a file or folder (journal basename edit / prefix sweep). */
   rename: (target: RowTarget, newName: string) => void;
   /** Move files/folders under `toDir` (journal re-parent / prefix sweep — no S3, no thaw). */
@@ -55,34 +58,48 @@ const applyRestore = (file: ArchivedFile, r: RestoreActivity | undefined): Archi
   return { ...file, status: "gettingBack" };
 };
 
-export const useFiles = (restores: Record<string, RestoreActivity>): FilesApi => {
-  const [base, setBase] = useState<ArchivedFile[]>(fixtureFiles);
+export const useFiles = (
+  daemonFiles: ArchivedFile[],
+  restores: Record<string, RestoreActivity>,
+): FilesApi => {
+  const [base, setBase] = useState<ArchivedFile[]>(daemonFiles);
   const [virtualFolders, setVirtualFolders] = useState<string[]>([]);
-  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  // The daemon's `listFiles` is the source of truth — adopt each (re)read. Optimistic local ops
+  // (deposit/move/rename/delete) edit `base` until the daemon supports them, then are reconciled to
+  // this truth on the next read (a no-op once those commands persist their edits to the journal).
+  useEffect(() => {
+    setBase(daemonFiles);
+  }, [daemonFiles]);
 
   // Overlay live restore status by file id — keeps the tree truthful as a real thaw progresses.
   const files = useMemo(() => base.map((file) => applyRestore(file, restores[file.id])), [base, restores]);
 
-  const deposit = useCallback((names: string[], intoDir: string): number => {
+  const deposit = useCallback((items: { name: string; srcPath?: string }[], intoDir: string): string[] => {
     const stamp = ++depositSeq;
-    const added: ArchivedFile[] = names.map((name, i) => ({
+    const added: ArchivedFile[] = items.map((it, i) => ({
       id: `dep-${stamp}-${i}`,
-      relativePath: joinPath(intoDir, name),
+      relativePath: joinPath(intoDir, it.name),
       size: 0, // real size lands with the daemon's deposit; unknown at drop time
       status: "uploading",
-      kind: kindFromName(name),
+      kind: kindFromName(it.name),
       date: null,
+      srcPath: it.srcPath ?? null, // remembered so a failed upload can be retried
     }));
-    if (added.length === 0) return 0;
+    if (added.length === 0) return [];
     setBase((prev) => [...prev, ...added]);
-    // SEAM: real ingest = resolve dropped paths via webUtils.getPathForFile (preload, Electron 32+),
-    // then a daemon one-shot `deposit` command. Here we just settle the optimistic rows to `frozen`.
-    const ids = new Set(added.map((a) => a.id));
-    const t = setTimeout(() => {
-      setBase((prev) => prev.map((f) => (ids.has(f.id) ? { ...f, status: "frozen" } : f)));
-    }, UPLOADING_DEMO_MS);
-    timers.current.push(t);
-    return added.length;
+    // Optimistic only — instant `uploading` feedback. The caller fires the REAL daemon `deposit`; its
+    // events drive the truth: on runFinished the next `listFiles` replaces these rows with the archived
+    // files (✓) or a failure surfaces (blobFailed → the "couldn't upload" panel). If the deposit COMMAND
+    // itself rejects (e.g. a stale daemon), the caller rolls these back via `dropOptimistic` so we never
+    // leave a fake `uploading` row. We never fake-settle to `frozen` on a timer.
+    return added.map((a) => a.id);
+  }, []);
+
+  const setDepositStatus = useCallback((ids: string[], status: FileStatus): void => {
+    if (ids.length === 0) return;
+    const set = new Set(ids);
+    setBase((prev) => prev.map((f) => (set.has(f.id) ? { ...f, status } : f)));
   }, []);
 
   const rename = useCallback((target: RowTarget, newName: string): void => {
@@ -147,5 +164,5 @@ export const useFiles = (restores: Record<string, RestoreActivity>): FilesApi =>
     [base, virtualFolders],
   );
 
-  return { files, virtualFolders, deposit, rename, move, remove, newFolder };
+  return { files, virtualFolders, deposit, setDepositStatus, rename, move, remove, newFolder };
 };
