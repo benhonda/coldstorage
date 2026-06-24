@@ -1,0 +1,103 @@
+/**
+ * Headless tests for the pure file-tree model (bun test, no React/daemon). Covers the derivation the
+ * browser leans on: one directory's rows, folder rollups, virtual folders, and the path-rewrite ops
+ * that make move/rename cheap journal edits.
+ */
+import { describe, expect, test } from "bun:test";
+import {
+  type ArchivedFile,
+  allFolderPaths,
+  childrenOf,
+  filesUnder,
+  formatBytes,
+  reparent,
+  rewritePrefix,
+  totalBytes,
+  withName,
+} from "./model.ts";
+
+const file = (relativePath: string, size: number, status: ArchivedFile["status"] = "frozen"): ArchivedFile => ({
+  id: relativePath,
+  relativePath,
+  size,
+  status,
+  kind: "other",
+  date: null,
+});
+
+const sample: ArchivedFile[] = [
+  file("Photos/2019/beach.jpg", 100),
+  file("Photos/2019/january/snow.jpg", 50),
+  file("Photos/sunset.jpg", 25, "here"),
+  file("readme.txt", 5),
+];
+
+describe("childrenOf", () => {
+  test("root lists immediate folders then files, A–Z", () => {
+    const rows = childrenOf(sample, "");
+    expect(rows.map((r) => (r.type === "folder" ? `📁${r.name}` : r.name))).toEqual(["📁Photos", "readme.txt"]);
+  });
+
+  test("a folder row rolls up descendant size + count across nested dirs", () => {
+    const photos = childrenOf(sample, "").find((r) => r.type === "folder" && r.name === "Photos");
+    expect(photos).toMatchObject({ type: "folder", size: 175, count: 3 });
+  });
+
+  test("drilling in shows the level's folders and files", () => {
+    const rows = childrenOf(sample, "Photos");
+    expect(rows.map((r) => r.name)).toEqual(["2019", "sunset.jpg"]); // folder before file
+  });
+
+  test("status rollup settles on frozen unless something is actively happening", () => {
+    const rows = childrenOf([file("a/x", 1, "frozen"), file("a/y", 1, "uploading")], "");
+    const folder = rows[0];
+    expect(folder.type === "folder" && folder.status).toBe("uploading");
+  });
+
+  test("a virtual (empty) folder surfaces only at its own level", () => {
+    const rows = childrenOf(sample, "", ["Projects"]);
+    const proj = rows.find((r) => r.type === "folder" && r.name === "Projects");
+    expect(proj).toMatchObject({ empty: true, count: 0 });
+    // not surfaced one level down where it doesn't belong
+    expect(childrenOf(sample, "Photos", ["Projects"]).some((r) => r.name === "Projects")).toBe(false);
+  });
+});
+
+describe("path ops", () => {
+  test("withName replaces the basename only", () => {
+    expect(withName("a/b/c.jpg", "d.jpg")).toBe("a/b/d.jpg");
+  });
+
+  test("reparent keeps the basename under a new dir", () => {
+    expect(reparent("a/b/c.jpg", "x/y")).toBe("x/y/c.jpg");
+    expect(reparent("a/b/c.jpg", "")).toBe("c.jpg");
+  });
+
+  test("rewritePrefix only touches descendants of the moved folder", () => {
+    expect(rewritePrefix("a/b/c", "a/b", "x")).toBe("x/c");
+    expect(rewritePrefix("a/b", "a/b", "x")).toBe("x");
+    expect(rewritePrefix("a/bc", "a/b", "x")).toBe("a/bc"); // not a path-segment match
+  });
+});
+
+describe("aggregates", () => {
+  test("filesUnder is inclusive of the whole subtree; root = all", () => {
+    expect(filesUnder(sample, "Photos")).toHaveLength(3);
+    expect(filesUnder(sample, "")).toHaveLength(4);
+  });
+
+  test("totalBytes sums sizes", () => {
+    expect(totalBytes(sample)).toBe(180);
+  });
+
+  test("allFolderPaths enumerates every implied + virtual folder", () => {
+    expect(allFolderPaths(sample, ["Projects"])).toEqual(["Photos", "Photos/2019", "Photos/2019/january", "Projects"]);
+  });
+
+  test("formatBytes is decimal and trims a trailing .0", () => {
+    expect(formatBytes(0)).toBe("0 B");
+    expect(formatBytes(4_100_000)).toBe("4.1 MB");
+    expect(formatBytes(2_000_000_000)).toBe("2 GB");
+    expect(formatBytes(512)).toBe("512 B");
+  });
+});

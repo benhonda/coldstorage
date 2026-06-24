@@ -3,91 +3,85 @@
  * (TopBar + scrolling content column) every view composes. Presentational — route state lives in App.
  */
 import type { ReactNode } from "react";
-import type { ConnectionState } from "../../../shared/ipc.ts";
 import { Icon } from "./primitives.tsx";
 
 export interface NavItem {
   id: string;
   label: string;
   icon: string;
-  /** Disabled + reason (e.g. browse is blocked on the R2 index) — shown honestly, not hidden. */
+  /** Disabled + reason — shown honestly, not hidden. */
   disabled?: boolean;
   hint?: string;
 }
 
-const CONN_COPY: Record<ConnectionState, { dot: string; label: string }> = {
-  connected: { dot: "cs-dot--connected", label: "Connected to daemon" },
-  connecting: { dot: "cs-dot--connecting", label: "Connecting…" },
-  disconnected: { dot: "cs-dot--disconnected", label: "Daemon offline" },
-};
-
 /** Navigation rail. The mark is a stand-in (Material snowflake on the iceberg tile) for the real
- * six-point frost crystal — swap in the brand SVG when it's exported from the DS. */
+ * six-point frost crystal — swap in the brand SVG when it's exported from the DS. The `footer` slot
+ * holds whatever the app pins to the foot (storage line, status, getting-back). */
 export const Sidebar = ({
   items,
   active,
   onNavigate,
-  connection,
+  footer,
 }: {
   items: NavItem[];
   active: string;
   onNavigate: (id: string) => void;
-  connection: ConnectionState;
-}): React.JSX.Element => {
-  const conn = CONN_COPY[connection];
-  return (
-    <aside className="cs-sidebar">
-      <div className="cs-brand">
-        <span className="cs-brand-mark">
-          <Icon name="ac_unit" size={18} />
-        </span>
-        <span className="cs-brand-word">coldstorage</span>
-      </div>
-      <nav className="cs-nav">
-        {items.map((it) => (
-          <button
-            key={it.id}
-            type="button"
-            className="cs-nav-item"
-            aria-current={active === it.id ? "page" : undefined}
-            disabled={it.disabled}
-            title={it.hint}
-            onClick={() => onNavigate(it.id)}
-          >
-            <Icon name={it.icon} size={22} />
-            {it.label}
-          </button>
-        ))}
-      </nav>
-      <div className="cs-nav-spacer" />
-      <div className="cs-conn">
-        <span className={`cs-dot ${conn.dot}`} />
-        {conn.label}
-      </div>
-    </aside>
-  );
-};
+  footer?: ReactNode;
+}): React.JSX.Element => (
+  <aside className="cs-sidebar">
+    <div className="cs-brand">
+      <span className="cs-brand-mark">
+        <Icon name="ac_unit" size={18} />
+      </span>
+      <span className="cs-brand-word">coldstorage</span>
+    </div>
+    <nav className="cs-nav">
+      {items.map((it) => (
+        <button
+          key={it.id}
+          type="button"
+          className="cs-nav-item"
+          aria-current={active === it.id ? "page" : undefined}
+          disabled={it.disabled}
+          title={it.hint}
+          onClick={() => onNavigate(it.id)}
+        >
+          <Icon name={it.icon} size={22} />
+          {it.label}
+        </button>
+      ))}
+    </nav>
+    <div className="cs-nav-spacer" />
+    <div className="cs-foot">{footer}</div>
+  </aside>
+);
 
-/** A view's main column: TopBar (title + actions) over a scrolling content area. */
+/**
+ * A view's main column: TopBar (title + actions) over the content area. `title` is a node so a view
+ * can put a breadcrumb there. `fill` swaps the stacked, max-width content column for a full-height
+ * region the view lays out itself (the file browser) — the default keeps the cards-in-a-column rhythm.
+ */
 export const Page = ({
   title,
   subtitle,
   actions,
+  fill = false,
   children,
 }: {
-  title: string;
+  title: ReactNode;
   subtitle?: string;
   actions?: ReactNode;
+  fill?: boolean;
   children: ReactNode;
 }): React.JSX.Element => (
   <main className="cs-main">
     <header className="cs-topbar">
-      <div>
-        <h1 className="cs-topbar-title">{title}</h1>
+      <div className="cs-topbar-lead">
+        {typeof title === "string" ? <h1 className="cs-topbar-title">{title}</h1> : title}
         {subtitle && <p className="cs-topbar-sub">{subtitle}</p>}
       </div>
       {actions && <div className="cs-cluster">{actions}</div>}
     </header>
-    <div className="cs-page">{children}</div>
+    <div className={fill ? "cs-page cs-page--fill" : "cs-page"}>{children}</div>
   </main>
 );

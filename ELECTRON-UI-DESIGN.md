@@ -6,10 +6,10 @@
 > [`coldstorage/README.md`](./coldstorage/README.md).
 
 ## What the UI is
-A control panel for `coldstored`: see what's archived, add/remove source folders, trigger a run, watch live
-progress, and restore a file. It holds **no archive logic** — the Swift daemon owns scan/encrypt/upload/
-restore/journal. The UI reads state and sends commands. Brand surface is calm, plainspoken, quietly warm
-(see strategy/, gitignored) — never catastrophe imagery.
+A control panel for `coldstored`: browse your files, drop files in to upload, reorganize, watch live
+progress, and request a copy back. It holds **no upload/restore logic** — the Swift daemon owns
+scan/encrypt/upload/restore/journal. The UI reads state and sends commands. Brand surface is plain and
+factual — a file uploader, not a vault that advertises safety (see the VOICE note below).
 
 ---
 
@@ -18,20 +18,35 @@ restore/journal. The UI reads state and sends commands. Brand surface is calm, p
 > **This supersedes the original 4-tab layout** (Vault / Sources / Restore / Browse) described under
 > "Build order" → layer 3 below. The layer 1–2 infrastructure (socket client, secure IPC, event-fold
 > store, the design system + tokens) is **unchanged and still correct**; only the *layout, navigation,
-> and flows* are redesigned. Worked through with Ben in a dedicated UX session. Not yet built.
+> and flows* are redesigned. Worked through with Ben in a dedicated UX session.
+>
+> **BUILT 2026-06-24 ✅ — pending macOS visual verify.** My Files browser + Settings ship in [`ui/`](./ui/);
+> the old 4-tab views are deleted, primitives/tokens/plumbing kept. `task ui:typecheck` + `ui:test` +
+> `ui:build` green. The browser tree renders from **fixtures** (`ui/src/renderer/src/views/files/fixtures.ts`
+> — a `listFiles` stand-in); request-a-copy issues the **real `restore` command**; deposit/move/rename/delete
+> are optimistic-local seams (honest — cheap journal edits in the real design). See the contract gaps below
+> for what makes each real.
+
+> **VOICE — plain file-uploader, no reassurance theater (Ben, 2026-06-24).** Don't tell the user their
+> files are "safe," don't claim/advertise safety, don't editorialize ("steady", "reassuring"). It's a
+> file uploader; they know why they're using it. Use plain, factual verbs: **upload** (not "archive" as
+> the active verb), **stored** (not "safe"), **request a copy** / **Start transfer** / **Transferring**
+> (not "download"/"retrieve"/"get it back" — those imply immediacy; the slow-thaw nuance lives in the
+> dialog, not the label), **frozen** (factual: deep storage is slow to open). Status is *information*, not
+> comfort. (Extends [no fear-mongering] — same principle, other direction: neither alarm nor reassurance,
+> just facts.)
 
 ## The mental model
-Two questions are the whole product: **"is my stuff safe?"** and **"can I get it back?"** The app answers
-them as a **remote SSD you browse like a filesystem** — not a dashboard, not a sync-status panel.
+Two jobs are the whole product: **get files up** and **get them back**. The app does them as a
+**drive you browse like a filesystem** — not a dashboard, not a sync-status panel.
 
 - **Front door = the file browser itself.** An external drive has no "home dashboard"; you open it and
-  see your files. Reassurance is **ambient** (per-file status badges + a "12 GB safe" line), never a
-  separate screen of counts. *(This kills the original three-zeros Vault home and its wrong "Catch up
-  now" hero button.)*
-- **Ad-hoc deposit is the hero**, auto-watch is secondary. Two kinds of "stuff you can't lose": *living*
-  (a Photos library that grows → wants watching) and *done* (a finished folder → just wants depositing
-  once). The "I can't do AWS" user grasps **drag-it-in-and-it's-safe** more readily than configuring
-  watched sources. So drop-to-archive is the front door; watched folders demote to Settings.
+  see your files. Status is **ambient** (per-file badges + a plain storage line), never a separate screen
+  of counts. *(This kills the original three-zeros Vault home and its wrong "Catch up now" hero button.)*
+- **Ad-hoc deposit is the hero**, auto-watch is secondary. Two kinds of files people keep: *living*
+  (a Photos library that grows → wants watching) and *done* (a finished folder → just wants uploading
+  once). The "I can't do AWS" user grasps **drag-it-in-and-it-uploads** more readily than configuring
+  watched sources. So drop-to-upload is the front door; watched folders demote to Settings.
 - **It's a real, reorganizable filesystem.** Move / rename / nest / new-folder / delete all work. This is
   cheap and honest because **the user's tree lives in the journal, not in S3 keys**: a move is a
   one-column `relativePath` edit (or a path-prefix sweep for a folder); the encrypted blob never moves,
@@ -44,42 +59,59 @@ them as a **remote SSD you browse like a filesystem** — not a dashboard, not a
 
 ## Surfaces — two, not four
 The 4 co-equal tabs collapse to:
-- **My Files** — the entire drive: browse, drop-to-archive, reorganize, request-back. *(absorbs old
+- **My Files** — the entire drive: browse, drop-to-upload, reorganize, download a copy. *(absorbs old
   Vault + Restore + Browse.)*
-- **Settings** — watched folders, exclude patterns, storage/cost, restore location. *(absorbs old
-  Sources.)*
+- **Settings** — watched folders, exclude patterns, storage/cost. *(absorbs old Sources.)*
+
+The sidebar is **resizable** (drag the seam; clamped + persisted). No docked detail panel — selecting a
+row just selects it; the `⋯` per-row dropdown (and right-click) opens actions, **Get info** opens a modal.
 
 ```
-┌──────────────┬──────────────────────────────────────────────────────┐
-│ ❄ coldstorage│  My Files › Photos › 2019        ⊞ ⊟    ⊕ Add   ⋯    │
-│              │ ┌──────────────────────────────────┬────────────────┐ │
-│  My Files    │ │ Name          Size    Status      │  beach.jpg     │ │
-│  Settings    │ │ 📁 January    1.2 GB  ☁           │  Photo · 4.1MB │ │
-│              │ │ 📄 beach.jpg  4.1 MB  ☁ frozen  ◀ │  archived      │ │
-│              │ │ 📄 sunset.jpg 3.8 MB  ⬇ here       │  Mar 3 2024    │ │
-│              │ │ 📄 hike.mov   2.3 GB  ◌ getting…   │                │ │
-│ ● Connected  │ │                                    │ [ Get it back ]│ │
-│ 12 GB safe   │ └──────────────────────────────────┴────────────────┘ │
-└──────────────┴── drop anywhere to archive · right-click for more ─────┘
+┌────────────┬────────────────────────────────────────────────────────┐
+│ ❄ coldstor.│  My Files › Photos › 2019              ⊞ ⊟    ⊕ Add      │
+│            │  Name                          Size      Date            │
+│  My Files  │  📁 January                    1.2 GB    12 items        │
+│  Settings  │  📄 beach.jpg                  4.1 MB    Jul 12 2019  ✓ ⋯ │
+│            │  📄 sunset.jpg                 3.8 MB    Jul 12 2019  ↓ ⋯ │
+│            │  📄 hike.mov                   2.3 GB    Aug 3 2019      │
+│            │                                                          │
+│ 12 GB      │                                                          │
+│Transferring 1│ ────── drop anywhere to upload · right-click for more ─│
+└────────────┴────────────────────────────────────────────────────────┘
+   ⋯ → Get info · Rename · Move to… · New folder · Request a copy… · Delete
+   (status = a small colored icon by the ⋯: ↑ uploading · ↓ transferring · ✓ saved;
+    frozen rows show none — the resting default, not news)
 ```
 
 ## My Files — the browser
 - **Navigation:** drill-in + breadcrumbs (click a folder → it becomes the view). Like iOS Files /
   Explorer — universally understood and it scales to an 8,000-photo folder where an inline tree would
   choke.
-- **View:** list by default (name / size / status / date), with a **grid/gallery toggle** (`⊞ ⊟`) for
-  photo folders — file-type icons today, thumbnails when R2 lands (the *only* R2-gated piece).
-- **Per-file status badge** is the reassurance, always visible:
-  - `☁ frozen` — safe in Deep Archive, not on disk. The default, reassuring state.
-  - `◌ getting back` — thaw in flight; shows the quoted ready-by time.
-  - `⬇ here` — thawed + downloaded, sitting locally.
-  - `↑ archiving…` — mid-upload.
-- **Selection → right-side inspector** (details + primary action `Get it back` / `Open`; also where the
-  request-back quote previews) + **right-click context menu**. **Multi-select** (cmd/shift) drives batch
-  restore / delete / move.
-- **Empty / first-run:** a calm invitation, not three zeros — *"Drop files or folders here to keep them
-  safe,"* one trust line ("encrypted on your Mac, then frozen in deep storage"), collapses to the file
-  list once populated.
+- **View:** list by default (name / size / date — **no status column**), with a **grid/gallery toggle**
+  (`⊞ ⊟`) — file-type icons today, thumbnails when R2 lands (the *only* R2-gated piece).
+- **Status is a small colored ICON by the row's `⋯`, NOT a column or a text pill** (Ben, 2026-06-24).
+  `frozen` is the resting default → **no icon** (a marker on every row is noise). An icon shows only when
+  there's something true to say (fixed-width slot so rows stay aligned with or without one):
+  - upload icon, accent blue — **uploading** (mid-upload).
+  - down-arrow-circle icon, amber — **Transferring** (a copy is on its way; queue shows Preparing →
+    Downloading → Ready + ready-by).
+  - green **check** — a copy is saved on this Mac.
+- **Selection is just selection** — clicking a row selects it (cmd/shift for multi → batch ops); it does
+  **not** auto-open a panel. **Details live behind a dropdown**: a per-row `⋯` (and right-click) opens
+  the actions menu; **Get info** opens a details modal. Double-click a file → Get info; a folder → drill
+  in. *(No docked side-inspector — Ben, 2026-06-24: details belong under a dropdown, not a panel that
+  opens on click.)*
+- **Getting a copy back is a SECONDARY action, never a promoted CTA.** The product's job is to upload +
+  hold files; getting a copy back is *available, not advertised* (Ben, 2026-06-24). It lives in the row
+  menu and the Get-info modal (a low-key button), labeled **"Request a copy…"** — *request* signals it's
+  not instant (not "download"/"retrieve"/"get it back", which all imply immediacy). The dialog's confirm
+  button is **"Start transfer"** and the dialog owns the "ready in ~a day" detail. In-flight status reads
+  **Transferring** (not "downloading" — that implies it's actively loading onto the disk, but most of the
+  wait is the deep-storage thaw; "transferring" matches the Start-transfer action).
+- **Empty / first-run:** a plain invitation, not three zeros — *"Drop files or folders here to upload
+  them,"* one factual line ("encrypted on your Mac before upload"), collapses to the file list once
+  populated. **Delete-empty-folder skips the confirm** (no bytes at stake → just remove it; the
+  180-day-cost copy only shows when real uploaded bytes are involved).
 - **Manipulation = standard Finder gestures** (committed to the filesystem feel): rename (double-click →
   inline edit), new folder, drag-to-move, delete (⌫ → confirm). **Delete = instant tombstone** in the
   journal — honest copy: *"removes it from your files; it doesn't lower your cost for 180 days"* (Deep
@@ -87,34 +119,37 @@ The 4 co-equal tabs collapse to:
   (packed blobs need thaw-to-repack — a backend concern, invisible here).
 
 ## Deposit flow (the hero)
-1. **Drop** anywhere (or ⊕ Add) → surface highlights, *"Drop to archive."* Items land in the
+1. **Drop** anywhere (or ⊕ Add) → surface highlights, *"Drop to upload."* Items land in the
    currently-viewed folder (root if at root).
 2. **Encrypt + upload** — daemon-owned, so **non-blocking**: browse / navigate / close the app, it
-   continues. Aggregate headline (`Archiving 240 photos… 31 done`) + per-file `↑ archiving…` → `☁ frozen`
+   continues. Aggregate headline (`Uploading 240 photos… 31 done`) + per-file `↑ uploading…` → `❄ frozen`
    badges updating live in the tree.
-3. **Done = quiet inline confirmation** (no celebration, no notification): *"240 photos are frozen and
-   safe. Skipped 1,203 files in node_modules and caches. see what →"*. The skip line is cost-protection
-   made calm + factual — name the junk, **no salesy "saved you $X."**
+3. **Done = quiet inline confirmation** (no celebration, no notification): *"240 photos uploaded. Skipped
+   1,203 files in node_modules and caches. see what →"*. The skip line is cost-protection made factual —
+   name the junk, **no salesy "saved you $X,"** no "safe."
 4. **Edge states reflect the proven daemon honestly:** interrupted → resumes same `uploadId` (no
    re-upload); a blob fails → run continues, failure surfaced named (permanent vs transient); offline →
    queues.
 
-## Request-back flow (the payoff + the honest limit)
-1. **Trigger:** click a `☁ frozen` file → `Get it back` (double-click a frozen file = request; a `⬇ here`
-   file = open). Works on one file, a multi-select, or a whole folder.
-2. **Quote = explicit modal confirm** (paid + multi-hour → never accidental/optimistic): file · size ·
-   **ready in ~a day (up to 48h)** · **cost ~$X** · **lands in Downloads/Restores** · "you can close the
-   app — we'll fetch it and let you know."
+## Request-a-copy flow (available, not advertised — the honest limit)
+1. **Trigger:** the **secondary** "Request a copy…" action — in the row `⋯` menu or the Get-info modal
+   (never a primary CTA, never the double-click default; double-click = Get info). Works on one file, a
+   multi-select, or a whole folder.
+2. **Confirm = explicit modal** (paid + multi-hour → never accidental/optimistic), button **"Start
+   transfer"**: file · size · **ready in ~a day (up to 48h)** · **cost ~$X** · **a "Save to" row with the
+   native folder picker** (`dialog.showOpenDialog`, a window sheet on macOS — no typing; defaults to the
+   OS Downloads dir, chosen per request, no global setting) · "you can close the app — we'll fetch it and
+   let you know."
 3. **In-flight = named stages, NEVER a fake progress bar** (Deep Archive reports only "still warming" vs
-   "ready", no %): **Warming up** (~12–48h, the honest unknown) → **Downloading** (mins) → **Verifying**
-   (secs) → **Ready**. Badge shows a quoted ready-by time.
+   "ready", no %): **Preparing** (~12–48h, the honest unknown) → **Downloading** (mins) → **Ready**. Badge
+   shows a quoted ready-by time.
 4. **Ready → `⬇ here` + a macOS system notification** (walk-away is the whole design): *"wedding.mov is
-   back — in Downloads/Restores [Show] [Open]."*
-5. **Edge:** the thawed copy expires after the requested `days`, then re-freezes → honest *"available
-   until Jun 28,"* re-fetch is one click.
-6. A **persistent "getting back" indicator** lives in the shell so an in-flight restore is visible
-   everywhere and survives app close (the daemon owns the thaw; the UI reflects it).
-7. **Batch/folder restore** → one **combined** quote (`getting back 240 files · ~a day · ~$3.10`) so cost
+   ready — in your Downloads folder [Show] [Open]."*
+5. **Edge:** the local copy expires after the requested `days`, then re-freezes → honest *"available
+   until Jun 28,"* download again is one click.
+6. A **persistent "Transferring N" indicator** lives in the shell (sidebar foot, clickable → the queue
+   popover) so an in-flight transfer is visible everywhere and survives app close.
+7. **Batch/folder request** → one **combined** quote (`transferring 240 files · ~a day · ~$3.10`) so cost
    stays certain.
 
 ## Settings
@@ -126,9 +161,10 @@ The 4 co-equal tabs collapse to:
   list to the non-technical user, real globs under the hood. Scope: **global + per-source** (per-source
   extras hang off each watched folder's `⋯`, a later refinement; global ships first). gitignore-style
   semantics (reuse, don't invent a matcher).
-- **Storage:** calm + factual — *"12 GB safe · ~$0.05/month · encrypted on this Mac"* (honest trust line,
-  no zero-knowledge / privacy over-claim beyond V1).
-- **Restores land in** — the default the request-back quote references, changeable.
+- **Storage:** plain + factual — *"12 GB stored · ~$0.05/month · encrypted on this Mac"* (no "safe", no
+  zero-knowledge / privacy over-claim beyond V1).
+- **No "download location" setting** — removed (Ben, 2026-06-24). Downloading is rare, so the destination
+  is chosen per download in the dialog, not maintained as a global preference.
 
 ## Daemon contract gaps this design needs (the build spec)
 The UI is a thin client; this design needs data/commands the daemon doesn't expose yet. **None block the
@@ -137,10 +173,10 @@ already holds the data.
 - **`listFiles` (read).** Return the browsable tree from the journal — `relativePath, size, status,
   blobId` already exist in the `files` table (`Journal.swift`). The single command that unblocks the
   whole browser. *No R2, no thaw.*
-- **Per-file live status.** Browser badges need `frozen | archiving | gettingBack | here` per file —
+- **Per-file live status.** Browser status icons need `frozen | uploading | gettingBack | here` per file —
   fold the journal `FileStatus` with the live restore state (today restore state is per-request via
   `restore*` events, not queryable per file).
-- **Bytes / size in `Status`.** "12 GB safe" + per-folder rollups. Per-file `size` exists in the journal;
+- **Bytes / size in `Status`.** "12 GB stored" + per-folder rollups. Per-file `size` exists in the journal;
   `Status` exposes only counts — add a total-bytes field (and ideally per-prefix sums).
 - **Restore *fee* estimate.** The quote shows cost; `restore`/`RestoreStep` exposes `typicalWait` but
   **no fee**. Add an estimated-cost field (and a combined estimate for batch/folder restore).
@@ -213,19 +249,19 @@ other clients of it). A Node client is ~30 lines and keeps the UI a pure consume
    `src/renderer/src/styles/tokens/` (the 5 token CSS files **vendored verbatim** from the DS — the
    SSOT, re-sync if it changes) + `styles/app.css` (component/shell styling, all `var(--*)`);
    `src/renderer/src/ui/` (`primitives.tsx` = Button/Card/Stat/Badge/KeyValueRow/Field/EmptyState/Icon;
-   `layout.tsx` = Sidebar + Page); `src/renderer/src/views/` (Vault = proof-of-safety wall, Sources,
-   Restore). `App.tsx` is now a thin shell (sidebar routing + a shared `exec` + an error toast). **Fonts
+   `layout.tsx` = Sidebar + Page); `src/renderer/src/views/` (the original 4-tab views — now deleted, see
+   the callout below). `App.tsx` is a thin shell (sidebar routing + a shared `exec` + an error toast). **Fonts
    self-hosted** (`@fontsource/hanken-grotesk`, `@fontsource/jetbrains-mono`, `material-symbols`) so they
    bundle same-origin under the renderer's locked-down CSP (`default-src 'self'`) — the DS's Google-Fonts
    `@import` would have been blocked. **Proven:** `task ui:typecheck` + `task ui:build` green.
    **PENDING Ben (macOS):** visual verify via `task ui:demo` (or `task ui:dev` vs `task daemon:run`) —
    can't render Electron here.
    *Later optimization:* subset the 5.3 MB Material Symbols woff2 to the ~12 glyphs used.
-   > ⚠️ **LAYOUT SUPERSEDED (2026-06-24).** The 4-tab Vault/Sources/Restore/Browse layout these views
-   > implement is replaced by the **reorganizable-filesystem design** (see "Canonical design" at the top).
-   > The **primitives, tokens, fonts, `app.css`, and the layer-1/2 plumbing stay** — it's the *views,
-   > nav, and flows* that get rebuilt (My Files browser + Settings). Don't extend the old 4 views; build
-   > toward the canonical design.
+   > ✅ **REBUILT to the canonical design (2026-06-24).** The 4-tab Vault/Sources/Restore/Browse views are
+   > deleted; **My Files** (browser) + **Settings** ship in their place (`src/views/MyFilesView.tsx`,
+   > `SettingsView.tsx`, `views/files/`). The primitives/tokens/fonts/`app.css`/layer-1/2 plumbing were
+   > kept and extended (added `Chip` + `Modal` primitives, a `Page` `fill` mode, a Sidebar foot slot).
+   > `task ui:typecheck` + `ui:test` + `ui:build` green; macOS visual verify pending.
 
 ## Dependencies & gotchas (save the next agent hours)
 - **Browse is NOT R2-blocked — only thumbnails are (corrected 2026-06-24).** Earlier notes said the whole
@@ -250,26 +286,29 @@ other clients of it). A Node client is ~30 lines and keeps the UI a pure consume
   is the live source — prefer it.
 
 ## Next task for the next agent
-Layers 1 + 2 are done ✅ + verified on macOS (socket client, secure IPC, event-fold store, DS tokens +
-primitives + fonts). Layer 3 was built as the **4-tab layout**, now **superseded** by the
-**Canonical design** at the top of this doc (the reorganizable filesystem). The plumbing + design system
-stay; the views/nav/flows get rebuilt. **Remaining UI work, in order:**
+Layers 1 + 2 done ✅ + verified on macOS. Layer 3 **rebuilt to the canonical design (2026-06-24)** —
+**My Files** browser + **Settings** ship in [`ui/`](./ui/); old 4-tab views deleted; primitives/tokens/
+plumbing kept + extended (added `Chip`/`Modal`, `Page.fill`, Sidebar foot). `task ui:typecheck`+`ui:test`+
+`ui:build` green. The data model is in `ui/src/renderer/src/views/files/model.ts` (pure, headless-tested);
+the tree is seeded from `fixtures.ts`. **Remaining UI work, in order:**
 
-1. **Rebuild the views to the canonical design** — collapse 4 tabs → **My Files** (drill-in file browser:
-   list/grid, status badges, inspector + context menu, drop-to-archive, reorganize, request-back modal)
-   **+ Settings** (watched folders, exclude chips, storage, restore location). Reuse the existing
-   primitives/tokens; add the few new ones the browser needs (tree row, breadcrumb, inspector, modal,
-   drop overlay). Keep `App.tsx` a thin routing shell.
-2. **Grow the daemon contract to match** — see "Daemon contract gaps this design needs" above. The
-   unblocking one is **`listFiles`** (journal `SELECT` → the browser's tree). The rest (ad-hoc deposit,
-   excludes, fee estimate, move/rename/delete, bytes/cost) are Ben's backend lane; the UI binds to the TS
-   mirror as each lands. Design the views to a clear data model now; render from realistic fixtures where
-   the daemon is behind.
-3. **macOS visual verify** (Ben) — `task ui:demo` / `task ui:dev` vs `task daemon:run`. Electron can't
-   render in the container.
-4. **Polish:** native folder picker (`dialog.showOpenDialog`) for Add-source; macOS system notification
-   on restore-ready; subset the 5.3 MB Material Symbols woff2 to the glyphs actually used.
+1. **macOS visual verify** (Ben) — `task ui:demo` / `task ui:dev` vs `task daemon:run`. Electron can't
+   render in the container. *(Caveat: against the current fixtures + empty vault, clicking Get-it-back
+   issues the real `restore` command for a fixture id the daemon can't match → an honest "unknown file"
+   error. The modal/quote/confirm flow still verifies; the post-confirm badge transition needs real ids
+   from `listFiles`.)*
+2. **Grow the daemon contract to activate the seams** — see "Daemon contract gaps this design needs"
+   above. **`listFiles`** (journal `SELECT`) is the unblocker: it replaces `fixtures.ts` with real journal
+   files, which also makes request-a-copy resolve end-to-end. Then ad-hoc **deposit**, **move/rename/delete**,
+   exclude get/set, and **fee + bytes/cost** estimates turn the optimistic-local ops (`useFiles.ts`) and
+   placeholder numbers real. As each lands: mirror it in `protocol.ts`, fetch/issue in the controller/view,
+   swap the stand-in. The UI already binds to a clear data model, so this is a source swap, not a rebuild.
+3. **Polish:** native folder picker (`dialog.showOpenDialog`) for Add-folder; `Show in Finder`
+   (`shell.showItemInFolder` via IPC); dropped-file paths via `webUtils.getPathForFile` in the preload
+   (Electron 32+ removed `File.path`); macOS system notification on restore-ready; subset the 5.3 MB
+   Material Symbols woff2 to the glyphs used.
 
-When extending: components live in `src/renderer/src/ui/` (bound to the vendored token vars in
-`styles/tokens/` — the DS SSOT, re-sync don't hand-edit). **Pull current docs via the Context7 MCP**
-before deep React/Vite/Electron work.
+When extending: generic primitives live in `src/renderer/src/ui/` (bound to the vendored token vars in
+`styles/tokens/` — the DS SSOT, re-sync don't hand-edit); the browser's domain components + model live in
+`src/renderer/src/views/files/`. **Pull current docs via the Context7 MCP** before deep React/Vite/Electron
+work.

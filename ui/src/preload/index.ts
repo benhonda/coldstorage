@@ -28,6 +28,9 @@ const api: ColdstoreApi = {
     ipcRenderer.on(IPC.lifecycle, handler);
     return () => ipcRenderer.removeListener(IPC.lifecycle, handler);
   },
+
+  chooseFolder: (defaultPath?: string) => ipcRenderer.invoke(IPC.chooseFolder, defaultPath),
+  getDownloadsDir: () => ipcRenderer.invoke(IPC.downloadsDir),
 };
 
 // contextIsolation is always on (set in main); the else is a defensive no-op path, not a supported mode.

@@ -14,9 +14,11 @@ import { join } from "node:path";
 import { app, BrowserWindow, shell } from "electron";
 import { DaemonClient } from "../daemon/client.ts";
 import { registerBridge } from "./bridge.ts";
+import { registerSystemHandlers } from "./system.ts";
 
 const client = new DaemonClient(); // autoReconnect on by default — survives launchd KeepAlive restarts
 const disposeBridge = registerBridge(client);
+const disposeSystem = registerSystemHandlers();
 
 const createWindow = (): void => {
   const win = new BrowserWindow({
@@ -70,5 +72,6 @@ app.on("window-all-closed", () => {
 
 app.on("will-quit", () => {
   disposeBridge();
+  disposeSystem();
   client.close();
 });

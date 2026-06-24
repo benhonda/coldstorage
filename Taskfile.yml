@@ -300,10 +300,10 @@ tasks:
       - bun run typecheck
 
   ui:test:
-    desc: "Run the headless state-layer tests (reducer + controller; no Electron/daemon needed)."
+    desc: "Run the headless renderer tests (state fold + file-tree model; no Electron/daemon needed)."
     dir: ui
     cmds:
-      - bun run test:state
+      - bun run test
 
   ui:dev:
     desc: "[macOS] Run the Electron app with HMR (electron-vite dev). Start `task daemon:run` first."

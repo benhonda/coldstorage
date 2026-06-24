@@ -14,7 +14,7 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "bun run typecheck:node && bun run typecheck:web",
-    "test:state": "bun test src/renderer/src/state",
+    "test": "bun test src/renderer/src",
     "prove": "bun run src/daemon/prove.ts"
   },
   "devDependencies": {

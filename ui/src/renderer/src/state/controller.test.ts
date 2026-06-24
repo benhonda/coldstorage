@@ -44,6 +44,8 @@ const makeApi = (initial: ConnectionState) => {
       lifeCb = cb;
       return () => (lifeCb = null);
     },
+    chooseFolder: () => Promise.resolve(null),
+    getDownloadsDir: () => Promise.resolve("/tmp/Downloads"),
   };
 
   return {

@@ -11,14 +11,17 @@ commands. Full plan + decisions: [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DES
 |-------|------|-------|
 | 1 | Node IPC bridge (`node:net` → JSONL control socket) | **DONE ✅** |
 | 2 | electron-vite shell + main↔renderer IPC + event-stream→typed state | **DONE ✅** |
-| 3 | Design system (tokens + primitives) + React views | **DS/plumbing DONE ✅ · LAYOUT REDESIGNED ⟳** |
+| 3 | Design system (tokens + primitives) + React views | **DONE ✅ — My Files + Settings (visual-verify pending)** |
 
-> ⚠️ **The built 4-tab layout (Vault/Sources/Restore/Browse) is SUPERSEDED** by the
-> **reorganizable-filesystem design** — two surfaces, **My Files** (drill-in file browser: drop-to-archive,
-> reorganize, request-back) + **Settings**. The DS tokens/primitives/fonts and all layer-1/2 plumbing
-> **stay**; the *views, nav, and flows* get rebuilt. **Canonical design + the daemon contract gaps it needs
-> (incl. `listFiles`) are the SSOT in [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md)** — build to
-> that, don't extend the old views. The notes below describe the *current* (to-be-rebuilt) code.
+> ✅ **The reorganizable-filesystem redesign is BUILT (2026-06-24)** — two surfaces, **My Files** (drill-in
+> file browser: drop-to-upload, status icons, row ⋯ dropdown + Get-info modal, reorganize, request-a-copy
+> modal w/ native folder picker) + **Settings** (watched folders, exclude chips, storage). The old 4-tab
+> Vault/Sources/Restore/Browse views are deleted; DS tokens/primitives/fonts + all layer-1/2 plumbing
+> were kept. `task ui:typecheck` + `task ui:test` + `task ui:build` green. **PENDING Ben (macOS): visual
+> verify** (`task ui:demo` / `ui:live` — Electron can't render in the container). The browser tree renders
+> from **fixtures** (a `listFiles` stand-in — see [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md)
+> "Daemon contract gaps"); request-a-copy issues the **real `restore` command**; deposit/move/rename/delete
+> are optimistic-local seams (honest — they're cheap journal edits in the real design).
 
 Toolchain: **electron-vite** (Vite, three-process split), **React 19**, secure IPC
 (`contextIsolation: true`, `contextBridge`). Tooling runs on **Bun**; the Electron runtime is its own
@@ -46,13 +49,16 @@ src/shared/
 src/main/         Electron main process — owns the one DaemonClient + the window.
   index.ts      app/window lifecycle; dials the daemon (autoReconnect); secure webPreferences.
   bridge.ts     DaemonClient ⇄ IPC: ipcMain.handle(commands) + webContents push(events/lifecycle).
+  system.ts     OS integrations the renderer can't reach: native folder picker + Downloads dir
+                (dialog.showOpenDialog), used by the request-a-copy dialog. Not daemon-related.
 
 src/preload/
   index.ts      contextBridge.exposeInMainWorld("coldstore", api) — the ONLY thing the renderer sees.
 
 src/renderer/     The web app (React). No Node, no socket — talks to window.coldstore.
   index.html, src/main.tsx (font + style imports), src/useStore.ts, src/env.d.ts
-  src/App.tsx     LAYER 3 — thin shell: sidebar routing + shared `exec` runner + error toast.
+  src/App.tsx     LAYER 3 — thin 2-route shell: routes My Files / Settings; owns the cross-view state
+                  (useFiles + useSettings); shared `exec` runner + error toast + sidebar foot reassurance.
   src/state/
     reducer.ts      pure event-stream → AppState fold (+ eventAction constructor). Headless-testable.
     store.ts        tiny observable store (useSyncExternalStore-shaped).
@@ -60,10 +66,18 @@ src/renderer/     The web app (React). No Node, no socket — talks to window.co
     *.test.ts       headless tests (bun test) — real reducer + real controller, fake api.
   src/styles/     LAYER 3 — tokens/ = the 5 DS token CSS files VENDORED verbatim (the SSOT, re-sync
                   don't hand-edit); app.css = component/shell styling (all var(--*)); index.css = entry.
-  src/ui/         LAYER 3 — DS primitives ported to native TSX: primitives.tsx (Button, Card, Stat,
-                  Badge, KeyValueRow, Field, EmptyState, Icon, Alert) + layout.tsx (Sidebar, Page).
-  src/views/      LAYER 3 — VaultView, SourcesView, RestoreView + types.ts. ⚠️ the OLD 4-tab views,
-                  superseded by the My Files browser + Settings (see ELECTRON-UI-DESIGN.md). To be rebuilt.
+  src/ui/         LAYER 3 — DS primitives ported to native TSX: primitives.tsx (Button, IconButton, Card,
+                  Stat, Badge, KeyValueRow, Field, EmptyState, Alert, Chip, Modal, Icon) + layout.tsx
+                  (Sidebar w/ foot slot, Page w/ ReactNode title + `fill` mode).
+  src/views/      LAYER 3 — MyFilesView (browser) + SettingsView + types.ts (ViewProps/Exec).
+    files/        the browser's domain layer:
+      model.ts        PURE, headless-tested: ArchivedFile/Row tree, rollups, path-rewrite ops, formatters.
+      model.test.ts   bun-test coverage of the tree derivation + reorganize math.
+      fixtures.ts     listFiles STAND-IN — realistic vault until the daemon read lands (seam-commented).
+      useFiles.ts     file state + reorganize ops (deposit/move/rename/delete/newFolder); overlays live
+                      restore status from the store. useSettings.ts = exclude chips.
+      Breadcrumb, StatusBadge (StatusIcon), ContextMenu, InfoModal (Get info), RequestBackModal
+                      (request-a-copy + native folder picker), GettingBackPanel (the transfer queue).
 ```
 
 ## Commands (run from repo root)
@@ -123,15 +137,17 @@ the *tokens*, not the bundle.
   `list_files`/`read_file` on project `41ebafc1`) — it has component specimens, the FORM RECIPE (normative
   spacing), and the iOS-app kit for reference. Keep new components in `src/ui/`, bound to the tokens.
 
-**Next UI work** (the redesign — full spec in [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md)):
-- **Rebuild views to the canonical design** — collapse 4 tabs → **My Files** browser + **Settings**;
-  reuse the existing primitives/tokens, add the few new ones (tree row, breadcrumb, inspector, modal,
-  drop overlay). *(Supersedes the old Vault-specific polish — e.g. stat-card wrap, the always-live
-  "Catch up now" — those views go away; "Catch up now" moves into Settings.)*
-- **Grow the daemon contract** to match — `listFiles` unblocks the browser (a journal `SELECT`); the rest
-  (ad-hoc deposit, excludes, fee estimate, move/rename/delete, bytes/cost) is the backend lane.
-- **Polish:** native folder picker (`dialog.showOpenDialog`); macOS system notification on restore-ready;
-  subset the 5.3 MB Material Symbols woff2 to the glyphs used.
+**Next UI work** (the redesign is BUILT — full spec in [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md)):
+- **macOS visual verify** (Ben) — `task ui:demo` / `ui:live`. Container can't render Electron.
+- **Grow the daemon contract** to activate the seams — **`listFiles`** (journal `SELECT`) makes the
+  browser tree real (replacing `fixtures.ts`); then ad-hoc **deposit**, **move/rename/delete**, exclude
+  get/set, **fee + bytes/cost** estimates wire up the optimistic-local ops + the storage/quote numbers.
+  As each lands: mirror it in `protocol.ts`, fetch/issue it, swap the stand-in. Request-back already
+  issues the real `restore` command (it resolves once the tree shows real journal ids).
+- **Polish:** native folder picker is **done** for the request-a-copy dialog (`src/main/system.ts`) —
+  still typed for the Settings Add-folder field; `Show in Finder` (`shell.showItemInFolder`
+  via IPC); dropped-file paths via `webUtils.getPathForFile` in the preload (Electron 32+ removed
+  `File.path`); macOS system notification on restore-ready; subset the 5.3 MB Material Symbols woff2.
 
 ## Gotchas
 

@@ -4,6 +4,8 @@
  * (../styles); they hold no app state. Voice rules live in the DS guide: sentence case, no exclamation
  * marks, no emoji — enforced by the copy passed in, not here.
  */
+import { useEffect } from "react";
+import { createPortal } from "react-dom";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 
 /** Material Symbols Rounded glyph (filled by default — the brand icon style). */
@@ -215,3 +217,71 @@ export const Alert = ({ children, icon = "error" }: { children: ReactNode; icon?
     <span>{children}</span>
   </div>
 );
+
+/** Removable label chip — a "don't back up" pattern, a tag. Pass `onRemove` to show the ✕. */
+export const Chip = ({
+  children,
+  mono = false,
+  onRemove,
+}: {
+  children: ReactNode;
+  mono?: boolean;
+  onRemove?: () => void;
+}): React.JSX.Element => (
+  <span className={mono ? "cs-chip cs-mono" : "cs-chip"}>
+    {children}
+    {onRemove && (
+      <button type="button" className="cs-chip-x" aria-label="Remove" onClick={onRemove}>
+        <Icon name="close" size={14} />
+      </button>
+    )}
+  </span>
+);
+
+/**
+ * Centered modal over a scrim — for the deliberate moments (a request-back quote, a delete confirm).
+ * Closes on Escape or scrim click; the panel stops propagation so inner clicks don't dismiss. `footer`
+ * holds the actions (primary action rightmost, DS convention).
+ */
+export const Modal = ({
+  title,
+  icon,
+  onClose,
+  footer,
+  children,
+}: {
+  title: string;
+  icon?: string;
+  onClose: () => void;
+  footer?: ReactNode;
+  children: ReactNode;
+}): React.JSX.Element => {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return createPortal(
+    <div className="cs-modal-scrim" onClick={onClose}>
+      <div
+        className="cs-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="cs-modal-head">
+          {icon && <Icon name={icon} size={22} />}
+          <h2 className="cs-modal-title">{title}</h2>
+          <IconButton icon="close" label="Close" className="cs-modal-x" onClick={onClose} />
+        </header>
+        <div className="cs-modal-body">{children}</div>
+        {footer && <footer className="cs-modal-foot">{footer}</footer>}
+      </div>
+    </div>,
+    document.body,
+  );
+};

@@ -36,6 +36,10 @@ export const IPC = {
   event: "daemon:event",
   /** push: connection lifecycle changed, `(state)`. */
   lifecycle: "daemon:lifecycle",
+  /** invoke: open the native folder picker; resolves to the chosen path or null. */
+  chooseFolder: "dialog:chooseFolder",
+  /** invoke: the OS Downloads directory (default save destination). */
+  downloadsDir: "dialog:downloadsDir",
 } as const;
 
 /** Whether the main process currently holds a live socket to `coldstored`. */
@@ -55,4 +59,9 @@ export interface ColdstoreApi {
   onEvent(listener: <E extends DaemonEventName>(name: E, data: DaemonEvents[E]) => void): () => void;
   /** Subscribe to connection-state changes. */
   onLifecycle(listener: (state: ConnectionState) => void): () => void;
+  /** Open the native folder picker (a window sheet on macOS). Resolves to the chosen absolute path, or
+   * null if cancelled. `defaultPath` seeds where it opens. */
+  chooseFolder(defaultPath?: string): Promise<string | null>;
+  /** The OS Downloads directory (absolute) — the default save destination for a requested copy. */
+  getDownloadsDir(): Promise<string>;
 }

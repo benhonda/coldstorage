@@ -6,20 +6,44 @@
 #root { height: 100vh; }
 
 .cs-shell {
+  position: relative;
   height: 100vh;
   display: grid;
-  grid-template-columns: var(--sidebar-width) 1fr;
+  /* default column track; App overrides inline with the resizable width */
+  grid-template-columns: 232px 1fr;
   /* the iceberg glow lives behind the whole shell, anchored top-left behind the sidebar */
   background: var(--bg-glow), var(--bg-app);
   background-repeat: no-repeat;
 }
 
+/* drag handle straddling the sidebar/main seam — thin, invisible until hovered */
+.cs-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  transform: translateX(-5px);
+  cursor: col-resize;
+  z-index: 10;
+  touch-action: none;
+}
+.cs-resizer::after {
+  content: "";
+  position: absolute;
+  inset: 0 4px;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+.cs-resizer:hover::after { background: var(--border-subtle); }
+
 /* ── sidebar (transparent over the glow; never a fill or border) ──── */
 .cs-sidebar {
   display: flex;
   flex-direction: column;
-  padding: var(--space-6) var(--space-4);
-  gap: var(--space-6);
+  padding: var(--space-5) var(--space-3);
+  gap: var(--space-5);
+  min-width: 0;
 }
 .cs-brand {
   display: flex;
@@ -88,7 +112,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 var(--gutter);
+  padding: 0 var(--cs-pad-x);
 }
 .cs-topbar-title { font: var(--type-page-title); letter-spacing: var(--tracking-tight); }
 .cs-topbar-sub { font: var(--type-label); color: var(--text-secondary); margin-top: 2px; }
@@ -96,12 +120,20 @@
 .cs-page {
   flex: 1 1 auto;
   overflow-y: auto;
-  padding: 0 var(--gutter) var(--space-12);
+  padding: 0 var(--cs-pad-x) var(--space-12);
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
   max-width: var(--content-max);
   width: 100%;
+}
+/* Full-height variant: the view (the file browser) owns its own layout + scroll. */
+.cs-page--fill {
+  overflow: hidden;
+  padding: 0;
+  gap: 0;
+  max-width: none;
+  min-height: 0;
 }
 
 /* ── primitives: layout helpers ─────────────────────────────────── */
@@ -311,3 +343,424 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-mono { font: var(--type-mono); letter-spacing: var(--tracking-mono); font-feature-settings: "tnum" 1; }
 .cs-muted { color: var(--text-secondary); }
 .cs-help { font: var(--type-label); color: var(--text-secondary); line-height: var(--leading-normal); }
+
+/* ════════════════════════════════════════════════════════════════════
+   Reorganizable-filesystem UI — My Files browser + Settings.
+   App-local layout vars below cover sizes the DS doesn't define (named here,
+   one place, so component rules never hand-pick a value). Everything else is
+   a DS token var. */
+.cs-shell {
+  --cs-pad-x: var(--space-5); /* content L/R inset — tighter than the fluid page gutter */
+  --cs-col-size: 92px;
+  --cs-col-date: 128px;
+  --cs-col-actions: 64px; /* status icon + ⋯, fixed so rows align with or without an icon */
+}
+
+/* ── sidebar foot: storage + (only-when-broken) status + getting-back ─ */
+.cs-foot { display: flex; flex-direction: column; gap: var(--space-1); }
+.cs-store {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  font: var(--type-label);
+  color: var(--text-secondary);
+}
+.cs-store .csf-icon { color: var(--text-tertiary); font-size: 16px; }
+/* a plain status line, shown ONLY when the background uploader isn't connected */
+.cs-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  font: var(--type-label);
+  color: var(--text-secondary);
+}
+/* getting-back is a button (opens the restore queue popover) */
+.cs-getting {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: rgba(224, 146, 42, 0.14);
+  color: var(--amber-500);
+  font: var(--type-label);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+.cs-getting:hover { background: rgba(224, 146, 42, 0.22); }
+.cs-getting .csf-icon { font-size: 16px; }
+
+/* ── getting-back queue popover ─────────────────────────────────── */
+.cs-queue {
+  position: fixed;
+  left: var(--space-4);
+  bottom: var(--space-12);
+  z-index: 30;
+  width: calc(var(--sidebar-width) - var(--space-8));
+  padding: var(--space-3);
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+}
+.cs-queue-head { font: var(--type-label); color: var(--text-tertiary); padding: 0 var(--space-2) var(--space-2); }
+.cs-queue-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2); }
+.cs-queue-row .csf-icon { color: var(--amber-500); flex: 0 0 auto; }
+.cs-queue-main { min-width: 0; }
+.cs-queue-name { font: var(--type-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-queue-sub { font: var(--type-label); color: var(--text-secondary); }
+
+/* ── topbar lead (holds the breadcrumb) ─────────────────────────── */
+.cs-topbar-lead { min-width: 0; display: flex; flex-direction: column; }
+
+/* ── breadcrumb ─────────────────────────────────────────────────── */
+.cs-crumbs { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
+.cs-crumb {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font: var(--type-page-title);
+  letter-spacing: var(--tracking-tight);
+  color: var(--text-secondary);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cs-crumb:hover { background: var(--surface-hover); color: var(--text-primary); }
+.cs-crumb--current { color: var(--text-primary); cursor: default; }
+.cs-crumb--current:hover { background: transparent; }
+.cs-crumb-sep { color: var(--text-tertiary); flex: 0 0 auto; }
+
+/* ── segmented list/grid toggle ─────────────────────────────────── */
+.cs-seg { display: inline-flex; gap: 2px; padding: 3px; background: var(--btn-secondary-bg); border-radius: var(--radius-pill); }
+.cs-seg-btn {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+.cs-seg-btn:hover { color: var(--text-primary); }
+.cs-seg-btn[aria-pressed="true"] { background: var(--surface-card); color: var(--accent-text); box-shadow: var(--shadow-card); }
+
+/* ── browser: a single full-height file list (details live in a modal, not a docked panel) ─ */
+.cs-browser { position: relative; display: flex; min-height: 0; height: 100%; }
+.cs-browser-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2) var(--cs-pad-x) var(--space-4);
+}
+
+/* ── file list (table) — a rounded card surface, on brand (no square white bar) ─ */
+.cs-filelist {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+}
+.cs-fl-grid {
+  display: grid;
+  grid-template-columns: 1fr var(--cs-col-size) var(--cs-col-date) var(--cs-col-actions);
+  align-items: center;
+  gap: var(--space-4);
+}
+/* trailing cell: the status icon (always, when non-frozen) sits just left of the ⋯ */
+.cs-fl-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-1); }
+/* the per-row ⋯ dropdown — hidden until the row is hovered or selected */
+.cs-fl-more {
+  width: var(--control-sm);
+  height: var(--control-sm);
+  background: transparent;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
+}
+.cs-fl-more:hover { background: var(--surface-active); }
+.cs-fl-row:hover .cs-fl-more,
+.cs-fl-row[aria-selected="true"] .cs-fl-more { opacity: 1; }
+.cs-fl-more:focus-visible { opacity: 1; }
+
+/* small colored status icon — colors kept from the badges (accent / amber / green) */
+.cs-statusicon { display: inline-grid; place-items: center; flex: 0 0 auto; }
+.cs-statusicon--accent .csf-icon { color: var(--accent); }
+.cs-statusicon--warning .csf-icon { color: var(--amber-500); }
+.cs-statusicon--success .csf-icon { color: var(--positive); }
+.cs-fl-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  /* same surface as the card so it reads as one piece; a hairline separates it from the rows */
+  background: var(--surface-card);
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  padding: var(--space-3) var(--space-4);
+  font: var(--type-label);
+  color: var(--text-tertiary);
+}
+.cs-fl-row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: var(--space-2) var(--space-4);
+  min-height: var(--control-lg);
+  border-radius: var(--radius-md);
+  cursor: default;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+.cs-fl-row:hover { background: var(--surface-hover); }
+.cs-fl-row[aria-selected="true"] { background: var(--accent-subtle); }
+.cs-fl-name { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.cs-fl-name .csf-icon { color: var(--text-secondary); flex: 0 0 auto; }
+.cs-fl-folder .csf-icon { color: var(--accent); }
+.cs-fl-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-body); }
+/* active/local status badge sits inline by the name (frozen shows none) */
+.cs-fl-name .cs-badge { flex: 0 0 auto; }
+.cs-fl-size, .cs-fl-date { font: var(--type-mono); color: var(--text-tertiary); letter-spacing: var(--tracking-mono); }
+.cs-fl-rename {
+  border: 0;
+  outline: none;
+  background: var(--surface-card);
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+  font: var(--type-body);
+  color: var(--text-primary);
+  min-width: 0;
+  width: 100%;
+}
+
+/* ── gallery (grid) view ────────────────────────────────────────── */
+.cs-gallery {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--space-4);
+  padding: var(--space-3);
+  align-content: start;
+}
+.cs-tile {
+  border: 1px solid var(--border-card);
+  background: var(--surface-card);
+  border-radius: var(--radius-lg);
+  padding: 0;
+  cursor: pointer;
+  overflow: hidden;
+  text-align: left;
+  transition: box-shadow var(--duration-fast) var(--ease-out);
+}
+.cs-tile:hover { box-shadow: var(--shadow-card); }
+.cs-tile[aria-selected="true"] { outline: 2px solid var(--accent); }
+.cs-tile-thumb {
+  aspect-ratio: 4 / 3;
+  display: grid;
+  place-items: center;
+  background: var(--surface-raised);
+  color: var(--text-tertiary);
+}
+.cs-tile-thumb .csf-icon { font-size: 40px; }
+.cs-tile-foot { padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); }
+.cs-tile-name { font: var(--type-label); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Get-info modal body ────────────────────────────────────────── */
+.cs-info { display: flex; flex-direction: column; gap: var(--space-4); }
+.cs-info-thumb {
+  aspect-ratio: 16 / 9;
+  display: grid;
+  place-items: center;
+  background: var(--surface-raised);
+  border-radius: var(--radius-lg);
+  color: var(--text-tertiary);
+}
+.cs-info-thumb .csf-icon { font-size: 48px; }
+
+/* ── hint bar under the list ────────────────────────────────────── */
+.cs-hint {
+  flex: 0 0 auto;
+  padding: var(--space-3) var(--space-3) 0;
+  font: var(--type-label);
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+/* ── drop-to-archive overlay ────────────────────────────────────── */
+.cs-drop {
+  position: absolute;
+  inset: var(--space-3);
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-xl);
+  background: var(--accent-subtle);
+  pointer-events: none;
+}
+.cs-drop-inner { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); color: var(--accent-text); }
+.cs-drop-inner .csf-icon { font-size: 40px; }
+.cs-drop-title { font: var(--type-card-title); }
+
+/* ── first-run hero (calm invitation, not three zeros) ──────────── */
+.cs-firstrun {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: var(--space-3);
+  padding: var(--space-12);
+  margin: var(--space-3);
+  border: 2px dashed var(--border-subtle);
+  border-radius: var(--radius-xl);
+}
+.cs-firstrun .csf-icon { font-size: 44px; color: var(--accent); }
+.cs-firstrun-title { font: var(--type-card-title); }
+.cs-firstrun-sub { font: var(--type-label); color: var(--text-secondary); max-width: var(--content-narrow); }
+
+/* ── context menu (popover at cursor) ───────────────────────────── */
+.cs-menu {
+  position: fixed;
+  z-index: 30;
+  min-width: 180px;
+  padding: var(--space-2);
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+}
+.cs-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font: var(--type-body);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.cs-menu-item:hover { background: var(--surface-hover); }
+.cs-menu-item:disabled { opacity: 0.45; cursor: default; }
+.cs-menu-item:disabled:hover { background: transparent; }
+.cs-menu-item--danger { color: var(--negative); }
+.cs-menu-item--danger:hover { background: rgba(222, 77, 59, 0.10); }
+.cs-menu-item .csf-icon { color: var(--text-secondary); }
+.cs-menu-item--danger .csf-icon { color: var(--negative); }
+.cs-menu-sep { height: 1px; margin: var(--space-1) 0; background: var(--border-subtle); }
+
+/* ── chips (exclude patterns / tags) ────────────────────────────── */
+.cs-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.cs-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-sm);
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--surface-active);
+  color: var(--text-secondary);
+  font: var(--type-label);
+}
+.cs-chip-x {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.cs-chip-x:hover { background: var(--surface-hover); color: var(--text-primary); }
+
+/* ── modal (scrim + centered panel) ─────────────────────────────── */
+.cs-modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+  background: var(--scrim);
+}
+.cs-modal {
+  width: min(480px, 100%);
+  max-height: calc(100vh - var(--space-12));
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-popover);
+  overflow: hidden;
+}
+.cs-modal-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.cs-modal-head .csf-icon { color: var(--accent-text); }
+.cs-modal-title { flex: 1; font: var(--type-card-title); letter-spacing: var(--tracking-tight); }
+.cs-modal-x { width: var(--control-sm); height: var(--control-sm); background: transparent; }
+.cs-modal-x:hover { background: var(--surface-hover); }
+.cs-modal-body { padding: var(--space-4) var(--space-5); overflow-y: auto; }
+.cs-modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* a quote/fact line in the modal body — compact rows, no wasted height */
+.cs-quote { display: flex; flex-direction: column; gap: 2px; }
+.cs-quote .cs-kv { min-height: 0; padding: var(--space-1) 0; }
+.cs-quote-lead { font: var(--type-body); color: var(--text-secondary); margin-bottom: var(--space-2); }
+.cs-note { font: var(--type-label); color: var(--text-tertiary); margin-top: var(--space-2); line-height: var(--leading-normal); }
+
+/* native folder picker row (request-a-copy dialog) — no typing, opens the OS picker */
+.cs-folderpick {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  background: var(--surface-input);
+  border-radius: var(--radius-md);
+}
+.cs-folderpick-info { min-width: 0; flex: 1; }
+.cs-folderpick-label { font: var(--type-label); color: var(--text-secondary); }
+.cs-folderpick-path {
+  font: var(--type-mono);
+  letter-spacing: var(--tracking-mono);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
