@@ -456,6 +456,13 @@ export const MyFilesView = ({
 
 // ── list view ──────────────────────────────────────────────────────
 
+// Rename is a deliberate gesture, never a plain double-click (double-click OPENS the row — folder drills
+// in, file shows Get-info). Like macOS/iOS: press-and-hold the name to rename; or use the ⋯ / right-click
+// menu. A hold this long can't be confused with a click or a double-click (both release immediately).
+const RENAME_LONG_PRESS_MS = 500;
+// A pointer drift past this (px) cancels the press — it was a drag/scroll, not a hold-to-rename.
+const PRESS_DRIFT_PX = 8;
+
 const FileList = ({
   rows,
   selected,
@@ -478,7 +485,30 @@ const FileList = ({
   onStartRename: (row: Row) => void;
   onCommitRename: (row: Row, value: string) => void;
   onCancelRename: () => void;
-}): React.JSX.Element => (
+}): React.JSX.Element => {
+  // One shared press timer (only one name is held at a time). Held in refs so re-renders don't reset it.
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pressOrigin = useRef<{ x: number; y: number } | null>(null);
+  const cancelPress = (): void => {
+    if (pressTimer.current) clearTimeout(pressTimer.current);
+    pressTimer.current = null;
+    pressOrigin.current = null;
+  };
+  const startPress = (e: React.PointerEvent, row: Row): void => {
+    if (e.button !== 0) return; // left button / primary touch only
+    cancelPress();
+    pressOrigin.current = { x: e.clientX, y: e.clientY };
+    pressTimer.current = setTimeout(() => {
+      cancelPress();
+      onStartRename(row);
+    }, RENAME_LONG_PRESS_MS);
+  };
+  const trackPress = (e: React.PointerEvent): void => {
+    const o = pressOrigin.current;
+    if (o && Math.hypot(e.clientX - o.x, e.clientY - o.y) > PRESS_DRIFT_PX) cancelPress();
+  };
+
+  return (
   <div className="cs-filelist">
     <div className="cs-fl-grid cs-fl-head">
       <span>Name</span>
@@ -506,7 +536,13 @@ const FileList = ({
             {renaming === key ? (
               <RenameInput initial={row.name} onCommit={(v) => onCommitRename(row, v)} onCancel={onCancelRename} />
             ) : (
-              <span className="cs-fl-label" onDoubleClick={(e) => (e.stopPropagation(), onStartRename(row))}>
+              <span
+                className="cs-fl-label"
+                onPointerDown={(e) => startPress(e, row)}
+                onPointerMove={trackPress}
+                onPointerUp={cancelPress}
+                onPointerLeave={cancelPress}
+              >
                 {row.name}
               </span>
             )}
@@ -543,7 +579,8 @@ const FileList = ({
       );
     })}
   </div>
-);
+  );
+};
 
 const RenameInput = ({
   initial,

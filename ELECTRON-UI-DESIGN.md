@@ -124,8 +124,9 @@ row just selects it; the `⋯` per-row dropdown (and right-click) opens actions,
   opens the native file dialog (same as the header **Add**); hover lifts it. Collapses to the file list
   once populated. **Delete-empty-folder skips the confirm** (no bytes at stake → just remove it; the
   180-day-cost copy only shows when real uploaded bytes are involved).
-- **Manipulation = standard Finder gestures** (committed to the filesystem feel): rename (double-click →
-  inline edit), new folder, drag-to-move, delete (⌫ → confirm). **Delete = instant tombstone** in the
+- **Manipulation = standard Finder gestures** (committed to the filesystem feel): rename (**press-and-hold
+  the name** → inline edit, or the ⋯/right-click menu — NOT double-click, which *opens* the row), new
+  folder, drag-to-move, delete (⌫ → confirm). **Delete = instant tombstone** in the
   journal — honest copy: *"removes it from your files; it doesn't lower your cost for 180 days"* (Deep
   Archive's minimum-duration; never imply delete-to-save-money). Actual byte reclamation is deferred/rare
   (packed blobs need thaw-to-repack — a backend concern, invisible here).

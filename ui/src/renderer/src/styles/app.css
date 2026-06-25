@@ -583,7 +583,7 @@ button.cs-kv:hover { background: var(--surface-hover); }
   text-align: left;
   padding: var(--space-2) var(--space-4);
   min-height: var(--control-lg);
-  border-radius: var(--radius-md);
+  /* No radius: the row spans edge-to-edge, so the hover/selected fill should be a full-bleed band. */
   cursor: default;
   transition: background var(--duration-fast) var(--ease-out);
 }
@@ -592,7 +592,8 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-fl-name { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
 .cs-fl-name .csf-icon { color: var(--text-secondary); flex: 0 0 auto; }
 .cs-fl-folder .csf-icon { color: var(--accent); }
-.cs-fl-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-body); }
+/* user-select: none so a press-and-hold-to-rename doesn't paint a text selection during the hold. */
+.cs-fl-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-body); user-select: none; }
 /* active/local status badge sits inline by the name (frozen shows none) */
 .cs-fl-name .cs-badge { flex: 0 0 auto; }
 .cs-fl-size, .cs-fl-date { font: var(--type-mono); color: var(--text-tertiary); letter-spacing: var(--tracking-mono); }

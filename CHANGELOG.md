@@ -2,6 +2,7 @@
 
 ## 2026-06-25
 
+- feat: rename via press-and-hold (500ms, 8px drift-cancel) in `MyFilesView`, not double-click — double-click now *opens* the row (folder drills in / file Get-info); `cs-fl-label` gets `user-select:none` so the hold doesn't paint a selection.
 - docs: sync design docs to the shipped move/rename/delete contract — `movePath`/`deletePath`/`filesChanged` added to the command + event SSOT and flipped DONE across `ELECTRON-UI-DESIGN`/`UPLOAD-DAEMON-DESIGN`/`coldstorage`+`ui` READMEs; `newFolder` noted as the lone remaining local-only seam.
 - feat: UI move/rename/delete on real daemon commands — reorganize/delete fire `movePath`/`deletePath` (optimistic local edit, reconciled by the `filesChanged`→`listFiles` refetch); `targetOf` keys the full vault-relative path. UI 44 tests.
 - feat: daemon move/rename/delete — `movePath` (journal `relativePath` prefix-sweep; one primitive for file/folder move AND rename; id-stable so no re-upload) + `deletePath` (tombstone `status=deleted`, row+blob kept for deferred GC, dropped from `listFiles`); `filesChanged` event; `task daemon:move-ipc`/`daemon:delete-ipc`. Proven vs MinIO.
