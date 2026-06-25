@@ -232,6 +232,22 @@ public actor DaemonService {
             // runStarted/fileArchived/blobFailed/runFinished events (exactly like a scheduled run).
             Task { await self.deposit(paths: paths, into: dest) }
             return AnyEncodable(AckDTO(ok: true))
+        case "movePath":
+            // Reorganize: relocate the subtree at `from` → `to` (a file/folder move OR rename). A cheap
+            // journal `relativePath` edit — no S3, no thaw, the blob never moves. `filesChanged` tells a live
+            // watcher to re-read the tree.
+            guard let from = p["from"] else { throw ColdStorageError.staging("movePath requires params.from (a vault-relative path)") }
+            guard let to = p["to"] else { throw ColdStorageError.staging("movePath requires params.to (the new vault-relative path)") }
+            try journal.movePath(from: from, to: to)
+            bus.publish(DaemonEvent("filesChanged", ["moved": from, "to": to]))
+            return AnyEncodable(AckDTO(ok: true))
+        case "deletePath":
+            // Tombstone the subtree at `path` (file or folder). The row + blob mapping are kept (bytes
+            // reclaim is a deferred repack/GC); the file just drops out of `listFiles`.
+            guard let path = p["path"] else { throw ColdStorageError.staging("deletePath requires params.path (a vault-relative path)") }
+            try journal.deletePath(path)
+            bus.publish(DaemonEvent("filesChanged", ["deleted": path]))
+            return AnyEncodable(AckDTO(ok: true))
         case "triggerNow":
             trigger()
             return AnyEncodable(AckDTO(ok: true))

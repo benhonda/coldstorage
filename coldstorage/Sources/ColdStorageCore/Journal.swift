@@ -158,13 +158,48 @@ public final class Journal: @unchecked Sendable {
     /// `.discovered` rather than dropping the row (the file still exists; the UI coarsens status anyway).
     public func listFiles() throws -> [FileRow] {
         lock.lock(); defer { lock.unlock() }
-        return try run("SELECT id, relativePath, size, status, blobId FROM files ORDER BY relativePath").map {
+        return try run("SELECT id, relativePath, size, status, blobId FROM files WHERE status != 'deleted' ORDER BY relativePath").map {
             FileRow(id: $0["id"] as? String ?? "",
                     relativePath: $0["relativePath"] as? String ?? "",
                     size: $0["size"] as? Int ?? 0,
                     status: FileStatus(rawValue: $0["status"] as? String ?? "") ?? .discovered,
                     blobId: $0["blobId"] as? String)
         }
+    }
+
+    /// Relocate the subtree rooted at `from` to `to` — the journal edit behind a file/folder **move OR
+    /// rename** (a rename is just a move whose `to` is a sibling path with a new basename). The tree lives
+    /// in the journal, never in S3 keys, so this is a pure `relativePath` rewrite: the stable `id` (the
+    /// `upsert` dedup key — changing it would re-upload the file on the next scan) and the encrypted blob
+    /// never move, only where the file appears in the browser. Sweeps `from` AND every descendant (`from/…`)
+    /// in one statement. No-op when `from == to`; throws on an into-self move (a folder can't move under
+    /// itself). All `length`/`substr` run in SQLite so prefix math is consistent regardless of encoding;
+    /// the `substr(...,1,length+1)` test (vs `LIKE`) sidesteps wildcard escaping.
+    public func movePath(from: String, to: String) throws {
+        guard from != to else { return }
+        guard !to.hasPrefix("\(from)/") else {
+            throw ColdStorageError.staging("cannot move '\(from)' into itself")
+        }
+        lock.lock(); defer { lock.unlock() }
+        // For the exact row, substr(path, length+1) is "" one past the end → maps to `to`; for "from/x" it
+        // is "/x" → maps to "to/x". One expression covers the file-rename and the whole-folder sweep.
+        try run("""
+            UPDATE files SET relativePath = ?1 || substr(relativePath, length(?2) + 1)
+            WHERE relativePath = ?2 OR substr(relativePath, 1, length(?2) + 1) = ?3
+            """, [.text(to), .text(from), .text("\(from)/")])
+    }
+
+    /// Tombstone the subtree rooted at `path` (status → `.deleted`) — the journal edit behind a file/folder
+    /// delete. The row and its blob mapping are KEPT, not removed: the encrypted bytes stay in S3 until a
+    /// future repack/GC reclaims them (deep storage's 180-day minimum makes eager deletion pointless, and
+    /// the kept mapping is how that GC will find them). Tombstoned files drop out of `listFiles` + the file
+    /// count. Sweeps `path` and every descendant; already-tombstoned rows are skipped (idempotent).
+    public func deletePath(_ path: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("""
+            UPDATE files SET status = ?1
+            WHERE (relativePath = ?2 OR substr(relativePath, 1, length(?2) + 1) = ?3) AND status != ?1
+            """, [.text(FileStatus.deleted.rawValue), .text(path), .text("\(path)/")])
     }
 
     public func ensureBlob(_ plan: BlobPlan, noncePrefix: Data, wrappedDEK: Data) throws {
@@ -197,7 +232,7 @@ public final class Journal: @unchecked Sendable {
     public func summary() throws -> (total: Int, archived: Int, blobsVerified: Int) {
         lock.lock(); defer { lock.unlock() }
         func count(_ sql: String) -> Int { (try? run(sql).first?["c"] as? Int) ?? 0 }
-        return (count("SELECT count(*) c FROM files"),
+        return (count("SELECT count(*) c FROM files WHERE status != 'deleted'"),
                 count("SELECT count(*) c FROM files WHERE status='archived'"),
                 count("SELECT count(*) c FROM blobs WHERE status='verified'"))
     }

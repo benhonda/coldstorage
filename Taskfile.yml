@@ -171,6 +171,18 @@ tasks:
     cmds:
       - swift run coldstorectl coldstored.sock deposit src={{.SRC}} dest={{.DEST | default ""}}
 
+  daemon:move-ipc:
+    desc: "Reorganize over the running daemon's socket — move OR rename: FROM=<vault/path> TO=<new/vault/path>. A cheap journal relativePath edit (no S3, no thaw); the same command the UI's move/rename issues. Check `daemon:ctl -- listFiles`."
+    dir: coldstorage
+    cmds:
+      - swift run coldstorectl coldstored.sock movePath from={{.FROM}} to={{.TO}}
+
+  daemon:delete-ipc:
+    desc: "Delete (tombstone) over the running daemon's socket: PATH=<vault/path> (file or folder). Drops from listFiles; bytes aren't reclaimed (deferred repack/GC). Check `daemon:ctl -- listFiles`."
+    dir: coldstorage
+    cmds:
+      - swift run coldstorectl coldstored.sock deletePath path={{.PATH}}
+
   daemon:live:
     desc: '[macOS] Drive the INSTALLED launchd daemon (real prod AWS / Deep Archive), e.g. `task daemon:live -- getStatus` · `-- addSource path=/abs/dir` · `-- triggerNow` · `-- watch`. (daemon:ctl targets the dev/MinIO daemon instead.) Uses the release binary built by daemon:install.'
     dir: coldstorage

@@ -39,7 +39,10 @@ public struct SourceRow: Sendable {
     public init(id: String, kind: SourceKind, path: String?) { self.id = id; self.kind = kind; self.path = path }
 }
 
-public enum FileStatus: String, Codable, Sendable { case discovered, planned, staging, uploading, verifying, archived, failed }
+/// `deleted` is a TOMBSTONE: the user removed the file from their tree, but its row + blob mapping are
+/// kept (bytes reclaim is deferred to a future repack/GC — deep storage has a 180-day minimum, so eager
+/// deletion saves nothing). Tombstoned files drop out of `listFiles` and the file count.
+public enum FileStatus: String, Codable, Sendable { case discovered, planned, staging, uploading, verifying, archived, failed, deleted }
 public enum BlobStatus: String, Codable, Sendable { case open, uploading, completed, verified, aborted }
 public enum PartStatus: String, Codable, Sendable { case pending, uploaded, verified }
 
