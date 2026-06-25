@@ -69,6 +69,19 @@ public enum RestoreTier: String, Sendable, CaseIterable { case expedited, standa
         }
     }
 
+    /// Glacier *retrieval* fee, USD per GB, for this tier — the public S3 Glacier Deep Archive list price
+    /// (us-east-1). The SSOT the daemon quotes a get-a-copy-back fee from, co-located with `typicalWait`
+    /// so a tier carries its whole speed/cost story in one place. An ESTIMATE by nature (AWS changes list
+    /// prices, other regions differ); we quote this dominant per-GB term only — per-request fees + egress
+    /// are excluded to keep the number calm and legible. See `Pricing` for the storage rate + disclaimer.
+    public var retrievalUsdPerGB: Double {
+        switch self {
+        case .expedited: return 0.03    // Glacier Flexible only — never valid for Deep Archive
+        case .standard:  return 0.02
+        case .bulk:      return 0.0025
+        }
+    }
+
     /// Parse a CLI/IPC tier argument (SSOT for both `coldstore-restore` and the daemon's `restore` command).
     /// `nil` → `.standard` (the default); an unrecognized value **throws** rather than silently downgrading —
     /// tier drives retrieval time + cost, so a typo must surface, not pass as standard.
@@ -79,6 +92,21 @@ public enum RestoreTier: String, Sendable, CaseIterable { case expedited, standa
         }
         return tier
     }
+}
+
+/// The storage/retrieval **rate card** the daemon quotes to the UI (the `getPricing` command) — the
+/// pricing SSOT, so cost copy lives in ONE place instead of magic numbers scattered across views. Public
+/// S3 Glacier Deep Archive list prices (us-east-1). ESTIMATES, stated as such: AWS revises list prices,
+/// other regions cost more, and we surface only the dominant per-GB terms (no per-request fee, no egress)
+/// to keep the figure calm and honest. The per-tier *retrieval* rate lives on `RestoreTier`; this holds
+/// the storage rate, the valid Deep-Archive tiers, and the disclaimer shown beside any quote.
+public enum Pricing {
+    /// Deep Archive storage, USD per GB per month (us-east-1 list price).
+    public static let storageUsdPerGBMonth = 0.00099
+    /// The tiers a Deep Archive object can actually be retrieved with (`.expedited` is Flexible-only).
+    public static let deepArchiveTiers: [RestoreTier] = [.standard, .bulk]
+    /// Always shown with a quote so we never assert a price as fact.
+    public static let estimateNote = "Estimate — public AWS list prices, before tax and small per-request fees."
 }
 
 /// Whether a blob object can be ranged-GET *right now*. Deep Archive / Glacier Flexible objects must be

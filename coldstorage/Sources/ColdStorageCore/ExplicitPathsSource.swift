@@ -15,7 +15,12 @@ public struct ExplicitPathsSource: IngestSource {
     }
 
     let entries: [Entry]
-    public init(entries: [Entry]) { self.entries = entries }
+    /// Applied only to **dropped directories** (their walk skips junk like node_modules) — NOT to an
+    /// explicitly dropped single file, which the user chose by hand and we honor as-is.
+    let exclude: ExcludeMatcher
+    public init(entries: [Entry], exclude: ExcludeMatcher = ExcludeMatcher(patterns: [])) {
+        self.entries = entries; self.exclude = exclude
+    }
 
     public func enumerate() async throws -> [IngestItem] {
         let fm = FileManager.default
@@ -24,10 +29,11 @@ public struct ExplicitPathsSource: IngestSource {
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: e.url.path, isDirectory: &isDir) else { continue }  // skip a vanished drop
             if isDir.boolValue {
-                // Reuse the proven directory walk; re-base each item under dest/<dirname>/… and re-key by
-                // its new relativePath (the journal's stable id), keeping its captured byte stream + hash.
+                // Reuse the proven directory walk (with the same excludes — junk inside a dropped folder is
+                // skipped before hashing); re-base each item under dest/<dirname>/… and re-key by its new
+                // relativePath (the journal's stable id), keeping its captured byte stream + hash.
                 let base = e.url.lastPathComponent
-                for it in try await LocalDirSource(root: e.url).enumerate() {
+                for it in try await LocalDirSource(root: e.url, exclude: exclude).enumerate() {
                     let rel = Self.join(e.destDir, "\(base)/\(it.relativePath)")
                     items.append(IngestItem(id: rel, relativePath: rel, size: it.size, contentHash: it.contentHash,
                                             createdAt: it.createdAt, isFavorite: it.isFavorite,

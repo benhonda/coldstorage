@@ -50,7 +50,15 @@ public final class Journal: @unchecked Sendable {
         try migrate()
     }
 
+    /// Smart default excludes — the junk a non-technical user never means to upload. Seeded into the
+    /// `excludes` table the first time a journal is created (the daemon is the SSOT for these; the UI
+    /// fetches them and no longer hardcodes its own copy). Bare names match at any depth; globs use `*`/`?`.
+    public static let defaultExcludes = ["node_modules", ".DS_Store", "*.tmp", ".git", "caches"]
+
     private func migrate() throws {
+        // Seed defaults only on a *fresh* journal, so a user who deletes them doesn't get them back. Detect
+        // "fresh" by the excludes table's absence *before* the idempotent CREATE re-asserts it.
+        let excludesIsNew = try run("SELECT name FROM sqlite_master WHERE type='table' AND name='excludes'").isEmpty
         try exec("""
             CREATE TABLE IF NOT EXISTS files(
               id TEXT PRIMARY KEY, relativePath TEXT NOT NULL, size INTEGER NOT NULL,
@@ -64,7 +72,14 @@ public final class Journal: @unchecked Sendable {
               sha256 TEXT NOT NULL, status TEXT NOT NULL, PRIMARY KEY(blobId, partNumber));
             CREATE TABLE IF NOT EXISTS sources(
               id TEXT PRIMARY KEY, kind TEXT NOT NULL, path TEXT, addedAt INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS excludes(
+              pattern TEXT PRIMARY KEY, addedAt INTEGER NOT NULL DEFAULT 0);
             """)
+        if excludesIsNew {
+            for p in Self.defaultExcludes {
+                try run("INSERT OR IGNORE INTO excludes(pattern) VALUES(?1)", [.text(p)])
+            }
+        }
     }
 
     // MARK: - tiny SQLite layer
@@ -151,6 +166,23 @@ public final class Journal: @unchecked Sendable {
                       kind: SourceKind(rawValue: $0["kind"] as? String ?? "") ?? .folder,
                       path: $0["path"] as? String)
         }
+    }
+
+    // MARK: - excludes registry (gitignore-style patterns; the SSOT the scan filters by)
+    /// Register an exclude pattern; idempotent on the pattern text (re-adding is a no-op).
+    public func addExclude(_ pattern: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("INSERT INTO excludes(pattern) VALUES(?1) ON CONFLICT(pattern) DO NOTHING", [.text(pattern)])
+    }
+
+    public func removeExclude(_ pattern: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("DELETE FROM excludes WHERE pattern=?1", [.text(pattern)])
+    }
+
+    public func listExcludes() throws -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return try run("SELECT pattern FROM excludes ORDER BY pattern").compactMap { $0["pattern"] as? String }
     }
 
     /// The browsable file tree (design: the journal is the tree SSOT). A pure metadata `SELECT` — no S3,

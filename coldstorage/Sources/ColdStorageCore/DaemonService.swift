@@ -45,7 +45,7 @@ public actor DaemonService {
     /// `error` event; per-blob upload failures surface as `blobFailed` (same as a scheduled run).
     func deposit(paths: [String], into dir: String) async {
         let entries = paths.map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: $0), destDir: dir) }
-        do { try await performRun(source: ExplicitPathsSource(entries: entries)) }
+        do { try await performRun(source: ExplicitPathsSource(entries: entries, exclude: excludeMatcher())) }
         catch { bus.publish(DaemonEvent("error", ["message": "deposit: \(error)"])) }
     }
 
@@ -101,13 +101,23 @@ public actor DaemonService {
         }
     }
 
+    /// The exclude patterns to scope a scan/deposit by, loaded fresh from the journal so an add/removeExclude
+    /// over IPC takes effect on the very next run. Applied *inside* the directory walk (see `LocalDirSource`)
+    /// so excluded files are never hashed and excluded folders never descended. (`try?`: a journal read
+    /// hiccup must not abort the run — worst case is one pass without the latest filter.)
+    private func excludeMatcher() -> ExcludeMatcher {
+        ExcludeMatcher(patterns: (try? journal.listExcludes()) ?? [])
+    }
+
     /// Live source set = registered folders + platform sources (Photos). Rebuilt each run so
-    /// add/remove via IPC takes effect on the next pass.
+    /// add/remove via IPC takes effect on the next pass. Folder walks carry the current excludes; Photos
+    /// don't (a photo library isn't a filesystem with gitignore-style junk).
     private func currentSource() throws -> IngestSource {
+        let matcher = excludeMatcher()
         let folders = try journal.listSources()
             .filter { $0.kind == .folder }
             .compactMap { $0.path }
-            .map { LocalDirSource(root: URL(fileURLWithPath: $0)) as IngestSource }
+            .map { LocalDirSource(root: URL(fileURLWithPath: $0), exclude: matcher) as IngestSource }
         return MultiSource(folders + platformSources)
     }
 
@@ -160,9 +170,27 @@ public actor DaemonService {
     /// re-issue `restore` until it's `restored`. `out` is set only when bytes landed; `tier`/`typicalWait`
     /// only while thawing, so the UI can show the quoted wait.
     private struct RestoreDTO: Encodable { let file, state: String; let out, tier, typicalWait: String? }
+    /// The pricing rate card the UI quotes cost/fee from — the daemon is the SSOT (constants live in
+    /// `Pricing`/`RestoreTier`, not scattered across views). Honest by construction: each retrieval tier
+    /// carries its own per-GB fee + typical wait (all USD — list prices), and `note` is the estimate
+    /// disclaimer shown beside any figure.
+    private struct TierQuoteDTO: Encodable { let tier: String; let usdPerGB: Double; let typicalWait: String }
+    private struct PricingDTO: Encodable {
+        let storageUsdPerGBMonth: Double
+        let retrieval: [TierQuoteDTO]
+        let note: String
+    }
 
     private func sourceDTOs() throws -> [SourceDTO] {
         try journal.listSources().map { SourceDTO(id: $0.id, kind: $0.kind.rawValue, path: $0.path) }
+    }
+
+    private func pricingDTO() -> PricingDTO {
+        PricingDTO(storageUsdPerGBMonth: Pricing.storageUsdPerGBMonth,
+                   retrieval: Pricing.deepArchiveTiers.map {
+                       TierQuoteDTO(tier: $0.rawValue, usdPerGB: $0.retrievalUsdPerGB, typicalWait: $0.typicalWait)
+                   },
+                   note: Pricing.estimateNote)
     }
 
     /// Map an idempotent restore step's outcome to its wire DTO, and push a matching progress event so a
@@ -197,6 +225,12 @@ public actor DaemonService {
             return AnyEncodable(try journal.listFiles().map {
                 FileDTO(id: $0.id, relativePath: $0.relativePath, size: $0.size, status: $0.status.rawValue, blobId: $0.blobId)
             })
+        case "getPricing":
+            // The storage/retrieval rate card (SSOT) the UI shows cost/fee from — static list-price estimate,
+            // no I/O. The UI does the trivial bytes × rate math; the daemon owns the numbers + the disclaimer.
+            return AnyEncodable(pricingDTO())
+        case "listExcludes":
+            return AnyEncodable(try journal.listExcludes())
         case "addSource":
             guard let raw = p["path"] else { throw ColdStorageError.staging("addSource requires params.path") }
             let abs = URL(fileURLWithPath: raw).standardizedFileURL.path
@@ -208,6 +242,19 @@ public actor DaemonService {
             guard let id = p["id"] else { throw ColdStorageError.staging("removeSource requires params.id") }
             try journal.removeSource(id)
             bus.publish(DaemonEvent("sourcesChanged", ["removed": id]))
+            return AnyEncodable(AckDTO(ok: true))
+        case "addExclude":
+            // Register a gitignore-style pattern; it filters every later scan/deposit. Trim so a stray-space
+            // paste doesn't create a pattern that matches nothing.
+            let pattern = (p["pattern"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !pattern.isEmpty else { throw ColdStorageError.staging("addExclude requires a non-empty params.pattern") }
+            try journal.addExclude(pattern)
+            bus.publish(DaemonEvent("excludesChanged", ["added": pattern]))
+            return AnyEncodable(AckDTO(ok: true))
+        case "removeExclude":
+            guard let pattern = p["pattern"] else { throw ColdStorageError.staging("removeExclude requires params.pattern") }
+            try journal.removeExclude(pattern)
+            bus.publish(DaemonEvent("excludesChanged", ["removed": pattern]))
             return AnyEncodable(AckDTO(ok: true))
         case "restore":
             guard let file = p["file"] else { throw ColdStorageError.staging("restore requires params.file (the fileId)") }

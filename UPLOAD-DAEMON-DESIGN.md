@@ -110,16 +110,19 @@ On daemon start, and after every network outage/crash:
 
 - **Local Unix-domain socket**, newline-delimited JSON for commands + a server-push **event stream** for live progress.
 - **Commands (as built — SSOT is `DaemonService.handle`):** `ping`, `getStatus`, `listSources`, `listFiles`,
-  `addSource`, `removeSource`, `deposit`, `movePath`, `deletePath`, `triggerNow`, `restore`, `pause`, `resume`.
+  `getPricing`, `listExcludes`, `addSource`, `removeSource`, `addExclude`, `removeExclude`, `deposit`,
+  `movePath`, `deletePath`, `triggerNow`, `restore`, `pause`, `resume`.
   *(`movePath {from, to}` is the single primitive behind file/folder **move AND rename** — a journal
   `relativePath` prefix-sweep, the stable `id` preserved; `deletePath {path}` **tombstones** the subtree
   (`status=deleted`, row + blob mapping kept for a deferred repack/GC). The original sketch's
-  `requestRestore`/`getQuote` landed as `restore` — idempotent, re-issued by the UI; the fee quote is still
-  a contract gap.)*
+  `requestRestore`/`getQuote` landed as `restore` (idempotent, re-issued by the UI) + `getPricing` (the
+  storage/retrieval rate-card SSOT the UI quotes fee/cost from). `addExclude`/`removeExclude`/`listExcludes`
+  manage the gitignore-style scan excludes, applied inside the directory walk so junk is never hashed.)*
 - **Events (as built — SSOT is the `DaemonEvent(...)` call sites):** `runStarted`, `fileArchived`,
   `uploadProgress` `{file, path, bytes, totalBytes}` (determinate per-file progress, solo-blob large files),
   `runFinished`, `blobFailed` `{blob, kind, message, paths}` (paths = newline-joined relativePaths of the
   failed files; permanent faults also mark those files `failed` in the journal), `sourcesChanged`,
+  `excludesChanged` `{added}` XOR `{removed}` (the exclude registry changed → re-read `listExcludes`),
   `filesChanged` `{moved, to}` XOR `{deleted}` (a reorganize/delete edited the tree → re-read `listFiles`),
   `restoreRequested`/`restoreInProgress`/`restoreCompleted`, `paused`/`resumed`, `error`.
 - Socket is `0600` (owner-only); secrets live in **Keychain**, never in the UI.

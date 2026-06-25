@@ -183,6 +183,14 @@ tasks:
     cmds:
       - swift run coldstorectl coldstored.sock deletePath path={{.PATH}}
 
+  daemon:exclude-ipc:
+    desc: "Manage scan exclude patterns over the running daemon's socket: ADD=<glob> or REMOVE=<glob> (omit both to just list). gitignore-style — bare names match at any depth, globs use */?. The next scan/deposit skips matches. Quote globs so the shell doesn't expand them, e.g. ADD='*.log'."
+    dir: coldstorage
+    cmds:
+      - '{{if .ADD}}swift run coldstorectl coldstored.sock addExclude pattern={{.ADD}}{{end}}'
+      - '{{if .REMOVE}}swift run coldstorectl coldstored.sock removeExclude pattern={{.REMOVE}}{{end}}'
+      - swift run coldstorectl coldstored.sock listExcludes
+
   daemon:live:
     desc: '[macOS] Drive the INSTALLED launchd daemon (real prod AWS / Deep Archive), e.g. `task daemon:live -- getStatus` · `-- addSource path=/abs/dir` · `-- triggerNow` · `-- watch`. (daemon:ctl targets the dev/MinIO daemon instead.) Uses the release binary built by daemon:install.'
     dir: coldstorage
