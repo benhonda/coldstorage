@@ -36,10 +36,29 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
     }
   };
 
+  const refreshExcludes = async (): Promise<void> => {
+    try {
+      store.dispatch({ type: "excludesLoaded", excludes: await api.request("listExcludes") });
+    } catch {
+      /* same as above */
+    }
+  };
+
+  // Pricing is a static rate card — fetch once per connect (no event invalidates it).
+  const refreshPricing = async (): Promise<void> => {
+    try {
+      store.dispatch({ type: "pricingLoaded", pricing: await api.request("getPricing") });
+    } catch {
+      /* falls back to the seeded FALLBACK_PRICING already in state */
+    }
+  };
+
   const offEvent = api.onEvent((name, data) => {
     store.dispatch(eventAction(name, data));
     // Resync the authoritative snapshot when the daemon reports the registry or a run changed it.
     if (name === "sourcesChanged") void refreshSources();
+    // An add/removeExclude changed the registry — re-read it (the next scan already applies the change).
+    else if (name === "excludesChanged") void refreshExcludes();
     // A reorganize/delete (movePath/deletePath) rewrote the tree — re-read it to reconcile the optimistic edit.
     else if (name === "filesChanged") void refreshFiles();
     // A finished run may have archived new files / changed their status — re-read both the counts
@@ -55,14 +74,19 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
     if (state === "connected") {
       void refreshStatus(); // resync the snapshot after a (re)connect
       void refreshFiles();
+      void refreshExcludes();
+      void refreshPricing();
     }
   });
 
-  // First paint: read the current connection state and, if already connected, the snapshot + tree.
+  // First paint: read the current connection state and, if already connected, the snapshot + tree +
+  // excludes + pricing.
   void (async () => {
     const state = await api.getConnectionState();
     store.dispatch({ type: "connection", state });
-    if (state === "connected") await Promise.all([refreshStatus(), refreshFiles()]);
+    if (state === "connected") {
+      await Promise.all([refreshStatus(), refreshFiles(), refreshExcludes(), refreshPricing()]);
+    }
   })();
 
   return () => {

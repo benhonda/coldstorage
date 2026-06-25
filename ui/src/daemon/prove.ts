@@ -6,6 +6,8 @@
  *   1. `getStatus` round-trips (typed reply by id).
  *   2. `listFiles` round-trips (the browser's journal-backed tree read).
  *   3. `triggerNow` produces `runStarted` … `runFinished` on the event stream.
+ *   4. `getPricing` returns a real rate card (storage + per-tier retrieval).
+ *   5. `listExcludes`/`addExclude`/`removeExclude` round-trip (defaults seeded; add then remove).
  * `fileArchived` only fires when there's something new to archive (the pipeline is idempotent), so
  * it's reported when seen but not required — runStarted/runFinished are the reliable invariants.
  *
@@ -85,6 +87,30 @@ log(
     `blobsFailed=${finished.blobsFailed}` +
     (seen.has("fileArchived") ? " (fileArchived seen)" : " (nothing new to archive)"),
 );
+
+// 4 — pricing rate card: real storage + per-tier retrieval numbers (what the UI quotes cost/fee from).
+const pricing = await client.request("getPricing");
+if (typeof pricing.storageUsdPerGBMonth !== "number" || !Array.isArray(pricing.retrieval)) {
+  fail(`getPricing shape unexpected: ${JSON.stringify(pricing)}`);
+}
+const std = pricing.retrieval.find((t) => t.tier === "standard");
+if (!std) {
+  fail(`getPricing missing the standard tier: ${JSON.stringify(pricing)}`);
+} else if (typeof std.usdPerGB !== "number" || !std.typicalWait) {
+  fail(`getPricing standard tier malformed: ${JSON.stringify(std)}`);
+} else {
+  log(`getPricing → storage=$${pricing.storageUsdPerGBMonth}/GB-mo · standard=$${std.usdPerGB}/GB (${std.typicalWait})`);
+}
+
+// 5 — excludes registry: defaults are seeded, and add→list→remove round-trips on the live journal.
+const defaults = await client.request("listExcludes");
+if (!defaults.includes("node_modules")) fail(`listExcludes missing seeded defaults: ${JSON.stringify(defaults)}`);
+const probe = "*.proveprobe";
+await client.request("addExclude", { pattern: probe });
+if (!(await client.request("listExcludes")).includes(probe)) fail(`addExclude did not persist ${probe}`);
+await client.request("removeExclude", { pattern: probe });
+if ((await client.request("listExcludes")).includes(probe)) fail(`removeExclude did not drop ${probe}`);
+log(`excludes → ${defaults.length} default(s) seeded; add/remove round-trips clean`);
 
 client.close();
 log("PASS — bridge round-trips commands and streams events");

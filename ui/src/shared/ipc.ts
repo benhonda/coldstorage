@@ -20,9 +20,11 @@ export type {
   ListedFile,
   Method,
   ParamsArg,
+  Pricing,
   RestoreStep,
   Source,
   Status,
+  TierQuote,
 } from "../daemon/protocol.ts";
 
 import type { Commands, DaemonEventName, DaemonEvents, Method, ParamsArg } from "../daemon/protocol.ts";

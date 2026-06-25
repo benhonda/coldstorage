@@ -7,7 +7,7 @@
  * request-back issues the real `restore` command via `exec`.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ColdstoreApi } from "../../../shared/ipc.ts";
+import type { ColdstoreApi, Pricing } from "../../../shared/ipc.ts";
 import type { Exec } from "./types.ts";
 import type { FilesApi } from "./files/useFiles.ts";
 import {
@@ -44,6 +44,8 @@ interface Props {
   files: ArchivedFile[];
   virtualFolders: string[];
   filesApi: FilesApi;
+  /** Rate card (store `state.pricing`) — drives the request-a-copy fee quote. */
+  pricing: Pricing;
   /** Live per-file upload progress (store `run.uploadProgress`), keyed by daemon file id — drives the
    * determinate bar on an uploading row. Empty between runs. */
   uploadProgress: Record<string, UploadProgress>;
@@ -62,6 +64,7 @@ export const MyFilesView = ({
   files,
   virtualFolders,
   filesApi,
+  pricing,
   uploadProgress,
 }: Props): React.JSX.Element => {
   const [dir, setDir] = useState("");
@@ -411,6 +414,7 @@ export const MyFilesView = ({
       {requestFiles && (
         <RequestBackModal
           files={requestFiles}
+          pricing={pricing}
           chooseFolder={api.chooseFolder}
           getDownloadsDir={api.getDownloadsDir}
           onConfirm={confirmRequest}

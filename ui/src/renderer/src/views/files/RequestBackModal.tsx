@@ -4,32 +4,30 @@
  * dialog sets expectations (ready-by, cost) rather than pretending it's instant, and the **save-to
  * folder is chosen here, per request** (a rare action — no global setting to maintain).
  *
- * The fee is a ROUGH placeholder — the daemon doesn't expose a retrieval-fee estimate yet (a known
- * contract gap). Shown as "~$X (estimate)". No specific provider price is asserted as fact.
+ * Fee + wait come from the daemon's rate card ({@link Pricing}) at the **standard** tier — the tier the
+ * `restore` command defaults to. Shown as "~$X (estimate)" with the card's disclaimer; no provider price
+ * is asserted as fact.
  */
 import { useEffect, useState } from "react";
+import type { Pricing } from "../../../../shared/ipc.ts";
 import type { ArchivedFile } from "./model.ts";
 import { formatBytes, totalBytes } from "./model.ts";
+import { formatUsd, retrievalTier, retrievalUsd } from "./pricing.ts";
 import { Button, KeyValueRow, Modal } from "../../ui/primitives.tsx";
-
-/** Placeholder per-GB retrieval rate (USD). NOT authoritative — the daemon will quote the real fee. */
-const EST_USD_PER_GB = 0.02;
-
-const estimateUsd = (bytes: number): string => {
-  const usd = Math.max(0.01, (bytes / 1_000_000_000) * EST_USD_PER_GB);
-  return `~$${usd.toFixed(2)}`;
-};
 
 const fileName = (f: ArchivedFile | undefined): string => f?.relativePath.split("/").at(-1) ?? "this file";
 
 export const RequestBackModal = ({
   files,
+  pricing,
   chooseFolder,
   getDownloadsDir,
   onConfirm,
   onClose,
 }: {
   files: ArchivedFile[];
+  /** Rate card the fee quote is drawn from (standard tier — the restore command's default). */
+  pricing: Pricing;
   /** Open the native folder picker, seeded at the current folder. */
   chooseFolder: (defaultPath?: string) => Promise<string | null>;
   /** The OS Downloads dir — the default destination. */
@@ -79,8 +77,8 @@ export const RequestBackModal = ({
         <p className="cs-quote-lead">{lead}</p>
         <KeyValueRow label={many ? "Files" : "File"} value={many ? files.length : fileName(files[0])} />
         <KeyValueRow label="Size" value={formatBytes(bytes)} />
-        <KeyValueRow label="Ready in" value="~a day (up to 48h)" accent />
-        <KeyValueRow label="Cost" value={`${estimateUsd(bytes)} (estimate)`} />
+        <KeyValueRow label="Ready in" value={retrievalTier(pricing)?.typicalWait ?? "~a day"} accent />
+        <KeyValueRow label="Cost" value={`${formatUsd(retrievalUsd(pricing, bytes))} (estimate)`} />
         <div className="cs-folderpick">
           <div className="cs-folderpick-info">
             <div className="cs-folderpick-label">Save to</div>

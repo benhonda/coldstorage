@@ -2,6 +2,8 @@
 
 ## 2026-06-25
 
+- feat: Settings exclude chips on real daemon excludes — fetch/add/remove via `listExcludes`/`addExclude`/`removeExclude` (replaces the hardcoded `useSettings.ts`), refetch on `excludesChanged`.
+- feat: cost estimates from one source — `pricing.ts` (bytes×rate, fed by `getPricing` → `state.pricing`, `FALLBACK_PRICING` seeds first paint) drives Settings storage/mo + the request-a-copy retrieval fee.
 - feat: daemon scan excludes — `ExcludeMatcher` (gitignore-flavored: bare names match at any depth, `*`/`?` globs) applied inside the `LocalDirSource` walk + deposit so junk is never hashed and excluded folders never descended; journal-persisted `excludes` + `listExcludes`/`addExclude`/`removeExclude` commands + `excludesChanged` event; `task daemon:exclude-ipc`. Proven vs MinIO.
 - feat: daemon `getPricing` rate card — `Pricing`/`RestoreTier` SSOT (Deep Archive storage $/GB-mo + per-tier retrieval $/GB + estimate disclaimer) over the socket, so cost copy isn't scattered magic numbers.
 - feat: rename via press-and-hold (500ms, 8px drift-cancel) in `MyFilesView`, not double-click — double-click now *opens* the row (folder drills in / file Get-info); `cs-fl-label` gets `user-select:none` so the hold doesn't paint a selection.

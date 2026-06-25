@@ -4,7 +4,7 @@
  * `window.coldstore` (commands) + the folded store (event-driven state); no archive logic here.
  *
  * App owns the cross-view state: the file tree ({@link useFiles}, overlaying live restore status from
- * the store) and local settings ({@link useSettings}). It threads slices to the two views, keeps the
+ * the store) and daemon-backed settings (excludes from the store, mutated via commands). It threads slices to the two views, keeps the
  * shared `exec` command runner (surfaces rejections as a toast), and pins the foot of the sidebar: a
  * plain storage line, a quiet status line only when the background uploader isn't running, and a
  * clickable getting-back indicator that opens the restore queue.
@@ -18,13 +18,12 @@ import type { Exec } from "./views/types.ts";
 import { useAppState } from "./useStore.ts";
 import { useResizable } from "./ui/useResizable.ts";
 import { useFiles } from "./views/files/useFiles.ts";
-import { useSettings } from "./views/files/useSettings.ts";
 import { fileFromJournal, formatBytes, totalBytes } from "./views/files/model.ts";
 import { GettingBackPanel } from "./views/files/GettingBackPanel.tsx";
 import { FailuresPanel } from "./views/files/FailuresPanel.tsx";
 import type { BlobFailure } from "./state/reducer.ts";
 import { MyFilesView } from "./views/MyFilesView.tsx";
-import { SettingsView } from "./views/SettingsView.tsx";
+import { SettingsView, type SettingsApi } from "./views/SettingsView.tsx";
 
 /** Plain status when the background uploader isn't connected — no "daemon" jargon, quiet when healthy. */
 const NOT_RUNNING: Partial<Record<ConnectionState, string>> = {
@@ -63,7 +62,13 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   // status overlaid inside useFiles) + local settings.
   const daemonFiles = useMemo(() => state.files.map(fileFromJournal), [state.files]);
   const filesApi = useFiles(daemonFiles, state.restores);
-  const settings = useSettings();
+  // Excludes are daemon-backed now (the SSOT): list comes from the store, add/remove issue commands and
+  // the `excludesChanged` refetch reconciles. No local state to drift.
+  const settings: SettingsApi = {
+    excludes: state.excludes,
+    addExclude: (pattern) => exec(() => api.request("addExclude", { pattern })),
+    removeExclude: (pattern) => exec(() => api.request("removeExclude", { pattern })),
+  };
 
   const vaultBytes = totalBytes(filesApi.files);
   const gettingBack = filesApi.files.filter((f) => f.status === "gettingBack");
@@ -153,6 +158,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           files={filesApi.files}
           virtualFolders={filesApi.virtualFolders}
           filesApi={filesApi}
+          pricing={state.pricing}
           uploadProgress={state.run?.uploadProgress ?? {}}
         />
       )}
@@ -163,6 +169,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           sources={state.status?.sources ?? []}
           status={state.status}
           settings={settings}
+          pricing={state.pricing}
           vaultBytes={vaultBytes}
         />
       )}

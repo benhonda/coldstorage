@@ -11,9 +11,11 @@ import type {
   DaemonEventName,
   DaemonEvents,
   ListedFile,
+  Pricing,
   Source,
   Status,
 } from "../../../shared/ipc.ts";
+import { FALLBACK_PRICING } from "../views/files/pricing.ts";
 
 /** Live progress of the current/most-recent run, folded from runStarted/fileArchived/runFinished. */
 export interface RunProgress {
@@ -55,6 +57,12 @@ export interface AppState {
   /** The browsable tree, straight from the daemon's `listFiles` (journal-backed). Raw wire shape —
    * the file-browser maps it to its own model. Empty until the first read lands. */
   files: ListedFile[];
+  /** Exclude patterns (daemon `listExcludes`) — Settings' "Don't back up" chips. Authoritative; the
+   * daemon seeds defaults on first run + applies them at scan time. */
+  excludes: string[];
+  /** Storage/retrieval rate card (daemon `getPricing`) — what cost/fee figures quote from. Seeded with
+   * a fallback so first paint isn't blank, replaced by the real quote on connect (never null). */
+  pricing: Pricing;
   run: RunProgress | null;
   failures: BlobFailure[];
   /** Keyed by file id. */
@@ -66,6 +74,8 @@ export const initialState: AppState = {
   connection: "connecting",
   status: null,
   files: [],
+  excludes: [],
+  pricing: FALLBACK_PRICING,
   run: null,
   failures: [],
   restores: {},
@@ -83,6 +93,8 @@ export type Action =
   | { type: "statusLoaded"; status: Status }
   | { type: "sourcesLoaded"; sources: Source[] }
   | { type: "filesLoaded"; files: ListedFile[] }
+  | { type: "excludesLoaded"; excludes: string[] }
+  | { type: "pricingLoaded"; pricing: Pricing }
   | EventAction;
 
 /**
@@ -128,6 +140,12 @@ export const reducer = (state: AppState, action: Action): AppState => {
 
     case "filesLoaded":
       return { ...state, files: action.files };
+
+    case "excludesLoaded":
+      return { ...state, excludes: action.excludes };
+
+    case "pricingLoaded":
+      return { ...state, pricing: action.pricing };
 
     case "event":
       return foldEvent(state, action);
@@ -213,6 +231,10 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
 
     case "sourcesChanged":
       // Authoritative refresh is the controller's job (it re-issues listSources); no fold here.
+      return state;
+
+    case "excludesChanged":
+      // Same pattern as sourcesChanged — the controller re-reads listExcludes. No fold here.
       return state;
 
     case "filesChanged":

@@ -72,7 +72,8 @@ src/preload/
 src/renderer/     The web app (React). No Node, no socket — talks to window.coldstore.
   index.html, src/main.tsx (font + style imports), src/useStore.ts, src/env.d.ts
   src/App.tsx     LAYER 3 — thin 2-route shell: routes My Files / Settings; owns the cross-view state
-                  (useFiles + useSettings); shared `exec` runner + error toast + sidebar foot reassurance.
+                  (useFiles + daemon-backed settings: excludes from the store, mutated via commands);
+                  shared `exec` runner + error toast + sidebar foot reassurance.
   src/state/
     reducer.ts      pure event-stream → AppState fold (+ eventAction constructor). Headless-testable.
     store.ts        tiny observable store (useSyncExternalStore-shaped).
@@ -92,7 +93,10 @@ src/renderer/     The web app (React). No Node, no socket — talks to window.co
                       deposit() adds optimistic "uploading" rows carrying srcPath (for retry) + setDepositStatus()
                       flips them uploading⇄failed; move/rename/delete apply an optimistic edit while the view
                       fires the real movePath/deletePath (filesChanged → listFiles refetch reconciles); only
-                      newFolder stays local (virtual path); overlays live restore status. useSettings.ts = exclude chips.
+                      newFolder stays local (virtual path); overlays live restore status.
+      pricing.ts      cost math (bytes × the daemon's getPricing rate card) for Settings + request-a-copy;
+                      FALLBACK_PRICING seeds the store until the real quote lands. (Excludes are daemon-backed:
+                      Settings' chips read state.excludes + issue addExclude/removeExclude — no local store.)
       Breadcrumb, StatusBadge (StatusIcon: ✓ stored · ↑ uploading · ⚠ couldn't upload · ↓ transferring ·
                       saved-here), ContextMenu (incl. Retry upload on failed rows), InfoModal (Get info),
                       RequestBackModal (request-a-copy + native folder picker), GettingBackPanel (transfer

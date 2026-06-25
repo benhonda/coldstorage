@@ -1,25 +1,24 @@
 /**
  * Settings — the rules behind My Files (the *stuff* lives there; the *rules* live here). Watched folders
- * (auto-sync, demoted from the old home hero), what not to back up, storage/cost, and where restores
- * land. All daemon-backed where the command exists (sources, pause/resume, catch-up); the rest binds to
- * {@link useSettings} until the daemon grows the matching commands.
+ * (auto-sync, demoted from the old home hero), what not to back up, and storage/cost. Fully daemon-backed
+ * now: sources, pause/resume/catch-up, excludes ({@link SettingsApi}), and the storage-cost estimate (the
+ * daemon's pricing rate card).
  */
 import { useState } from "react";
-import type { Source, Status } from "../../../shared/ipc.ts";
+import type { Pricing, Source, Status } from "../../../shared/ipc.ts";
 import type { ViewProps } from "./types.ts";
-import type { SettingsApi } from "./files/useSettings.ts";
 import { formatBytes } from "./files/model.ts";
+import { formatUsd, monthlyStorageUsd } from "./files/pricing.ts";
 import { Button, Card, Chip, EmptyState, Field, Icon, IconButton, KeyValueRow } from "../ui/primitives.tsx";
 import { Page } from "../ui/layout.tsx";
 
-/** Rough Glacier Deep Archive storage rate (USD/GB/month). NOT authoritative — a calm ballpark until
- * the daemon reports real cost. Shown as "~$X/month (estimate)". */
-const STORAGE_USD_PER_GB_MONTH = 0.001;
-
-const monthlyEstimate = (bytes: number): string => {
-  const usd = (bytes / 1_000_000_000) * STORAGE_USD_PER_GB_MONTH;
-  return usd < 0.01 ? "~$0.01/month" : `~$${usd.toFixed(2)}/month`;
-};
+/** The "Don't back up" surface — daemon-backed exclude patterns. The daemon is the SSOT (it seeds the
+ * defaults + applies the patterns at scan time); the renderer just lists them and issues add/remove. */
+export interface SettingsApi {
+  excludes: string[];
+  addExclude: (pattern: string) => void;
+  removeExclude: (pattern: string) => void;
+}
 
 export const SettingsView = ({
   api,
@@ -27,11 +26,13 @@ export const SettingsView = ({
   sources,
   status,
   settings,
+  pricing,
   vaultBytes,
 }: ViewProps & {
   sources: Source[];
   status: Status | null;
   settings: SettingsApi;
+  pricing: Pricing;
   vaultBytes: number;
 }): React.JSX.Element => {
   const [path, setPath] = useState("");
@@ -145,8 +146,9 @@ export const SettingsView = ({
 
       <Card title="Storage">
         <KeyValueRow label="In deep storage" value={formatBytes(vaultBytes)} accent />
-        <KeyValueRow label="Roughly" value={`${monthlyEstimate(vaultBytes)} (estimate)`} />
+        <KeyValueRow label="Roughly" value={`${formatUsd(monthlyStorageUsd(pricing, vaultBytes))}/month (estimate)`} />
         <KeyValueRow label="Encryption" value="on this Mac, before upload" icon="lock" />
+        <p className="cs-help" style={{ marginTop: "var(--space-3)" }}>{pricing.note}</p>
       </Card>
     </Page>
   );

@@ -96,6 +96,24 @@ export interface RestoreStep {
   typicalWait: string | null;
 }
 
+/** `TierQuoteDTO` — one Glacier retrieval tier's per-GB fee + typical wait (SSOT: the daemon's `RestoreTier`). */
+export interface TierQuote {
+  tier: string;
+  usdPerGB: number;
+  typicalWait: string;
+}
+
+/**
+ * `PricingDTO` — the storage/retrieval rate card the UI quotes cost+fee from (the daemon is the SSOT;
+ * `note` is the estimate disclaimer to show beside any figure). All figures are USD list prices. Static
+ * estimate — the UI does the trivial bytes × rate math, the daemon owns the numbers. See `getPricing`.
+ */
+export interface Pricing {
+  storageUsdPerGBMonth: number;
+  retrieval: TierQuote[];
+  note: string;
+}
+
 /**
  * Typed command surface — method → {params, result}. Mirrors the `switch` in `DaemonService.handle`.
  * Params with no entries take no params; optional keys (`tier`, `days`) match the Swift defaults.
@@ -105,8 +123,15 @@ export interface Commands {
   getStatus: { params: Record<string, never>; result: Status };
   listSources: { params: Record<string, never>; result: Source[] };
   listFiles: { params: Record<string, never>; result: ListedFile[] };
+  /** The storage/retrieval rate card (SSOT) the UI quotes cost+fee from. Static — fetched once on connect. */
+  getPricing: { params: Record<string, never>; result: Pricing };
   addSource: { params: { path: string }; result: Ack };
   removeSource: { params: { id: string }; result: Ack };
+  /** The gitignore-style exclude patterns the scan/deposit skips (the daemon is the SSOT; defaults seeded
+   * on first run). `addExclude`/`removeExclude` mutate the registry and emit `excludesChanged`. */
+  listExcludes: { params: Record<string, never>; result: string[] };
+  addExclude: { params: { pattern: string }; result: Ack };
+  removeExclude: { params: { pattern: string }; result: Ack };
   /** Ad-hoc drop-to-upload: archive these paths once under `dest` (a vault-relative folder; "" = root),
    * without registering a watched source. `src` is newline-joined absolute paths. Fire-and-forget — the
    * reply just acks; progress/outcome arrive as runStarted/fileArchived/blobFailed/runFinished events. */
@@ -157,6 +182,9 @@ export interface DaemonEvents {
    * as a per-file `failed` status in the journal, so the ⚠ survives the next `listFiles` read. */
   blobFailed: { blob: string; kind: "permanent" | "transient"; message: string; paths: string };
   sourcesChanged: { added?: string; removed?: string };
+  /** The exclude registry changed via add/removeExclude (carries the affected pattern for logging). The
+   * controller's response is to re-read `listExcludes`; it also means the *next* scan applies the change. */
+  excludesChanged: { added?: string; removed?: string };
   /** The journal tree changed via a reorganize/delete (`movePath`/`deletePath`). Carries the affected path
    * (`moved`+`to`, XOR `deleted`) for logging; the controller's response is to re-read `listFiles`. */
   filesChanged: { moved?: string; to?: string; deleted?: string };

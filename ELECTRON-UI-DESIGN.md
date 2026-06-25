@@ -28,7 +28,7 @@ factual — a file uploader, not a vault that advertises safety (see the VOICE n
 > **drop-to-upload / "Choose files" really archive through the daemon** (the `deposit`
 > command — proven vs MinIO); **move/rename/delete are real daemon commands** too (`movePath`/`deletePath`
 > — journal `relativePath` prefix-sweep + tombstone, `filesChanged` event reconciles the optimistic edit;
-> proven vs MinIO, 2026-06-25). See the contract gaps below for what's still open (excludes, cost).
+> proven vs MinIO, 2026-06-25). **Excludes + cost/fee are now built too (2026-06-25)** — see the contract gaps below; what remains is small (per-file live status, skipped-count reporting).
 
 > **VOICE — plain file-uploader, no reassurance theater (Ben, 2026-06-24).** Don't tell the user their
 > files are "safe," don't claim/advertise safety, don't editorialize ("steady", "reassuring"). It's a
@@ -181,7 +181,8 @@ row just selects it; the `⋯` per-row dropdown (and right-click) opens actions,
 
 ## Daemon contract gaps this design needs (the build spec)
 The UI is a thin client; this design needs data/commands from the daemon — **most now built** (`listFiles`,
-`deposit`, `movePath`/`deletePath`, `uploadProgress`, per-file `failed`); the rest below are still open.
+`deposit`, `movePath`/`deletePath`, `uploadProgress`, per-file `failed`, **excludes** + **`getPricing`**);
+the rest below are still open.
 **None block the *design*; each is a precise backend ask** (Ben's lane). Most are small reads/edits over
 the journal, which already holds the data.
 - **`listFiles` (read) — DONE ✅ (2026-06-24).** Returns the browsable tree from the journal —
@@ -211,10 +212,16 @@ the journal, which already holds the data.
   bar is meaningful; small batched files flip to ✓ near-instantly and keep the indeterminate stripe. The UI
   matches the row by id-or-path and fills the bar live, even for one big file. Proven vs MinIO (a ~200 MB
   deposit streamed 4 monotonic ticks 32→64→96→100%).
-- **Bytes / size in `Status`.** "12 GB stored" + per-folder rollups. Per-file `size` exists in the journal;
-  `Status` exposes only counts — add a total-bytes field (and ideally per-prefix sums).
-- **Restore *fee* estimate.** The quote shows cost; `restore`/`RestoreStep` exposes `typicalWait` but
-  **no fee**. Add an estimated-cost field (and a combined estimate for batch/folder restore).
+- **Bytes / size — RESOLVED by design (2026-06-25).** No `Status` field needed: per-file `size` rides every
+  `listFiles` row, so the renderer derives "12 GB stored" + per-folder rollups from the tree it already holds
+  (`totalBytes(files)` / the folder model). Adding a `storedBytes` to `Status` would be a *second* source of
+  the same number (divergence risk) — deliberately not done; the journal tree is the SSOT.
+- **Restore *fee* estimate — DONE ✅ (2026-06-25).** A daemon **`getPricing`** rate-card command (storage
+  $/GB-mo + per-tier retrieval $/GB, co-located on `RestoreTier`, with an honest estimate disclaimer) is the
+  pricing SSOT. The request-a-copy modal quotes fee + wait from it at the standard tier; Settings quotes the
+  monthly storage estimate. Replaced two divergent hardcoded magic numbers. Proven vs MinIO
+  (`task ui:prove` → `getPricing → storage=$0.00099/GB-mo · standard=$0.02/GB`). Batch/folder restore already
+  sums bytes, so the combined quote falls out of the same per-GB math.
 - **Ad-hoc one-shot deposit command — DONE ✅ (2026-06-24).** `deposit {src, dest}` (newline-joined
   absolute paths + a vault-relative target folder) archives the dropped paths once with NO watched source
   — the proven pipeline over an `ExplicitPathsSource`, fire-and-forget, progress via the usual
@@ -224,9 +231,16 @@ the journal, which already holds the data.
   MinIO). *Note:* a deposit that FAILS isn't auto-retried by the run loop (it's not a watched source) — it
   surfaces via `blobFailed` (→ the "couldn't upload" panel) and needs a re-drop; auto-retry of failed
   deposits is a later refinement.
-- **Exclude patterns (get/set).** Global + per-source globs, applied at scan time; gitignore semantics.
-- **Skipped-count reporting.** The deposit "skipped 1,203 (node_modules…)" line needs the run to report
-  what the excludes filtered (an event field or `runFinished` addition).
+- **Exclude patterns (get/set) — DONE ✅ (2026-06-25).** Global gitignore-style globs, journal-persisted
+  (the daemon seeds the smart defaults once on first run + is the SSOT — the UI fetches them, no longer
+  hardcodes). Commands `listExcludes`/`addExclude`/`removeExclude` + an `excludesChanged` event; Settings'
+  "Don't back up" chips are daemon-backed. **Applied *inside the directory walk*** (`LocalDirSource`) so an
+  excluded file is never hashed and an excluded folder (node_modules) is pruned whole — covering scheduled
+  scans + dropped folders (an explicitly dropped single file is honored as-is). Proven end-to-end vs MinIO.
+  *(Per-source globs remain a later refinement; global ships now.)*
+- **Skipped-count reporting — still open.** The deposit "skipped 1,203 (node_modules…)" line needs the run
+  to report *how many* the excludes filtered (an event field or `runFinished` addition). Excludes themselves
+  now exist (above); only the count surfacing is unbuilt.
 - **Filesystem ops — move/rename/delete DONE ✅ (2026-06-25).** One primitive `movePath {from, to}` backs
   both file/folder **move AND rename** (a rename is a move to a sibling path) — a journal `relativePath`
   prefix-sweep, cheap, no S3, the blob never moves; the stable `id` (the upsert dedup key) is preserved so
