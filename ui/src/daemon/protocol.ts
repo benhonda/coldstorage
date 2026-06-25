@@ -111,6 +111,14 @@ export interface Commands {
    * without registering a watched source. `src` is newline-joined absolute paths. Fire-and-forget — the
    * reply just acks; progress/outcome arrive as runStarted/fileArchived/blobFailed/runFinished events. */
   deposit: { params: { src: string; dest: string }; result: Ack };
+  /** Reorganize: relocate the subtree at `from` → `to` — a file/folder MOVE or RENAME (a rename is just a
+   * move to a sibling path). A cheap journal `relativePath` edit (no S3, no thaw, the blob never moves);
+   * the stable file id is unchanged. Emits `filesChanged`. */
+  movePath: { params: { from: string; to: string }; result: Ack };
+  /** Delete (tombstone) the subtree at `path` (file or folder): it drops from `listFiles`, but the row +
+   * blob mapping are kept (byte reclaim is a deferred repack/GC — deep storage has a 180-day minimum).
+   * Emits `filesChanged`. */
+  deletePath: { params: { path: string }; result: Ack };
   restore: {
     params: { file: string; out: string; tier?: string; days?: string };
     result: RestoreStep;
@@ -149,6 +157,9 @@ export interface DaemonEvents {
    * as a per-file `failed` status in the journal, so the ⚠ survives the next `listFiles` read. */
   blobFailed: { blob: string; kind: "permanent" | "transient"; message: string; paths: string };
   sourcesChanged: { added?: string; removed?: string };
+  /** The journal tree changed via a reorganize/delete (`movePath`/`deletePath`). Carries the affected path
+   * (`moved`+`to`, XOR `deleted`) for logging; the controller's response is to re-read `listFiles`. */
+  filesChanged: { moved?: string; to?: string; deleted?: string };
   restoreRequested: { file: string; tier: string };
   restoreInProgress: { file: string };
   restoreCompleted: { file: string; out: string };

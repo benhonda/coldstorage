@@ -214,6 +214,10 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
     case "sourcesChanged":
       // Authoritative refresh is the controller's job (it re-issues listSources); no fold here.
       return state;
+
+    case "filesChanged":
+      // A reorganize/delete edited the journal tree; the controller re-reads listFiles. No fold here.
+      return state;
   }
 };
 

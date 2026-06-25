@@ -2,6 +2,7 @@
 
 ## 2026-06-25
 
+- feat: UI move/rename/delete on real daemon commands — reorganize/delete fire `movePath`/`deletePath` (optimistic local edit, reconciled by the `filesChanged`→`listFiles` refetch); `targetOf` keys the full vault-relative path. UI 44 tests.
 - feat: daemon move/rename/delete — `movePath` (journal `relativePath` prefix-sweep; one primitive for file/folder move AND rename; id-stable so no re-upload) + `deletePath` (tombstone `status=deleted`, row+blob kept for deferred GC, dropped from `listFiles`); `filesChanged` event; `task daemon:move-ipc`/`daemon:delete-ipc`. Proven vs MinIO.
 - docs: sync design docs to the shipped `uploadProgress`/per-file-`failed` contract (event SSOT + READMEs + ROADMAP/ELECTRON-UI-DESIGN) + stale-fact fixes — journal is `libsqlite3` not GRDB, CLAUDE.md infra now applied, `daemon-module-split` executables list.
 - feat: UI determinate upload bar + journal-truth failed rows — reducer folds `uploadProgress` (per-file %, keyed by id, cleared as each file archives) into a determinate bar; `blobFailed` paths flip the affected rows to ⚠ and name them in `FailuresPanel`. UI 42 tests.

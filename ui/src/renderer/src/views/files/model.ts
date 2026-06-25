@@ -75,11 +75,12 @@ export type RowTarget = { kind: "file"; id: string; path: string } | { kind: "fo
 export const rowKey = (row: Row): string =>
   row.type === "folder" ? `folder:${row.path}` : `file:${row.file.id}`;
 
-/** The reorganize target a row points at. */
+/** The reorganize target a row points at. `path` is the FULL vault-relative path for both kinds — it's
+ * the `from`/`path` argument of the daemon's `movePath`/`deletePath` commands. */
 export const targetOf = (row: Row): RowTarget =>
   row.type === "folder"
     ? { kind: "folder", path: row.path }
-    : { kind: "file", id: row.file.id, path: joinPath("", row.name) };
+    : { kind: "file", id: row.file.id, path: row.file.relativePath };
 
 /** A row's status — the folder rollup or the file's own — for the always-visible badge. */
 export const rowStatus = (row: Row): FileStatus => (row.type === "folder" ? row.status : row.file.status);

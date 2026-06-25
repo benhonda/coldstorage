@@ -21,10 +21,12 @@ import {
   formatBytes,
   formatDate,
   parentOf,
+  reparent,
   rowKey,
   rowStatus,
   targetOf,
   totalBytes,
+  withName,
   type UploadProgress,
   uploadPercent,
 } from "./files/model.ts";
@@ -146,16 +148,27 @@ export const MyFilesView = ({
     setSelected(new Set([key]));
     setRenaming(key);
   };
+  // Rename = a move to a sibling path. Optimistic edit for instant feedback, then the REAL daemon
+  // `movePath` (a cheap journal relativePath edit); its `filesChanged` event reconciles the tree.
   const commitRename = (row: Row, value: string): void => {
-    if (value.trim() && value.trim() !== row.name) filesApi.rename(targetOf(row), value.trim());
+    const trimmed = value.trim();
+    if (trimmed && trimmed !== row.name) {
+      const target = targetOf(row);
+      const to = withName(target.path, trimmed);
+      filesApi.rename(target, trimmed);
+      exec(() => api.request("movePath", { from: target.path, to }));
+    }
     setRenaming(null);
   };
   const doNewFolder = (): void => {
     const path = filesApi.newFolder(dir);
     startRename(`folder:${path}`);
   };
+  // Delete = tombstone each target's subtree in the journal (bytes aren't reclaimed — deferred repack/GC).
+  // Optimistic drop from the tree, then the REAL daemon `deletePath` per target.
   const doDelete = (targets: RowTarget[]): void => {
     filesApi.remove(targets);
+    exec(() => Promise.all(targets.map((t) => api.request("deletePath", { path: t.path }))));
     setSelected(new Set());
     setConfirmDelete(null);
   };
@@ -165,8 +178,14 @@ export const MyFilesView = ({
     else doDelete(targets);
   };
   const clearSelection = (): void => setSelected(new Set());
+  // Move each target's subtree under `toDir`. Optimistic re-parent, then the REAL daemon `movePath` per
+  // target ({ from: full path, to: toDir/basename }); `filesChanged` reconciles to journal truth.
   const doMove = (toDir: string): void => {
-    if (moveTargets) filesApi.move(moveTargets, toDir);
+    if (moveTargets) {
+      const targets = moveTargets;
+      filesApi.move(targets, toDir);
+      exec(() => Promise.all(targets.map((t) => api.request("movePath", { from: t.path, to: reparent(t.path, toDir) }))));
+    }
     setSelected(new Set());
     setMoveTargets(null);
   };

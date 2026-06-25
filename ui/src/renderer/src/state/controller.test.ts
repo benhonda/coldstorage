@@ -103,6 +103,20 @@ describe("controller sync policy", () => {
     expect(store.getState().files).toHaveLength(2);
   });
 
+  test("filesChanged refetches the file tree (a reorganize/delete rewrote it)", async () => {
+    const f = makeApi("connected");
+    const store = createStore();
+    connectController(f.api, store);
+    await tick();
+    const before = f.calls.filter((c) => c === "listFiles").length;
+
+    f.setFiles([{ id: "f1", relativePath: "moved/b.jpg", size: 10, status: "archived", blobId: "blob-1" }]);
+    f.fireEvent("filesChanged", { moved: "a/b.jpg", to: "moved/b.jpg" });
+    await tick();
+    expect(f.calls.filter((c) => c === "listFiles").length).toBe(before + 1);
+    expect(store.getState().files[0]?.relativePath).toBe("moved/b.jpg");
+  });
+
   test("does NOT fetch while disconnected, then refetches on (re)connect", async () => {
     const f = makeApi("disconnected");
     const store = createStore();

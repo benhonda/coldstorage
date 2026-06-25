@@ -26,9 +26,9 @@ factual — a file uploader, not a vault that advertises safety (see the VOICE n
 > and the fixtures stand-in is deleted (proven vs MinIO, `task ui:prove`). Request-a-copy issues the
 > **real `restore` command** (resolves end-to-end now that ids are real journal ids);
 > **drop-to-upload / "Choose files" really archive through the daemon** (the `deposit`
-> command — proven vs MinIO). Still optimistic-local seams: **move/rename/delete** (honest — cheap journal
-> edits in the real design, reverted to `listFiles` truth on the next read until those daemon commands land). See the
-> contract gaps below for what makes each real.
+> command — proven vs MinIO); **move/rename/delete are real daemon commands** too (`movePath`/`deletePath`
+> — journal `relativePath` prefix-sweep + tombstone, `filesChanged` event reconciles the optimistic edit;
+> proven vs MinIO, 2026-06-25). See the contract gaps below for what's still open (excludes, cost).
 
 > **VOICE — plain file-uploader, no reassurance theater (Ben, 2026-06-24).** Don't tell the user their
 > files are "safe," don't claim/advertise safety, don't editorialize ("steady", "reassuring"). It's a
@@ -225,9 +225,14 @@ already holds the data.
 - **Exclude patterns (get/set).** Global + per-source globs, applied at scan time; gitignore semantics.
 - **Skipped-count reporting.** The deposit "skipped 1,203 (node_modules…)" line needs the run to report
   what the excludes filtered (an event field or `runFinished` addition).
-- **Filesystem ops:** `move`/`rename` (journal `relativePath` edit / prefix sweep — cheap, no S3), `delete`
-  (tombstone in journal; **decouple from byte reclamation** — defer GC, mind the 180-day min +
-  thaw-to-repack cost), `newFolder` (virtual path).
+- **Filesystem ops — move/rename/delete DONE ✅ (2026-06-25).** One primitive `movePath {from, to}` backs
+  both file/folder **move AND rename** (a rename is a move to a sibling path) — a journal `relativePath`
+  prefix-sweep, cheap, no S3, the blob never moves; the stable `id` (the upsert dedup key) is preserved so
+  a rescan won't re-upload. `deletePath {path}` **tombstones** the subtree (`status=deleted`, row + blob
+  mapping kept — byte reclamation is decoupled/deferred: 180-day min + thaw-to-repack cost). Both emit
+  `filesChanged` → the UI reconciles its optimistic edit on the next `listFiles`. Proven vs MinIO
+  (`task daemon:move-ipc`/`daemon:delete-ipc`). Still local-only: `newFolder` (a virtual path with no
+  files yet — nothing to persist until something lands in it).
 - **Cost/storage estimate.** GB stored + rough monthly cost for the Storage panel.
 - **(UI/main-process, not daemon):** macOS **system notification** on restore-ready.
 

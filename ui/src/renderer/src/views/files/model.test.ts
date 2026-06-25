@@ -14,6 +14,7 @@ import {
   formatBytes,
   reparent,
   rewritePrefix,
+  targetOf,
   totalBytes,
   type UploadProgress,
   uploadPercent,
@@ -81,6 +82,16 @@ describe("path ops", () => {
     expect(rewritePrefix("a/b/c", "a/b", "x")).toBe("x/c");
     expect(rewritePrefix("a/b", "a/b", "x")).toBe("x");
     expect(rewritePrefix("a/bc", "a/b", "x")).toBe("a/bc"); // not a path-segment match
+  });
+
+  test("targetOf carries the FULL vault path (the daemon movePath/deletePath argument)", () => {
+    // A nested file's target.path must be its whole relativePath, not just the basename — it's the `from`
+    // sent to the daemon. (Folders already carry their full path.)
+    expect(targetOf({ type: "file", name: "beach.jpg", file: file("Photos/2019/beach.jpg", 1) })).toEqual({
+      kind: "file",
+      id: "Photos/2019/beach.jpg",
+      path: "Photos/2019/beach.jpg",
+    });
   });
 });
 

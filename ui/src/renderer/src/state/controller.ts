@@ -40,6 +40,8 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
     store.dispatch(eventAction(name, data));
     // Resync the authoritative snapshot when the daemon reports the registry or a run changed it.
     if (name === "sourcesChanged") void refreshSources();
+    // A reorganize/delete (movePath/deletePath) rewrote the tree — re-read it to reconcile the optimistic edit.
+    else if (name === "filesChanged") void refreshFiles();
     // A finished run may have archived new files / changed their status — re-read both the counts
     // (getStatus) and the tree (listFiles).
     else if (name === "runFinished") {

@@ -2,11 +2,12 @@
  * The file-browser state + reorganize ops — the renderer's view of the vault tree.
  *
  * The flat tree is the daemon's `listFiles` (journal-backed), passed in as `daemonFiles` and held in
- * local state so the reorganize ops can edit it optimistically. The deposit/move/rename/delete ops are
- * still local-only seams: the daemon doesn't expose those commands yet, so they mutate the local copy
- * and are reverted to the daemon's truth on the next `listFiles` (re)read. This is honest to the real
- * design — a move/rename/delete genuinely IS a cheap journal `relativePath` edit (no S3, no thaw) — so
- * the optimistic edit mirrors what the daemon command will do once it lands. Each op marks its seam.
+ * local state so the reorganize ops can edit it optimistically. deposit/move/rename/delete each apply an
+ * OPTIMISTIC local edit here (instant feedback) while the view fires the REAL daemon command (`deposit` /
+ * `movePath` / `deletePath`); the daemon's `filesChanged`/`runFinished` event then triggers a `listFiles`
+ * refetch that reconciles this local copy to journal truth. The optimistic edit is exact (a move/rename
+ * genuinely IS a cheap journal `relativePath` edit, no S3/no thaw), so the refetch is a no-op in the happy
+ * path and the authoritative correction if anything diverged.
  *
  * Live restore status IS real: request-back calls the daemon's `restore` command, and the `restore*`
  * events fold into the store's `restores` — which we overlay here so a file the user asks back shows
@@ -143,7 +144,8 @@ export const useFiles = (
     const folders = targets.filter((t) => t.kind === "folder").map((t) => t.path);
     const underAFolder = (path: string): boolean =>
       folders.some((dir) => path === dir || path.startsWith(`${dir}/`));
-    // SEAM: real delete = daemon `delete` tombstone; byte reclamation is deferred (180-day min + repack).
+    // Optimistic drop; the view fires the real `deletePath` (a journal tombstone — byte reclamation is
+    // deferred, 180-day min + repack). The next `listFiles` confirms it (tombstones are excluded there).
     setBase((prev) => prev.filter((f) => !fileIds.has(f.id) && !underAFolder(f.relativePath)));
     setVirtualFolders((prev) => prev.filter((p) => !folders.includes(p) && !underAFolder(p)));
   }, []);
