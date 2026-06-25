@@ -46,7 +46,6 @@ We design solutions that are:
 
 - For JS/Node, we use Bun. Not NPM.
 - For IaC/Terraform/Terragrunt, you should verify & debug any sizable changes with the plan, though you never apply. See taskfile for exact commands. Assume you are logged into profile 'pharmer' unless proven otherwise
-- You have access to all our silo services
 - This is a PUBLIC REPO - no sensitive stuff please!
 
 ### Monorepo structure
