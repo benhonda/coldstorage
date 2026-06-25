@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-06-25
+
+- feat: daemon `uploadProgress` event + per-file `failed` status — `UploadEngine` emits determinate progress (bytes/encrypted-total, per 64 MiB part, solo-blob large files); a permanent blob failure persists its files as `failed` (`Journal.markFilesFailed`, survives restart) and `blobFailed` now carries the affected paths. Proven vs MinIO.
+
 ## 2026-06-24
 
 - feat: My Files browser runs on real daemon data — swap `fixtures.ts` for live `listFiles` (journal tree → store `state.files` → `model.fileFromJournal`), drop-to-upload issues the real `deposit` command, request-a-copy resolves end-to-end; `pathForFile` preload (`webUtils.getPathForFile`, Electron 32+). Proven vs MinIO (`task ui:prove`).

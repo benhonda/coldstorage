@@ -240,6 +240,19 @@ public final class Journal: @unchecked Sendable {
             """, [.text(FileStatus.archived.rawValue), .text(blobId), .int(offset), .int(length), .int(firstFrame), .text(plaintextSha256), .text(id)])
     }
 
+    /// Mark logical files `failed` (+ record why) — written when their blob fails *permanently*, so the UI's
+    /// ⚠ row is journal truth that survives a `listFiles` refresh and a restart, not a UI guess. Transient
+    /// failures are left untouched (they retry next pass). A later successful re-archive overwrites this back
+    /// to `archived` (self-correcting). No-op on an empty id set.
+    public func markFilesFailed(_ ids: [String], error: String) throws {
+        guard !ids.isEmpty else { return }
+        lock.lock(); defer { lock.unlock() }
+        for id in ids {
+            try run("UPDATE files SET status=?1, error=?2 WHERE id=?3",
+                    [.text(FileStatus.failed.rawValue), .text(error), .text(id)])
+        }
+    }
+
     /// Everything restore needs to locate + decrypt a logical file.
     public func fileMapping(_ id: String) throws -> (blobId: String, offset: Int, length: Int, firstFrame: Int, plaintextSha256: String)? {
         lock.lock(); defer { lock.unlock() }

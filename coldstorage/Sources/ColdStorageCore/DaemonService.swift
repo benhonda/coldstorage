@@ -59,14 +59,30 @@ public actor DaemonService {
         let onFile: @Sendable (String, String) async -> Void = { id, blob in
             bus.publish(DaemonEvent("fileArchived", ["file": id, "blob": blob]))
         }
+        // Per-file determinate upload progress (solo-blob large files only — see UploadEngine.archive).
+        // Carries both id and path so the UI can match either a journal row (by id) or an optimistic
+        // drop row (by path) — they diverge for Photos and for not-yet-archived deposits.
+        let onProgress: @Sendable (UploadProgress) async -> Void = { p in
+            bus.publish(DaemonEvent("uploadProgress", ["file": p.fileId, "path": p.path,
+                                                       "bytes": "\(p.uploaded)", "totalBytes": "\(p.total)"]))
+        }
         defer { running = false }
         let failures = try await engine.run(source: source,
-                                            skipBlobIds: permanentlyFailedBlobs, onFileArchived: onFile)
+                                            skipBlobIds: permanentlyFailedBlobs,
+                                            onFileArchived: onFile, onProgress: onProgress)
         for f in failures {
+            // Name the affected files by path (newline-joined) so a live watcher flips their rows + lists them
+            // in the failures panel without waiting for the next listFiles read.
             bus.publish(DaemonEvent("blobFailed", ["blob": f.blobId,
                                                    "kind": f.kind.isPermanent ? "permanent" : "transient",
-                                                   "message": f.kind.message]))
-            if f.kind.isPermanent { permanentlyFailedBlobs.insert(f.blobId) }
+                                                   "message": f.kind.message,
+                                                   "paths": f.files.map(\.path).joined(separator: "\n")]))
+            if f.kind.isPermanent {
+                permanentlyFailedBlobs.insert(f.blobId)
+                // Persist the ⚠ as journal truth (survives refresh + restart). Best-effort: a write hiccup here
+                // must not abort surfacing the remaining failures — the event already reported the fault.
+                try? journal.markFilesFailed(f.files.map(\.id), error: f.kind.message)
+            }
         }
         try writeStatus()
         let s = try journal.summary()

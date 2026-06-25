@@ -1,6 +1,19 @@
 import Foundation
 import Crypto
 
+/// One determinate upload-progress tick for a solo-blob file: how many encrypted bytes are up out of the
+/// blob's total. Named fields (not a positional tuple) so the `uploaded`/`total` pair — both `Int` — can't
+/// be transposed at the call site, which would silently invert the percentage.
+public struct UploadProgress: Sendable, Equatable {
+    public let fileId: String
+    public let path: String
+    public let uploaded: Int
+    public let total: Int
+    public init(fileId: String, path: String, uploaded: Int, total: Int) {
+        self.fileId = fileId; self.path = path; self.uploaded = uploaded; self.total = total
+    }
+}
+
 /// Orchestrates: scan → plan → (per blob) stage-encrypt → resumable multipart → verify → journal.
 /// V1 processes one blob at a time in newest-first order (correct + simple; cross-blob concurrency
 /// is a tunable later). Resumability comes from deterministic encryption + the journal + ListParts.
@@ -28,21 +41,29 @@ public actor UploadEngine {
     @discardableResult
     public func run(source: IngestSource,
                     skipBlobIds: Set<String> = [],
-                    onFileArchived: (@Sendable (String, String) async -> Void)? = nil) async throws -> [BlobFailure] {
+                    onFileArchived: (@Sendable (String, String) async -> Void)? = nil,
+                    onProgress: (@Sendable (UploadProgress) async -> Void)? = nil) async throws -> [BlobFailure] {
         let items = try await source.enumerate()
         try journal.upsert(items)
         var failures: [BlobFailure] = []
         for blob in BlobPlanner().plan(items) where !skipBlobIds.contains(blob.id) {
-            do { try await archive(blob, onFileArchived: onFileArchived) }
+            do { try await archive(blob, onFileArchived: onFileArchived, onProgress: onProgress) }
             catch {
-                failures.append(BlobFailure(blobId: blob.id, kind: FailureKind.classify(error)))
+                let files = blob.items.map { BlobFailure.File(id: $0.id, path: $0.relativePath) }
+                failures.append(BlobFailure(blobId: blob.id, kind: FailureKind.classify(error), files: files))
                 try? FileManager.default.removeItem(at: stagingDir.appendingPathComponent(blob.id))   // don't leak a half-staged file
             }
         }
         return failures
     }
 
-    private func archive(_ blob: BlobPlan, onFileArchived: (@Sendable (String, String) async -> Void)?) async throws {
+    /// `onProgress` reports resumable-multipart progress as a determinate fraction of the *encrypted* blob —
+    /// emitted once per uploaded 64 MiB part. **Solo-blob only:** a determinate bar is only meaningful for a
+    /// large file (always its own blob); small files are batched into one blob and flip to `archived`
+    /// near-instantly, so they keep the indeterminate bar. Bounded to one event per part per large file.
+    private func archive(_ blob: BlobPlan,
+                         onFileArchived: (@Sendable (String, String) async -> Void)?,
+                         onProgress: (@Sendable (UploadProgress) async -> Void)? = nil) async throws {
         if try journal.isBlobVerified(blob.id) { return }   // already archived → idempotent skip
         let kek = try keys.userKEK()
         // Resume: if this blob exists, reuse its STORED key + nonce prefix so re-staging reproduces
@@ -98,6 +119,12 @@ public actor UploadEngine {
             guard let data = try fh.read(upToCount: S3Store.partSize), !data.isEmpty else { continue }
             let r = try await store.uploadPart(key: blob.s3Key, uploadId: uploadId, number: n, data: data)
             try journal.recordPart(PartRow(blobId: blob.id, partNumber: n, eTag: r.etag, sha256: r.sha, status: .uploaded))
+            // Determinate progress for a solo (large-file) blob: bytes uploaded so far over encrypted total.
+            if blob.items.count == 1, let onProgress {
+                let f = blob.items[0]
+                await onProgress(UploadProgress(fileId: f.id, path: f.relativePath,
+                                                uploaded: min(n * S3Store.partSize, offset), total: offset))
+            }
             // demo aid: slow parts so kill/resume is easy to see against fast local MinIO
             if let ms = ProcessInfo.processInfo.environment["COLDSTORE_PART_DELAY_MS"].flatMap(Int.init), ms > 0 {
                 try await Task.sleep(for: .milliseconds(ms))

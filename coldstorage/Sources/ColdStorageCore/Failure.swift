@@ -49,7 +49,21 @@ public enum FailureKind: Sendable, Equatable {
 /// One blob that failed to archive this pass, with why. The engine returns these instead of aborting the
 /// whole run — a single poison blob must not block the rest of the backup.
 public struct BlobFailure: Sendable, Equatable {
+    /// A logical file caught in a failed blob — its journal `id` (to mark it `failed`) and `path` (to name
+    /// it on the wire / match the user's row). Both are needed because they diverge for Photos (id =
+    /// localIdentifier ≠ relativePath), and the optimistic UI row keys on path while the journal keys on id.
+    public struct File: Sendable, Equatable {
+        public let id: String
+        public let path: String
+        public init(id: String, path: String) { self.id = id; self.path = path }
+    }
     public let blobId: String
     public let kind: FailureKind
-    public init(blobId: String, kind: FailureKind) { self.blobId = blobId; self.kind = kind }
+    /// The files batched into this blob. Surfaced so the daemon can mark them `failed` in the journal
+    /// (permanent only) and name them on the `blobFailed` event — making the UI's ⚠ row journal truth, not a
+    /// UI guess. Defaulted so existing call sites/tests that don't care stay terse.
+    public let files: [File]
+    public init(blobId: String, kind: FailureKind, files: [File] = []) {
+        self.blobId = blobId; self.kind = kind; self.files = files
+    }
 }

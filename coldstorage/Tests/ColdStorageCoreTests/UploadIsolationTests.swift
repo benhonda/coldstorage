@@ -65,6 +65,9 @@ import Foundation
         #expect(failures.count == 1)                                   // isolated, not fatal
         #expect(failures.first?.blobId == bad.id)
         #expect(failures.first?.kind.isPermanent == true)
+        #expect(failures.first?.files.map(\.id) == bad.items.map(\.id))     // names the files in the poison blob
+        #expect(failures.first?.files.map(\.path) == bad.items.map(\.relativePath))
+        #expect(!bad.items.isEmpty)                                         // guard: assertions above are non-vacuous
         #expect(try journal.isBlobVerified(blobs[0].id) == true)       // the good blob archived end-to-end
         #expect(try journal.isBlobVerified(bad.id) == false)
     }

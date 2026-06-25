@@ -45,4 +45,26 @@ import Foundation
         #expect(row.status == .archived)
         #expect(row.blobId == "blob-1")
     }
+
+    /// A permanently-failed blob marks its files `failed` so the UI's ⚠ is journal truth, not a UI guess —
+    /// it survives the next `listFiles` refresh (and a restart). Mirrors `DaemonService.performRun`.
+    @Test func markFilesFailedPersistsFailedStatus() throws {
+        let j = try tempJournal()
+        try j.upsert([item("x", path: "a/b.jpg", size: 1), item("y", path: "a/c.jpg", size: 2)])
+        try j.markFilesFailed(["x", "y"], error: "S3 AccessDenied")
+        let rows = try j.listFiles()
+        #expect(rows.allSatisfy { $0.status == .failed })
+    }
+
+    /// A later successful re-archive overwrites a prior `failed` back to `archived` (self-correcting after a
+    /// transient-looking config fix on restart). And an empty id set is a no-op.
+    @Test func reArchiveClearsFailedAndEmptyIsNoop() throws {
+        let j = try tempJournal()
+        try j.upsert([item("x", path: "a/b.jpg", size: 1)])
+        try j.markFilesFailed([], error: "ignored")              // no-op, doesn't throw
+        #expect(try #require(try j.listFiles().first).status == .planned)
+        try j.markFilesFailed(["x"], error: "S3 AccessDenied")
+        try j.markFileArchived("x", blobId: "blob-1", offset: 0, length: 1, firstFrame: 0, plaintextSha256: "sha")
+        #expect(try #require(try j.listFiles().first).status == .archived)
+    }
 }
