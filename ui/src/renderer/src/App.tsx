@@ -153,6 +153,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           files={filesApi.files}
           virtualFolders={filesApi.virtualFolders}
           filesApi={filesApi}
+          uploadProgress={state.run?.uploadProgress ?? {}}
         />
       )}
       {route === "settings" && (

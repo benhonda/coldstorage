@@ -25,6 +25,8 @@ import {
   rowStatus,
   targetOf,
   totalBytes,
+  type UploadProgress,
+  uploadPercent,
 } from "./files/model.ts";
 import { Breadcrumb } from "./files/Breadcrumb.tsx";
 import { ContextMenu, type MenuEntry } from "./files/ContextMenu.tsx";
@@ -40,6 +42,9 @@ interface Props {
   files: ArchivedFile[];
   virtualFolders: string[];
   filesApi: FilesApi;
+  /** Live per-file upload progress (store `run.uploadProgress`), keyed by daemon file id — drives the
+   * determinate bar on an uploading row. Empty between runs. */
+  uploadProgress: Record<string, UploadProgress>;
 }
 
 type ViewMode = "list" | "grid";
@@ -55,6 +60,7 @@ export const MyFilesView = ({
   files,
   virtualFolders,
   filesApi,
+  uploadProgress,
 }: Props): React.JSX.Element => {
   const [dir, setDir] = useState("");
   const [view, setView] = useState<ViewMode>("list");
@@ -72,6 +78,11 @@ export const MyFilesView = ({
   const fileInput = useRef<HTMLInputElement>(null);
 
   const rows = useMemo(() => childrenOf(files, dir, virtualFolders), [files, dir, virtualFolders]);
+
+  // Determinate upload % for a file row (null → fall back to the indeterminate bar). Folders roll up many
+  // files, so they keep the indeterminate stripe rather than picking one file's %.
+  const uploadPct = (row: Row): number | null =>
+    row.type === "file" ? uploadPercent(uploadProgress, row.file) : null;
 
   // ── navigation resets transient state ──
   const goTo = (next: string): void => {
@@ -334,6 +345,7 @@ export const MyFilesView = ({
               rows={rows}
               selected={selected}
               renaming={renaming}
+              uploadPct={uploadPct}
               onRowClick={onRowClick}
               onRowOpen={openRow}
               onRowContext={openMenu}
@@ -429,6 +441,7 @@ const FileList = ({
   rows,
   selected,
   renaming,
+  uploadPct,
   onRowClick,
   onRowOpen,
   onRowContext,
@@ -439,6 +452,7 @@ const FileList = ({
   rows: Row[];
   selected: Set<string>;
   renaming: string | null;
+  uploadPct: (row: Row) => number | null;
   onRowClick: (e: React.MouseEvent, row: Row, index: number) => void;
   onRowOpen: (row: Row) => void;
   onRowContext: (e: React.MouseEvent, row: Row) => void;
@@ -457,6 +471,7 @@ const FileList = ({
       const key = rowKey(row);
       const isFolder = row.type === "folder";
       const status = rowStatus(row);
+      const pct = status === "uploading" ? uploadPct(row) : null;
       return (
         <div
           key={key}
@@ -492,9 +507,19 @@ const FileList = ({
               }}
             />
           </span>
-          {/* honest activity indicator — an INDETERMINATE bar (no fake %; the daemon emits no per-file
-              byte progress yet). Shows the upload is working, in conjunction with the ↑ icon. */}
-          {status === "uploading" && <span className="cs-uploading-bar" aria-hidden="true" />}
+          {/* activity indicator under the row: a DETERMINATE 0–100 fill when the daemon reports per-file
+              byte progress (`uploadProgress`, large solo-blob files), else an INDETERMINATE stripe that
+              just says "working" (small batched files / before the first progress event). */}
+          {status === "uploading" &&
+            (pct === null ? (
+              <span className="cs-uploading-bar" aria-hidden="true" />
+            ) : (
+              <span
+                className="cs-uploading-bar cs-uploading-bar--determinate"
+                style={{ "--pct": `${pct}%` } as React.CSSProperties}
+                aria-hidden="true"
+              />
+            ))}
         </div>
       );
     })}

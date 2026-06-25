@@ -2,6 +2,7 @@
 
 ## 2026-06-25
 
+- feat: UI determinate upload bar + journal-truth failed rows — reducer folds `uploadProgress` (per-file %, keyed by id, cleared as each file archives) into a determinate bar; `blobFailed` paths flip the affected rows to ⚠ and name them in `FailuresPanel`. UI 42 tests.
 - feat: daemon `uploadProgress` event + per-file `failed` status — `UploadEngine` emits determinate progress (bytes/encrypted-total, per 64 MiB part, solo-blob large files); a permanent blob failure persists its files as `failed` (`Journal.markFilesFailed`, survives restart) and `blobFailed` now carries the affected paths. Proven vs MinIO.
 
 ## 2026-06-24

@@ -26,12 +26,19 @@ export interface RunProgress {
   blobsFailed: number | null;
   /** Most-recent-first, capped — for a live "now archiving…" feed. */
   recent: { file: string; blob: string }[];
+  /** Live determinate upload progress, keyed by the daemon file id. Each entry carries the file's `path`
+   * too, so the browser can match either a journal row (by id) or an optimistic drop row (by path). Only
+   * large (solo-blob) files appear here; small batched files flip to archived too fast to bother. Cleared
+   * at `runFinished`; an entry is dropped as its file archives. */
+  uploadProgress: Record<string, { path: string; uploaded: number; total: number }>;
 }
 
 export interface BlobFailure {
   blob: string;
   kind: "permanent" | "transient";
   message: string;
+  /** relativePaths of the files in the failed blob — for naming them in the panel + flipping their rows. */
+  files: string[];
 }
 
 /** One file's restore progress, folded from the restore* events (idempotent, re-issued by the UI). */
@@ -98,6 +105,7 @@ const startedRun = (): RunProgress => ({
   filesTotal: null,
   blobsFailed: null,
   recent: [],
+  uploadProgress: {},
 });
 
 /** Parse a wire string to a non-negative integer, defaulting to 0 (never NaN). */
@@ -134,6 +142,8 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
     case "fileArchived": {
       const { file, blob } = action.data;
       const prev = state.run ?? startedRun();
+      // It's archived now — drop its live progress entry so no stale bar lingers.
+      const { [file]: _done, ...uploadProgress } = prev.uploadProgress;
       return {
         ...state,
         run: {
@@ -141,6 +151,20 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
           active: true,
           filesArchived: prev.filesArchived + 1,
           recent: [{ file, blob }, ...prev.recent].slice(0, RECENT_CAP),
+          uploadProgress,
+        },
+      };
+    }
+
+    case "uploadProgress": {
+      const { file, path, bytes, totalBytes } = action.data;
+      const prev = state.run ?? startedRun();
+      return {
+        ...state,
+        run: {
+          ...prev,
+          active: true,
+          uploadProgress: { ...prev.uploadProgress, [file]: { path, uploaded: num(bytes), total: num(totalBytes) } },
         },
       };
     }
@@ -155,13 +179,15 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
           filesTotal: num(d.filesTotal),
           blobsFailed: num(d.blobsFailed),
           recent: state.run?.recent ?? [],
+          uploadProgress: {}, // run's over — no live bars
         },
       };
     }
 
     case "blobFailed": {
-      const { blob, kind, message } = action.data;
-      return { ...state, failures: [{ blob, kind, message }, ...state.failures].slice(0, FAILURE_CAP) };
+      const { blob, kind, message, paths } = action.data;
+      const files = paths ? paths.split("\n").filter(Boolean) : [];
+      return { ...state, failures: [{ blob, kind, message, files }, ...state.failures].slice(0, FAILURE_CAP) };
     }
 
     case "paused":

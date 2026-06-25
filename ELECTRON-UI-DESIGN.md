@@ -189,27 +189,26 @@ already holds the data.
   `model.fileFromJournal`). **The fixtures stand-in is deleted** — the browser tree is real journal data.
   Proven end-to-end vs MinIO (`task ui:prove` → `listFiles → N file(s)`; raw shape confirmed via
   `task daemon:ctl -- listFiles`). *No R2, no thaw.* Note `status` is the raw journal `FileStatus`
-  (today only `planned`/`archived` persist per file; the UI coarsens to frozen/uploading).
+  (today `planned`/`archived`/`failed` persist per file; the UI coarsens to frozen/uploading/failed).
 - **Per-file live status.** Browser status icons need `frozen | uploading | failed | gettingBack | here`
   per file — fold the journal `FileStatus` with the live restore state (today restore state is per-request
   via `restore*` events, not queryable per file).
-- **Upload-failure surfacing (per-file) — the error-UX gap.** *Why it matters:* a failed upload was
-  **invisible** (Ben, 2026-06-24 — "I saw nothing"). The daemon reports failures **per-BLOB** (`blobFailed
-  {blob, kind, message}` + `getStatus.permanentlyFailedBlobs`), but the UI is **per-file**, and a failed
-  file never gets a `blobId` to join on — so we can't mark the *file's* row yet, and a stuck file silently
-  lingers as `planned` (→ shows "uploading" forever). **Build now (done ✅):** a persistent sidebar
-  "couldn't upload" count → a failures panel (from `state.failures`, **permanent only** — transient blips
-  stay "uploading" and self-heal, Ben's call) + "Try again" (`triggerNow`). **Needs the daemon:** persist a
-  per-file **`failed`** status (so `listFiles` returns it → the per-row ⚠, already wired) **and** name the
-  **affected file ids** on `blobFailed` (so the panel/summary can say *which* files, not a blob hash) — and
-  a per-run **filesFailed** count (blobs ≠ files). *Error copy is Ben-gatekept (placeholders in the UI).*
-- **Upload progress (per-file byte %) — for a real determinate bar.** Uploading rows show an **indeterminate**
-  activity bar today, because the daemon emits no per-file progress — only `fileArchived` when a whole file
-  finishes (a determinate "63%" now would be fake, like the old green check). To make it real: emit an
-  **`uploadProgress {file|blob, bytes, total}`** event from the engine's multipart loop; the bar then fills
-  for real, even for one big file. *(Cheap alternative with no daemon change: fold `fileArchived` so rows
-  flip ✓ one-by-one — real aggregate progress for a multi-file drop, but nothing mid-upload for a single
-  large file.)*
+- **Upload-failure surfacing (per-file) — DONE ✅ (2026-06-24/25).** *Why it mattered:* a failed upload was
+  **invisible** (Ben, 2026-06-24 — "I saw nothing"). Failures classify per-BLOB, but the surfacing is now
+  per-file and backed by journal truth: (1) `blobFailed {blob, kind, message, paths}` names the files —
+  `paths` is the newline-joined relativePaths of every file in the failed blob — so the panel says *which*
+  files, not a blob hash; (2) a **permanent** failure calls `Journal.markFilesFailed` to persist a per-file
+  **`failed`** status, so `listFiles` returns it → the per-row ⚠ survives a refresh + a restart (not a UI
+  guess). The UI side: a persistent sidebar "couldn't upload" count → a failures panel (from
+  `state.failures`, **permanent only** — transient blips stay "uploading" and self-heal, Ben's call) +
+  "Try again" (`triggerNow`). *Error copy is Ben-gatekept (placeholders in the UI).* **Still open:** a
+  per-run **filesFailed** count (blobs ≠ files).
+- **Upload progress (per-file byte %) — DONE ✅ (2026-06-24).** Uploading rows show a **determinate** bar
+  (real percent of bytes up). The engine's multipart loop emits **`uploadProgress {file, path, bytes,
+  totalBytes}`** once per 64 MiB part, for **solo (large-file) blobs only** — the case where a determinate
+  bar is meaningful; small batched files flip to ✓ near-instantly and keep the indeterminate stripe. The UI
+  matches the row by id-or-path and fills the bar live, even for one big file. Proven vs MinIO (a ~200 MB
+  deposit streamed 4 monotonic ticks 32→64→96→100%).
 - **Bytes / size in `Status`.** "12 GB stored" + per-folder rollups. Per-file `size` exists in the journal;
   `Status` exposes only counts — add a total-bytes field (and ideally per-prefix sums).
 - **Restore *fee* estimate.** The quote shows cost; `restore`/`RestoreStep` exposes `typicalWait` but
@@ -257,8 +256,10 @@ other clients of it). A Node client is ~30 lines and keeps the UI a pure consume
   (`{event, data}`). The client distinguishes by which key is present.
 - **Commands (SSOT = `DaemonService.handle`):** `ping · getStatus · listSources · listFiles · addSource ·
   removeSource · deposit · triggerNow · restore · pause · resume`.
-- **Events (SSOT = `DaemonEvent(...)` call sites):** `runStarted · fileArchived · runFinished · blobFailed ·
-  sourcesChanged · restoreRequested · restoreInProgress · restoreCompleted · paused · resumed · error`.
+- **Events (SSOT = `DaemonEvent(...)` call sites):** `runStarted · fileArchived · uploadProgress · runFinished ·
+  blobFailed · sourcesChanged · restoreRequested · restoreInProgress · restoreCompleted · paused · resumed ·
+  error`. `uploadProgress` carries `{file, path, bytes, totalBytes}`; `blobFailed` carries `{blob, kind,
+  message, paths}` (newline-joined relativePaths).
 - **Connection model:** keep one **long-lived** socket connection for the live event stream (blocks
   indefinitely by design — that's the "watch" mode). Use bounded request/response for commands. Mirror the
   `ControlClient(path:readTimeout:)` semantics: a `readTimeout` for request/response so a stalled daemon
@@ -328,7 +329,7 @@ other clients of it). A Node client is ~30 lines and keeps the UI a pure consume
 ## Next task for the next agent
 Layers 1 + 2 done ✅ + verified on macOS. Layer 3 = the canonical design, BUILT and substantially wired to
 the real daemon (2026-06-24). **My Files** browser + **Settings** ship in [`ui/`](./ui/); old 4-tab views
-deleted. `task ui:typecheck` + `ui:test` (34) + `ui:build` green. The data model is in
+deleted. `task ui:typecheck` + `ui:test` (42) + `ui:build` green. The data model is in
 `ui/src/renderer/src/views/files/model.ts` (pure, headless-tested); the tree is the daemon's `listFiles`
 (no more fixtures).
 

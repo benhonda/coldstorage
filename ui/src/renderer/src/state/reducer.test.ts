@@ -66,16 +66,54 @@ describe("run progress fold", () => {
     });
     expect(s.run).toMatchObject({ filesArchived: 0, filesTotal: 0, blobsFailed: 3 });
   });
+
+  test("uploadProgress folds per-file (id-keyed, parses bytes), latest wins", () => {
+    const s = run(
+      { type: "event", name: "runStarted", data: {} },
+      { type: "event", name: "uploadProgress", data: { file: "big.mov", path: "v/big.mov", bytes: "64", totalBytes: "200" } },
+      { type: "event", name: "uploadProgress", data: { file: "big.mov", path: "v/big.mov", bytes: "128", totalBytes: "200" } },
+    );
+    expect(s.run?.uploadProgress["big.mov"]).toEqual({ path: "v/big.mov", uploaded: 128, total: 200 });
+  });
+
+  test("fileArchived drops the file's live progress entry; runFinished clears all", () => {
+    const mid = run(
+      { type: "event", name: "runStarted", data: {} },
+      { type: "event", name: "uploadProgress", data: { file: "big.mov", path: "v/big.mov", bytes: "128", totalBytes: "200" } },
+    );
+    const archived = reducer(mid, { type: "event", name: "fileArchived", data: { file: "big.mov", blob: "b1" } });
+    expect(archived.run?.uploadProgress).toEqual({});
+    const finished = reducer(mid, {
+      type: "event",
+      name: "runFinished",
+      data: { filesArchived: "1", filesTotal: "1", blobsFailed: "0" },
+    });
+    expect(finished.run?.uploadProgress).toEqual({});
+  });
 });
 
 describe("failures, pause, restore, error", () => {
-  test("blobFailed prepends with kind", () => {
+  test("blobFailed prepends with kind + splits the newline-joined paths", () => {
     const s = run({
       type: "event",
       name: "blobFailed",
-      data: { blob: "b9", kind: "permanent", message: "NoSuchBucket" },
+      data: { blob: "b9", kind: "permanent", message: "NoSuchBucket", paths: "Photos/a.jpg\nPhotos/b.jpg" },
     });
-    expect(s.failures[0]).toEqual({ blob: "b9", kind: "permanent", message: "NoSuchBucket" });
+    expect(s.failures[0]).toEqual({
+      blob: "b9",
+      kind: "permanent",
+      message: "NoSuchBucket",
+      files: ["Photos/a.jpg", "Photos/b.jpg"],
+    });
+  });
+
+  test("blobFailed with empty paths yields no file names (no empty-string entries)", () => {
+    const s = run({
+      type: "event",
+      name: "blobFailed",
+      data: { blob: "b9", kind: "transient", message: "timeout", paths: "" },
+    });
+    expect(s.failures[0]?.files).toEqual([]);
   });
 
   test("paused/resumed flip the snapshot flag (no-op without a snapshot)", () => {

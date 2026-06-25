@@ -549,6 +549,14 @@ button.cs-kv:hover { background: var(--surface-hover); }
   from { left: -35%; }
   to { left: 100%; }
 }
+/* determinate variant — a real 0–100 fill, driven by the daemon's per-file `uploadProgress`. Same track;
+   the stripe becomes a left-anchored fill whose width is the live percent (--pct). */
+.cs-uploading-bar--determinate::after {
+  left: 0;
+  width: var(--pct, 0%);
+  animation: none;
+  transition: width 0.25s var(--ease-out, ease-out);
+}
 
 /* small colored status icon — colors kept from the badges (accent / amber / green) */
 .cs-statusicon { display: inline-grid; place-items: center; flex: 0 0 auto; }

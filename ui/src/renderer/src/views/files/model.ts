@@ -246,14 +246,36 @@ export const kindFromName = (name: string): FileKind => {
   return EXT_KIND[ext] ?? "other";
 };
 
+/** Live determinate upload progress for one file (the value side of the store's `run.uploadProgress`). */
+export interface UploadProgress {
+  /** relativePath the daemon reported — the match key for an optimistic (pre-archive) drop row. */
+  path: string;
+  uploaded: number;
+  total: number;
+}
+
+/**
+ * The upload percent (0–100) to draw on a file's row, or null for no determinate bar (fall back to the
+ * indeterminate stripe). Matches the daemon's `uploadProgress` entries to a file by EITHER its journal id
+ * or its relativePath — they diverge for Photos (id = localIdentifier) and for an optimistic drop row
+ * (synthetic id, real path). Only large (solo-blob) files ever have an entry; everything else → null.
+ */
+export const uploadPercent = (
+  progress: Record<string, UploadProgress>,
+  file: { id: string; relativePath: string },
+): number | null => {
+  const e = progress[file.id] ?? Object.values(progress).find((p) => p.path === file.relativePath);
+  if (!e || e.total <= 0) return null;
+  return Math.min(100, Math.max(0, Math.round((e.uploaded / e.total) * 100)));
+};
+
 /**
  * Coarsen the daemon's raw journal `FileStatus` to the browser's status. `gettingBack`/`here` are NOT
  * journal states — they're overlaid live from restore activity (see useFiles), never produced here.
- * In practice the journal only persists `planned` (queued) and `archived` (at rest) per file today; the
- * rest are mapped forward-looking. `failed` → `failed` (needs attention) — but note the daemon doesn't
- * yet PERSIST a per-file `failed` status (failures are reported per-blob via the `blobFailed` event); see
- * ELECTRON-UI-DESIGN.md "Daemon contract gaps". So a per-row ⚠ lights up only once that contract lands;
- * until then, failures surface at the run/blob level (the sidebar "couldn't upload" panel).
+ * The journal persists `planned` (queued), `archived` (at rest), and `failed` (a permanent upload fault —
+ * the daemon stopped retrying and marked the file, so the ⚠ row is journal truth that survives a refresh
+ * and a restart); the remaining states are mapped forward-looking. `failed` → `failed` (needs attention).
+ * A blob's *transient* failure does NOT mark its files — they stay `planned`/`uploading` and retry.
  */
 const STATUS_FROM_JOURNAL: Record<string, FileStatus> = {
   archived: "frozen", // at rest in deep storage — the resting state (a quiet ✓)

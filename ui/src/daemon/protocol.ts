@@ -139,8 +139,15 @@ export type ParamsArg<M extends Method> =
 export interface DaemonEvents {
   runStarted: Record<string, never>;
   fileArchived: { file: string; blob: string };
+  /** Determinate per-file upload progress (bytes uploaded / encrypted total), emitted once per 64 MiB
+   * part for a solo (large-file) blob. `file` is the journal id, `path` the relativePath — the UI matches
+   * a row by either (they diverge for Photos / not-yet-archived drops). */
+  uploadProgress: { file: string; path: string; bytes: string; totalBytes: string };
   runFinished: { filesArchived: string; filesTotal: string; blobsFailed: string };
-  blobFailed: { blob: string; kind: "permanent" | "transient"; message: string };
+  /** A blob that failed to archive this pass. `paths` is the newline-joined relativePaths of the files it
+   * batched (named in the failures panel + used to flip their rows); permanent failures are also persisted
+   * as a per-file `failed` status in the journal, so the ⚠ survives the next `listFiles` read. */
+  blobFailed: { blob: string; kind: "permanent" | "transient"; message: string; paths: string };
   sourcesChanged: { added?: string; removed?: string };
   restoreRequested: { file: string; tier: string };
   restoreInProgress: { file: string };

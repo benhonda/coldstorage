@@ -5,16 +5,20 @@
  * Closes on outside click / Escape. "Try again" re-triggers a run (the daemon re-attempts non-skipped
  * work; a permanent fault that's since been fixed will then clear).
  *
- * COPY IS PLACEHOLDER — Ben gatekeeps the error wording. Today the daemon reports failures per-BLOB, not
- * per-file, and a blob id is meaningless to the user, so each row is a generic line + the raw daemon
- * `message` (muted, for now). Once the daemon persists a per-file `failed` status + names the affected
- * files (see ELECTRON-UI-DESIGN.md "Daemon contract gaps → error handling"), swap the generic line for
- * the file names and drop the raw message behind a "details" affordance.
+ * COPY IS PLACEHOLDER — Ben gatekeeps the error wording. The daemon now names the affected files (the
+ * `blobFailed` event carries their relativePaths), so each row lists the file name(s) that couldn't upload
+ * with the raw daemon `message` muted beneath. (A future "details" affordance can tuck the raw message
+ * away once Ben settles the copy.)
  */
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import type { BlobFailure } from "../../state/reducer.ts";
+import { baseName } from "./model.ts";
 import { Button, Icon } from "../../ui/primitives.tsx";
+
+/** Human file list for a failed blob: the file basenames, or a generic line if none were named. */
+const failedNames = (paths: string[]): string =>
+  paths.length === 0 ? "Some files couldn't be uploaded" : paths.map(baseName).join(", ");
 
 export const FailuresPanel = ({
   failures,
@@ -46,8 +50,7 @@ export const FailuresPanel = ({
         <div className="cs-queue-row" key={f.blob}>
           <Icon name="error" size={18} />
           <div className="cs-queue-main">
-            {/* PLACEHOLDER — becomes the affected file names once the daemon reports them per-file */}
-            <div className="cs-queue-name">Some files couldn&apos;t be uploaded</div>
+            <div className="cs-queue-name">{failedNames(f.files)}</div>
             <div className="cs-queue-sub">{f.message}</div>
           </div>
         </div>

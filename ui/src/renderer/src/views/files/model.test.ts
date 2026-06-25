@@ -15,6 +15,8 @@ import {
   reparent,
   rewritePrefix,
   totalBytes,
+  type UploadProgress,
+  uploadPercent,
   withName,
 } from "./model.ts";
 
@@ -138,5 +140,34 @@ describe("aggregates", () => {
     test("unknown status defaults to uploading, never silently frozen", () => {
       expect(fileFromJournal(row({ status: "bogus" })).status).toBe("uploading");
     });
+  });
+});
+
+describe("uploadPercent", () => {
+  const prog = (over: Record<string, UploadProgress> = {}): Record<string, UploadProgress> => over;
+
+  test("matches by journal id and rounds the percent", () => {
+    const p = prog({ "v/big.mov": { path: "v/big.mov", uploaded: 64, total: 200 } });
+    expect(uploadPercent(p, { id: "v/big.mov", relativePath: "v/big.mov" })).toBe(32);
+  });
+
+  test("falls back to matching by path (optimistic drop row's synthetic id)", () => {
+    // daemon keyed the entry by the real path; the row still has its synthetic `dep-…` id.
+    const p = prog({ "v/big.mov": { path: "v/big.mov", uploaded: 100, total: 200 } });
+    expect(uploadPercent(p, { id: "dep-1-0", relativePath: "v/big.mov" })).toBe(50);
+  });
+
+  test("no entry → null (indeterminate bar)", () => {
+    expect(uploadPercent(prog(), { id: "x", relativePath: "x" })).toBeNull();
+  });
+
+  test("zero/unknown total → null, never a divide-by-zero", () => {
+    const p = prog({ x: { path: "x", uploaded: 0, total: 0 } });
+    expect(uploadPercent(p, { id: "x", relativePath: "x" })).toBeNull();
+  });
+
+  test("clamps to 100 even if bytes overshoot the total", () => {
+    const p = prog({ x: { path: "x", uploaded: 250, total: 200 } });
+    expect(uploadPercent(p, { id: "x", relativePath: "x" })).toBe(100);
   });
 });
