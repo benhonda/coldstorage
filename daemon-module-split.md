@@ -43,10 +43,13 @@ protocol IngestSource {
 ## SwiftPM shape
 ```
 ColdStorage (package)
-├─ Sources/ColdStorageCore/      # library, NO Apple-only imports → builds on Linux
+├─ Sources/ColdStorageCore/      # library, NO Apple-only imports → builds on Linux (engine, journal, crypto, control plane)
 ├─ Sources/ColdStorageMac/       # library, macOS-only (Photos, launchd, Keychain)
-├─ Sources/coldstored/           # executable (macOS) — wires Core + Mac adapter
-└─ Tests/CoreTests/              # run on Linux CI; the upload spike becomes a Core integ test
+├─ Sources/coldstored/           # executable — the daemon (run loop + control socket); wires Core + Mac adapter
+├─ Sources/coldstorectl/         # executable — control-socket client (send commands / watch events)
+├─ Sources/coldstore-cli/        # executable — one-shot archive a folder (the upload-spike pipeline)
+├─ Sources/coldstore-restore/    # executable — one-shot restore a file (re-run until it lands)
+└─ Tests/ColdStorageCoreTests/   # run on Linux CI; the upload spike is now a Core integ test (swift-testing)
 ```
 Gate the Mac target with `.when(platforms: [.macOS])` (or `#if canImport(Photos)`), so `swift build`/`swift test` of `ColdStorageCore` succeeds in the container.
 

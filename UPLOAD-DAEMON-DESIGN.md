@@ -35,7 +35,7 @@ Four levels, each with a distinct job:
 
 ## 3. The journal — durable, crash-safe state (the heart)
 
-- **Store:** embedded **SQLite, WAL mode**, accessed via **GRDB** (type-safe Swift). Single file, transactional, battle-tested. This *is* the resumability guarantee.
+- **Store:** embedded **SQLite, WAL mode**, accessed via **`libsqlite3` directly** (the `Csqlite3` system module + a thin typed wrapper in `Journal.swift` — GRDB was the original sketch but we kept the dep surface minimal). Single file, transactional, battle-tested. This *is* the resumability guarantee.
 - **Durability rule:** every state transition is a **committed transaction** (`fsync` on commit). A crash at *any* instant leaves a consistent, resumable state — never "uploaded but unrecorded" without reconciliation (§4 handles the window).
 - **This journal is the metadata index SPOF (§6.6)** — back it up redundantly and treat corruption as the top risk. The authoritative record is written only *after* verification (§5).
 
@@ -108,10 +108,17 @@ On daemon start, and after every network outage/crash:
 
 ## 9. IPC contract (daemon ↔ Electron)
 
-- **Local Unix-domain socket**, JSON-RPC for commands + a server-push **event stream** for live progress.
-- **Commands:** `addSource`, `removeSource`, `pause`, `resume`, `getStatus`, `requestRestore`, `getQuote`.
-- **Events:** `progress` (per-source/per-file), `stalled`, `fileArchived`, `error`.
-- Daemon authenticates the local client (peer-cred check); secrets live in **Keychain**, never in the UI.
+- **Local Unix-domain socket**, newline-delimited JSON for commands + a server-push **event stream** for live progress.
+- **Commands (as built — SSOT is `DaemonService.handle`):** `ping`, `getStatus`, `listSources`, `listFiles`,
+  `addSource`, `removeSource`, `deposit`, `triggerNow`, `restore`, `pause`, `resume`. *(The original sketch's
+  `requestRestore`/`getQuote` landed as `restore` — idempotent, re-issued by the UI; the fee quote is still
+  a contract gap.)*
+- **Events (as built — SSOT is the `DaemonEvent(...)` call sites):** `runStarted`, `fileArchived`,
+  `uploadProgress` `{file, path, bytes, totalBytes}` (determinate per-file progress, solo-blob large files),
+  `runFinished`, `blobFailed` `{blob, kind, message, paths}` (paths = newline-joined relativePaths of the
+  failed files; permanent faults also mark those files `failed` in the journal), `sourcesChanged`,
+  `restoreRequested`/`restoreInProgress`/`restoreCompleted`, `paused`/`resumed`, `error`.
+- Socket is `0600` (owner-only); secrets live in **Keychain**, never in the UI.
 
 ---
 

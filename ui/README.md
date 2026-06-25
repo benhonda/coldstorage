@@ -28,9 +28,11 @@ commands. Full plan + decisions: [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DES
 > **Error states (UI side, 2026-06-24):** a failed upload shows ⚠ **couldn't upload** on the row (kept
 > visible), a **light-red error toast**, a persistent sidebar **"N couldn't upload"** → `FailuresPanel`
 > (permanent failures only — transient stays "uploading" and self-heals), and **Retry upload** in the row
-> ⋯ menu (re-issues `deposit` from the row's `srcPath`). Uploading rows show an **indeterminate** activity
-> bar — a real determinate % bar needs a daemon `uploadProgress` event (see [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md)
-> "Daemon contract gaps").
+> ⋯ menu (re-issues `deposit` from the row's `srcPath`). A permanent failure is journal truth (the daemon
+> marks the file `failed` → `listFiles` returns it → the ⚠ survives a refresh/restart), and the panel
+> **names** the failed files (via `blobFailed.paths`). Uploading rows show a **determinate** % bar for large
+> solo-blob files (the daemon's `uploadProgress` event), falling back to an indeterminate stripe for small
+> batched files.
 
 Toolchain: **electron-vite** (Vite, three-process split), **React 19**, secure IPC
 (`contextIsolation: true`, `contextBridge`). Tooling runs on **Bun**; the Electron runtime is its own
@@ -154,15 +156,15 @@ the *tokens*, not the bundle.
 
 **Next UI work** (the redesign is BUILT — full spec in [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md)):
 - **macOS visual verify** (Ben) — `task ui:demo` / `ui:live`. Container can't render Electron.
-- **`listFiles` + ad-hoc `deposit` + error states — DONE ✅ (2026-06-24)** — browser tree is real journal
-  data (`fixtures.ts` deleted), drop-to-upload really archives through the daemon (both proven vs MinIO),
-  and failures surface (⚠ row + sidebar panel + Retry + light-red toast + indeterminate upload bar).
+- **`listFiles` + ad-hoc `deposit` + error states + upload progress — DONE ✅ (2026-06-24/25)** — browser
+  tree is real journal data (`fixtures.ts` deleted), drop-to-upload really archives through the daemon, and
+  failures surface (⚠ row from journal truth + sidebar panel that **names** files + Retry + light-red toast).
+  Uploading rows show a **determinate** % bar for large solo-blob files (daemon `uploadProgress`), else an
+  indeterminate stripe. All proven vs MinIO.
 - **Remaining daemon contract** to activate the rest (each a source-swap, not a rebuild — mirror in
   `protocol.ts`, fetch/issue, swap the stand-in):
-  - **`uploadProgress {file|blob, bytes, total}` event** → a real determinate upload bar (indeterminate today).
-  - **per-file `failed` status + affected file-ids on `blobFailed`** → flip the failed file's *row* to ⚠ +
-    name files in the panel (today only a deposit *command* rejection flips the row; the panel is per-blob).
-  - **move/rename/delete**, **exclude get/set**, **fee + bytes/cost** estimates (the placeholder numbers).
+  - **move/rename/delete**, **exclude get/set**, **fee + bytes/cost** estimates (the placeholder numbers),
+    a per-run **filesFailed** count.
 - **Retry depth:** row Retry covers up-front (command-rejection) failures — we hold `srcPath`. A failure
   *after* the daemon accepts the upload (`blobFailed`) has no `srcPath` → needs daemon-side re-deposit/retry.
 - **Polish:** native folder picker + `webUtils.getPathForFile` are **done** (deposit + request-a-copy) —

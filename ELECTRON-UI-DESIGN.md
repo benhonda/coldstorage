@@ -338,19 +338,20 @@ deleted. `task ui:typecheck` + `ui:test` (42) + `ui:build` green. The data model
 `restore` (request-a-copy). **Error states built (UI side):** a failed upload shows ⚠ **couldn't upload**
 ON the row (kept visible, not vanished/not stuck-blue), a **light-red error toast**, a persistent sidebar
 **"N couldn't upload"** count → `FailuresPanel` (from `state.failures`, permanent only — transient stays
-"uploading"), and **Retry upload** in the row ⋯ menu (re-issues `deposit` from the row's remembered
-`srcPath`). Uploading rows show an **indeterminate** activity bar (honest — see the progress gap below).
+"uploading") that **names the failed files** (via `blobFailed.paths`), and **Retry upload** in the row ⋯
+menu (re-issues `deposit` from the row's remembered `srcPath`). A permanent failure is now journal truth
+(`Journal.markFilesFailed` → `listFiles` returns `failed` → the ⚠ row survives a refresh/restart). Uploading
+rows show a **determinate** progress bar for large solo-blob files (daemon `uploadProgress`), falling back to
+the indeterminate stripe for small batched files.
 
 **Remaining UI work, in priority order:**
 1. **macOS visual verify** (Ben) — `task ui:demo` / `ui:live`. Electron can't render in the container.
    *(`task ui:demo` archives `testdata`, so the tree shows those `*.bin`; the empty prod vault under
    `ui:live` shows the first-run drop zone until a deposit/source run lands.)*
-2. **Daemon contract gaps** (see that section above) to make the rest real — each a source-swap, not a
-   rebuild: **`uploadProgress` event** (per-file byte % → a real determinate upload bar, replacing the
-   indeterminate one), **per-file `failed` status + affected file-ids on `blobFailed`** (so a real upload
-   failure flips the file's *row* to ⚠ + names files in the panel; today only the deposit *command*
-   rejection flips the row, and the panel is per-blob), **move/rename/delete** commands, **exclude
-   get/set**, **fee + bytes/cost** estimates.
+2. **Remaining daemon contract gaps** (see that section above) to make the rest real — each a source-swap,
+   not a rebuild: **move/rename/delete** commands, **exclude get/set**, a per-run **filesFailed** count,
+   **fee + bytes/cost** estimates. *(The **`uploadProgress` event** → determinate upload bar, and **per-file
+   `failed` status + paths on `blobFailed`** → ⚠ row + named files, are now DONE ✅ — 2026-06-24/25.)*
 3. **Retry depth:** row Retry covers deposits we caught up front (we hold `srcPath`). A real upload that
    fails *after* the daemon accepts it (a `blobFailed`) becomes a journal row with no `srcPath` → retrying
    those needs daemon support (re-deposit by stored path, or a daemon retry command).

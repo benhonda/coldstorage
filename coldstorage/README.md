@@ -43,10 +43,13 @@ task daemon:ctl -- triggerNow                # archive now instead of waiting th
 task daemon:restore-ipc FILE=<fileId>        # restore over the socket (idempotent; re-run until state=restored)
 swift run coldstorectl coldstored.sock watch # live event stream (runStarted/fileArchived/runFinished/blobFailed/restore*)
 ```
-A failing blob is **isolated**, not fatal: the run continues, a `blobFailed{blob,kind,message}` event is
-pushed, and a *permanent* fault (config/auth — e.g. `InvalidStorageClass`/`NoSuchBucket`) is skipped on
-later passes (and counted in `getStatus.permanentlyFailedBlobs`) so the daemon doesn't re-stage a doomed
-blob each interval. Transient faults are already retried by the AWS SDK before they reach us.
+A failing blob is **isolated**, not fatal: the run continues, a `blobFailed{blob,kind,message,paths}` event
+is pushed (`paths` = newline-joined relativePaths of the files in the blob), and a *permanent* fault
+(config/auth — e.g. `InvalidStorageClass`/`NoSuchBucket`) is skipped on later passes (and counted in
+`getStatus.permanentlyFailedBlobs`) so the daemon doesn't re-stage a doomed blob each interval. A permanent
+fault also marks its files `failed` in the journal (`Journal.markFilesFailed`), so `listFiles` returns
+`failed` and the UI's ⚠ survives a refresh/restart. Transient faults are already retried by the AWS SDK
+before they reach us.
 The **journal is the SSOT for sources** — add/remove via the socket survives restarts (`COLDSTORE_SOURCES`
 is only a one-time seed). The socket is `0600` (owner-only). On macOS the full setup is two task runs:
 `task tf:coldstorage:creds-export` (in the devcontainer — TF creds → a gitignored handoff file over the bind
@@ -105,11 +108,9 @@ description (see ROADMAP). `S3ClientConfiguration`/`*Input` deprecation warnings
 ## Known stubs / TODO (next build chunks)
 - Live Deep Archive **thaw** leg — `RestoreObject` + hours-long retrieval is built but only exercisable on real AWS.
 - **UI contract gaps** (the Electron panel needs these — see [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md) "Daemon contract gaps"):
-  - **`uploadProgress {file|blob, bytes, total}` event** from the engine's multipart loop → a real per-file upload progress bar (UI shows an indeterminate bar until then).
-  - **Per-file `failed` status** persisted in the journal + **affected file-ids on `blobFailed`** + a per-run **filesFailed** count — so a real upload failure flips the *file's* row to ⚠ and the UI can name *which* files failed (failures are per-blob today).
-  - **`move` / `rename` / `delete`** (journal `relativePath` edit / prefix sweep / tombstone — cheap, no S3) and **`newFolder`**; **exclude get/set** (gitignore-style globs at scan time); **bytes/size in `Status`** + a **restore fee** estimate.
+  - **`move` / `rename` / `delete`** (journal `relativePath` edit / prefix sweep / tombstone — cheap, no S3) and **`newFolder`**; **exclude get/set** (gitignore-style globs at scan time); **bytes/size in `Status`** + a **restore fee** estimate; a per-run **filesFailed** count (blobs ≠ files).
 - `PhotoKitSource`: real plaintext hashing pre-pass (currently keys on `localIdentifier`) + launchd `.app`/Info.plist so Photos auth works (CLI run SIGTRAPs); `FolderWatcher` FSEvents behavior runtime-untested (compiles on macOS now).
 - Cross-blob concurrency + adaptive throughput (engine is correct sequential today); persistent poison-blob state (skip-list is in-memory).
 - R2 bucket for photo **thumbnails** + cross-device index portability (the browse *tree* is journal-backed and needs no R2).
 
-> **Done since earlier drafts (no longer stubs):** restore **over IPC** (`restore` command + `restore*` events, byte-identical vs MinIO) · **graceful error handling** (`FailureKind` classify + per-blob isolation + skip-list; SDK owns transient retry) · **`listFiles`** (journal-backed browse tree) · ad-hoc **`deposit`** (drop-to-upload, `ExplicitPathsSource`) · bucket **lifecycle** (abort-incomplete-multipart, applied) · the **Electron UI** (My Files + Settings, wired to the daemon).
+> **Done since earlier drafts (no longer stubs):** restore **over IPC** (`restore` command + `restore*` events, byte-identical vs MinIO) · **graceful error handling** (`FailureKind` classify + per-blob isolation + skip-list; SDK owns transient retry) · **`listFiles`** (journal-backed browse tree) · ad-hoc **`deposit`** (drop-to-upload, `ExplicitPathsSource`) · **`uploadProgress` event** (per-file determinate bar for solo-blob large files; `UploadProgress` struct + `onProgress` callback, proven vs MinIO) · **per-file `failed` status** (`Journal.markFilesFailed` on permanent faults + `paths` on `blobFailed` → ⚠ row that's journal truth) · bucket **lifecycle** (abort-incomplete-multipart, applied) · the **Electron UI** (My Files + Settings, wired to the daemon).
