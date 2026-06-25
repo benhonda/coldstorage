@@ -21,9 +21,10 @@ commands. Full plan + decisions: [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DES
 > verify** (`task ui:demo` / `ui:live` — Electron can't render in the container). The browser tree is
 > **real journal data** — the daemon's `listFiles` read is built and the fixtures stand-in is deleted
 > (proven vs MinIO, `task ui:prove`); **drop-to-upload / "Choose files" really archive through the daemon**
-> (the `deposit` command, proven vs MinIO); request-a-copy issues the **real `restore` command**.
-> move/rename/delete remain optimistic-local seams (honest — they're cheap journal edits in the real
-> design, reverted to the `listFiles` truth on the next read until those daemon commands land).
+> (the `deposit` command, proven vs MinIO); request-a-copy issues the **real `restore` command**;
+> **move/rename/delete are real daemon commands** (`movePath`/`deletePath` — the UI applies an optimistic
+> edit, then reconciles to journal truth on the `filesChanged`-triggered `listFiles` refetch; proven vs
+> MinIO, 2026-06-25). Only `newFolder` stays local-only (a virtual path with nothing to persist yet).
 >
 > **Error states (UI side, 2026-06-24):** a failed upload shows ⚠ **couldn't upload** on the row (kept
 > visible), a **light-red error toast**, a persistent sidebar **"N couldn't upload"** → `FailuresPanel`
@@ -89,8 +90,9 @@ src/renderer/     The web app (React). No Node, no socket — talks to window.co
       model.test.ts   bun-test coverage of the tree derivation + reorganize math + fileFromJournal mapping.
       useFiles.ts     file state seeded from the daemon's listFiles (App maps state.files → ArchivedFile[]);
                       deposit() adds optimistic "uploading" rows carrying srcPath (for retry) + setDepositStatus()
-                      flips them uploading⇄failed; move/rename/delete/newFolder are optimistic-local seams;
-                      overlays live restore status from the store. useSettings.ts = exclude chips.
+                      flips them uploading⇄failed; move/rename/delete apply an optimistic edit while the view
+                      fires the real movePath/deletePath (filesChanged → listFiles refetch reconciles); only
+                      newFolder stays local (virtual path); overlays live restore status. useSettings.ts = exclude chips.
       Breadcrumb, StatusBadge (StatusIcon: ✓ stored · ↑ uploading · ⚠ couldn't upload · ↓ transferring ·
                       saved-here), ContextMenu (incl. Retry upload on failed rows), InfoModal (Get info),
                       RequestBackModal (request-a-copy + native folder picker), GettingBackPanel (transfer
@@ -156,15 +158,17 @@ the *tokens*, not the bundle.
 
 **Next UI work** (the redesign is BUILT — full spec in [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md)):
 - **macOS visual verify** (Ben) — `task ui:demo` / `ui:live`. Container can't render Electron.
-- **`listFiles` + ad-hoc `deposit` + error states + upload progress — DONE ✅ (2026-06-24/25)** — browser
-  tree is real journal data (`fixtures.ts` deleted), drop-to-upload really archives through the daemon, and
-  failures surface (⚠ row from journal truth + sidebar panel that **names** files + Retry + light-red toast).
-  Uploading rows show a **determinate** % bar for large solo-blob files (daemon `uploadProgress`), else an
-  indeterminate stripe. All proven vs MinIO.
+- **`listFiles` + ad-hoc `deposit` + move/rename/delete + error states + upload progress — DONE ✅
+  (2026-06-24/25)** — browser tree is real journal data (`fixtures.ts` deleted), drop-to-upload really
+  archives through the daemon, **reorganize move/rename + delete issue real `movePath`/`deletePath`**
+  (optimistic edit → `filesChanged` → `listFiles` refetch reconciles), and failures surface (⚠ row from
+  journal truth + sidebar panel that **names** files + Retry + light-red toast). Uploading rows show a
+  **determinate** % bar for large solo-blob files (daemon `uploadProgress`), else an indeterminate stripe.
+  All proven vs MinIO.
 - **Remaining daemon contract** to activate the rest (each a source-swap, not a rebuild — mirror in
   `protocol.ts`, fetch/issue, swap the stand-in):
-  - **move/rename/delete**, **exclude get/set**, **fee + bytes/cost** estimates (the placeholder numbers),
-    a per-run **filesFailed** count.
+  - **exclude get/set**, **fee + bytes/cost** estimates (the placeholder numbers), a per-run **filesFailed**
+    count. *(`newFolder` is still a local-only virtual path — nothing to persist until a file lands in it.)*
 - **Retry depth:** row Retry covers up-front (command-rejection) failures — we hold `srcPath`. A failure
   *after* the daemon accepts the upload (`blobFailed`) has no `srcPath` → needs daemon-side re-deposit/retry.
 - **Polish:** native folder picker + `webUtils.getPathForFile` are **done** (deposit + request-a-copy) —

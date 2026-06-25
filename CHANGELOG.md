@@ -2,6 +2,7 @@
 
 ## 2026-06-25
 
+- docs: sync design docs to the shipped move/rename/delete contract — `movePath`/`deletePath`/`filesChanged` added to the command + event SSOT and flipped DONE across `ELECTRON-UI-DESIGN`/`UPLOAD-DAEMON-DESIGN`/`coldstorage`+`ui` READMEs; `newFolder` noted as the lone remaining local-only seam.
 - feat: UI move/rename/delete on real daemon commands — reorganize/delete fire `movePath`/`deletePath` (optimistic local edit, reconciled by the `filesChanged`→`listFiles` refetch); `targetOf` keys the full vault-relative path. UI 44 tests.
 - feat: daemon move/rename/delete — `movePath` (journal `relativePath` prefix-sweep; one primitive for file/folder move AND rename; id-stable so no re-upload) + `deletePath` (tombstone `status=deleted`, row+blob kept for deferred GC, dropped from `listFiles`); `filesChanged` event; `task daemon:move-ipc`/`daemon:delete-ipc`. Proven vs MinIO.
 - docs: sync design docs to the shipped `uploadProgress`/per-file-`failed` contract (event SSOT + READMEs + ROADMAP/ELECTRON-UI-DESIGN) + stale-fact fixes — journal is `libsqlite3` not GRDB, CLAUDE.md infra now applied, `daemon-module-split` executables list.

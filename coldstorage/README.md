@@ -39,9 +39,11 @@ task daemon:ctl -- getStatus                 # counts, sources, paused/running, 
 task daemon:ctl -- listFiles                 # the browsable tree from the journal (id/relativePath/size/status/blobId)
 task daemon:ctl -- addSource path=/abs/dir   # register a WATCHED source (persists in the journal; triggers a run)
 task daemon:deposit-ipc SRC=/abs/path DEST=folder  # ad-hoc one-shot upload (no watched source); the UI's drag-drop
+task daemon:move-ipc FROM=a/x.jpg TO=b/x.jpg # reorganize: file/folder MOVE or RENAME (journal relativePath edit)
+task daemon:delete-ipc PATH=b/x.jpg          # delete (tombstone) a file/folder subtree; drops from listFiles
 task daemon:ctl -- triggerNow                # archive now instead of waiting the interval
 task daemon:restore-ipc FILE=<fileId>        # restore over the socket (idempotent; re-run until state=restored)
-swift run coldstorectl coldstored.sock watch # live event stream (runStarted/fileArchived/runFinished/blobFailed/restore*)
+swift run coldstorectl coldstored.sock watch # live event stream (runStarted/fileArchived/runFinished/blobFailed/filesChanged/restore*)
 ```
 A failing blob is **isolated**, not fatal: the run continues, a `blobFailed{blob,kind,message,paths}` event
 is pushed (`paths` = newline-joined relativePaths of the files in the blob), and a *permanent* fault
@@ -108,9 +110,9 @@ description (see ROADMAP). `S3ClientConfiguration`/`*Input` deprecation warnings
 ## Known stubs / TODO (next build chunks)
 - Live Deep Archive **thaw** leg — `RestoreObject` + hours-long retrieval is built but only exercisable on real AWS.
 - **UI contract gaps** (the Electron panel needs these — see [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md) "Daemon contract gaps"):
-  - **`move` / `rename` / `delete`** (journal `relativePath` edit / prefix sweep / tombstone — cheap, no S3) and **`newFolder`**; **exclude get/set** (gitignore-style globs at scan time); **bytes/size in `Status`** + a **restore fee** estimate; a per-run **filesFailed** count (blobs ≠ files).
+  - **`newFolder`** (a virtual path, still local-only); **exclude get/set** (gitignore-style globs at scan time); **bytes/size in `Status`** + a **restore fee** estimate; a per-run **filesFailed** count (blobs ≠ files). *(`move`/`rename`/`delete` landed as `movePath`/`deletePath` — see below.)*
 - `PhotoKitSource`: real plaintext hashing pre-pass (currently keys on `localIdentifier`) + launchd `.app`/Info.plist so Photos auth works (CLI run SIGTRAPs); `FolderWatcher` FSEvents behavior runtime-untested (compiles on macOS now).
 - Cross-blob concurrency + adaptive throughput (engine is correct sequential today); persistent poison-blob state (skip-list is in-memory).
 - R2 bucket for photo **thumbnails** + cross-device index portability (the browse *tree* is journal-backed and needs no R2).
 
-> **Done since earlier drafts (no longer stubs):** restore **over IPC** (`restore` command + `restore*` events, byte-identical vs MinIO) · **graceful error handling** (`FailureKind` classify + per-blob isolation + skip-list; SDK owns transient retry) · **`listFiles`** (journal-backed browse tree) · ad-hoc **`deposit`** (drop-to-upload, `ExplicitPathsSource`) · **`uploadProgress` event** (per-file determinate bar for solo-blob large files; `UploadProgress` struct + `onProgress` callback, proven vs MinIO) · **per-file `failed` status** (`Journal.markFilesFailed` on permanent faults + `paths` on `blobFailed` → ⚠ row that's journal truth) · bucket **lifecycle** (abort-incomplete-multipart, applied) · the **Electron UI** (My Files + Settings, wired to the daemon).
+> **Done since earlier drafts (no longer stubs):** restore **over IPC** (`restore` command + `restore*` events, byte-identical vs MinIO) · **graceful error handling** (`FailureKind` classify + per-blob isolation + skip-list; SDK owns transient retry) · **`listFiles`** (journal-backed browse tree) · ad-hoc **`deposit`** (drop-to-upload, `ExplicitPathsSource`) · **`movePath` / `deletePath`** (reorganize move/rename via a journal `relativePath` prefix-sweep + delete-as-tombstone; `filesChanged` event, proven vs MinIO) · **`uploadProgress` event** (per-file determinate bar for solo-blob large files; `UploadProgress` struct + `onProgress` callback, proven vs MinIO) · **per-file `failed` status** (`Journal.markFilesFailed` on permanent faults + `paths` on `blobFailed` → ⚠ row that's journal truth) · bucket **lifecycle** (abort-incomplete-multipart, applied) · the **Electron UI** (My Files + Settings, wired to the daemon).

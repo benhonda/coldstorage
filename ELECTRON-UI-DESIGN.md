@@ -179,9 +179,10 @@ row just selects it; the `⋯` per-row dropdown (and right-click) opens actions,
   is chosen per download in the dialog, not maintained as a global preference.
 
 ## Daemon contract gaps this design needs (the build spec)
-The UI is a thin client; this design needs data/commands the daemon doesn't expose yet. **None block the
-*design*; each is a precise backend ask** (Ben's lane). Most are small reads over the journal, which
-already holds the data.
+The UI is a thin client; this design needs data/commands from the daemon — **most now built** (`listFiles`,
+`deposit`, `movePath`/`deletePath`, `uploadProgress`, per-file `failed`); the rest below are still open.
+**None block the *design*; each is a precise backend ask** (Ben's lane). Most are small reads/edits over
+the journal, which already holds the data.
 - **`listFiles` (read) — DONE ✅ (2026-06-24).** Returns the browsable tree from the journal —
   `{id, relativePath, size, status, blobId}` straight off the `files` table (`Journal.listFiles`, a pure
   `SELECT ORDER BY relativePath`; wired in `DaemonService.handle`, mirrored in `protocol.ts` as
@@ -260,11 +261,12 @@ other clients of it). A Node client is ~30 lines and keeps the UI a pure consume
   (`{id, method, params?}`); replies carry `id` (`{id, result|error}`); pushed events carry `event`
   (`{event, data}`). The client distinguishes by which key is present.
 - **Commands (SSOT = `DaemonService.handle`):** `ping · getStatus · listSources · listFiles · addSource ·
-  removeSource · deposit · triggerNow · restore · pause · resume`.
+  removeSource · deposit · movePath · deletePath · triggerNow · restore · pause · resume`.
 - **Events (SSOT = `DaemonEvent(...)` call sites):** `runStarted · fileArchived · uploadProgress · runFinished ·
-  blobFailed · sourcesChanged · restoreRequested · restoreInProgress · restoreCompleted · paused · resumed ·
-  error`. `uploadProgress` carries `{file, path, bytes, totalBytes}`; `blobFailed` carries `{blob, kind,
-  message, paths}` (newline-joined relativePaths).
+  blobFailed · sourcesChanged · filesChanged · restoreRequested · restoreInProgress · restoreCompleted · paused ·
+  resumed · error`. `uploadProgress` carries `{file, path, bytes, totalBytes}`; `blobFailed` carries `{blob,
+  kind, message, paths}` (newline-joined relativePaths); `filesChanged` carries `{moved, to}` XOR `{deleted}`
+  (the path(s) a `movePath`/`deletePath` touched — the UI's cue to re-read `listFiles`).
 - **Connection model:** keep one **long-lived** socket connection for the live event stream (blocks
   indefinitely by design — that's the "watch" mode). Use bounded request/response for commands. Mirror the
   `ControlClient(path:readTimeout:)` semantics: a `readTimeout` for request/response so a stalled daemon
@@ -334,13 +336,14 @@ other clients of it). A Node client is ~30 lines and keeps the UI a pure consume
 ## Next task for the next agent
 Layers 1 + 2 done ✅ + verified on macOS. Layer 3 = the canonical design, BUILT and substantially wired to
 the real daemon (2026-06-24). **My Files** browser + **Settings** ship in [`ui/`](./ui/); old 4-tab views
-deleted. `task ui:typecheck` + `ui:test` (42) + `ui:build` green. The data model is in
+deleted. `task ui:typecheck` + `ui:test` (44) + `ui:build` green. The data model is in
 `ui/src/renderer/src/views/files/model.ts` (pure, headless-tested); the tree is the daemon's `listFiles`
 (no more fixtures).
 
 **Real against the daemon now (all proven vs MinIO):** `listFiles` (browser tree), `deposit`
 (drop-to-upload / "Choose files" — `ExplicitPathsSource`, paths resolved via preload `webUtils.getPathForFile`),
-`restore` (request-a-copy). **Error states built (UI side):** a failed upload shows ⚠ **couldn't upload**
+`restore` (request-a-copy), and `movePath`/`deletePath` (reorganize move/rename + delete — optimistic edit
+then reconcile on the `filesChanged`-triggered `listFiles` refetch). **Error states built (UI side):** a failed upload shows ⚠ **couldn't upload**
 ON the row (kept visible, not vanished/not stuck-blue), a **light-red error toast**, a persistent sidebar
 **"N couldn't upload"** count → `FailuresPanel` (from `state.failures`, permanent only — transient stays
 "uploading") that **names the failed files** (via `blobFailed.paths`), and **Retry upload** in the row ⋯
@@ -354,9 +357,10 @@ the indeterminate stripe for small batched files.
    *(`task ui:demo` archives `testdata`, so the tree shows those `*.bin`; the empty prod vault under
    `ui:live` shows the first-run drop zone until a deposit/source run lands.)*
 2. **Remaining daemon contract gaps** (see that section above) to make the rest real — each a source-swap,
-   not a rebuild: **move/rename/delete** commands, **exclude get/set**, a per-run **filesFailed** count,
-   **fee + bytes/cost** estimates. *(The **`uploadProgress` event** → determinate upload bar, and **per-file
-   `failed` status + paths on `blobFailed`** → ⚠ row + named files, are now DONE ✅ — 2026-06-24/25.)*
+   not a rebuild: **exclude get/set**, a per-run **filesFailed** count, **fee + bytes/cost** estimates.
+   *(The **`uploadProgress` event** → determinate upload bar, **per-file `failed` status + paths on
+   `blobFailed`** → ⚠ row + named files, and **move/rename/delete** (`movePath`/`deletePath`) are now
+   DONE ✅ — 2026-06-24/25.)*
 3. **Retry depth:** row Retry covers deposits we caught up front (we hold `srcPath`). A real upload that
    fails *after* the daemon accepts it (a `blobFailed`) becomes a journal row with no `srcPath` → retrying
    those needs daemon support (re-deposit by stored path, or a daemon retry command).
