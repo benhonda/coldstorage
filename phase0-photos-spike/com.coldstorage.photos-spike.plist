@@ -12,6 +12,10 @@
   </array>
   <key>RunAtLoad</key>
   <true/>
+  <!-- launchd defaults cwd to "/"; give it a writable dir so the spike's relative output lands here.
+       (The real coldstored plist sets WorkingDirectory to its data dir for the same reason.) -->
+  <key>WorkingDirectory</key>
+  <string>/tmp</string>
   <key>StandardOutPath</key>
   <string>/tmp/photos-spike.out</string>
   <key>StandardErrorPath</key>

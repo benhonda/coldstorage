@@ -84,6 +84,9 @@ strategy/
 .swiftpm/
 Packages/
 
+# phase0-photos-spike: downloaded full-res originals are test output, never committed.
+phase0-photos-spike/original-*
+
 # Xcode (in case packages are opened in the IDE)
 DerivedData/
 *.xcuserstate

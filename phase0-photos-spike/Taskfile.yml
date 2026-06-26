@@ -4,24 +4,73 @@ version: '3'
 
 tasks:
   build:
-    desc: "Build release, embed Info.plist into the binary, codesign (IDENTITY defaults to ad-hoc '-')"
+    desc: "Build release, embed Info.plist, codesign. Auto-detects your Apple Development identity (override with IDENTITY=…). TCC keys the Photos grant to this identity, so keep it STABLE."
     cmds:
       - swift build -c release -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker Info.plist
-      - codesign --force --sign "{{.IDENTITY | default \"-\"}}" .build/release/photos-spike
-      - 'echo "Signed with: {{.IDENTITY | default \"ad-hoc (-)\"}} — keep this identity STABLE across runs or the TCC grant resets."'
+      - |
+        # TCC keys the Photos grant to the code-signing identity → it must stay STABLE across runs.
+        # Default: the first "Apple Development" identity in your Keychain (more reliable than ad-hoc).
+        # Override: `task build IDENTITY="Apple Development: …"`.
+        identity="{{.IDENTITY}}"
+        if [ -z "$identity" ]; then
+          identity=$(security find-identity -v -p codesigning | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)
+        fi
+        if [ -z "$identity" ]; then
+          echo "No Apple Development identity found in your Keychain — pass one explicitly: task build IDENTITY=\"…\""; exit 1
+        fi
+        codesign --force --sign "$identity" .build/release/photos-spike
+        echo "Signed with: $identity — keep this identity STABLE across runs or the TCC grant resets."
 
   run:
     desc: "Run from your GUI session (triggers/uses the TCC grant)"
     cmds:
       - .build/release/photos-spike
 
-  install-agent:
-    desc: "Install + load the LaunchAgent (proves the grant survives a launchd-spawned process)"
+  crashlog:
+    desc: "Show the cause + faulting backtrace of the latest photos-spike crash (diagnoses an exit 133/SIGTRAP)."
     cmds:
-      - 'echo "Edit the absolute path in com.coldstorage.photos-spike.plist first."'
-      - cp com.coldstorage.photos-spike.plist ~/Library/LaunchAgents/
-      - launchctl load ~/Library/LaunchAgents/com.coldstorage.photos-spike.plist
-      - 'echo "Check /tmp/photos-spike.out — it should read an original WITHOUT a new prompt."'
+      - |
+        f=$(ls -t ~/Library/Logs/DiagnosticReports/photos-spike-* 2>/dev/null | head -1)
+        if [ -z "$f" ]; then echo "No crash report found. If it just crashed, wait ~10s for the reporter to write it, then retry."; exit 0; fi
+        echo "report: $f"; echo
+        tail -n +2 "$f" | python3 -c '
+        import json,sys
+        d=json.load(sys.stdin)
+        ex=d.get("exception") or {}
+        print("exception:", ex.get("type"), ex.get("signal"), ex.get("subtype",""))
+        t=d.get("termination") or {}
+        print("termination:", t.get("indicator") or t.get("reason") or t)
+        if d.get("asi"): print("appSpecificInfo:", d["asi"])
+        imgs=d.get("usedImages",[])
+        nm=lambda i: (imgs[i].get("name","?") if 0<=i<len(imgs) else "?")
+        leb=d.get("lastExceptionBacktrace")
+        if leb:
+            print("\n** Obj-C NSException backtrace **")
+            for fr in leb[:12]: print("   ", nm(fr.get("imageIndex",-1)), fr.get("symbol") or hex(fr.get("imageOffset",0)))
+        for th in d.get("threads",[]):
+            if th.get("triggered"):
+                print("\n-- faulting thread", th.get("id"), th.get("queue",""))
+                for fr in th.get("frames",[])[:12]: print("   ", nm(fr.get("imageIndex",-1)), fr.get("symbol") or hex(fr.get("imageOffset",0)))
+        '
+
+  install-agent:
+    desc: "Install + load the LaunchAgent, then show its output (proves the grant survives a launchd-spawned process). Auto-fills the binary path — no manual plist edit."
+    cmds:
+      - |
+        bin="$(pwd)/.build/release/photos-spike"
+        dst="$HOME/Library/LaunchAgents/com.coldstorage.photos-spike.plist"
+        rm -f /tmp/photos-spike.out /tmp/photos-spike.err
+        # Substitute the real absolute binary path into the committed template on the way in.
+        sed "s#/ABSOLUTE/PATH/TO/.build/release/photos-spike#${bin}#" com.coldstorage.photos-spike.plist > "$dst"
+        launchctl unload "$dst" 2>/dev/null || true   # idempotent re-install
+        launchctl load "$dst"
+        echo "loaded → $dst"
+        echo "binary → $bin"
+        echo "waiting for the launchd-spawned run…"
+        # RunAtLoad fires it immediately; wait for it to finish (it downloads from iCloud).
+        for i in $(seq 1 20); do grep -qE "✅|❌|Not authorized|No photos" /tmp/photos-spike.out 2>/dev/null && break; sleep 1; done
+        echo "── /tmp/photos-spike.out ──"; cat /tmp/photos-spike.out 2>/dev/null || echo "(empty)"
+        echo "── /tmp/photos-spike.err ──"; cat /tmp/photos-spike.err 2>/dev/null || true
 
   uninstall-agent:
     cmds:
