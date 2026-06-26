@@ -171,6 +171,42 @@ tasks:
     cmds:
       - swift run coldstorectl coldstored.sock deposit src={{.SRC}} dest={{.DEST | default ""}}
 
+  daemon:logs:
+    desc: "[macOS] Tail the installed daemon's stdout+stderr logs (live). Shows PhotoKitResolver auth/resolve diagnostics, deposit errors, etc."
+    dir: coldstorage
+    vars:
+      DATA_DIR: '{{.HOME}}/Library/Application Support/ColdStorage'
+    cmds:
+      - tail -n 40 -f "{{.DATA_DIR}}/coldstored.out.log" "{{.DATA_DIR}}/coldstored.err.log"
+
+  daemon:reset-photos-tcc:
+    desc: "[macOS] Reset the daemon's Photos permission so the next depositPhotos re-prompts from scratch (use if you granted Limited instead of Full, or to re-test the grant). Derives the identifier from the signed binary, so it always matches the installed daemon."
+    dir: coldstorage
+    cmds:
+      - |
+        # The TCC grant keys to the binary's code-signing Identifier (pinned to com.theadpharm.coldstored in
+        # daemon:install) — read it straight from the binary so this can't drift. Also reset the old default
+        # "coldstored" identifier, in case a pre-pinning grant is lingering. A "No such bundle identifier"
+        # error just means there's no grant to clear (already reset / never granted) — not a failure.
+        id=$(codesign -dv .build/release/coldstored 2>&1 | sed -n 's/^Identifier=//p')
+        for client in "$id" coldstored; do
+          [ -n "$client" ] || continue
+          tccutil reset Photos "$client" 2>&1 | sed "s/^/[$client] /" || true
+        done
+        echo "done — the next photo deposit re-prompts; choose ALL Photos (Full), not Limited"
+
+  daemon:photo-picker:
+    desc: "[macOS] Run the native Photos picker helper standalone (no daemon, no UI) — opens the system picker and prints the selection as JSON {id, name} objects. Sanity-checks option B before wiring it through the UI."
+    dir: coldstorage
+    cmds:
+      - swift run coldstore-photo-picker
+
+  daemon:deposit-photos-ipc:
+    desc: "Explicit photo deposit over the running daemon's socket: IDS='id1\\nid2' (newline-joined Photos localIdentifiers) [DEST=folder]. Archives ONLY those picked photos (never the whole library) — the same command the UI's photo picker issues. macOS only (PhotoKit); off-Mac the daemon emits an error event. Check `daemon:ctl -- listFiles`."
+    dir: coldstorage
+    cmds:
+      - swift run coldstorectl coldstored.sock depositPhotos assetIds={{.IDS}} dest={{.DEST | default ""}}
+
   daemon:move-ipc:
     desc: "Reorganize over the running daemon's socket — move OR rename: FROM=<vault/path> TO=<new/vault/path>. A cheap journal relativePath edit (no S3, no thaw); the same command the UI's move/rename issues. Check `daemon:ctl -- listFiles`."
     dir: coldstorage
@@ -200,6 +236,46 @@ tasks:
       - test -S "{{.SOCK}}" || { echo "no installed daemon socket at {{.SOCK}} — run task daemon:bootstrap first"; exit 1; }
       - ./.build/release/coldstorectl "{{.SOCK}}" {{.CLI_ARGS | default "getStatus"}}
 
+  daemon:verify-aws:
+    desc: "[macOS] HEAD a single LIVE vault blob directly in S3 (bypasses the daemon) to confirm StorageClass=DEEP_ARCHIVE + see the Restore (thaw) status. BLOB=<blobId> (the hash from listFiles). Uses head-object, so it stays within the daemon's least-priv GetObject grant (no ListBucket). Also the way to poll a thaw: re-run until Restore shows ongoing-request=\"false\"."
+    dir: coldstorage
+    vars:
+      CREDS: '{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env'
+    cmds:
+      - |
+        [ -f "{{.CREDS}}" ] && { set -a; . "{{.CREDS}}"; set +a; }
+        bucket="${COLDSTORE_BUCKET:?missing COLDSTORE_BUCKET — run tf:coldstorage:creds-export in the devcontainer}"
+        region="${AWS_REGION:-ca-central-1}"
+        blob="{{.BLOB}}"; : "${blob:?pass BLOB=<blobId> (the hash from task daemon:live -- listFiles)}"
+        echo "── HEAD s3://${bucket}/blobs/${blob} ──"
+        aws s3api head-object --bucket "$bucket" --key "blobs/${blob}" \
+          --query '{StorageClass:StorageClass,Size:ContentLength,Restore:Restore}' \
+          --output table --profile coldstorage --region "$region"
+
+  daemon:restore-wait:
+    desc: "[macOS] Hands-off Deep Archive restore: re-fires `restore` against the INSTALLED daemon every INTERVAL until state=restored, then shows the recovered file. Start it and walk away (Glacier Standard thaw is ~12h). FILE=<id> OUT=<path> [TIER=standard] [INTERVAL=900]. Idempotent — re-issues no duplicate thaw while in progress."
+    dir: coldstorage
+    vars:
+      SOCK: '{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock'
+      OUT: '{{.OUT | default "/tmp/coldstore-restore-test.out"}}'
+      TIER: '{{.TIER | default "standard"}}'
+      INTERVAL: '{{.INTERVAL | default "900"}}'
+    cmds:
+      - test -S "{{.SOCK}}" || { echo "no installed daemon socket at {{.SOCK}} — run task daemon:bootstrap first"; exit 1; }
+      - |
+        file="{{.FILE}}"; : "${file:?pass FILE=<id> (from task daemon:live -- listFiles)}"
+        ctl='./.build/release/coldstorectl'; sock="{{.SOCK}}"
+        while :; do
+          out="$($ctl "$sock" restore "file=$file" "out={{.OUT}}" "tier={{.TIER}}")"
+          echo "[$(date '+%H:%M:%S')] $out"
+          case "$out" in
+            *'"state":"restored"'*) echo "✓ restored → {{.OUT}}"; break ;;
+          esac
+          sleep {{.INTERVAL}}
+        done
+        echo "── recovered file (first 40 lines) ──"
+        head -n 40 "{{.OUT}}"
+
   daemon:install:
     desc: "[macOS] Build release + install the coldstored LaunchAgent (RunAtLoad/KeepAlive)."
     dir: coldstorage
@@ -207,11 +283,28 @@ tasks:
       DATA_DIR: '{{.HOME}}/Library/Application Support/ColdStorage'
       PLIST: '{{.HOME}}/Library/LaunchAgents/com.theadpharm.coldstored.plist'
     cmds:
-      # NOTE: when the explicit photo-deposit path lands, this build step must embed
-      # launchd/coldstored-Info.plist (via `-sectcreate __TEXT __info_plist`) + codesign coldstored with
-      # a stable identity — the prerequisite for ANY Photos access (proven recipe in phase0-photos-spike).
-      # Left out for now: the daemon is folders + explicit-file-deposit only, so it needs neither.
+      # Photos access prerequisite (explicit photo-deposit path): the Info.plist is embedded into coldstored
+      # at link time via Package.swift (-sectcreate, macOS-only), and we codesign with a STABLE identity
+      # below — TCC keys the Photos grant to (CFBundleIdentifier + signing identity), so a changing identity
+      # resets the grant. Recipe proven in phase0-photos-spike. Folder/file deposit needs neither, but
+      # signing is harmless for them, so we always sign — one code path, and photos "just work".
       - swift build -c release
+      - |
+        # Default to the first "Apple Development" identity in the Keychain; override with IDENTITY="…".
+        # Keep it CONSTANT across releases or macOS re-prompts for Photos (the TCC grant is identity-keyed).
+        identity="{{.IDENTITY}}"
+        if [ -z "$identity" ]; then
+          identity=$(security find-identity -v -p codesigning | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)
+        fi
+        if [ -z "$identity" ]; then
+          echo "No Apple Development identity in your Keychain — pass one: task daemon:install IDENTITY=\"Apple Development: …\""; exit 1
+        fi
+        # --identifier pins the code-signing identifier to the bundle id (== launchd Label). TCC keys the
+        # Photos grant to this identifier (NOT the embedded CFBundleIdentifier); without pinning, codesign
+        # defaults it to the basename "coldstored", so `tccutil reset Photos com.theadpharm.coldstored`
+        # wouldn't match. Pinning makes the grant + reset + launchd label all consistent.
+        codesign --force --sign "$identity" --identifier com.theadpharm.coldstored .build/release/coldstored
+        echo "signed coldstored as com.theadpharm.coldstored with: $identity  (keep this identity STABLE — TCC keys the Photos grant to it)"
       - mkdir -p "{{.DATA_DIR}}" "{{.HOME}}/Library/LaunchAgents"
       - |
         # Bucket/region come from the handoff file (written by `task tf:coldstorage:creds-export` in the
@@ -343,6 +436,9 @@ tasks:
       # Electron runs with cwd=ui/, so the DaemonClient's relative default would miss the daemon's
       # socket. Point at it explicitly (same path daemon:run creates). Mirrors ui:prove.
       COLDSTORE_SOCKET: '{{.ROOT_DIR}}/coldstorage/coldstored.sock'
+      # Absolute path to the native Photos-picker helper (built by daemon:build/install) — the "Add photos…"
+      # entry spawns it. Absolute so it resolves regardless of Electron's cwd.
+      COLDSTORE_PHOTO_PICKER: '{{.ROOT_DIR}}/coldstorage/.build/release/coldstore-photo-picker'
     cmds:
       - bun run dev
 
@@ -353,6 +449,7 @@ tasks:
     env:
       # The launchd daemon's socket (daemon:install path), NOT the dev socket ui:dev/ui:demo use.
       COLDSTORE_SOCKET: '{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock'
+      COLDSTORE_PHOTO_PICKER: '{{.ROOT_DIR}}/coldstorage/.build/release/coldstore-photo-picker'
     cmds:
       - bun run dev
 

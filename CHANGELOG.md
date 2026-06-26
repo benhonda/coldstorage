@@ -2,6 +2,8 @@
 
 ## 2026-06-26
 
+- chore: Taskfile photo + restore ops — `daemon:photo-picker`/`daemon:deposit-photos-ipc`/`daemon:reset-photos-tcc`/`daemon:logs`; `daemon:install` now codesigns `coldstored` (`--identifier`-pinned) + embeds the Info.plist; `daemon:verify-aws` (HEAD a live vault blob for StorageClass/thaw) + `daemon:restore-wait` (hands-off Glacier thaw poller); `COLDSTORE_PHOTO_PICKER` env for `ui:dev`/`ui:live`.
+- docs: ROADMAP — photo-deposit PROVEN end-to-end on a real Mac; first real Deep Archive upload DONE (4 files live in the prod vault) + first real thaw in flight (AWS-confirmed `ongoing-request`).
 - feat: UI "Add photos…" in My Files — native picker (`window.coldstore.pickPhotos` → `main/system.ts` spawns `coldstore-photo-picker`, shape-validated) → `depositPhotos` into the current folder with optimistic rows; new `PhotoPick` IPC type + preload binding.
 - feat: daemon explicit photo-deposit — `depositPhotos` archives ONLY the PICKED Photos assets (never the whole library): a portable `PhotoResolver` seam + `PhotoDepositSource` (mounts picks under a dest folder, keeps `id`=`localIdentifier` so re-deposits dedup on identity) in Core, Mac `PhotoKitResolver` (reuses the proven `stream(assetId:)`, requests the daemon's own FULL grant) injected in `coldstored`; runs the same encrypt→plan→stage→multipart→journal pipeline as file deposit. New `coldstore-photo-picker` executable (native `PHPickerViewController`, needs no TCC/codesign) + `coldstored-Info.plist` embedded via `Package.swift` `-sectcreate`. Headless-proven (fake resolver + recording store: ciphertext on the wire, stale-pick skip, re-deposit dedup; Swift 55 green).
 - chore: vendor the `checkpoint` skill (`.claude`/`.agents` install + `skills-lock.json`).
