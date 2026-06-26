@@ -31,6 +31,12 @@
       "skillPath": "skills/vendor/brand-review/SKILL.md",
       "computedHash": "08eba7dace5ca74bec3c1bf0094877b905d13076fdf029f175773908b5734082"
     },
+    "checkpoint": {
+      "source": "git@github.com:adpharm/adpharm-skills.git",
+      "sourceType": "git",
+      "skillPath": "skills/engineering/checkpoint/SKILL.md",
+      "computedHash": "5cfd8b3669b86bb85c34abca2bbbb765df483589b300a9b0cce40c825d372b82"
+    },
     "product-brainstorming": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",
