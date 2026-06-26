@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-06-26
+
+- feat: daemon per-source pause + mount destinations — `SourceRow` gains journal-persisted `paused` + `mountPath` (replaces the transient global pause flag); `pauseSource`/`resumeSource` replace `pause`/`resume`; `addSource path= mountPath=`; `MountedSource` re-bases items so a watched folder lands at its chosen drive path and same-named files don't collide on `id`. Proven vs MinIO.
+- feat: daemon `createFolder` — `FileStatus.folder` path-only marker anchors an empty folder so it survives a reload (no S3/no thaw); emits `filesChanged{created}`.
+
 ## 2026-06-25
 
 - feat: Settings exclude chips on real daemon excludes — fetch/add/remove via `listExcludes`/`addExclude`/`removeExclude` (replaces the hardcoded `useSettings.ts`), refetch on `excludesChanged`.

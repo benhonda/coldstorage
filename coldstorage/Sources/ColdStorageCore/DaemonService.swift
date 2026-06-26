@@ -1,9 +1,10 @@
 import Foundation
 
 /// The long-running service: turns the proven engine into `coldstored`. Owns the run loop, the live
-/// source set (rebuilt each pass from the journal registry), pause/resume, and the command surface
-/// the control socket dispatches to. Emits progress to the `EventBus`. The journal stays the SSOT —
-/// this actor holds only transient run state (paused, running, the loop's wake latch).
+/// source set (rebuilt each pass from the journal registry, paused folders filtered out), per-source
+/// pause/resume, and the command surface the control socket dispatches to. Emits progress to the
+/// `EventBus`. The journal stays the SSOT — this actor holds only transient run state (running, the
+/// loop's wake latch); pause is now persisted per-source in the journal, not a global actor flag.
 public actor DaemonService {
     let engine: UploadEngine
     /// Drives get-a-file-back over the same store/keys as the upload engine. Idempotent + self-progressing:
@@ -15,7 +16,6 @@ public actor DaemonService {
     /// Platform sources that aren't path-based (Photos on macOS); folders come from the registry.
     let platformSources: [IngestSource]
 
-    private var paused = false
     private var running = false
     // Blobs that failed *permanently* (config/logic — won't self-heal) this session. Skipped on the next
     // pass so we don't re-stage+re-attempt a doomed blob every interval. In-memory by design: a restart
@@ -93,10 +93,10 @@ public actor DaemonService {
     public func runForever(intervalSeconds: UInt64) async throws {
         try writeStatus()   // seed status.json so the UI has something on first connect
         while !Task.isCancelled {
-            if !paused {
-                do { try await runOnce() }
-                catch { bus.publish(DaemonEvent("error", ["message": "\(error)"])) }   // surface, never crash the loop
-            }
+            // Pause is per-source now (paused folders are filtered out of `currentSource`), so the loop
+            // always runs — a pass over zero unpaused folders is just a cheap no-op.
+            do { try await runOnce() }
+            catch { bus.publish(DaemonEvent("error", ["message": "\(error)"])) }   // surface, never crash the loop
             await wakeableSleep(seconds: intervalSeconds)
         }
     }
@@ -115,9 +115,13 @@ public actor DaemonService {
     private func currentSource() throws -> IngestSource {
         let matcher = excludeMatcher()
         let folders = try journal.listSources()
-            .filter { $0.kind == .folder }
-            .compactMap { $0.path }
-            .map { LocalDirSource(root: URL(fileURLWithPath: $0), exclude: matcher) as IngestSource }
+            .filter { $0.kind == .folder && !$0.paused }   // paused folders are skipped (still registered)
+            .compactMap { row -> IngestSource? in
+                guard let path = row.path else { return nil }
+                let dir = LocalDirSource(root: URL(fileURLWithPath: path), exclude: matcher)
+                // Mount the folder at its chosen destination in the drive (daemon-owned placement).
+                return MountedSource(dir, mountPath: row.mountPath)
+            }
         return MultiSource(folders + platformSources)
     }
 
@@ -157,11 +161,11 @@ public actor DaemonService {
 
     private struct StatusDTO: Encodable {
         let filesTotal, filesArchived, blobsVerified: Int
-        let paused, running: Bool
+        let running: Bool
         let permanentlyFailedBlobs: Int   // >0 ⇒ a blob is stuck on a config/logic fault the operator must fix
         let sources: [SourceDTO]
     }
-    private struct SourceDTO: Encodable { let id, kind: String; let path: String? }
+    private struct SourceDTO: Encodable { let id, kind: String; let path: String?; let mountPath: String; let paused: Bool }
     /// One browsable file (the `listFiles` element). `status` is the raw journal `FileStatus` — the UI
     /// coarsens it to its own browse states (frozen/uploading/…); we expose what we actually know.
     private struct FileDTO: Encodable { let id, relativePath: String; let size: Int; let status: String; let blobId: String? }
@@ -182,7 +186,7 @@ public actor DaemonService {
     }
 
     private func sourceDTOs() throws -> [SourceDTO] {
-        try journal.listSources().map { SourceDTO(id: $0.id, kind: $0.kind.rawValue, path: $0.path) }
+        try journal.listSources().map { SourceDTO(id: $0.id, kind: $0.kind.rawValue, path: $0.path, mountPath: $0.mountPath, paused: $0.paused) }
     }
 
     private func pricingDTO() -> PricingDTO {
@@ -216,7 +220,7 @@ public actor DaemonService {
         case "getStatus":
             let s = try journal.summary()
             return AnyEncodable(StatusDTO(filesTotal: s.total, filesArchived: s.archived,
-                                          blobsVerified: s.blobsVerified, paused: paused, running: running,
+                                          blobsVerified: s.blobsVerified, running: running,
                                           permanentlyFailedBlobs: permanentlyFailedBlobs.count, sources: try sourceDTOs()))
         case "listSources":
             return AnyEncodable(try sourceDTOs())
@@ -234,7 +238,13 @@ public actor DaemonService {
         case "addSource":
             guard let raw = p["path"] else { throw ColdStorageError.staging("addSource requires params.path") }
             let abs = URL(fileURLWithPath: raw).standardizedFileURL.path
-            try journal.addSource(SourceRow(id: abs, kind: .folder, path: abs))
+            // Destination in the drive: where this folder's tree mounts. Default to the basename so a CLI
+            // add (or any caller omitting it) still namespaces the source rather than dumping at root.
+            // Trim leading/trailing slashes — mountPath is a vault-relative folder, never absolute.
+            let rawMount = (p["mountPath"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let mount = rawMount.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let mountPath = mount.isEmpty ? URL(fileURLWithPath: abs).lastPathComponent : mount
+            try journal.addSource(SourceRow(id: abs, kind: .folder, path: abs, mountPath: mountPath))
             bus.publish(DaemonEvent("sourcesChanged", ["added": abs]))
             trigger()
             return AnyEncodable(AckDTO(ok: true))
@@ -288,6 +298,14 @@ public actor DaemonService {
             try journal.movePath(from: from, to: to)
             bus.publish(DaemonEvent("filesChanged", ["moved": from, "to": to]))
             return AnyEncodable(AckDTO(ok: true))
+        case "createFolder":
+            // Anchor an empty folder so it survives a reload (the tree is derived from file paths, so an
+            // empty one otherwise has nothing to imply it). A path-only journal marker — no S3, no thaw.
+            // Idempotent on the path. `filesChanged` tells a live watcher to re-read the tree.
+            guard let path = p["path"], !path.isEmpty else { throw ColdStorageError.staging("createFolder requires params.path (a vault-relative folder path)") }
+            try journal.createFolder(path: path)
+            bus.publish(DaemonEvent("filesChanged", ["created": path]))
+            return AnyEncodable(AckDTO(ok: true))
         case "deletePath":
             // Tombstone the subtree at `path` (file or folder). The row + blob mapping are kept (bytes
             // reclaim is a deferred repack/GC); the file just drops out of `listFiles`.
@@ -298,11 +316,18 @@ public actor DaemonService {
         case "triggerNow":
             trigger()
             return AnyEncodable(AckDTO(ok: true))
-        case "pause":
-            paused = true; bus.publish(DaemonEvent("paused"))
+        case "pauseSource":
+            // Per-folder pause: stop auto-syncing this one source (it stays registered). Persisted, so it
+            // survives restart. Manual deposits are unaffected. `sourcesChanged` → the UI refetches.
+            guard let id = p["id"] else { throw ColdStorageError.staging("pauseSource requires params.id") }
+            try journal.setSourcePaused(id, true)
+            bus.publish(DaemonEvent("sourcesChanged", ["paused": id]))
             return AnyEncodable(AckDTO(ok: true))
-        case "resume":
-            paused = false; bus.publish(DaemonEvent("resumed")); trigger()
+        case "resumeSource":
+            guard let id = p["id"] else { throw ColdStorageError.staging("resumeSource requires params.id") }
+            try journal.setSourcePaused(id, false)
+            bus.publish(DaemonEvent("sourcesChanged", ["resumed": id]))
+            trigger()   // sync the just-resumed folder soon, don't wait for the next interval
             return AnyEncodable(AckDTO(ok: true))
         default:
             throw ColdStorageError.staging("unknown method: \(method)")

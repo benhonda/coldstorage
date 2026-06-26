@@ -36,13 +36,30 @@ public struct SourceRow: Sendable {
     public let id: String          // stable key — the absolute path for folders
     public let kind: SourceKind
     public let path: String?
-    public init(id: String, kind: SourceKind, path: String?) { self.id = id; self.kind = kind; self.path = path }
+    /// Destination: the vault-relative folder this source's tree mounts under in My Files (e.g.
+    /// "Backups/Photos"). The daemon owns this placement — every ingested item is re-based under it, which
+    /// both lets the user choose *where* a watched folder lands and namespaces sources so same-named files
+    /// across two folders can't collide on `id`. Never empty for a folder (defaults to the basename).
+    public let mountPath: String
+    /// Per-source pause: when true the scheduled scan loop skips this folder (it stays registered, just
+    /// isn't auto-synced). Persistent (journal-backed) so a deliberate pause survives a daemon restart —
+    /// unlike the old transient global flag this replaced. Manual deposits are unaffected (always honored).
+    public let paused: Bool
+    public init(id: String, kind: SourceKind, path: String?, mountPath: String = "", paused: Bool = false) {
+        self.id = id; self.kind = kind; self.path = path; self.mountPath = mountPath; self.paused = paused
+    }
 }
 
 /// `deleted` is a TOMBSTONE: the user removed the file from their tree, but its row + blob mapping are
 /// kept (bytes reclaim is deferred to a future repack/GC — deep storage has a 180-day minimum, so eager
 /// deletion saves nothing). Tombstoned files drop out of `listFiles` and the file count.
-public enum FileStatus: String, Codable, Sendable { case discovered, planned, staging, uploading, verifying, archived, failed, deleted }
+///
+/// `folder` is a FOLDER MARKER: a path-only row (size 0, no blob) that anchors a just-created EMPTY folder
+/// so it survives a reload — otherwise an empty folder, having no files beneath it to imply its path, would
+/// vanish (the tree is derived from file paths). The marker is excluded from the file count and never
+/// becomes a browsable file; `movePath`/`deletePath` sweep it by path like any other row. Once real files
+/// land under the folder the marker is redundant (the path is implied) but harmless — the UI dedups by name.
+public enum FileStatus: String, Codable, Sendable { case discovered, planned, staging, uploading, verifying, archived, failed, deleted, folder }
 public enum BlobStatus: String, Codable, Sendable { case open, uploading, completed, verified, aborted }
 public enum PartStatus: String, Codable, Sendable { case pending, uploaded, verified }
 

@@ -26,7 +26,8 @@ let journal = try Journal(path: env["COLDSTORE_JOURNAL"] ?? "coldstore.sqlite")
 // the SSOT — add/remove happens over the control socket, and survives restarts.
 for root in folderRoots {
     let abs = root.standardizedFileURL.path
-    try journal.addSource(SourceRow(id: abs, kind: .folder, path: abs))
+    // Env-seeded folders mount under their basename (same default as an addSource over the socket).
+    try journal.addSource(SourceRow(id: abs, kind: .folder, path: abs, mountPath: URL(fileURLWithPath: abs).lastPathComponent))
 }
 
 // Platform sources: the Photos library on macOS, once authorized (TCC). Folders come from the registry.

@@ -71,7 +71,8 @@ public final class Journal: @unchecked Sendable {
               blobId TEXT NOT NULL, partNumber INTEGER NOT NULL, eTag TEXT NOT NULL,
               sha256 TEXT NOT NULL, status TEXT NOT NULL, PRIMARY KEY(blobId, partNumber));
             CREATE TABLE IF NOT EXISTS sources(
-              id TEXT PRIMARY KEY, kind TEXT NOT NULL, path TEXT, addedAt INTEGER NOT NULL DEFAULT 0);
+              id TEXT PRIMARY KEY, kind TEXT NOT NULL, path TEXT, addedAt INTEGER NOT NULL DEFAULT 0,
+              mountPath TEXT NOT NULL DEFAULT '', paused INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS excludes(
               pattern TEXT PRIMARY KEY, addedAt INTEGER NOT NULL DEFAULT 0);
             """)
@@ -79,6 +80,16 @@ public final class Journal: @unchecked Sendable {
             for p in Self.defaultExcludes {
                 try run("INSERT OR IGNORE INTO excludes(pattern) VALUES(?1)", [.text(p)])
             }
+        }
+        // Idempotent column add for journals created before mountPath existed (CREATE TABLE IF NOT EXISTS
+        // won't alter an existing table). New mounts default to '' here; the addSource path supplies a
+        // real basename, so only legacy rows stay root-mounted until re-added.
+        let sourceCols = try run("PRAGMA table_info(sources)").compactMap { $0["name"] as? String }
+        if !sourceCols.contains("mountPath") {
+            try exec("ALTER TABLE sources ADD COLUMN mountPath TEXT NOT NULL DEFAULT ''")
+        }
+        if !sourceCols.contains("paused") {
+            try exec("ALTER TABLE sources ADD COLUMN paused INTEGER NOT NULL DEFAULT 0")
         }
     }
 
@@ -144,14 +155,35 @@ public final class Journal: @unchecked Sendable {
         try exec("COMMIT;")
     }
 
+    /// Anchor an EMPTY folder so it survives a reload — a path-only marker row (status `folder`, size 0, no
+    /// blob). The tree is derived from file paths, so an empty folder otherwise has nothing to imply it and
+    /// vanishes when the UI's local state resets. Idempotent: a no-op if any LIVE row already sits at `path`
+    /// (a real file there already implies the folder, or the marker already exists) — so we never stack
+    /// duplicate markers. The id is derived from the path purely for readability; `movePath` keeps it stable
+    /// across a rename (path moves, id doesn't) exactly like a file's id.
+    public func createFolder(path: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        // Skip if any LIVE row already sits AT the path (the marker exists) or UNDER it (a real file already
+        // implies the folder) — so we never stack a redundant marker. `substr(...,1,len+1)` is the same
+        // prefix test movePath/deletePath use (no LIKE-wildcard escaping).
+        let exists = try run("""
+            SELECT 1 FROM files
+            WHERE (relativePath=?1 OR substr(relativePath, 1, length(?1) + 1) = ?2) AND status != ?3 LIMIT 1
+            """, [.text(path), .text("\(path)/"), .text(FileStatus.deleted.rawValue)])
+        guard exists.isEmpty else { return }
+        try run("""
+            INSERT INTO files(id, relativePath, size, contentHash, status) VALUES(?1,?2,0,'',?3)
+            """, [.text("folder:\(path)"), .text(path), .text(FileStatus.folder.rawValue)])
+    }
+
     // MARK: - sources registry (SSOT for what we archive; mutated via IPC)
     /// Register a source; idempotent on `id` (re-adding a folder just refreshes it).
     public func addSource(_ s: SourceRow) throws {
         lock.lock(); defer { lock.unlock() }
         try run("""
-            INSERT INTO sources(id, kind, path) VALUES(?1,?2,?3)
-            ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, path=excluded.path
-            """, [.text(s.id), .text(s.kind.rawValue), s.path.map(Bind.text) ?? .null])
+            INSERT INTO sources(id, kind, path, mountPath, paused) VALUES(?1,?2,?3,?4,?5)
+            ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, path=excluded.path, mountPath=excluded.mountPath, paused=excluded.paused
+            """, [.text(s.id), .text(s.kind.rawValue), s.path.map(Bind.text) ?? .null, .text(s.mountPath), .int(s.paused ? 1 : 0)])
     }
 
     public func removeSource(_ id: String) throws {
@@ -159,12 +191,21 @@ public final class Journal: @unchecked Sendable {
         try run("DELETE FROM sources WHERE id=?1", [.text(id)])
     }
 
+    /// Toggle a source's pause without re-adding it (its scan is skipped while paused). Idempotent; a
+    /// no-op if the id isn't registered.
+    public func setSourcePaused(_ id: String, _ paused: Bool) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("UPDATE sources SET paused=?2 WHERE id=?1", [.text(id), .int(paused ? 1 : 0)])
+    }
+
     public func listSources() throws -> [SourceRow] {
         lock.lock(); defer { lock.unlock() }
-        return try run("SELECT id, kind, path FROM sources ORDER BY id").map {
+        return try run("SELECT id, kind, path, mountPath, paused FROM sources ORDER BY id").map {
             SourceRow(id: $0["id"] as? String ?? "",
                       kind: SourceKind(rawValue: $0["kind"] as? String ?? "") ?? .folder,
-                      path: $0["path"] as? String)
+                      path: $0["path"] as? String,
+                      mountPath: $0["mountPath"] as? String ?? "",
+                      paused: ($0["paused"] as? Int ?? 0) != 0)
         }
     }
 
@@ -264,7 +305,8 @@ public final class Journal: @unchecked Sendable {
     public func summary() throws -> (total: Int, archived: Int, blobsVerified: Int) {
         lock.lock(); defer { lock.unlock() }
         func count(_ sql: String) -> Int { (try? run(sql).first?["c"] as? Int) ?? 0 }
-        return (count("SELECT count(*) c FROM files WHERE status != 'deleted'"),
+        // `folder` markers anchor empty folders — they aren't files, so they don't count toward the total.
+        return (count("SELECT count(*) c FROM files WHERE status NOT IN ('deleted','folder')"),
                 count("SELECT count(*) c FROM files WHERE status='archived'"),
                 count("SELECT count(*) c FROM blobs WHERE status='verified'"))
     }
