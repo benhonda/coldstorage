@@ -114,8 +114,10 @@
   justify-content: space-between;
   padding: 0 var(--cs-pad-x);
 }
-.cs-topbar-title { font: var(--type-page-title); letter-spacing: var(--tracking-tight); }
-.cs-topbar-sub { font: var(--type-label); color: var(--text-secondary); margin-top: 2px; }
+/* Page title typography — SSOT for both the plain-title (h1) and breadcrumb paths. */
+.cs-topbar-title,
+.cs-crumb { font: var(--type-page-title); letter-spacing: var(--tracking-tight); }
+.cs-topbar-title { margin: 0; } /* kill the UA <h1> margin — only the Settings path uses an h1 (base.css is vendored, no global reset). */
 
 .cs-page {
   flex: 1 1 auto;
@@ -199,7 +201,9 @@
   border: 1px solid var(--border-card);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-card);
-  padding: var(--space-6);
+  /* Less top inset than sides/bottom — the header carries its own optical weight, so symmetric
+     padding leaves the title floating below the card edge. (A) */
+  padding: var(--space-3) var(--space-6) var(--space-6);
 }
 .cs-card--raised { background: var(--surface-raised); border-color: var(--border-subtle); box-shadow: none; }
 .cs-card--flush { padding: 0; }
@@ -208,9 +212,9 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--space-2); /* header → content (C) */
 }
-.cs-card-title { font: var(--type-card-title); letter-spacing: var(--tracking-tight); }
+.cs-card-title { margin: 0; font: var(--type-card-title); letter-spacing: var(--tracking-tight); }
 
 /* ── Stat (big reassuring number) ───────────────────────────────── */
 .cs-stat-value { font: var(--type-stat); letter-spacing: var(--tracking-tighter); }
@@ -265,6 +269,9 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-row-main { min-width: 0; flex: 1; }
 .cs-row-title { font: var(--type-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cs-row-sub { font: var(--type-mono); color: var(--text-tertiary); letter-spacing: var(--tracking-mono); }
+/* Paused watched folder: the name reads inactive, but its "not backing up" sub stays loud (amber, set inline). */
+.cs-row--paused .cs-row-title { color: var(--text-tertiary); }
+.cs-row--paused .csf-icon { opacity: 0.6; }
 
 /* ── EmptyState ─────────────────────────────────────────────────── */
 .cs-empty {
@@ -272,12 +279,17 @@ button.cs-kv:hover { background: var(--surface-hover); }
   flex-direction: column;
   align-items: center;
   text-align: center;
-  gap: var(--space-3);
-  padding: var(--space-10) var(--space-6);
+  gap: var(--space-4);
+  padding: var(--space-8) var(--space-6);
   color: var(--text-secondary);
 }
-.cs-empty .csf-icon { font-size: 32px; color: var(--text-tertiary); }
-.cs-empty-title { font: var(--type-body); color: var(--text-secondary); }
+/* Direct child only — the empty state's own glyph. A descendant selector would also recolor the icon
+   inside the call-to-action button (turning a primary button's white "+" grey). */
+.cs-empty > .csf-icon { font-size: 40px; color: var(--text-tertiary); }
+/* margin:0 — <p> carries a UA margin (no global reset; base.css is vendored) that blows out the gaps. */
+.cs-empty-copy { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
+.cs-empty-title { margin: 0; font: var(--type-body-strong); color: var(--text-secondary); }
+.cs-empty-text { margin: 0; font: var(--type-label); color: var(--text-tertiary); max-width: 44ch; line-height: var(--leading-normal); }
 
 /* ── Field (floating label, 64px, borderless, label inside) ─────── */
 .cs-field {
@@ -344,6 +356,8 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-mono { font: var(--type-mono); letter-spacing: var(--tracking-mono); font-feature-settings: "tnum" 1; }
 .cs-muted { color: var(--text-secondary); }
 .cs-help { font: var(--type-label); color: var(--text-secondary); line-height: var(--leading-normal); }
+/* Single-line truncation for a flex child (e.g. a long picked path). Needs min-width:0 to shrink. */
+.cs-ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ════════════════════════════════════════════════════════════════════
    Reorganizable-filesystem UI — My Files browser + Settings.
@@ -451,14 +465,14 @@ button.cs-kv:hover { background: var(--surface-hover); }
   cursor: pointer;
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-sm);
-  font: var(--type-page-title);
-  letter-spacing: var(--tracking-tight);
   color: var(--text-secondary);
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Lead crumb sits flush with the page padding so the title aligns with Settings' h1 across tabs. */
+.cs-crumb:first-child { padding-left: 0; }
 .cs-crumb:hover { background: var(--surface-hover); color: var(--text-primary); }
 .cs-crumb--current { color: var(--text-primary); cursor: default; }
 .cs-crumb--current:hover { background: transparent; }
@@ -493,13 +507,31 @@ button.cs-kv:hover { background: var(--surface-hover); }
 
 /* ── file list (table) — a rounded card surface, on brand (no square white bar) ─ */
 .cs-filelist {
+  /* single SSOT row height — shared by the rows AND the filler stripe bands so the zebra stays aligned */
+  --cs-row-h: var(--control-md);
   flex: 1 1 auto;
   overflow-y: auto;
   min-height: 0;
+  /* flex column so the filler can grow to fill the empty space below the last row */
+  display: flex;
+  flex-direction: column;
   background: var(--surface-card);
   border: 1px solid var(--border-card);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-card);
+}
+/* keeps the zebra reading continuous: stripes the empty space below the last row (or the whole body of an
+   empty folder) with the same row-height bands. --fill-shift carries the parity of the row count so the
+   first filler band picks up where the real rows left off. Row height = --control-lg (rows are min-height
+   that, border-box). */
+.cs-fl-filler {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: repeating-linear-gradient(
+    var(--surface-raised) 0 var(--cs-row-h),
+    transparent var(--cs-row-h) calc(var(--cs-row-h) * 2)
+  );
+  background-position: 0 var(--fill-shift, 0px);
 }
 .cs-fl-grid {
   display: grid;
@@ -581,12 +613,16 @@ button.cs-kv:hover { background: var(--surface-hover); }
   border: 0;
   background: transparent;
   text-align: left;
-  padding: var(--space-2) var(--space-4);
-  min-height: var(--control-lg);
+  padding: var(--space-1) var(--space-4);
+  min-height: var(--cs-row-h);
   /* No radius: the row spans edge-to-edge, so the hover/selected fill should be a full-bleed band. */
   cursor: default;
   transition: background var(--duration-fast) var(--ease-out);
 }
+/* zebra striping for row-scanning legibility. The sticky head is child 1, so data rows start at child 2;
+   :nth-child(even) tints every other data row. Declared BEFORE hover/selected (equal specificity) so those
+   states still win. */
+.cs-fl-row:nth-child(even) { background: var(--surface-raised); }
 .cs-fl-row:hover { background: var(--surface-hover); }
 .cs-fl-row[aria-selected="true"] { background: var(--accent-subtle); }
 .cs-fl-name { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
@@ -730,7 +766,9 @@ button.cs-kv:hover { background: var(--surface-hover); }
 /* ── context menu (popover at cursor) ───────────────────────────── */
 .cs-menu {
   position: fixed;
-  z-index: 30;
+  /* Above the modal scrim (40) — a menu/dropdown is always the top-most layer, incl. when opened from
+     inside a dialog (e.g. the watched-folder destination picker). */
+  z-index: 50;
   min-width: 180px;
   padding: var(--space-2);
   background: var(--surface-card);
@@ -812,12 +850,12 @@ button.cs-kv:hover { background: var(--surface-hover); }
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-3) var(--space-5);
+  padding: var(--space-4) var(--space-3) var(--space-4) var(--space-5);
   border-bottom: 1px solid var(--border-subtle);
 }
 .cs-modal-head .csf-icon { color: var(--accent-text); }
-.cs-modal-title { flex: 1; font: var(--type-card-title); letter-spacing: var(--tracking-tight); }
-.cs-modal-x { width: var(--control-sm); height: var(--control-sm); background: transparent; }
+.cs-modal-title { flex: 1; margin: 0; font: var(--type-card-title); letter-spacing: var(--tracking-tight); }
+.cs-modal-x { width: var(--space-8); height: var(--space-8); background: transparent; }
 .cs-modal-x:hover { background: var(--surface-hover); }
 .cs-modal-body { padding: var(--space-4) var(--space-5); overflow-y: auto; }
 .cs-modal-foot {
@@ -844,6 +882,25 @@ button.cs-kv:hover { background: var(--surface-hover); }
   background: var(--surface-input);
   border-radius: var(--radius-md);
 }
+/* Inline, searchable + bounded-scroll destination list (scales to many folders without a popover). */
+/* Folder picker tree (shared: move dialog + watched-folder destination) — drill-in, one level at a time. */
+.cs-foldertree { margin-top: var(--space-2); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; }
+.cs-treecrumbs { display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border-subtle); }
+.cs-treecrumbs .csf-icon { color: var(--text-tertiary); }
+.cs-treecrumb { border: 0; background: transparent; cursor: pointer; padding: 2px var(--space-1); border-radius: var(--radius-sm); font: var(--type-label); color: var(--text-secondary); }
+.cs-treecrumb:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-primary); }
+.cs-treecrumb:disabled { color: var(--text-primary); cursor: default; } /* current level */
+.cs-treelist { max-height: 264px; overflow-y: auto; padding: var(--space-2); }
+.cs-treerow { display: flex; align-items: center; border-radius: var(--radius-sm); }
+.cs-treerow:hover { background: var(--surface-hover); }
+.cs-treerow--on, .cs-treerow--on:hover { background: var(--accent-subtle); }
+.cs-treerow-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-3); border: 0; background: transparent; cursor: pointer; text-align: left; padding: var(--space-2) var(--space-3); font: var(--type-body); color: var(--text-primary); }
+.cs-treerow-pick .csf-icon { color: var(--text-secondary); }
+.cs-treerow-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-treerow-into { display: grid; place-items: center; width: var(--control-md); height: var(--control-md); border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; border-radius: var(--radius-sm); }
+.cs-treerow-into:hover { background: var(--surface-active); color: var(--text-primary); }
+.cs-treerow-pick:disabled, .cs-treerow-into:disabled { opacity: 0.4; cursor: default; }
+.cs-treerow-pick:disabled:hover, .cs-treerow-into:disabled:hover { background: transparent; }
 .cs-folderpick-info { min-width: 0; flex: 1; }
 .cs-folderpick-label { font: var(--type-label); color: var(--text-secondary); }
 .cs-folderpick-path {

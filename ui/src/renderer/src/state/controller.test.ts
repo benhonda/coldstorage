@@ -14,7 +14,6 @@ const status = (sources: Source[]): Status => ({
   filesTotal: 1,
   filesArchived: 1,
   blobsVerified: 1,
-  paused: false,
   running: false,
   permanentlyFailedBlobs: 0,
   sources,
@@ -23,7 +22,7 @@ const status = (sources: Source[]): Status => ({
 /** A controllable fake of the preload surface. */
 const makeApi = (initial: ConnectionState) => {
   let connectionState = initial;
-  let sources: Source[] = [{ id: "s1", kind: "folder", path: "/a" }];
+  let sources: Source[] = [{ id: "s1", kind: "folder", path: "/a", mountPath: "a", paused: false }];
   let files: ListedFile[] = [{ id: "f1", relativePath: "a/b.jpg", size: 10, status: "archived", blobId: "blob-1" }];
   const calls: string[] = [];
   let eventCb: ((name: never, data: never) => void) | null = null;
@@ -136,8 +135,8 @@ describe("controller sync policy", () => {
     await tick();
 
     f.setSources([
-      { id: "s1", kind: "folder", path: "/a" },
-      { id: "s2", kind: "folder", path: "/b" },
+      { id: "s1", kind: "folder", path: "/a", mountPath: "a", paused: false },
+      { id: "s2", kind: "folder", path: "/b", mountPath: "b", paused: false },
     ]);
     f.fireEvent("sourcesChanged", { added: "/b" });
     await tick();

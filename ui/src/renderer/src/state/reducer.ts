@@ -208,12 +208,6 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
       return { ...state, failures: [{ blob, kind, message, files }, ...state.failures].slice(0, FAILURE_CAP) };
     }
 
-    case "paused":
-      return state.status ? { ...state, status: { ...state.status, paused: true } } : state;
-
-    case "resumed":
-      return state.status ? { ...state, status: { ...state.status, paused: false } } : state;
-
     case "restoreRequested":
       return upsertRestore(state, action.data.file, {
         state: "requested",

@@ -14,12 +14,12 @@ import {
   type ArchivedFile,
   type Row,
   type RowTarget,
-  allFolderPaths,
   baseName,
   childrenOf,
   filesUnder,
   formatBytes,
   formatDate,
+  isEmptyFolder,
   parentOf,
   reparent,
   rowKey,
@@ -32,6 +32,7 @@ import {
 } from "./files/model.ts";
 import { Breadcrumb } from "./files/Breadcrumb.tsx";
 import { ContextMenu, type MenuEntry } from "./files/ContextMenu.tsx";
+import { FolderTree } from "./files/FolderTree.tsx";
 import { InfoModal, type SelectionSummary } from "./files/InfoModal.tsx";
 import { RequestBackModal } from "./files/RequestBackModal.tsx";
 import { KindIcon, StatusIcon } from "./files/StatusBadge.tsx";
@@ -163,8 +164,12 @@ export const MyFilesView = ({
     }
     setRenaming(null);
   };
+  // New folder = an optimistic empty-folder row (instant inline-rename) + the REAL daemon `createFolder`,
+  // which writes a journal marker so the folder PERSISTS across a reload. Its `filesChanged` event
+  // reconciles the tree. The subsequent rename is a `movePath` (commitRename), which sweeps the marker too.
   const doNewFolder = (): void => {
     const path = filesApi.newFolder(dir);
+    exec(() => api.request("createFolder", { path }));
     startRename(`folder:${path}`);
   };
   // Delete = tombstone each target's subtree in the journal (bytes aren't reclaimed — deferred repack/GC).
@@ -226,7 +231,10 @@ export const MyFilesView = ({
           { label: "Request a copy…", icon: "download", onClick: () => openRequest(filesForTargets(targets)), disabled: restorable.length === 0 },
           { label: "Delete", icon: "delete", danger: true, onClick: () => requestDelete(targets) },
         ]
-      : [{ label: "New folder", icon: "create_new_folder", onClick: doNewFolder }];
+      : [
+          { label: "Upload files…", icon: "upload", onClick: () => fileInput.current?.click() },
+          { label: "New folder", icon: "create_new_folder", onClick: doNewFolder },
+        ];
     setMenu({ x: e.clientX, y: e.clientY, items });
   };
 
@@ -360,8 +368,10 @@ export const MyFilesView = ({
           onClick={(e) => e.target === e.currentTarget && clearSelection()}
           onContextMenu={(e) => e.target === e.currentTarget && openMenu(e)}
         >
-          {rows.length === 0 ? (
-            <FirstRun onChoose={() => fileInput.current?.click()} />
+          {/* FirstRun (the drop-zone hero) is the onboarding state for a genuinely empty vault — root with
+              nothing in it. A drilled-into empty folder just shows the empty file list, not the hero. */}
+          {rows.length === 0 && dir === "" ? (
+            <FirstRun onChoose={() => fileInput.current?.click()} onContextMenu={openMenu} />
           ) : view === "list" ? (
             <FileList
               rows={rows}
@@ -374,6 +384,7 @@ export const MyFilesView = ({
               onStartRename={(row) => startRename(rowKey(row))}
               onCommitRename={commitRename}
               onCancelRename={() => setRenaming(null)}
+              onClearSelection={clearSelection}
             />
           ) : (
             <Gallery
@@ -382,9 +393,12 @@ export const MyFilesView = ({
               onRowClick={onRowClick}
               onRowOpen={openRow}
               onRowContext={openMenu}
+              onClearSelection={clearSelection}
             />
           )}
-          {rows.length > 0 && <p className="cs-hint">drop anywhere to upload · right-click for more</p>}
+          {!(rows.length === 0 && dir === "") && (
+            <p className="cs-hint">drop anywhere to upload · right-click for more</p>
+          )}
         </div>
 
         {dropActive && (
@@ -478,6 +492,7 @@ const FileList = ({
   onStartRename,
   onCommitRename,
   onCancelRename,
+  onClearSelection,
 }: {
   rows: Row[];
   selected: Set<string>;
@@ -485,10 +500,12 @@ const FileList = ({
   uploadPct: (row: Row) => number | null;
   onRowClick: (e: React.MouseEvent, row: Row, index: number) => void;
   onRowOpen: (row: Row) => void;
-  onRowContext: (e: React.MouseEvent, row: Row) => void;
+  /** Right-click handler — pass a row for a row menu, omit it for the empty-area (Upload / New folder) menu. */
+  onRowContext: (e: React.MouseEvent, row?: Row) => void;
   onStartRename: (row: Row) => void;
   onCommitRename: (row: Row, value: string) => void;
   onCancelRename: () => void;
+  onClearSelection: () => void;
 }): React.JSX.Element => {
   // One shared press timer (only one name is held at a time). Held in refs so re-renders don't reset it.
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -513,7 +530,14 @@ const FileList = ({
   };
 
   return (
-  <div className="cs-filelist">
+  // Finder-style: a click that lands on the list's blank area (the card itself, not a row) clears the
+  // selection; a right-click there opens the empty-area menu. Row events bubble here too, but
+  // target!==currentTarget for them, so they don't deselect / double-fire.
+  <div
+    className="cs-filelist"
+    onClick={(e) => e.target === e.currentTarget && onClearSelection()}
+    onContextMenu={(e) => e.target === e.currentTarget && onRowContext(e)}
+  >
     <div className="cs-fl-grid cs-fl-head">
       <span>Name</span>
       <span>Size</span>
@@ -554,8 +578,9 @@ const FileList = ({
           <span className="cs-fl-size">{row.type === "folder" ? (row.empty ? "—" : formatBytes(row.size)) : formatBytes(row.file.size)}</span>
           <span className="cs-fl-date">{row.type === "file" ? formatDate(row.file.date) : `${row.count} items`}</span>
           <span className="cs-fl-actions">
-            {/* status icon by the ⋯: ✓ stored · ↑ uploading · ⚠ couldn't upload · ↓ transferring · saved-here */}
-            <StatusIcon status={status} />
+            {/* status icon by the ⋯: ✓ stored · ↑ uploading · ⚠ couldn't upload · ↓ transferring · saved-here.
+                An empty folder has nothing stored, so it shows no badge. */}
+            {!isEmptyFolder(row) && <StatusIcon status={status} />}
             <IconButton
               icon="more_horiz"
               label="Actions"
@@ -582,6 +607,15 @@ const FileList = ({
         </div>
       );
     })}
+    {/* striped filler so the zebra reads continuously into the empty space below the last row (and fills
+        the body of an empty folder). Shift by one band when the row count is odd so parity continues. */}
+    <div
+      className="cs-fl-filler"
+      aria-hidden="true"
+      onClick={onClearSelection}
+      onContextMenu={(e) => onRowContext(e)}
+      style={{ "--fill-shift": rows.length % 2 === 0 ? "0px" : "var(--cs-row-h)" } as React.CSSProperties}
+    />
   </div>
   );
 };
@@ -596,12 +630,18 @@ const RenameInput = ({
   onCancel: () => void;
 }): React.JSX.Element => {
   const [value, setValue] = useState(initial);
+  const inputRef = useRef<HTMLInputElement>(null);
+  // focus AND select the whole name on mount so it's highlighted, ready to replace (Finder "new folder" behaviour)
+  useEffect(() => inputRef.current?.select(), []);
   return (
     <input
+      ref={inputRef}
       className="cs-fl-rename"
       autoFocus
       value={value}
       onClick={(e) => e.stopPropagation()}
+      // double-click selects a word in the field; don't let it bubble to the row (which would drill in / open).
+      onDoubleClick={(e) => e.stopPropagation()}
       onChange={(e) => setValue(e.target.value)}
       onBlur={() => onCommit(value)}
       onKeyDown={(e) => {
@@ -620,14 +660,22 @@ const Gallery = ({
   onRowClick,
   onRowOpen,
   onRowContext,
+  onClearSelection,
 }: {
   rows: Row[];
   selected: Set<string>;
   onRowClick: (e: React.MouseEvent, row: Row, index: number) => void;
   onRowOpen: (row: Row) => void;
-  onRowContext: (e: React.MouseEvent, row: Row) => void;
+  /** Right-click handler — pass a tile's row for a row menu, omit it for the empty-area menu. */
+  onRowContext: (e: React.MouseEvent, row?: Row) => void;
+  onClearSelection: () => void;
 }): React.JSX.Element => (
-  <div className="cs-gallery">
+  // click / right-click on the blank grid area (not a tile) clears the selection / opens the empty menu
+  <div
+    className="cs-gallery"
+    onClick={(e) => e.target === e.currentTarget && onClearSelection()}
+    onContextMenu={(e) => e.target === e.currentTarget && onRowContext(e)}
+  >
     {rows.map((row, i) => {
       const key = rowKey(row);
       return (
@@ -644,7 +692,7 @@ const Gallery = ({
           <span className="cs-tile-thumb">{row.type === "folder" ? <Icon name="folder" size={40} /> : <KindIcon kind={row.file.kind} size={40} />}</span>
           <span className="cs-tile-foot">
             <span className="cs-tile-name">{row.name}</span>
-            <StatusIcon status={rowStatus(row)} />
+            {!isEmptyFolder(row) && <StatusIcon status={rowStatus(row)} />}
           </span>
         </button>
       );
@@ -654,8 +702,14 @@ const Gallery = ({
 
 // ── first run / empty folder ───────────────────────────────────────
 
-const FirstRun = ({ onChoose }: { onChoose: () => void }): React.JSX.Element => (
-  <button type="button" className="cs-firstrun" onClick={onChoose}>
+const FirstRun = ({
+  onChoose,
+  onContextMenu,
+}: {
+  onChoose: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+}): React.JSX.Element => (
+  <button type="button" className="cs-firstrun" onClick={onChoose} onContextMenu={onContextMenu}>
     <span className="cs-dropzone-badge">
       <Icon name="cloud_upload" size={38} />
     </span>
@@ -685,21 +739,27 @@ const MoveModal = ({
   onMove: (toDir: string) => void;
   onClose: () => void;
 }): React.JSX.Element => {
-  // Destinations = root + every folder, minus the moved folders themselves (can't move into yourself).
+  // Can't move a folder into itself or its own subtree.
   const moved = new Set(targets.filter((t) => t.kind === "folder").map((t) => t.path));
-  const dests = ["", ...allFolderPaths(files, virtualFolders)].filter(
-    (p) => !moved.has(p) && ![...moved].some((m) => p === m || p.startsWith(`${m}/`)),
-  );
+  const blocked = (p: string): boolean => [...moved].some((m) => p === m || p.startsWith(`${m}/`));
+  const [dest, setDest] = useState("");
   return (
-    <Modal title={`Move ${targets.length === 1 ? "1 item" : `${targets.length} items`} to…`} icon="drive_file_move" onClose={onClose}>
-      <div className="cs-stack">
-        {dests.map((d) => (
-          <button key={d || "root"} type="button" className="cs-menu-item" onClick={() => onMove(d)}>
-            <Icon name={d ? "folder" : "home" } size={20} />
-            {d ? d : "My Files (root)"}
-          </button>
-        ))}
-      </div>
+    <Modal
+      title={`Move ${targets.length === 1 ? "1 item" : `${targets.length} items`} to…`}
+      icon="drive_file_move"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" icon="check" disabled={blocked(dest)} onClick={() => onMove(dest)}>
+            Move here
+          </Button>
+        </>
+      }
+    >
+      <FolderTree files={files} virtualFolders={virtualFolders} value={dest} onChange={setDest} isDisabled={blocked} />
     </Modal>
   );
 };

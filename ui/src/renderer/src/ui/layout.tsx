@@ -57,19 +57,19 @@ export const Sidebar = ({
 );
 
 /**
- * A view's main column: TopBar (title + actions) over the content area. `title` is a node so a view
- * can put a breadcrumb there. `fill` swaps the stacked, max-width content column for a full-height
- * region the view lays out itself (the file browser) — the default keeps the cards-in-a-column rhythm.
+ * A view's main column: TopBar (title + actions) over the content area. The topbar is a single-line
+ * bar on every page — same height, same padding, same title baseline — so the chrome reads identically
+ * whether the title is a plain string or a breadcrumb node. Page-level intro copy lives in the body,
+ * not the chrome, so a one-page subtitle can't desync the bar. `fill` swaps the stacked, max-width
+ * content column for a full-height region the view lays out itself (the file browser).
  */
 export const Page = ({
   title,
-  subtitle,
   actions,
   fill = false,
   children,
 }: {
   title: ReactNode;
-  subtitle?: string;
   actions?: ReactNode;
   fill?: boolean;
   children: ReactNode;
@@ -78,7 +78,6 @@ export const Page = ({
     <header className="cs-topbar">
       <div className="cs-topbar-lead">
         {typeof title === "string" ? <h1 className="cs-topbar-title">{title}</h1> : title}
-        {subtitle && <p className="cs-topbar-sub">{subtitle}</p>}
       </div>
       {actions && <div className="cs-cluster">{actions}</div>}
     </header>

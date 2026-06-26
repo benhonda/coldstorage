@@ -57,6 +57,12 @@ export interface Source {
   id: string;
   kind: string;
   path: string | null;
+  /** Destination: the vault-relative folder this source's tree mounts under in My Files (e.g.
+   * "Backups/Photos"). Daemon-owned placement — set at add time, defaults to the source's basename. */
+  mountPath: string;
+  /** Per-source pause: when true the scheduled scan skips this folder (still registered, just not
+   * auto-synced). Persistent. Toggle via `pauseSource`/`resumeSource`. Manual deposits are unaffected. */
+  paused: boolean;
 }
 
 /**
@@ -78,7 +84,6 @@ export interface Status {
   filesTotal: number;
   filesArchived: number;
   blobsVerified: number;
-  paused: boolean;
   running: boolean;
   permanentlyFailedBlobs: number;
   sources: Source[];
@@ -125,7 +130,9 @@ export interface Commands {
   listFiles: { params: Record<string, never>; result: ListedFile[] };
   /** The storage/retrieval rate card (SSOT) the UI quotes cost+fee from. Static — fetched once on connect. */
   getPricing: { params: Record<string, never>; result: Pricing };
-  addSource: { params: { path: string }; result: Ack };
+  /** Register a watched folder. `mountPath` is the vault-relative destination its tree lands under in My
+   * Files; omit/empty → the daemon defaults to the source's basename (never root, to keep mounts namespaced). */
+  addSource: { params: { path: string; mountPath?: string }; result: Ack };
   removeSource: { params: { id: string }; result: Ack };
   /** The gitignore-style exclude patterns the scan/deposit skips (the daemon is the SSOT; defaults seeded
    * on first run). `addExclude`/`removeExclude` mutate the registry and emit `excludesChanged`. */
@@ -140,6 +147,10 @@ export interface Commands {
    * move to a sibling path). A cheap journal `relativePath` edit (no S3, no thaw, the blob never moves);
    * the stable file id is unchanged. Emits `filesChanged`. */
   movePath: { params: { from: string; to: string }; result: Ack };
+  /** Anchor an empty folder so it survives a reload: writes a path-only journal marker (no S3, no thaw).
+   * The tree is derived from file paths, so an empty folder otherwise has nothing to imply it. Idempotent
+   * on `path` (a no-op if a real file already sits there). Emits `filesChanged`. */
+  createFolder: { params: { path: string }; result: Ack };
   /** Delete (tombstone) the subtree at `path` (file or folder): it drops from `listFiles`, but the row +
    * blob mapping are kept (byte reclaim is a deferred repack/GC — deep storage has a 180-day minimum).
    * Emits `filesChanged`. */
@@ -149,8 +160,10 @@ export interface Commands {
     result: RestoreStep;
   };
   triggerNow: { params: Record<string, never>; result: Ack };
-  pause: { params: Record<string, never>; result: Ack };
-  resume: { params: Record<string, never>; result: Ack };
+  /** Per-source pause/resume — stop/resume auto-syncing one watched folder (it stays registered).
+   * Persisted in the journal; both emit `sourcesChanged` so the UI refetches. (There is no global pause.) */
+  pauseSource: { params: { id: string }; result: Ack };
+  resumeSource: { params: { id: string }; result: Ack };
 }
 
 export type Method = keyof Commands;
@@ -167,7 +180,8 @@ export type ParamsArg<M extends Method> =
 /**
  * Event name → data shape. Every value arrives as a string. Keys mirror the exact `DaemonEvent`
  * payloads in `DaemonService` (e.g. `runFinished` carries the three count strings it publishes).
- * `sourcesChanged` carries `added` XOR `removed` depending on which command fired it.
+ * `sourcesChanged` carries exactly one of `added`/`removed`/`paused`/`resumed` (the id), depending on
+ * which command fired it; the controller's response to any of them is to refetch `listSources`.
  */
 export interface DaemonEvents {
   runStarted: Record<string, never>;
@@ -181,18 +195,17 @@ export interface DaemonEvents {
    * batched (named in the failures panel + used to flip their rows); permanent failures are also persisted
    * as a per-file `failed` status in the journal, so the ⚠ survives the next `listFiles` read. */
   blobFailed: { blob: string; kind: "permanent" | "transient"; message: string; paths: string };
-  sourcesChanged: { added?: string; removed?: string };
+  sourcesChanged: { added?: string; removed?: string; paused?: string; resumed?: string };
   /** The exclude registry changed via add/removeExclude (carries the affected pattern for logging). The
    * controller's response is to re-read `listExcludes`; it also means the *next* scan applies the change. */
   excludesChanged: { added?: string; removed?: string };
-  /** The journal tree changed via a reorganize/delete (`movePath`/`deletePath`). Carries the affected path
-   * (`moved`+`to`, XOR `deleted`) for logging; the controller's response is to re-read `listFiles`. */
-  filesChanged: { moved?: string; to?: string; deleted?: string };
+  /** The journal tree changed via a reorganize/delete/new-folder (`movePath`/`deletePath`/`createFolder`).
+   * Carries the affected path (`moved`+`to`, XOR `deleted`, XOR `created`) for logging; the controller's
+   * response is to re-read `listFiles`. */
+  filesChanged: { moved?: string; to?: string; deleted?: string; created?: string };
   restoreRequested: { file: string; tier: string };
   restoreInProgress: { file: string };
   restoreCompleted: { file: string; out: string };
-  paused: Record<string, never>;
-  resumed: Record<string, never>;
   error: { message: string };
 }
 

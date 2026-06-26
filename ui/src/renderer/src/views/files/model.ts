@@ -85,6 +85,10 @@ export const targetOf = (row: Row): RowTarget =>
 /** A row's status — the folder rollup or the file's own — for the always-visible badge. */
 export const rowStatus = (row: Row): FileStatus => (row.type === "folder" ? row.status : row.file.status);
 
+/** A just-created folder with nothing under it yet — no upload status applies (nothing to store), so the
+ * row shows no badge. */
+export const isEmptyFolder = (row: Row): boolean => row.type === "folder" && row.empty;
+
 /** Split a path into its non-empty segments. "" → []. */
 export const segments = (p: string): string[] => p.split("/").filter(Boolean);
 
@@ -287,6 +291,14 @@ const STATUS_FROM_JOURNAL: Record<string, FileStatus> = {
   verifying: "uploading",
   failed: "failed",
 };
+
+/**
+ * A folder-marker row — the journal's `folder`-status anchor for a just-created EMPTY folder (so it
+ * survives a reload; the tree is otherwise derived from file paths). Its `relativePath` is the folder
+ * path. Markers are NOT files: split them out of `listFiles` and feed their paths into the browser's
+ * `virtualFolders` channel instead (see App + useFiles), so the tree derivation needs no special-casing.
+ */
+export const isFolderMarker = (row: ListedFile): boolean => row.status === "folder";
 
 /**
  * Map a raw `listFiles` row to the {@link ArchivedFile} the browser draws. The journal carries no

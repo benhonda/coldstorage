@@ -184,10 +184,26 @@ export const KeyValueRow = ({
 };
 
 /** Centered empty state — one calm sentence, no illustration. */
-export const EmptyState = ({ icon, title }: { icon: string; title: string }): React.JSX.Element => (
+/** Centered empty state: icon + title, with an optional supporting line and a call-to-action (e.g. the
+ * Add button) folded in, so the empty case is self-contained instead of leaning on surrounding chrome. */
+export const EmptyState = ({
+  icon,
+  title,
+  description,
+  action,
+}: {
+  icon: string;
+  title: string;
+  description?: string;
+  action?: ReactNode;
+}): React.JSX.Element => (
   <div className="cs-empty">
-    <Icon name={icon} />
-    <p className="cs-empty-title">{title}</p>
+    <Icon name={icon} outline />
+    <div className="cs-empty-copy">
+      <p className="cs-empty-title">{title}</p>
+      {description && <p className="cs-empty-text">{description}</p>}
+    </div>
+    {action && <div className="cs-empty-action">{action}</div>}
   </div>
 );
 

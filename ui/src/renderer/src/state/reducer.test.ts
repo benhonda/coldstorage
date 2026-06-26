@@ -13,10 +13,9 @@ const status: AppState["status"] = {
   filesTotal: 10,
   filesArchived: 4,
   blobsVerified: 4,
-  paused: false,
   running: false,
   permanentlyFailedBlobs: 0,
-  sources: [{ id: "s1", kind: "folder", path: "/a" }],
+  sources: [{ id: "s1", kind: "folder", path: "/a", mountPath: "a", paused: false }],
 };
 
 describe("connection + snapshot", () => {
@@ -27,13 +26,13 @@ describe("connection + snapshot", () => {
   test("statusLoaded sets the snapshot; sourcesLoaded patches sources onto it", () => {
     const s = run(
       { type: "statusLoaded", status },
-      { type: "sourcesLoaded", sources: [{ id: "s2", kind: "folder", path: "/b" }] },
+      { type: "sourcesLoaded", sources: [{ id: "s2", kind: "folder", path: "/b", mountPath: "b", paused: false }] },
     );
-    expect(s.status?.sources).toEqual([{ id: "s2", kind: "folder", path: "/b" }]);
+    expect(s.status?.sources).toEqual([{ id: "s2", kind: "folder", path: "/b", mountPath: "b", paused: false }]);
   });
 
   test("sourcesLoaded is held (no-op) until a snapshot exists", () => {
-    const s = run({ type: "sourcesLoaded", sources: [{ id: "s2", kind: "folder", path: "/b" }] });
+    const s = run({ type: "sourcesLoaded", sources: [{ id: "s2", kind: "folder", path: "/b", mountPath: "b", paused: false }] });
     expect(s.status).toBeNull();
     expect(s).toBe(initialState); // unchanged reference → store skips the notify
   });
@@ -114,16 +113,6 @@ describe("failures, pause, restore, error", () => {
       data: { blob: "b9", kind: "transient", message: "timeout", paths: "" },
     });
     expect(s.failures[0]?.files).toEqual([]);
-  });
-
-  test("paused/resumed flip the snapshot flag (no-op without a snapshot)", () => {
-    expect(run({ type: "event", name: "paused", data: {} }).status).toBeNull();
-    const s = run(
-      { type: "statusLoaded", status },
-      { type: "event", name: "paused", data: {} },
-    );
-    expect(s.status?.paused).toBe(true);
-    expect(reducer(s, { type: "event", name: "resumed", data: {} }).status?.paused).toBe(false);
   });
 
   test("restore* events fold into one keyed activity, latest state winning", () => {

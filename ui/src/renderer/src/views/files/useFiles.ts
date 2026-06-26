@@ -61,10 +61,13 @@ const applyRestore = (file: ArchivedFile, r: RestoreActivity | undefined): Archi
 
 export const useFiles = (
   daemonFiles: ArchivedFile[],
+  persistedFolders: string[],
   restores: Record<string, RestoreActivity>,
 ): FilesApi => {
   const [base, setBase] = useState<ArchivedFile[]>(daemonFiles);
-  const [virtualFolders, setVirtualFolders] = useState<string[]>([]);
+  // Empty folders, now journal-backed (status `folder` markers, fed in as `persistedFolders`). Held in
+  // local state so the reorganize ops can edit them optimistically; adopted from the daemon on each read.
+  const [virtualFolders, setVirtualFolders] = useState<string[]>(persistedFolders);
 
   // The daemon's `listFiles` is the source of truth — adopt each (re)read. Optimistic local ops
   // (deposit/move/rename/delete) edit `base` until the daemon supports them, then are reconciled to
@@ -72,6 +75,13 @@ export const useFiles = (
   useEffect(() => {
     setBase(daemonFiles);
   }, [daemonFiles]);
+
+  // Same adopt-on-read for empty folders: `newFolder` adds optimistically + fires the REAL `createFolder`,
+  // move/rename/delete edit optimistically + fire `movePath`/`deletePath` (which sweep the marker by path);
+  // the next `listFiles` reconciles to journal truth (now a no-op in the happy path — the folder persists).
+  useEffect(() => {
+    setVirtualFolders(persistedFolders);
+  }, [persistedFolders]);
 
   // Overlay live restore status by file id — keeps the tree truthful as a real thaw progresses.
   const files = useMemo(() => base.map((file) => applyRestore(file, restores[file.id])), [base, restores]);

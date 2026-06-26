@@ -18,7 +18,7 @@ import type { Exec } from "./views/types.ts";
 import { useAppState } from "./useStore.ts";
 import { useResizable } from "./ui/useResizable.ts";
 import { useFiles } from "./views/files/useFiles.ts";
-import { fileFromJournal, formatBytes, totalBytes } from "./views/files/model.ts";
+import { fileFromJournal, isFolderMarker, formatBytes, totalBytes } from "./views/files/model.ts";
 import { GettingBackPanel } from "./views/files/GettingBackPanel.tsx";
 import { FailuresPanel } from "./views/files/FailuresPanel.tsx";
 import type { BlobFailure } from "./state/reducer.ts";
@@ -60,8 +60,14 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
 
   // Cross-view state: the file tree (daemon `listFiles`, mapped to the browser model; live restore
   // status overlaid inside useFiles) + local settings.
-  const daemonFiles = useMemo(() => state.files.map(fileFromJournal), [state.files]);
-  const filesApi = useFiles(daemonFiles, state.restores);
+  // Folder markers (empty-folder anchors) aren't files — split them out and feed their paths into useFiles'
+  // virtualFolders channel, so an empty folder persists across reloads while the tree derivation stays simple.
+  const daemonFiles = useMemo(() => state.files.filter((r) => !isFolderMarker(r)).map(fileFromJournal), [state.files]);
+  const persistedFolders = useMemo(
+    () => state.files.filter(isFolderMarker).map((r) => r.relativePath),
+    [state.files],
+  );
+  const filesApi = useFiles(daemonFiles, persistedFolders, state.restores);
   // Excludes are daemon-backed now (the SSOT): list comes from the store, add/remove issue commands and
   // the `excludesChanged` refetch reconciles. No local state to drift.
   const settings: SettingsApi = {
@@ -171,6 +177,8 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           settings={settings}
           pricing={state.pricing}
           vaultBytes={vaultBytes}
+          files={filesApi.files}
+          virtualFolders={filesApi.virtualFolders}
         />
       )}
 

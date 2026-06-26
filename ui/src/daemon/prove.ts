@@ -48,7 +48,7 @@ if (typeof status.filesTotal !== "number" || !Array.isArray(status.sources)) {
 log(
   `getStatus → filesTotal=${status.filesTotal} archived=${status.filesArchived} ` +
     `verified=${status.blobsVerified} sources=${status.sources.length} ` +
-    `paused=${status.paused} running=${status.running} permFailed=${status.permanentlyFailedBlobs}`,
+    `running=${status.running} permFailed=${status.permanentlyFailedBlobs}`,
 );
 
 // 2 — listFiles round-trips: the journal-backed browse tree (paths/sizes/status, no S3/no thaw).

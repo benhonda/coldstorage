@@ -53,16 +53,22 @@ export const ContextMenu = ({
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === "Escape") onClose();
     };
-    // `click`/`contextmenu` on window dismiss; the panel stops propagation so its own clicks don't.
+    // Dismiss on any click/right-click outside the panel. CAPTURE phase + a containment check (not a
+    // bubble listener on window) so it still fires when the menu is opened from inside a dialog whose
+    // panel calls stopPropagation in the bubble phase — that would otherwise swallow the click and leave
+    // the menu stuck open. Inside-panel clicks are ignored here, so item handlers run normally.
+    const onClickAway = (e: MouseEvent): void => {
+      if (!ref.current?.contains(e.target as Node)) onClose();
+    };
     // `resize`/`scroll` close too — a stale anchor is worse than reopening.
-    window.addEventListener("click", close);
-    window.addEventListener("contextmenu", close);
+    document.addEventListener("click", onClickAway, true);
+    document.addEventListener("contextmenu", onClickAway, true);
     window.addEventListener("keydown", onKey);
     window.addEventListener("resize", close);
     window.addEventListener("scroll", close, true);
     return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("contextmenu", close);
+      document.removeEventListener("click", onClickAway, true);
+      document.removeEventListener("contextmenu", onClickAway, true);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", close);
       window.removeEventListener("scroll", close, true);
