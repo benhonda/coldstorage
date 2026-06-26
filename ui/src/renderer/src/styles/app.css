@@ -194,6 +194,10 @@
 }
 .cs-iconbtn:hover { background: var(--btn-secondary-bg-hover); }
 .cs-iconbtn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+/* Ghost overflow button — no filled disc, just the glyph (matches the file-row ⋯). For chrome that sits
+   inline beside content where a solid circle reads too heavy. */
+.cs-iconbtn--ghost { background: transparent; }
+.cs-iconbtn--ghost:hover { background: var(--surface-active); }
 
 /* ── Card (elevation by shadow + hairline, never by lightness alone) ─ */
 .cs-card {
@@ -269,9 +273,42 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-row-main { min-width: 0; flex: 1; }
 .cs-row-title { font: var(--type-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cs-row-sub { font: var(--type-mono); color: var(--text-tertiary); letter-spacing: var(--tracking-mono); }
-/* Paused watched folder: the name reads inactive, but its "not backing up" sub stays loud (amber, set inline). */
+/* Stopped watched folder: the row reads inactive (dimmed name + glyph); the amber "Not watching" badge
+   carries the loud signal that it isn't syncing. */
 .cs-row--paused .cs-row-title { color: var(--text-tertiary); }
 .cs-row--paused .csf-icon { opacity: 0.6; }
+
+/* Watched-folder row: a rounded light-blue tile holding the folder glyph, then source → destination. */
+.cs-watch-folder-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: var(--accent-subtle);
+}
+.cs-watch-folder-icon .csf-icon { color: var(--accent-text); }
+/* source = the watched Mac folder (prominent); dest = where it lands in My Files (muted, arrow-led). */
+.cs-watch-src {
+  font: var(--type-body);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cs-watch-dest {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font: var(--type-mono);
+  color: var(--text-tertiary);
+  letter-spacing: var(--tracking-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cs-watch-dest .csf-icon { color: var(--text-tertiary); flex: 0 0 auto; }
 
 /* ── EmptyState ─────────────────────────────────────────────────── */
 .cs-empty {
@@ -788,6 +825,7 @@ button.cs-kv:hover { background: var(--surface-hover); }
   font: var(--type-body);
   color: var(--text-primary);
   text-align: left;
+  white-space: nowrap;          /* labels read on one line — the menu grows to fit, never wraps */
   cursor: pointer;
 }
 .cs-menu-item:hover { background: var(--surface-hover); }

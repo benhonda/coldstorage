@@ -2,6 +2,8 @@
 
 ## 2026-06-26
 
+- feat: Settings watched-folder row redesign — each row is a rounded accent folder tile + source → destination (`~`-shortened Mac path over `↳ My Files / <mount>`), an at-a-glance status badge (Up to date · Syncing… · Not watching), and a ghost `⋯` menu with Stop / Start watching (the reversible per-source pause) and Remove… (confirm dialog — uploaded files stay in My Files). "Catch up now" → "Sync now". New `cs-iconbtn--ghost` primitive; `cs-menu-item` no longer wraps.
+- fix: watched-folder status badge + "Sync now" button now read the live run state (`run.active`), not `status.running` — which only updates on a getStatus poll and so never reflected an in-flight scan (the badge was stuck on "Up to date").
 - feat: Settings watched folders — `AddWatchedFolderModal` (native folder picker + a `FolderTree` drive-destination picker, shared with the move dialog) issues `addSource` with `mountPath`; per-folder pause/resume via `pauseSource`/`resumeSource`. Global pause/resume removed (`Status.paused` + `paused`/`resumed` events gone).
 - feat: My Files new-folder anchors via `createFolder` — the new-folder gesture issues the real daemon marker (optimistic empty-folder row + inline rename) instead of a local-only virtual path.
 - feat: daemon per-source pause + mount destinations — `SourceRow` gains journal-persisted `paused` + `mountPath` (replaces the transient global pause flag); `pauseSource`/`resumeSource` replace `pause`/`resume`; `addSource path= mountPath=`; `MountedSource` re-bases items so a watched folder lands at its chosen drive path and same-named files don't collide on `id`. Proven vs MinIO.

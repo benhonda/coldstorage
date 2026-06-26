@@ -166,9 +166,14 @@ row just selects it; the `⋯` per-row dropdown (and right-click) opens actions,
    stays certain.
 
 ## Settings
-- **Watched folders** (demoted auto-sync): list + Add folder; **"Catch up now" lives here** (only
-  meaningful with watched folders — no longer a home hero). Their *archived contents* still appear in My
-  Files (with a small "auto" marker); Settings holds the *rule*, My Files the *stuff*.
+- **Watched folders** (demoted auto-sync): a list + **Add a watched folder**; **"Sync now" lives here**
+  (a global catch-up; only meaningful with watched folders — no longer a home hero). Each row is a
+  **rounded accent folder tile + source → destination** (the `~`-shortened Mac path over `↳ My Files /
+  <mount>`), an at-a-glance **status badge** (🟢 Up to date · 🔵 Syncing… · 🟠 Not watching — driven by the
+  live `run.active`, since `status.running` only updates on a getStatus poll and so never reflects an
+  in-flight scan), and a ghost **⋯** holding **Stop / Start watching** (the reversible per-source pause)
+  and **Remove…** (a confirm dialog — uploaded files stay in My Files). Their *archived contents* still
+  appear in My Files (with a small "auto" marker); Settings holds the *rule*, My Files the *stuff*.
 - **Don't back up** (excludes): **friendly removable chips**, seeded with smart defaults
   (`node_modules` `.DS_Store` `*.tmp` `.git` …), "+ add a pattern" types a glob — a plain "don't back up"
   list to the non-technical user, real globs under the hood. Scope: **global + per-source** (per-source

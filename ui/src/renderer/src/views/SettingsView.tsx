@@ -6,14 +6,25 @@
  * daemon's pricing rate card).
  */
 import { useState } from "react";
-import type { Pricing, Source, Status } from "../../../shared/ipc.ts";
+import type { Pricing, Source } from "../../../shared/ipc.ts";
 import type { ViewProps } from "./types.ts";
 import type { ArchivedFile } from "./files/model.ts";
-import { formatBytes } from "./files/model.ts";
+import { baseName, formatBytes } from "./files/model.ts";
 import { formatUsd, monthlyStorageUsd } from "./files/pricing.ts";
 import { AddWatchedFolderModal } from "./files/AddWatchedFolderModal.tsx";
-import { Button, Card, Chip, EmptyState, Field, Icon, IconButton, KeyValueRow } from "../ui/primitives.tsx";
+import { ContextMenu, type MenuEntry } from "./files/ContextMenu.tsx";
+import { Badge, Button, Card, Chip, EmptyState, Field, Icon, IconButton, KeyValueRow, Modal } from "../ui/primitives.tsx";
 import { Page } from "../ui/layout.tsx";
+
+/** A watched folder's at-a-glance state. The daemon only exposes a GLOBAL `running` flag (no per-source
+ * progress), so a catch-up shows every un-paused folder as syncing — accurate, since a run scans them all.
+ * `paused` means the user stopped watching it (the folder + its uploaded files stay; it's just not synced). */
+type FolderState = "paused" | "syncing" | "current";
+const folderBadge: Record<FolderState, { tone: "warning" | "accent" | "success"; icon: string; label: string }> = {
+  paused: { tone: "warning", icon: "visibility_off", label: "Not watching" },
+  syncing: { tone: "accent", icon: "sync", label: "Syncing…" },
+  current: { tone: "success", icon: "cloud_done", label: "Up to date" },
+};
 
 /** The "Don't back up" surface — daemon-backed exclude patterns. The daemon is the SSOT (it seeds the
  * defaults + applies the patterns at scan time); the renderer just lists them and issues add/remove. */
@@ -27,7 +38,7 @@ export const SettingsView = ({
   api,
   exec,
   sources,
-  status,
+  running,
   settings,
   pricing,
   vaultBytes,
@@ -35,7 +46,9 @@ export const SettingsView = ({
   virtualFolders,
 }: ViewProps & {
   sources: Source[];
-  status: Status | null;
+  /** A scan is in flight — the LIVE run state (`state.run.active`), folded from runStarted/runFinished.
+   * NOT `status.running`, which only updates on a getStatus poll and so never flips during a quick run. */
+  running: boolean;
   settings: SettingsApi;
   pricing: Pricing;
   vaultBytes: number;
@@ -44,10 +57,43 @@ export const SettingsView = ({
 }): React.JSX.Element => {
   const [adding, setAdding] = useState(false);
   const [pattern, setPattern] = useState("");
-  const running = status?.running ?? false;
+  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuEntry[] } | null>(null);
+  const [removing, setRemoving] = useState<Source | null>(null);
 
-  /** A vault-relative path as breadcrumb-style text: "Backups/Photos" → "Backups / Photos". */
-  const asCrumbs = (m: string): string => m.split("/").filter(Boolean).join(" / ");
+  /** Shorten a macOS home path for display: /Users/ben/Downloads/x → ~/Downloads/x (full path on hover). */
+  const tildify = (p: string): string => p.replace(/^\/Users\/[^/]+\//, "~/");
+  /** Destination as breadcrumb text: "Backups/Photos" → "My Files / Backups / Photos". */
+  const dest = (m: string): string => ["My Files", ...m.split("/").filter(Boolean)].join(" / ");
+
+  const folderState = (s: Source): FolderState => (s.paused ? "paused" : running ? "syncing" : "current");
+
+  // Two distinct ideas, both behind the row's ⋯ (not bare buttons — neither should be a one-misclick):
+  //   · Stop/Start watching — a reversible pause. The folder stays in the list and its uploaded files stay
+  //     in My Files; it just isn't synced while stopped (the per-source `paused` flag).
+  //   · Remove — take the folder off the watch list entirely. Confirmed, since it's the deliberate one
+  //     (uploaded files still stay — the confirm says so).
+  const openRowMenu = (e: React.MouseEvent, s: Source): void => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        {
+          label: s.paused ? "Start watching" : "Stop watching",
+          icon: s.paused ? "play_arrow" : "pause",
+          onClick: () => exec(() => api.request(s.paused ? "resumeSource" : "pauseSource", { id: s.id })),
+        },
+        "separator",
+        { label: "Remove…", icon: "delete", danger: true, onClick: () => setRemoving(s) },
+      ],
+    });
+  };
+
+  const confirmRemove = (s: Source): void => {
+    exec(() => api.request("removeSource", { id: s.id }));
+    setRemoving(null);
+  };
 
   const addWatched = (path: string, mountPath: string): void => {
     exec(() => api.request("addSource", { path, mountPath }));
@@ -69,7 +115,7 @@ export const SettingsView = ({
         disabled={running || sources.length === 0}
         onClick={() => exec(() => api.request("triggerNow"))}
       >
-        {running ? "Catching up…" : "Catch up now"}
+        {running ? "Syncing…" : "Sync now"}
       </Button>
     </div>
   );
@@ -90,35 +136,39 @@ export const SettingsView = ({
               marker. Done-once folders don't need watching — just drop them into My Files.
             </p>
             <div>
-              {sources.map((s) => (
-              <div className={s.paused ? "cs-row cs-row--paused" : "cs-row"} key={s.id}>
-                <Icon name={s.paused ? "pause_circle" : "folder"} size={22} />
-                <div className="cs-row-main">
-                  <div className="cs-row-title">{s.path ?? s.id}</div>
-                  {/* Paused folders say so loudly (amber) — a backup tool must never look like it's
-                      protecting a folder it has quietly stopped syncing. */}
-                  <div className="cs-row-sub" style={s.paused ? { color: "var(--amber-500)" } : undefined}>
-                    {s.paused
-                      ? "Paused — not backing up"
-                      : s.mountPath
-                        ? `My Files / ${asCrumbs(s.mountPath)}`
-                        : s.kind}
+              {sources.map((s) => {
+                const st = folderState(s);
+                const badge = folderBadge[st];
+                return (
+                <div
+                  className={s.paused ? "cs-row cs-row--paused" : "cs-row"}
+                  key={s.id}
+                  onContextMenu={(e) => openRowMenu(e, s)}
+                >
+                  <span className="cs-watch-folder-icon">
+                    <Icon name="folder" size={22} />
+                  </span>
+                  <div className="cs-row-main">
+                    {/* source → destination: the watched folder on the Mac (~-shortened, full path on
+                        hover), then where its files land in My Files. */}
+                    <div className="cs-watch-src" title={s.path ?? s.id}>{tildify(s.path ?? s.id)}</div>
+                    <div className="cs-watch-dest">
+                      <Icon name="subdirectory_arrow_right" size={16} />
+                      {s.mountPath ? dest(s.mountPath) : "My Files"}
+                    </div>
                   </div>
+                  {/* Status at a glance — the badge carries the live state (amber Paused on a dimmed row
+                      reads loud, so the folder never looks protected when it isn't). */}
+                  <Badge tone={badge.tone} icon={badge.icon}>{badge.label}</Badge>
+                  <IconButton
+                    icon="more_horiz"
+                    label={`Actions for ${s.path ?? s.id}`}
+                    className="cs-iconbtn--ghost"
+                    onClick={(e) => openRowMenu(e, s)}
+                  />
                 </div>
-                <IconButton
-                  icon={s.paused ? "play_arrow" : "pause"}
-                  label={`${s.paused ? "Resume" : "Pause"} backing up ${s.path ?? s.id}`}
-                  onClick={() =>
-                    exec(() => api.request(s.paused ? "resumeSource" : "pauseSource", { id: s.id }))
-                  }
-                />
-                <IconButton
-                  icon="close"
-                  label={`Stop watching ${s.path ?? s.id}`}
-                  onClick={() => exec(() => api.request("removeSource", { id: s.id }))}
-                />
-              </div>
-              ))}
+                );
+              })}
             </div>
             <div style={{ marginTop: "var(--space-4)" }}>{addButton}</div>
           </>
@@ -140,6 +190,32 @@ export const SettingsView = ({
           onAdd={addWatched}
           onClose={() => setAdding(false)}
         />
+      )}
+
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
+
+      {removing && (
+        <Modal
+          title="Remove this watched folder?"
+          icon="delete"
+          onClose={() => setRemoving(null)}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setRemoving(null)}>
+                Keep watching
+              </Button>
+              <Button variant="danger" icon="delete" onClick={() => confirmRemove(removing)}>
+                Remove
+              </Button>
+            </>
+          }
+        >
+          <p className="cs-quote-lead">
+            coldstorage stops watching <strong>{baseName(removing.path ?? removing.id)}</strong> and takes it
+            off this list. Files it already uploaded stay in My Files — this doesn&apos;t delete anything
+            you&apos;ve backed up.
+          </p>
+        </Modal>
       )}
 
       <Card title="Don't back up">

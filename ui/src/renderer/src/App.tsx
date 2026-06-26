@@ -173,7 +173,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           api={api}
           exec={exec}
           sources={state.status?.sources ?? []}
-          status={state.status}
+          running={state.run?.active ?? false}
           settings={settings}
           pricing={state.pricing}
           vaultBytes={vaultBytes}
