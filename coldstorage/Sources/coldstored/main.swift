@@ -40,6 +40,17 @@ for root in folderRoots {
 // file deposits only. See ROADMAP / ELECTRON-UI-DESIGN.md.
 let platformSources: [IngestSource] = []
 
+// Photo deposit IS wired (explicit-deposit only): the `depositPhotos` command resolves picked asset IDs
+// to full-res originals via PhotoKit and archives only those. The resolver is Mac-only (PhotoKit); off
+// macOS it's nil and the command reports photos-unavailable. NOTE: actual Photos access still needs the
+// daemon binary to embed coldstored-Info.plist + be codesigned (recipe proven in phase0-photos-spike) —
+// see daemon:install. Until that lands, the resolver compiles + dispatches but PhotoKit will deny reads.
+#if canImport(Photos)
+let photoResolver: (any PhotoResolver)? = PhotoKitResolver()
+#else
+let photoResolver: (any PhotoResolver)? = nil
+#endif
+
 // Shared store + keys: the upload engine PUTs with them, the restore engine GETs/thaws + decrypts with
 // them. storageClass only affects PUT, so sharing one store is correct (restore ignores it).
 let store = S3Store(client: client, bucket: bucket, storageClass: endpoint != nil ? nil : .deepArchive)
@@ -53,7 +64,8 @@ let restoreEngine = RestoreEngine(journal: journal, store: store, keys: keys)
 let bus = EventBus()
 let daemon = DaemonService(engine: engine, restoreEngine: restoreEngine, journal: journal, bus: bus,
                            statusPath: env["COLDSTORE_STATUS"] ?? "status.json",
-                           platformSources: platformSources)
+                           platformSources: platformSources,
+                           photoResolver: photoResolver)
 
 // Control plane: a local unix socket the UI/cli drives (getStatus, add/removeSource, triggerNow, …).
 let socketPath = env["COLDSTORE_SOCKET"] ?? "coldstored.sock"

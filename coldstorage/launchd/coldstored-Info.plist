@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Embedded into coldstored's Mach-O __TEXT,__info_plist section (via -sectcreate in Package.swift) so the
+       unbundled daemon binary has a TCC identity. TCC keys the Photos grant to CFBundleIdentifier + the stable
+       code-signing identity, so this id must match the launchd Label and stay constant across releases (else the
+       grant resets and the daemon re-prompts). See phase0-photos-spike. -->
+  <key>CFBundleIdentifier</key>
+  <string>com.theadpharm.coldstored</string>
+  <key>CFBundleName</key>
+  <string>ColdStorage</string>
+  <!-- REQUIRED for any Photos access: the string the system permission prompt shows. No usage description =
+       no prompt = no access. Plain, factual — we only ever read the photos the user explicitly deposits. -->
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>ColdStorage reads the photos you pick so it can upload them to your offsite storage.</string>
+</dict>
+</plist>

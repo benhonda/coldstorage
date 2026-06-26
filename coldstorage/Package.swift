@@ -30,7 +30,22 @@ let package = Package(
         .executableTarget(name: "coldstore-cli", dependencies: ["ColdStorageCore"]),
         .executableTarget(name: "coldstore-restore", dependencies: ["ColdStorageCore"]),
         .executableTarget(name: "coldstorectl", dependencies: ["ColdStorageCore"]),
-        .executableTarget(name: "coldstored", dependencies: ["ColdStorageCore", "ColdStorageMac"]),
+        // The native Photos picker (UI option B). No deps — it just prints selected asset ids as JSON;
+        // AppKit/PhotosUI on macOS, a stub that exits 1 elsewhere. The daemon reads the picked originals.
+        .executableTarget(name: "coldstore-photo-picker"),
+        .executableTarget(
+            name: "coldstored", dependencies: ["ColdStorageCore", "ColdStorageMac"],
+            // Embed Info.plist into the Mach-O so the unbundled daemon has a TCC identity (required for any
+            // Photos read — the explicit photo-deposit path). macOS-only: -sectcreate is a Mach-O/ld64 flag,
+            // meaningless on Linux ELF, so the platform condition keeps Linux/CI builds clean. The codesign
+            // step (a STABLE identity, which TCC also keys to) lives in `task daemon:install`. See
+            // launchd/coldstored-Info.plist + phase0-photos-spike.
+            linkerSettings: [
+                .unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT",
+                              "-Xlinker", "__info_plist", "-Xlinker", "launchd/coldstored-Info.plist"],
+                             .when(platforms: [.macOS])),
+            ]
+        ),
         .testTarget(name: "ColdStorageCoreTests", dependencies: ["ColdStorageCore"]),
     ]
 )

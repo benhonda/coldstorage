@@ -55,4 +55,58 @@ public struct PhotoKitSource: IngestSource {
         }
     }
 }
+
+/// The Mac implementation of the core `PhotoResolver` seam — the consumer of the explicit photo-deposit
+/// path. Resolves explicitly-picked asset IDs into archivable items, reusing the proven
+/// `PhotoKitSource.stream(assetId:)` for the bytes (full-res original incl. iCloud download). Unlike
+/// `PhotoKitSource.enumerate()` (the whole library — DO NOT background-wire), this touches ONLY the picked
+/// assets, mirroring `ExplicitPathsSource`. A missing/denied/stale id is skipped (a stale pick from the UI
+/// must not abort the deposit). Size is left 0 here — unknown until streamed, and the integrity SHA-256 is
+/// computed from the real bytes at archive time (`UploadEngine.archive`), so `contentHash` is metadata only.
+public struct PhotoKitResolver: PhotoResolver {
+    public init() {}
+
+    public func resolve(assetIds: [String]) async -> [IngestItem] {
+        // Ensure the DAEMON's own Photos authorization first. `fetchAssets` neither prompts nor errors when
+        // unauthorized — it just returns empty — so without this a missing grant silently archives nothing.
+        // `requestAuthorization` prompts on first call (a launchd daemon CAN prompt + the grant persists —
+        // phase0-photos-spike) and is a no-op once decided. TCC keys the grant to the RESPONSIBLE process, so
+        // a grant the picker/terminal got does NOT transfer here — the daemon must request its own.
+        var status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        if status == .notDetermined {
+            status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+        }
+        // FULL access is REQUIRED for this flow: the user picks via PHPicker in a SEPARATE process, so the
+        // daemon must resolve arbitrary localIdentifiers. Under `.limited` it can only see its own selected
+        // set (not the picker's) → resolves nothing. Surface that explicitly instead of silently no-op'ing.
+        guard status == .authorized else {
+            let why = status == .limited
+                ? "Limited access granted, but the photo picker needs FULL access — change coldstored to “All Photos” in System Settings ▸ Privacy & Security ▸ Photos."
+                : "not authorized (status \(status.rawValue))."
+            FileHandle.standardError.write(Data("PhotoKitResolver: \(why) Archiving no photos.\n".utf8))
+            return []
+        }
+
+        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: assetIds, options: nil)
+        var items: [IngestItem] = []
+        fetched.enumerateObjects { asset, _, _ in
+            guard let res = PHAssetResource.assetResources(for: asset).first(where: { $0.type == .photo }) else { return }
+            // Capture only the Sendable id (PHAssetResource isn't Sendable) — `stream` re-resolves it on the
+            // consuming thread, exactly as the background source does.
+            let assetId = asset.localIdentifier
+            items.append(IngestItem(
+                id: assetId,
+                relativePath: res.originalFilename,
+                size: 0,                                    // unknown until streamed; real hash computed at archive time
+                contentHash: assetId,                       // metadata key only (see UploadEngine.archive)
+                createdAt: asset.creationDate,
+                isFavorite: asset.isFavorite,
+                metadata: ["uti": res.uniformTypeIdentifier],
+                open: { PhotoKitSource.stream(assetId: assetId) }))
+        }
+        // Observability: a count mismatch points at stale picks or (more likely) an id the daemon can't see.
+        FileHandle.standardError.write(Data("PhotoKitResolver: requested \(assetIds.count), resolved \(items.count).\n".utf8))
+        return items
+    }
+}
 #endif

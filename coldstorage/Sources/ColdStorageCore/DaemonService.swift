@@ -15,6 +15,9 @@ public actor DaemonService {
     let statusPath: String
     /// Platform sources that aren't path-based (Photos on macOS); folders come from the registry.
     let platformSources: [IngestSource]
+    /// Resolves explicitly-picked Photos assets for `depositPhotos` (Mac PhotoKit); nil off macOS, where
+    /// the command reports photos-unavailable. The seam that keeps PhotoKit out of this portable actor.
+    let photoResolver: (any PhotoResolver)?
 
     private var running = false
     // Blobs that failed *permanently* (config/logic — won't self-heal) this session. Skipped on the next
@@ -27,9 +30,11 @@ public actor DaemonService {
     private var triggerPending = false
 
     public init(engine: UploadEngine, restoreEngine: RestoreEngine, journal: Journal, bus: EventBus,
-                statusPath: String, platformSources: [IngestSource] = []) {
+                statusPath: String, platformSources: [IngestSource] = [],
+                photoResolver: (any PhotoResolver)? = nil) {
         self.engine = engine; self.restoreEngine = restoreEngine; self.journal = journal; self.bus = bus
         self.statusPath = statusPath; self.platformSources = platformSources
+        self.photoResolver = photoResolver
     }
 
     // MARK: - run loop
@@ -47,6 +52,22 @@ public actor DaemonService {
         let entries = paths.map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: $0), destDir: dir) }
         do { try await performRun(source: ExplicitPathsSource(entries: entries, exclude: excludeMatcher())) }
         catch { bus.publish(DaemonEvent("error", ["message": "deposit: \(error)"])) }
+    }
+
+    /// Archive an explicit set of picked Photos-library assets once — the photo analogue of `deposit`
+    /// (file drop). Resolves each asset to its full-res original via the injected `PhotoResolver` (Mac
+    /// PhotoKit) and runs the proven pipeline, journaling them under `dir` (the browser folder picked into)
+    /// so they appear in `listFiles`. Photos are EXPLICIT-deposit only (product decision 2026-06-26) — we
+    /// archive ONLY the picked assets, never the whole library. Non-throwing so the command can
+    /// fire-and-forget; a missing resolver (off macOS) or setup error surfaces as an `error` event, while
+    /// per-blob upload failures surface as `blobFailed` (same as any run).
+    func depositPhotos(assetIds: [String], into dir: String) async {
+        guard let resolver = photoResolver else {
+            bus.publish(DaemonEvent("error", ["message": "depositPhotos: Photos ingest is unavailable on this platform"]))
+            return
+        }
+        do { try await performRun(source: PhotoDepositSource(resolver: resolver, assetIds: assetIds, destDir: dir)) }
+        catch { bus.publish(DaemonEvent("error", ["message": "depositPhotos: \(error)"])) }
     }
 
     /// One pass of the pipeline over `source` — the shared core of a scheduled run and an ad-hoc deposit.
@@ -288,6 +309,16 @@ public actor DaemonService {
             // Fire-and-forget: archiving can be slow, so don't block the reply. Progress + outcome flow as
             // runStarted/fileArchived/blobFailed/runFinished events (exactly like a scheduled run).
             Task { await self.deposit(paths: paths, into: dest) }
+            return AnyEncodable(AckDTO(ok: true))
+        case "depositPhotos":
+            // Explicit photo deposit (the photo analogue of `deposit`): archive these PICKED Photos assets
+            // once, under browser folder `dest` ("" = root). `assetIds` is newline-joined Photos
+            // localIdentifiers. Only the picked assets are read — never the whole library (product decision
+            // 2026-06-26). Fire-and-forget: progress/outcome flow as run*/fileArchived/blobFailed events.
+            guard let raw = p["assetIds"], !raw.isEmpty else { throw ColdStorageError.staging("depositPhotos requires params.assetIds (newline-joined Photos localIdentifiers)") }
+            let assetIds = raw.split(separator: "\n").map(String.init)
+            let dest = p["dest"] ?? ""
+            Task { await self.depositPhotos(assetIds: assetIds, into: dest) }
             return AnyEncodable(AckDTO(ok: true))
         case "movePath":
             // Reorganize: relocate the subtree at `from` → `to` (a file/folder move OR rename). A cheap

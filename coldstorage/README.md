@@ -8,14 +8,16 @@ to the four pillars: simple, best-practice, DRY, type-safe.
 ```
 Sources/ColdStorageCore/   # portable — builds/tests on Linux + macOS
   Models, IngestSource, LocalDirSource, Crypto, BlobPlanner, Journal, S3Store, UploadEngine, RestoreEngine
+  ExplicitPathsSource, PhotoResolver/PhotoDepositSource   # ad-hoc deposit sources (files / picked photos)
   DaemonService            # the run loop + command surface (registry-driven, wakeable, paused/running)
   EventBus, ControlProtocol, UnixSocket, ControlServer, ControlClient   # the unix-socket control plane
-Sources/ColdStorageMac/    # macOS-only adapter (PhotoKitSource, FolderWatcher), canImport-guarded
+Sources/ColdStorageMac/    # macOS-only adapter (PhotoKitSource + PhotoKitResolver, FolderWatcher), canImport-guarded
 Sources/coldstore-cli/     # portable runner — archive a dir to S3/MinIO from your container
 Sources/coldstore-restore/ # get one file back — thaw (if Deep Archive) → ranged GET → decrypt → verify
 Sources/coldstorectl/      # thin client over the daemon control socket (getStatus, addSource, watch, …)
+Sources/coldstore-photo-picker/  # macOS native PHPickerViewController helper → prints picked {id,name} (option B)
 Sources/coldstored/        # daemon entrypoint — wires engine + EventBus + ControlServer (+ FSEvents on Mac)
-launchd/                   # com.theadpharm.coldstored.plist.template (LaunchAgent; task daemon:install)
+launchd/                   # plist template + coldstored-Info.plist (TCC identity for Photos); task daemon:install
 Tests/                     # Core tests (swift-testing — NOT XCTest; XCTest deadlocks on Linux, see ROADMAP)
 ```
 
@@ -106,14 +108,15 @@ socket up, Electron UI connected). **PhotoKit mechanics are PROVEN** (2026-06-26
 real Mac — durable Photos TCC grant under launchd + full-res iCloud original). **But photos are now
 EXPLICIT-deposit only, never auto-watched** (product decision 2026-06-26): the daemon's old
 `COLDSTORE_PHOTOS=1` enumerate-everything path is **removed** (`platformSources` is empty); the explicit
-photo-deposit path is to-build (see ROADMAP). `FolderWatcher` FSEvents *behavior* is still runtime-untested.
+photo-deposit path is **built + proven end-to-end on a real Mac (2026-06-26)** — native PHPicker helper →
+`depositPhotos` → daemon archives full-res originals (see ROADMAP). `FolderWatcher` FSEvents *behavior* is still runtime-untested.
 `S3ClientConfiguration`/`*Input` deprecation warnings remain (SDK moved to `S3ClientConfig`); a non-urgent cleanup.
 
 ## Known stubs / TODO (next build chunks)
-- Live Deep Archive **thaw** leg — `RestoreObject` + hours-long retrieval is built but only exercisable on real AWS.
+- Live Deep Archive **thaw** leg — first REAL thaw was requested + AWS-confirmed 2026-06-26 (`restore` → `state=thawRequested`; `head-object` showed `ongoing-request="true"` on the live vault). The download/landing leg was NOT yet confirmed (the ~12h Standard clock; re-run `task daemon:live -- restore …` or `task daemon:restore-wait` to finish). See ROADMAP.
 - **UI contract gaps** (the Electron panel needs these — see [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md) "Daemon contract gaps"):
   - **`newFolder`** (a virtual path, still local-only); a per-run **filesFailed** count (blobs ≠ files); **skipped-count reporting** (how many files the excludes filtered). *(`move`/`rename`/`delete` landed as `movePath`/`deletePath`; **exclude get/set**, the **restore fee** estimate, and **bytes/size** all landed too — see below.)*
-- **Explicit photo-deposit path** (photos are user-selected, never auto-watched — decision 2026-06-26): UI photo picker → daemon `depositPhotos` command reusing the proven `PhotoKitSource.stream(assetId:)`, plus its prerequisite (embed `coldstored-Info.plist` via `-sectcreate` + codesign `coldstored` — recipe proven in `phase0-photos-spike`). Also: real plaintext hashing pre-pass for photos (currently keys on `localIdentifier`). `FolderWatcher` FSEvents behavior runtime-untested (compiles on macOS now).
+- **Explicit photo-deposit path — DONE ✅ + proven on a real Mac (2026-06-26):** native PHPicker helper (`coldstore-photo-picker`) → `depositPhotos` → daemon resolves picked ids via `PhotoKitResolver` + archives full-res originals; `coldstored-Info.plist` embedded (`-sectcreate`) + codesigned `--identifier`-pinned in `task daemon:install`. *Remaining TODOs in this area:* (a) `FolderWatcher` FSEvents behavior runtime-untested; (b) real plaintext hashing pre-pass for photos (the `contentHash` metadata still keys on `localIdentifier` — integrity is unaffected, it's computed from real bytes at archive time, but a real hash would dedup re-deposits better).
 - Cross-blob concurrency + adaptive throughput (engine is correct sequential today); persistent poison-blob state (skip-list is in-memory).
 - R2 bucket for photo **thumbnails** + cross-device index portability (the browse *tree* is journal-backed and needs no R2).
 
