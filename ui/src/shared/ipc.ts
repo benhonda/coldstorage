@@ -43,10 +43,19 @@ export const IPC = {
   chooseFolder: "dialog:chooseFolder",
   /** invoke: the OS Downloads directory (default save destination). */
   downloadsDir: "dialog:downloadsDir",
+  /** invoke: present the native Photos picker; resolves to the picked asset ids (or [] if cancelled). */
+  pickPhotos: "photos:pick",
 } as const;
 
 /** Whether the main process currently holds a live socket to `coldstored`. */
 export type ConnectionState = "connecting" | "connected" | "disconnected";
+
+/** One photo picked in the native picker: the PHAsset localIdentifier (drives the daemon `depositPhotos`)
+ * + a suggested name for the instant optimistic row label (the daemon resolves the true filename later). */
+export interface PhotoPick {
+  id: string;
+  name: string;
+}
 
 /**
  * The surface the preload exposes on `window.coldstore` via `contextBridge`. The renderer's entire
@@ -67,6 +76,10 @@ export interface ColdstoreApi {
   chooseFolder(defaultPath?: string): Promise<string | null>;
   /** The OS Downloads directory (absolute) — the default save destination for a requested copy. */
   getDownloadsDir(): Promise<string>;
+  /** Present the native macOS Photos picker (option B) and resolve to the picked photos ({id, name}), or []
+   * if the user cancelled / picked nothing. The renderer shows optimistic rows from the names and hands the
+   * ids to the daemon's `depositPhotos`. macOS-only — rejects if the picker helper is missing or fails. */
+  pickPhotos(): Promise<PhotoPick[]>;
   /** Absolute path of a dropped/picked File. Electron 32+ removed `File.path`; resolved in the preload
    * via `webUtils.getPathForFile`. "" if it can't be resolved (e.g. a synthetic File). Sync — no daemon. */
   pathForFile(file: File): string;

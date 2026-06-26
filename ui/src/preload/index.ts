@@ -31,6 +31,7 @@ const api: ColdstoreApi = {
 
   chooseFolder: (defaultPath?: string) => ipcRenderer.invoke(IPC.chooseFolder, defaultPath),
   getDownloadsDir: () => ipcRenderer.invoke(IPC.downloadsDir),
+  pickPhotos: () => ipcRenderer.invoke(IPC.pickPhotos),
   // Resolve a dropped/picked File → absolute path here in the preload (webUtils isn't in the renderer).
   pathForFile: (file: File) => webUtils.getPathForFile(file),
 };

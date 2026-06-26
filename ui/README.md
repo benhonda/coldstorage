@@ -62,7 +62,8 @@ src/main/         Electron main process — owns the one DaemonClient + the wind
   index.ts      app/window lifecycle; dials the daemon (autoReconnect); secure webPreferences.
   bridge.ts     DaemonClient ⇄ IPC: ipcMain.handle(commands) + webContents push(events/lifecycle).
   system.ts     OS integrations the renderer can't reach: native folder picker + Downloads dir
-                (dialog.showOpenDialog), used by the request-a-copy dialog. Not daemon-related.
+                (dialog.showOpenDialog), plus the native Photos picker — spawns the coldstore-photo-picker
+                helper (COLDSTORE_PHOTO_PICKER) and returns the picked {id,name} for "Add photos…". Not daemon-related.
 
 src/preload/
   index.ts      contextBridge.exposeInMainWorld("coldstore", api) — the ONLY thing the renderer sees.

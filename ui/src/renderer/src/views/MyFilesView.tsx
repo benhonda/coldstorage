@@ -233,6 +233,7 @@ export const MyFilesView = ({
         ]
       : [
           { label: "Upload files…", icon: "upload", onClick: () => fileInput.current?.click() },
+          { label: "Add photos…", icon: "photo_library", onClick: addPhotos },
           { label: "New folder", icon: "create_new_folder", onClick: doNewFolder },
         ];
     setMenu({ x: e.clientX, y: e.clientY, items });
@@ -270,6 +271,26 @@ export const MyFilesView = ({
     if (!file.srcPath) return;
     filesApi.setDepositStatus([file.id], "uploading");
     issueDeposit([file.srcPath], parentOf(file.relativePath), [file.id]);
+  };
+  // ── add photos (native picker) — REAL explicit photo deposit (option B) ──
+  // The native macOS Photos picker (a separate helper) returns PHAsset localIdentifiers; the daemon
+  // resolves them to full-res originals (incl. iCloud download) and archives ONLY those into the current
+  // folder. No optimistic rows: unlike a file drop we don't know each photo's name/size until the daemon
+  // resolves the asset, so picked photos appear via the normal runStarted→fileArchived→runFinished
+  // refetch. Cancel / pick-nothing is a no-op (the helper returns []).
+  const addPhotos = (): void => {
+    exec(async () => {
+      const picks = await api.pickPhotos();
+      if (picks.length === 0) return; // cancelled / nothing picked
+      // Optimistic "uploading" rows appear instantly (same machinery as a file drop) — labelled by the
+      // picker's suggested names; the daemon resolves the true filenames and the runFinished refetch swaps
+      // these rows for the real archived ones (✓). No srcPath: a photo retry would re-pick, not re-send a path.
+      const optimisticIds = filesApi.deposit(picks.map((p) => ({ name: p.name })), dir);
+      await api.request("depositPhotos", { assetIds: picks.map((p) => p.id).join("\n"), dest: dir }).catch((e: unknown) => {
+        filesApi.setDepositStatus(optimisticIds, "failed"); // command rejected → ⚠ on the rows, don't leave them stuck "uploading"
+        throw e;
+      });
+    });
   };
   const onDrop = (e: React.DragEvent): void => {
     e.preventDefault();

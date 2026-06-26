@@ -1,14 +1,44 @@
 /**
  * Main-process OS integrations the renderer needs but can't reach (no Node in the renderer): the native
- * folder picker and the default Downloads directory, used by the request-a-copy dialog. Kept separate
- * from {@link registerBridge} (which is strictly the daemon-client seam).
+ * folder picker, the default Downloads directory (request-a-copy dialog), and the native Photos picker
+ * (the explicit photo-deposit path, UI option B). Kept separate from {@link registerBridge} (which is
+ * strictly the daemon-client seam).
  */
+import { execFile } from "node:child_process";
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
-import { IPC } from "../shared/ipc.ts";
+import { IPC, type PhotoPick } from "../shared/ipc.ts";
+
+/** Resolve the native Photos-picker helper binary: `$COLDSTORE_PHOTO_PICKER`, else the dev build path
+ * (mirrors how the daemon socket path is resolved in the client). The Taskfile sets the env for ui:dev/ui:live. */
+const photoPickerPath = (): string =>
+  process.env.COLDSTORE_PHOTO_PICKER ?? "coldstorage/.build/release/coldstore-photo-picker";
+
+const isPhotoPick = (x: unknown): x is PhotoPick =>
+  typeof x === "object" && x !== null && typeof (x as PhotoPick).id === "string" && typeof (x as PhotoPick).name === "string";
+
+/** Spawn the picker helper and parse its stdout (a JSON array of {id, name}). The helper prints `[]` on
+ * cancel/empty (exit 0); a non-zero exit (e.g. run off a Mac, or a missing binary) rejects so the renderer
+ * can surface it. The shape is validated so a malformed line can't reach the daemon as a bogus payload. */
+const pickPhotos = (): Promise<PhotoPick[]> =>
+  new Promise((resolve, reject) => {
+    execFile(photoPickerPath(), { timeout: 5 * 60_000 }, (err, stdout) => {
+      if (err) return reject(err);
+      try {
+        const parsed: unknown = JSON.parse(stdout.trim() || "[]");
+        if (!Array.isArray(parsed) || !parsed.every(isPhotoPick)) {
+          return reject(new Error("photo picker returned an unexpected payload"));
+        }
+        resolve(parsed);
+      } catch (e) {
+        reject(e instanceof Error ? e : new Error(String(e)));
+      }
+    });
+  });
 
 /** Register the dialog/path handlers. Returns a disposer that removes them. */
 export const registerSystemHandlers = (): (() => void) => {
   ipcMain.handle(IPC.downloadsDir, () => app.getPath("downloads"));
+  ipcMain.handle(IPC.pickPhotos, () => pickPhotos());
 
   ipcMain.handle(IPC.chooseFolder, async (_e, defaultPath?: string) => {
     const opts: Electron.OpenDialogOptions = {
@@ -25,5 +55,6 @@ export const registerSystemHandlers = (): (() => void) => {
   return () => {
     ipcMain.removeHandler(IPC.downloadsDir);
     ipcMain.removeHandler(IPC.chooseFolder);
+    ipcMain.removeHandler(IPC.pickPhotos);
   };
 };

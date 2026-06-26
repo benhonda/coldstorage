@@ -143,6 +143,12 @@ export interface Commands {
    * without registering a watched source. `src` is newline-joined absolute paths. Fire-and-forget — the
    * reply just acks; progress/outcome arrive as runStarted/fileArchived/blobFailed/runFinished events. */
   deposit: { params: { src: string; dest: string }; result: Ack };
+  /** Explicit photo deposit (the photo analogue of `deposit`): archive these PICKED Photos-library assets
+   * once under `dest` (a vault-relative folder; "" = root). `assetIds` is newline-joined Photos
+   * localIdentifiers — only the picked assets are read, never the whole library. Mac-only (PhotoKit); off
+   * macOS the daemon emits an `error` event. Fire-and-forget — the reply acks, progress/outcome arrive as
+   * runStarted/fileArchived/blobFailed/runFinished events (exactly like `deposit`). */
+  depositPhotos: { params: { assetIds: string; dest: string }; result: Ack };
   /** Reorganize: relocate the subtree at `from` → `to` — a file/folder MOVE or RENAME (a rename is just a
    * move to a sibling path). A cheap journal `relativePath` edit (no S3, no thaw, the blob never moves);
    * the stable file id is unchanged. Emits `filesChanged`. */
