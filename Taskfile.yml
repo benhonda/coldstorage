@@ -207,6 +207,10 @@ tasks:
       DATA_DIR: '{{.HOME}}/Library/Application Support/ColdStorage'
       PLIST: '{{.HOME}}/Library/LaunchAgents/com.theadpharm.coldstored.plist'
     cmds:
+      # NOTE: when the explicit photo-deposit path lands, this build step must embed
+      # launchd/coldstored-Info.plist (via `-sectcreate __TEXT __info_plist`) + codesign coldstored with
+      # a stable identity — the prerequisite for ANY Photos access (proven recipe in phase0-photos-spike).
+      # Left out for now: the daemon is folders + explicit-file-deposit only, so it needs neither.
       - swift build -c release
       - mkdir -p "{{.DATA_DIR}}" "{{.HOME}}/Library/LaunchAgents"
       - |

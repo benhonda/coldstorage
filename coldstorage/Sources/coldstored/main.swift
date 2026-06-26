@@ -1,9 +1,8 @@
 import Foundation
 import AWSS3
 import ColdStorageCore
-#if canImport(Photos)
-import Photos
-import ColdStorageMac
+#if canImport(CoreServices)
+import ColdStorageMac   // FolderWatcher (FSEvents). Also home of PhotoKitSource, for the future explicit photo-deposit path.
 #endif
 
 // The macOS daemon (launchd LaunchAgent). Env-configured so it's also runnable in a Linux container
@@ -30,25 +29,16 @@ for root in folderRoots {
     try journal.addSource(SourceRow(id: abs, kind: .folder, path: abs, mountPath: URL(fileURLWithPath: abs).lastPathComponent))
 }
 
-// Platform sources: the Photos library on macOS, once authorized (TCC). Folders come from the registry.
-var platformSources: [IngestSource] = []
-#if canImport(Photos)
-// Opt-in (COLDSTORE_PHOTOS=1). Requesting Photos authorization needs an NSPhotoLibraryUsageDescription
-// in the app's Info.plist — a plain `swift run` binary has none, so the call hard-crashes the process
-// (SIGTRAP) the instant it touches Photos. The launchd .app bundle (which carries the plist) sets the
-// flag; dev/CLI runs stay folders-only. Wiring the bundle + plist is the PhotoKit spike (see ROADMAP).
-if env["COLDSTORE_PHOTOS"] != nil {
-    let photoStatus = await withCheckedContinuation { (c: CheckedContinuation<PHAuthorizationStatus, Never>) in
-        PHPhotoLibrary.requestAuthorization(for: .readWrite) { c.resume(returning: $0) }
-    }
-    if photoStatus == .authorized || photoStatus == .limited {
-        platformSources.append(PhotoKitSource())
-        print("coldstored: Photos authorized — including the library")
-    } else {
-        print("coldstored: Photos not authorized — folders only")
-    }
-}
-#endif
+// Platform sources: folders come from the journal registry. Photos are deliberately NOT a background
+// source — auto-archiving the whole library is invasive and is explicitly rejected (product decision
+// 2026-06-26). Photo ingest is EXPLICIT: the user picks specific photos to deposit and only those are
+// archived, mirroring file deposit (ExplicitPathsSource). The OS grant may be full-library (one tap,
+// less friction) but breadth of grant ≠ permission to slurp — we only ever read what was deposited.
+// That deposit path will reuse the proven PhotoKitSource.stream(assetId:) (durable launchd TCC grant +
+// full-res iCloud originals — see phase0-photos-spike) and needs the daemon binary to embed
+// coldstored-Info.plist + be codesigned; it is not built yet, so the daemon archives folders + explicit
+// file deposits only. See ROADMAP / ELECTRON-UI-DESIGN.md.
+let platformSources: [IngestSource] = []
 
 // Shared store + keys: the upload engine PUTs with them, the restore engine GETs/thaws + decrypts with
 // them. storageClass only affects PUT, so sharing one store is correct (restore ignores it).

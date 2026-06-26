@@ -3,8 +3,14 @@ import Foundation
 import Photos
 import ColdStorageCore
 
-/// Production macOS source: streams full-res originals from the Photos library (incl. iCloud download).
-/// Implements the same `IngestSource` boundary the portable core depends on.
+/// Streams full-res originals from the Photos library (incl. iCloud download) — the proven mechanics
+/// from phase0-photos-spike.
+///
+/// IMPORTANT (product decision 2026-06-26): photo ingest is **explicit-deposit only**. `enumerate()`
+/// returns the WHOLE library, so this MUST NOT be wired into the daemon's background run loop —
+/// auto-archiving everything is invasive and rejected. The explicit photo-deposit path (user picks
+/// photos → archive only those, mirroring `ExplicitPathsSource`) is the intended consumer and should
+/// reuse `stream(assetId:)` for the bytes; until it's built, the daemon never instantiates this.
 public struct PhotoKitSource: IngestSource {
     public init() {}
 

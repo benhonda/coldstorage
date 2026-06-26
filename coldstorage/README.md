@@ -102,16 +102,18 @@ MinIO (archive + resume + round-trip restore; IPC add/remove/trigger + restart p
 The restore path is now **thaw-aware** — Deep Archive thaw logic is unit-tested, the download/decrypt leg is
 round-trip-proven, but the live multi-hour `RestoreObject` retrieval needs real AWS to exercise. The macOS
 adapter (`PhotoKitSource`, `FolderWatcher`) now **compiles + the daemon runs on macOS** (2026-06-21, control
-socket up, Electron UI connected); their actual PhotoKit/FSEvents *behavior* is still runtime-untested.
-Photos auth is opt-in behind `COLDSTORE_PHOTOS=1` — a bare CLI run SIGTRAPs without an Info.plist usage
-description (see ROADMAP). `S3ClientConfiguration`/`*Input` deprecation warnings remain (SDK moved to
-`S3ClientConfig`); a non-urgent cleanup.
+socket up, Electron UI connected). **PhotoKit mechanics are PROVEN** (2026-06-26, `phase0-photos-spike` on a
+real Mac — durable Photos TCC grant under launchd + full-res iCloud original). **But photos are now
+EXPLICIT-deposit only, never auto-watched** (product decision 2026-06-26): the daemon's old
+`COLDSTORE_PHOTOS=1` enumerate-everything path is **removed** (`platformSources` is empty); the explicit
+photo-deposit path is to-build (see ROADMAP). `FolderWatcher` FSEvents *behavior* is still runtime-untested.
+`S3ClientConfiguration`/`*Input` deprecation warnings remain (SDK moved to `S3ClientConfig`); a non-urgent cleanup.
 
 ## Known stubs / TODO (next build chunks)
 - Live Deep Archive **thaw** leg — `RestoreObject` + hours-long retrieval is built but only exercisable on real AWS.
 - **UI contract gaps** (the Electron panel needs these — see [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md) "Daemon contract gaps"):
   - **`newFolder`** (a virtual path, still local-only); a per-run **filesFailed** count (blobs ≠ files); **skipped-count reporting** (how many files the excludes filtered). *(`move`/`rename`/`delete` landed as `movePath`/`deletePath`; **exclude get/set**, the **restore fee** estimate, and **bytes/size** all landed too — see below.)*
-- `PhotoKitSource`: real plaintext hashing pre-pass (currently keys on `localIdentifier`) + launchd `.app`/Info.plist so Photos auth works (CLI run SIGTRAPs); `FolderWatcher` FSEvents behavior runtime-untested (compiles on macOS now).
+- **Explicit photo-deposit path** (photos are user-selected, never auto-watched — decision 2026-06-26): UI photo picker → daemon `depositPhotos` command reusing the proven `PhotoKitSource.stream(assetId:)`, plus its prerequisite (embed `coldstored-Info.plist` via `-sectcreate` + codesign `coldstored` — recipe proven in `phase0-photos-spike`). Also: real plaintext hashing pre-pass for photos (currently keys on `localIdentifier`). `FolderWatcher` FSEvents behavior runtime-untested (compiles on macOS now).
 - Cross-blob concurrency + adaptive throughput (engine is correct sequential today); persistent poison-blob state (skip-list is in-memory).
 - R2 bucket for photo **thumbnails** + cross-device index portability (the browse *tree* is journal-backed and needs no R2).
 
