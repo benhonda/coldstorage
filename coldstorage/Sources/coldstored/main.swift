@@ -76,7 +76,19 @@ print("coldstored: control socket at \(socketPath)")
 #if canImport(CoreServices)
 // FSEvents: re-scan promptly when a watched folder changes, instead of only on the interval.
 let watcher = FolderWatcher { Task { await daemon.trigger() } }
-watcher.start(paths: try journal.listSources().compactMap { $0.kind == .folder ? $0.path : nil })
+// The set of folders to watch = active (non-paused) folder sources — same predicate the run loop scans
+// by (DaemonService.currentSource), so a paused/"Not watching" folder doesn't wake the daemon either.
+@Sendable func watchedFolderPaths() -> [String] {
+    ((try? journal.listSources()) ?? []).compactMap { $0.kind == .folder && !$0.paused ? $0.path : nil }
+}
+watcher.start(paths: watchedFolderPaths())
+// Re-arm on registry changes: addSource/removeSource/pause/resume all emit `sourcesChanged`, so a newly
+// added (or unpaused) folder is FSEvents-watched without a daemon restart — and a removed/paused one
+// stops. `setPaths` is a no-op when the resulting set is unchanged.
+bus.subscribe { event in
+    guard event.name == "sourcesChanged" else { return }
+    watcher.setPaths(watchedFolderPaths())
+}
 #endif
 
 if env["COLDSTORE_ONCE"] != nil {

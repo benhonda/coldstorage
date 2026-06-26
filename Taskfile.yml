@@ -138,8 +138,19 @@ tasks:
       COLDSTORE_ENDPOINT: http://localhost:9000
       COLDSTORE_SOURCES: testdata          # one-time seed → journal registry (SSOT thereafter)
       COLDSTORE_SOCKET: coldstored.sock
-      COLDSTORE_INTERVAL: "30"
+      COLDSTORE_INTERVAL: '{{.INTERVAL | default "30"}}'   # overridable (fsevents-test bumps it to 600)
     cmds:
+      - swift run coldstored
+
+  daemon:fsevents-test:
+    desc: "[macOS] Runtime-test the FSEvents FolderWatcher: runs coldstored vs MinIO with a 600s poll interval (so a prompt re-scan can ONLY be FSEvents, never the poll). Drop a file into coldstorage/testdata in Finder → expect a 'FolderWatcher: FSEvents fired' line + a runStarted→fileArchived→runFinished within ~1-2s. Watch events in another terminal with `task daemon:ctl -- watch`."
+    dir: coldstorage
+    deps: [daemon:minio, daemon:unlock]   # unlock: clear a stale .build/.lock so the build can't wedge at 0% CPU
+    vars:
+      INTERVAL: "600"   # huge on purpose: a re-scan within seconds of a drop is FSEvents, not the poll
+    env: *daemon_run_env
+    cmds:
+      - mkdir -p testdata   # FSEvents needs the watched path to exist before the stream starts
       - swift run coldstored
 
   daemon:run:bg:

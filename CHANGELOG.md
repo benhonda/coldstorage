@@ -2,6 +2,8 @@
 
 ## 2026-06-26
 
+- feat: FSEvents `FolderWatcher` proven + re-armable on a real Mac — a watched-folder drop fires a sub-second re-scan under a deliberate 600s poll (`task daemon:fsevents-test`, stderr breadcrumb on fire); new serial-queue-confined `setPaths` (dedup-guarded teardown+rebuild) + `coldstored` subscribing to `sourcesChanged` re-arms the watcher to the active non-paused folder set without a daemon restart; `COLDSTORE_INTERVAL` now overridable.
+- docs: ROADMAP dev-env gotchas — VS Code resurrects stale 9000/9001 port-forwards (blocks native MinIO bind; fix `remote.restoreForwardedPorts:false`) and cold-build `swift run` SwiftPM `.build`-lock contention looks hung (run `daemon:build` first).
 - chore: Taskfile photo + restore ops — `daemon:photo-picker`/`daemon:deposit-photos-ipc`/`daemon:reset-photos-tcc`/`daemon:logs`; `daemon:install` now codesigns `coldstored` (`--identifier`-pinned) + embeds the Info.plist; `daemon:verify-aws` (HEAD a live vault blob for StorageClass/thaw) + `daemon:restore-wait` (hands-off Glacier thaw poller); `COLDSTORE_PHOTO_PICKER` env for `ui:dev`/`ui:live`.
 - docs: ROADMAP — photo-deposit PROVEN end-to-end on a real Mac; first real Deep Archive upload DONE (4 files live in the prod vault) + first real thaw in flight (AWS-confirmed `ongoing-request`).
 - feat: UI "Add photos…" in My Files — native picker (`window.coldstore.pickPhotos` → `main/system.ts` spawns `coldstore-photo-picker`, shape-validated) → `depositPhotos` into the current folder with optimistic rows; new `PhotoPick` IPC type + preload binding.
