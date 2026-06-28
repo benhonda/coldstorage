@@ -121,7 +121,8 @@ public final class Journal: @unchecked Sendable {
             }
         }
         var rows: [[String: Any]] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        var rc = sqlite3_step(stmt)
+        while rc == SQLITE_ROW {
             var row: [String: Any] = [:]
             for col in 0..<sqlite3_column_count(stmt) {
                 let nm = String(cString: sqlite3_column_name(stmt, col))
@@ -133,6 +134,14 @@ public final class Journal: @unchecked Sendable {
                 }
             }
             rows.append(row)
+            rc = sqlite3_step(stmt)
+        }
+        // A write (INSERT/UPDATE/DELETE) yields SQLITE_DONE on the first step and never enters the loop; a
+        // SELECT ends on SQLITE_DONE after its rows. Anything else (SQLITE_CONSTRAINT, SQLITE_ERROR, …) is a
+        // real failure — surface it. The journal is the SPOF: a silently-swallowed write is how a marker (or
+        // any row) can vanish without a trace, so we refuse to report success on a step that didn't finish.
+        guard rc == SQLITE_DONE else {
+            throw ColdStorageError.staging("sqlite step: \(String(cString: sqlite3_errmsg(db)))")
         }
         return rows
     }
@@ -159,8 +168,11 @@ public final class Journal: @unchecked Sendable {
     /// blob). The tree is derived from file paths, so an empty folder otherwise has nothing to imply it and
     /// vanishes when the UI's local state resets. Idempotent: a no-op if any LIVE row already sits at `path`
     /// (a real file there already implies the folder, or the marker already exists) — so we never stack
-    /// duplicate markers. The id is derived from the path purely for readability; `movePath` keeps it stable
-    /// across a rename (path moves, id doesn't) exactly like a file's id.
+    /// duplicate markers. The id is a fresh UUID, NOT derived from the path: `movePath` keeps a marker's id
+    /// stable while rewriting its `relativePath`, so a path-derived id would outlive its path and collide the
+    /// next time the same path is reused (e.g. another "untitled folder" after the first was renamed) — the
+    /// `INSERT` would hit the PK and (silently, pre-hardening) drop the marker. The `folder:` prefix is kept
+    /// purely so the row is greppable as a marker; the human-readable path lives in `relativePath`.
     public func createFolder(path: String) throws {
         lock.lock(); defer { lock.unlock() }
         // Skip if any LIVE row already sits AT the path (the marker exists) or UNDER it (a real file already
@@ -173,7 +185,7 @@ public final class Journal: @unchecked Sendable {
         guard exists.isEmpty else { return }
         try run("""
             INSERT INTO files(id, relativePath, size, contentHash, status) VALUES(?1,?2,0,'',?3)
-            """, [.text("folder:\(path)"), .text(path), .text(FileStatus.folder.rawValue)])
+            """, [.text("folder:\(UUID().uuidString)"), .text(path), .text(FileStatus.folder.rawValue)])
     }
 
     // MARK: - sources registry (SSOT for what we archive; mutated via IPC)

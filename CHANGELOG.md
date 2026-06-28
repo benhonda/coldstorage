@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-06-28
+
+- fix: `createFolder` marker uses a fresh UUID id (was path-derived) — a re-used path (every "New folder" defaults to "untitled folder") collided the PK after the first was renamed, so the 2nd marker's `INSERT` silently dropped and the UI's new folder flickered-then-vanished; `Journal.run` now surfaces a non-`DONE` sqlite step (`SQLITE_CONSTRAINT`/etc.) instead of swallowing it. New `JournalFolderTests` regression coverage.
+
 ## 2026-06-27
 
 - docs: live Deep Archive **thaw** PROVEN END-TO-END on the real prod vault — after the ~12h Standard clock a single `restore` re-run returned `state=restored` with a verified file written (`RestoreEngine` won't write on hash mismatch, so it's the byte-identical proof); the whole pipeline now has zero unproven legs vs real AWS (ROADMAP Built/Stub + `coldstorage/README.md` flip the thaw stub to DONE).
