@@ -128,6 +128,18 @@ describe("failures, pause, restore, error", () => {
     expect(run({ type: "event", name: "error", data: { message: "boom" } }).lastError).toBe("boom");
   });
 
+  test("error carries an actionable code (drives the toast recovery action)", () => {
+    const s = run({ type: "event", name: "error", data: { message: "no access", code: "photosAccessDenied" } });
+    expect(s.lastError).toBe("no access");
+    expect(s.lastErrorCode).toBe("photosAccessDenied");
+  });
+
+  test("a code-less error clears any prior code (no stale recovery button)", () => {
+    const withCode = run({ type: "event", name: "error", data: { message: "x", code: "photosAccessDenied" } });
+    const cleared = reducer(withCode, { type: "event", name: "error", data: { message: "y" } });
+    expect(cleared.lastErrorCode).toBeNull();
+  });
+
   test("sourcesChanged is a no-op in the reducer (controller refetches)", () => {
     const base = run({ type: "statusLoaded", status });
     expect(reducer(base, { type: "event", name: "sourcesChanged", data: { added: "/c" } })).toBe(base);

@@ -23,7 +23,7 @@ const status = (sources: Source[]): Status => ({
 const makeApi = (initial: ConnectionState) => {
   let connectionState = initial;
   let sources: Source[] = [{ id: "s1", kind: "folder", path: "/a", mountPath: "a", paused: false }];
-  let files: ListedFile[] = [{ id: "f1", relativePath: "a/b.jpg", size: 10, status: "archived", blobId: "blob-1" }];
+  let files: ListedFile[] = [{ id: "f1", relativePath: "a/b.jpg", size: 10, status: "archived", blobId: "blob-1", date: null }];
   const calls: string[] = [];
   let eventCb: ((name: never, data: never) => void) | null = null;
   let lifeCb: ((s: ConnectionState) => void) | null = null;
@@ -93,8 +93,8 @@ describe("controller sync policy", () => {
     const before = f.calls.filter((c) => c === "listFiles").length;
 
     f.setFiles([
-      { id: "f1", relativePath: "a/b.jpg", size: 10, status: "archived", blobId: "blob-1" },
-      { id: "f2", relativePath: "a/c.jpg", size: 20, status: "archived", blobId: "blob-2" },
+      { id: "f1", relativePath: "a/b.jpg", size: 10, status: "archived", blobId: "blob-1", date: null },
+      { id: "f2", relativePath: "a/c.jpg", size: 20, status: "archived", blobId: "blob-2", date: null },
     ]);
     f.fireEvent("runFinished", { filesArchived: "2", filesTotal: "2", blobsFailed: "0" });
     await tick();
@@ -109,7 +109,7 @@ describe("controller sync policy", () => {
     await tick();
     const before = f.calls.filter((c) => c === "listFiles").length;
 
-    f.setFiles([{ id: "f1", relativePath: "moved/b.jpg", size: 10, status: "archived", blobId: "blob-1" }]);
+    f.setFiles([{ id: "f1", relativePath: "moved/b.jpg", size: 10, status: "archived", blobId: "blob-1", date: null }]);
     f.fireEvent("filesChanged", { moved: "a/b.jpg", to: "moved/b.jpg" });
     await tick();
     expect(f.calls.filter((c) => c === "listFiles").length).toBe(before + 1);

@@ -381,13 +381,27 @@ button.cs-kv:hover { background: var(--surface-hover); }
   /* light-red error surface (opaque mix), calm not alarm-red */
   background: color-mix(in srgb, var(--negative) 10%, var(--surface-raised));
   border: 1px solid color-mix(in srgb, var(--negative) 28%, var(--border-subtle));
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-xl);
   box-shadow: var(--shadow-toast);
   font: var(--type-body);
   z-index: 20;
 }
-.cs-toast .csf-icon { color: var(--negative); }
-.cs-toast-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-toast .csf-icon { flex: none; color: var(--negative); }
+/* Wrap the full message (up to a few lines) — never truncate it; the user must be able to read what failed. */
+.cs-toast-msg { flex: 1; min-width: 0; line-height: 1.4; overflow-wrap: anywhere; }
+/* Inline recovery action (e.g. "Open Photos settings") — a quiet pill, never an alarm-red button. */
+.cs-toast-action {
+  flex: none;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--negative) 32%, var(--border-subtle));
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-primary);
+  font: var(--type-label);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cs-toast-action:hover { background: color-mix(in srgb, var(--negative) 12%, transparent); }
 
 /* ── helpers ────────────────────────────────────────────────────── */
 .cs-mono { font: var(--type-mono); letter-spacing: var(--tracking-mono); font-feature-settings: "tnum" 1; }

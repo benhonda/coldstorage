@@ -49,6 +49,9 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   const state = useAppState(store);
   const [route, setRoute] = useState<Route>("files");
   const [cmdError, setCmdError] = useState<string | null>(null);
+  // The error message the user has dismissed. Daemon `error` events are live state (no id/timestamp), so
+  // we gate on the message string: a new, distinct error re-shows the toast; re-firing the same one stays hidden.
+  const [dismissedError, setDismissedError] = useState<string | null>(null);
   const [queueOpen, setQueueOpen] = useState(false);
   const [failuresOpen, setFailuresOpen] = useState(false);
   const { width: sidebarWidth, onResizeStart } = useResizable("cs-sidebar-width", 232, 200, 360);
@@ -133,9 +136,13 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
     </>
   );
 
-  // Most recent of the two error channels; the user can dismiss the command one (daemon `error` events
-  // reflect live state, so they clear when the next event arrives).
-  const toast = cmdError ?? state.lastError;
+  // Most recent of the two error channels (command rejection over live daemon error), hidden once dismissed.
+  const liveError = cmdError ?? state.lastError;
+  const toast = liveError && liveError !== dismissedError ? liveError : null;
+  const dismissToast = (): void => {
+    setCmdError(null);
+    setDismissedError(liveError);
+  };
 
   return (
     <div className="cs-shell" style={{ gridTemplateColumns: `${sidebarWidth}px 1fr` }}>
@@ -186,7 +193,14 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
         <div className="cs-toast" role="alert">
           <Icon name="error" size={20} />
           <span className="cs-toast-msg">{toast}</span>
-          {cmdError && <IconButton icon="close" label="Dismiss" onClick={() => setCmdError(null)} />}
+          {/* Recovery for a denied/limited Photos grant — jumps straight to the right Settings pane (the daemon
+              can't re-prompt once denied). Only on the live daemon-error channel, not a command rejection. */}
+          {!cmdError && state.lastErrorCode === "photosAccessDenied" && (
+            <button type="button" className="cs-toast-action" onClick={() => void api.openPhotosSettings()}>
+              Open Photos settings
+            </button>
+          )}
+          <IconButton icon="close" label="Dismiss" onClick={dismissToast} />
         </div>
       )}
     </div>

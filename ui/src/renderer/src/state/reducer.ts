@@ -68,6 +68,9 @@ export interface AppState {
   /** Keyed by file id. */
   restores: Record<string, RestoreActivity>;
   lastError: string | null;
+  /** The `code` of the most recent daemon `error` (or null) — drives a recovery action on the toast, e.g.
+   * `photosAccessDenied` → an "Open Photos settings" button. Cleared (→ null) by any error without a code. */
+  lastErrorCode: DaemonEvents["error"]["code"] | null;
 }
 
 export const initialState: AppState = {
@@ -80,6 +83,7 @@ export const initialState: AppState = {
   failures: [],
   restores: {},
   lastError: null,
+  lastErrorCode: null,
 };
 
 /** Distributive event action — keeps each event name correlated with its own data shape (for the
@@ -221,7 +225,7 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
       return upsertRestore(state, action.data.file, { state: "completed", out: action.data.out });
 
     case "error":
-      return { ...state, lastError: action.data.message };
+      return { ...state, lastError: action.data.message, lastErrorCode: action.data.code ?? null };
 
     case "sourcesChanged":
       // Authoritative refresh is the controller's job (it re-issues listSources); no fold here.

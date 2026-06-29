@@ -45,6 +45,8 @@ export const IPC = {
   downloadsDir: "dialog:downloadsDir",
   /** invoke: present the native Photos picker; resolves to the picked asset ids (or [] if cancelled). */
   pickPhotos: "photos:pick",
+  /** invoke: open System Settings ▸ Privacy & Security ▸ Photos (recovery for a denied/limited grant). */
+  openPhotosSettings: "photos:openSettings",
 } as const;
 
 /** Whether the main process currently holds a live socket to `coldstored`. */
@@ -80,6 +82,9 @@ export interface ColdstoreApi {
    * if the user cancelled / picked nothing. The renderer shows optimistic rows from the names and hands the
    * ids to the daemon's `depositPhotos`. macOS-only — rejects if the picker helper is missing or fails. */
   pickPhotos(): Promise<PhotoPick[]>;
+  /** Open System Settings ▸ Privacy & Security ▸ Photos so the user can grant ColdStorage full Photos
+   * access — the recovery path when a deposit failed with `photosAccessDenied`. macOS-only. */
+  openPhotosSettings(): Promise<void>;
   /** Absolute path of a dropped/picked File. Electron 32+ removed `File.path`; resolved in the preload
    * via `webUtils.getPathForFile`. "" if it can't be resolved (e.g. a synthetic File). Sync — no daemon. */
   pathForFile(file: File): string;

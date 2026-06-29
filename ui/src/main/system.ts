@@ -5,13 +5,23 @@
  * strictly the daemon-client seam).
  */
 import { execFile } from "node:child_process";
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { join } from "node:path";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { IPC, type PhotoPick } from "../shared/ipc.ts";
 
-/** Resolve the native Photos-picker helper binary: `$COLDSTORE_PHOTO_PICKER`, else the dev build path
- * (mirrors how the daemon socket path is resolved in the client). The Taskfile sets the env for ui:dev/ui:live. */
+/** Deep-link straight to System Settings ▸ Privacy & Security ▸ Photos (macOS). The recovery path the
+ * toast offers when a photo deposit failed for lack of (full) Photos access — `tccutil`/relaunch can't
+ * re-prompt a denied grant, so the user flips it here. */
+const PHOTOS_PRIVACY_PANE = "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos";
+
+/** Resolve the native Photos-picker helper binary. Precedence: explicit `$COLDSTORE_PHOTO_PICKER` (set by
+ * the Taskfile for ui:dev/ui:live) → the bundled copy under `Contents/Resources/bin` in a packaged app
+ * (see electron-builder.yml extraResources) → the dev `.build/release` path. */
 const photoPickerPath = (): string =>
-  process.env.COLDSTORE_PHOTO_PICKER ?? "coldstorage/.build/release/coldstore-photo-picker";
+  process.env.COLDSTORE_PHOTO_PICKER ??
+  (app.isPackaged
+    ? join(process.resourcesPath, "bin", "coldstore-photo-picker")
+    : "coldstorage/.build/release/coldstore-photo-picker");
 
 const isPhotoPick = (x: unknown): x is PhotoPick =>
   typeof x === "object" && x !== null && typeof (x as PhotoPick).id === "string" && typeof (x as PhotoPick).name === "string";
@@ -39,6 +49,7 @@ const pickPhotos = (): Promise<PhotoPick[]> =>
 export const registerSystemHandlers = (): (() => void) => {
   ipcMain.handle(IPC.downloadsDir, () => app.getPath("downloads"));
   ipcMain.handle(IPC.pickPhotos, () => pickPhotos());
+  ipcMain.handle(IPC.openPhotosSettings, () => shell.openExternal(PHOTOS_PRIVACY_PANE));
 
   ipcMain.handle(IPC.chooseFolder, async (_e, defaultPath?: string) => {
     const opts: Electron.OpenDialogOptions = {
@@ -56,5 +67,6 @@ export const registerSystemHandlers = (): (() => void) => {
     ipcMain.removeHandler(IPC.downloadsDir);
     ipcMain.removeHandler(IPC.chooseFolder);
     ipcMain.removeHandler(IPC.pickPhotos);
+    ipcMain.removeHandler(IPC.openPhotosSettings);
   };
 };

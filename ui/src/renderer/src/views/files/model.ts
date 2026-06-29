@@ -301,8 +301,9 @@ const STATUS_FROM_JOURNAL: Record<string, FileStatus> = {
 export const isFolderMarker = (row: ListedFile): boolean => row.status === "folder";
 
 /**
- * Map a raw `listFiles` row to the {@link ArchivedFile} the browser draws. The journal carries no
- * timestamp on the `files` row today, so `date` is null (renders "—"); kind is derived from the name.
+ * Map a raw `listFiles` row to the {@link ArchivedFile} the browser draws. `date` is the journal's capture
+ * time (epoch seconds) rendered to an ISO string for {@link formatDate}; null when the journal has none
+ * (legacy rows predating the column → "—"). `kind` is derived from the name.
  */
 export const fileFromJournal = (row: ListedFile): ArchivedFile => ({
   id: row.id,
@@ -310,5 +311,5 @@ export const fileFromJournal = (row: ListedFile): ArchivedFile => ({
   size: row.size,
   status: STATUS_FROM_JOURNAL[row.status] ?? "uploading",
   kind: kindFromName(row.relativePath),
-  date: null,
+  date: row.date != null ? new Date(row.date * 1000).toISOString() : null,
 });

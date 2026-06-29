@@ -123,10 +123,11 @@ describe("aggregates", () => {
       size: 4_100_000,
       status: "archived",
       blobId: "blob-1",
+      date: null,
       ...over,
     });
 
-    test("maps an archived row to a frozen photo, kind from name, no date", () => {
+    test("maps an archived row to a frozen photo, kind from name, null date when absent", () => {
       const f = fileFromJournal(row());
       expect(f).toEqual({
         id: "f1",
@@ -136,6 +137,11 @@ describe("aggregates", () => {
         kind: "photo",
         date: null,
       });
+    });
+
+    test("renders the journal's epoch-seconds date to an ISO string", () => {
+      // 1_700_000_000 s → 2023-11-14T22:13:20.000Z (epoch is seconds; JS Date wants ms).
+      expect(fileFromJournal(row({ date: 1_700_000_000 })).date).toBe("2023-11-14T22:13:20.000Z");
     });
 
     test("coarsens in-pipeline statuses to uploading", () => {

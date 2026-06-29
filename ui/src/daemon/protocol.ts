@@ -77,6 +77,8 @@ export interface ListedFile {
   size: number;
   status: string;
   blobId: string | null;
+  /** Capture/creation date as Unix epoch SECONDS, or null when the journal has none (legacy rows). */
+  date: number | null;
 }
 
 /** `StatusDTO` — the daemon snapshot. `permanentlyFailedBlobs > 0` ⇒ a config/logic fault to fix. */
@@ -212,7 +214,11 @@ export interface DaemonEvents {
   restoreRequested: { file: string; tier: string };
   restoreInProgress: { file: string };
   restoreCompleted: { file: string; out: string };
-  error: { message: string };
+  /** A daemon-side error surfaced to the user as a toast. `code`, when present, marks a KNOWN, actionable
+   * failure the UI can offer recovery for — `photosAccessDenied` (the daemon lacks full Photos access →
+   * show an "Open Photos settings" button) and `photosNoneResolved` (none of the picked photos could be
+   * read). Absent `code` ⇒ a plain message with no action. */
+  error: { message: string; code?: "photosAccessDenied" | "photosNoneResolved" };
 }
 
 export type DaemonEventName = keyof DaemonEvents;
