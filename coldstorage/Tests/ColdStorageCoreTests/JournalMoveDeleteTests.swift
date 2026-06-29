@@ -89,7 +89,7 @@ import Foundation
     @Test func deleteFileTombstonesButKeepsRowAndBlob() throws {
         let j = try tempJournal()
         try j.upsert([item("a/x.jpg", path: "a/x.jpg")])
-        try j.markFileArchived("a/x.jpg", blobId: "blob-1", offset: 0, length: 1, firstFrame: 0, plaintextSha256: "sha")
+        try j.markFileArchived("a/x.jpg", blobId: "blob-1", offset: 0, length: 1, firstFrame: 0, plaintextSha256: "sha", size: 1)
         try j.deletePath("a/x.jpg")
         // Gone from the browse tree + the count…
         #expect(try j.listFiles().isEmpty)

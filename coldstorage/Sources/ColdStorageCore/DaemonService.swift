@@ -67,6 +67,18 @@ public actor DaemonService {
             return
         }
         do { try await performRun(source: PhotoDepositSource(resolver: resolver, assetIds: assetIds, destDir: dir)) }
+        catch let e as ColdStorageError {
+            // Photo-access / nothing-resolved are user-recoverable: surface the bare message (already a clean
+            // sentence) plus a `code` the UI keys an action off (e.g. `photosAccessDenied` → "Open Photos
+            // settings"). Other ColdStorageErrors fall through to the generic surface below.
+            var data = ["message": e.description]
+            switch e {
+            case .photosAccess: data["code"] = "photosAccessDenied"
+            case .photosNoneResolved: data["code"] = "photosNoneResolved"
+            default: break
+            }
+            bus.publish(DaemonEvent("error", data))
+        }
         catch { bus.publish(DaemonEvent("error", ["message": "depositPhotos: \(error)"])) }
     }
 
@@ -88,9 +100,21 @@ public actor DaemonService {
                                                        "bytes": "\(p.uploaded)", "totalBytes": "\(p.total)"]))
         }
         defer { running = false }
-        let failures = try await engine.run(source: source,
+        // Always close out a `runStarted` with a `runFinished`, even when the run THROWS before any blob
+        // (e.g. a photo deposit that can't read the library). Otherwise the UI is stuck "syncing" forever and
+        // the optimistic rows never reconcile. We re-throw so the caller still surfaces the cause as an
+        // `error` event — runFinished just lets the UI leave the running state + re-read the tree.
+        let failures: [BlobFailure]
+        do {
+            failures = try await engine.run(source: source,
                                             skipBlobIds: permanentlyFailedBlobs,
                                             onFileArchived: onFile, onProgress: onProgress)
+        } catch {
+            let s = try? journal.summary()
+            bus.publish(DaemonEvent("runFinished", ["filesArchived": "\(s?.archived ?? 0)",
+                                                    "filesTotal": "\(s?.total ?? 0)", "blobsFailed": "0"]))
+            throw error
+        }
         for f in failures {
             // Name the affected files by path (newline-joined) so a live watcher flips their rows + lists them
             // in the failures panel without waiting for the next listFiles read.
@@ -189,7 +213,9 @@ public actor DaemonService {
     private struct SourceDTO: Encodable { let id, kind: String; let path: String?; let mountPath: String; let paused: Bool }
     /// One browsable file (the `listFiles` element). `status` is the raw journal `FileStatus` — the UI
     /// coarsens it to its own browse states (frozen/uploading/…); we expose what we actually know.
-    private struct FileDTO: Encodable { let id, relativePath: String; let size: Int; let status: String; let blobId: String? }
+    /// `date` is the capture/creation time as Unix epoch SECONDS (nil when unknown). Epoch keeps the wire
+    /// type trivial + lossless; the renderer owns ISO/display formatting (epoch × 1000 → JS `Date`).
+    private struct FileDTO: Encodable { let id, relativePath: String; let size: Int; let status: String; let blobId: String?; let date: Int? }
     private struct AckDTO: Encodable { let ok: Bool }
     /// One idempotent restore step's outcome. `state` ∈ restored | thawRequested | thawInProgress —
     /// re-issue `restore` until it's `restored`. `out` is set only when bytes landed; `tier`/`typicalWait`
@@ -248,7 +274,8 @@ public actor DaemonService {
         case "listFiles":
             // The browsable tree, straight from the journal — paths/sizes/status, no S3, no thaw.
             return AnyEncodable(try journal.listFiles().map {
-                FileDTO(id: $0.id, relativePath: $0.relativePath, size: $0.size, status: $0.status.rawValue, blobId: $0.blobId)
+                FileDTO(id: $0.id, relativePath: $0.relativePath, size: $0.size, status: $0.status.rawValue, blobId: $0.blobId,
+                        date: $0.createdAt)
             })
         case "getPricing":
             // The storage/retrieval rate card (SSOT) the UI shows cost/fee from — static list-price estimate,

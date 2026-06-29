@@ -66,7 +66,7 @@ public struct PhotoKitSource: IngestSource {
 public struct PhotoKitResolver: PhotoResolver {
     public init() {}
 
-    public func resolve(assetIds: [String]) async -> [IngestItem] {
+    public func resolve(assetIds: [String]) async throws -> [IngestItem] {
         // Ensure the DAEMON's own Photos authorization first. `fetchAssets` neither prompts nor errors when
         // unauthorized — it just returns empty — so without this a missing grant silently archives nothing.
         // `requestAuthorization` prompts on first call (a launchd daemon CAN prompt + the grant persists —
@@ -78,13 +78,16 @@ public struct PhotoKitResolver: PhotoResolver {
         }
         // FULL access is REQUIRED for this flow: the user picks via PHPicker in a SEPARATE process, so the
         // daemon must resolve arbitrary localIdentifiers. Under `.limited` it can only see its own selected
-        // set (not the picker's) → resolves nothing. Surface that explicitly instead of silently no-op'ing.
+        // set (not the picker's) → resolves nothing. THROW (not return []) so the deposit surfaces a clear,
+        // recoverable error to the UI instead of silently flashing the picked rows then dropping them. The
+        // message is the user-facing sentence the toast shows; the `photosAccess` case drives the UI's
+        // "Open Photos settings" action (the deep-link), so we don't spell out the menu path here.
         guard status == .authorized else {
             let why = status == .limited
-                ? "Limited access granted, but the photo picker needs FULL access — change coldstored to “All Photos” in System Settings ▸ Privacy & Security ▸ Photos."
-                : "not authorized (status \(status.rawValue))."
-            FileHandle.standardError.write(Data("PhotoKitResolver: \(why) Archiving no photos.\n".utf8))
-            return []
+                ? "ColdStorage has limited access to your photos. To upload the ones you pick, give it access to all photos."
+                : "ColdStorage doesn’t have permission to read your photos."
+            FileHandle.standardError.write(Data("PhotoKitResolver: \(why) (status \(status.rawValue)) Archiving no photos.\n".utf8))
+            throw ColdStorageError.photosAccess(why)
         }
 
         let fetched = PHAsset.fetchAssets(withLocalIdentifiers: assetIds, options: nil)
@@ -105,6 +108,8 @@ public struct PhotoKitResolver: PhotoResolver {
                 open: { PhotoKitSource.stream(assetId: assetId) }))
         }
         // Observability: a count mismatch points at stale picks or (more likely) an id the daemon can't see.
+        // The "nothing resolved at all → surface it" policy lives in `PhotoDepositSource.enumerate` (Core), so
+        // it's platform-independent + testable; here we just report the count and hand back what we resolved.
         FileHandle.standardError.write(Data("PhotoKitResolver: requested \(assetIds.count), resolved \(items.count).\n".utf8))
         return items
     }

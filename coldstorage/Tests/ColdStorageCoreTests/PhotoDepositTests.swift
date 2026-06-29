@@ -72,6 +72,29 @@ import Foundation
         #expect(items.map(\.id) == ["asset-1"])  // the missing id is dropped, the present one survives
     }
 
+    /// When EVERY pick is unresolvable (all stale, or — in prod — an id the daemon can't see), enumerate
+    /// THROWS rather than returning [] → the deposit surfaces a recoverable error instead of silently
+    /// flashing the rows then dropping them (the "flash, then nothing" bug). Partial resolves still proceed.
+    @Test func allPicksUnresolvableSurfacesAsError() async throws {
+        let resolver = FakeResolver(library: ["asset-1": ("IMG_0001.jpg", Data("a".utf8))])
+        await #expect(throws: ColdStorageError.self) {
+            try await PhotoDepositSource(resolver: resolver, assetIds: ["gone-1", "gone-2"], destDir: "").enumerate()
+        }
+    }
+
+    /// A resolver that can't get at the library (prod: the daemon lacks full Photos access) throws — and that
+    /// throw propagates through enumerate unchanged, so the daemon can surface it with an actionable `code`.
+    @Test func resolverAccessFailurePropagates() async throws {
+        struct DeniedResolver: PhotoResolver {
+            func resolve(assetIds: [String]) async throws -> [IngestItem] {
+                throw ColdStorageError.photosAccess("ColdStorage doesn’t have permission to read your photos.")
+            }
+        }
+        await #expect(throws: ColdStorageError.self) {
+            try await PhotoDepositSource(resolver: DeniedResolver(), assetIds: ["asset-1"], destDir: "").enumerate()
+        }
+    }
+
     // MARK: - end-to-end through the real pipeline
 
     @Test func depositedPhotosArchiveThroughTheRealPipeline() async throws {

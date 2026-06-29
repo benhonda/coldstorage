@@ -28,9 +28,12 @@ public struct FileRow: Sendable {
     public let size: Int
     public let status: FileStatus
     public let blobId: String?
-    public init(id: String, relativePath: String, size: Int, status: FileStatus, blobId: String?) {
+    /// Capture/creation date as Unix epoch seconds; nil when unknown (legacy rows, or a source that
+    /// carries no date). The daemon renders it to an ISO-8601 string at the IPC boundary.
+    public let createdAt: Int?
+    public init(id: String, relativePath: String, size: Int, status: FileStatus, blobId: String?, createdAt: Int?) {
         self.id = id; self.relativePath = relativePath; self.size = size
-        self.status = status; self.blobId = blobId
+        self.status = status; self.blobId = blobId; self.createdAt = createdAt
     }
 }
 
@@ -63,7 +66,8 @@ public final class Journal: @unchecked Sendable {
             CREATE TABLE IF NOT EXISTS files(
               id TEXT PRIMARY KEY, relativePath TEXT NOT NULL, size INTEGER NOT NULL,
               contentHash TEXT NOT NULL, status TEXT NOT NULL, blobId TEXT,
-              "offset" INTEGER, length INTEGER, firstFrame INTEGER, plaintextSha256 TEXT, error TEXT);
+              "offset" INTEGER, length INTEGER, firstFrame INTEGER, plaintextSha256 TEXT, error TEXT,
+              createdAt INTEGER);
             CREATE TABLE IF NOT EXISTS blobs(
               id TEXT PRIMARY KEY, s3Key TEXT NOT NULL, uploadId TEXT,
               noncePrefix BLOB, wrappedDEK BLOB, status TEXT NOT NULL);
@@ -90,6 +94,13 @@ public final class Journal: @unchecked Sendable {
         }
         if !sourceCols.contains("paused") {
             try exec("ALTER TABLE sources ADD COLUMN paused INTEGER NOT NULL DEFAULT 0")
+        }
+        // Idempotent column add for journals created before `createdAt` existed. Nullable (no DEFAULT): a
+        // legacy row's true capture date is unknown, so it stays NULL → "—" in the UI rather than a faked
+        // value. New/re-scanned rows get the real `IngestItem.createdAt` via `upsert`.
+        let fileCols = try run("PRAGMA table_info(files)").compactMap { $0["name"] as? String }
+        if !fileCols.contains("createdAt") {
+            try exec("ALTER TABLE files ADD COLUMN createdAt INTEGER")
         }
     }
 
@@ -155,11 +166,15 @@ public final class Journal: @unchecked Sendable {
             let cur = try run("SELECT status, contentHash FROM files WHERE id=?1", [.text(it.id)])
             if let r = cur.first, (r["status"] as? String) == FileStatus.archived.rawValue,
                (r["contentHash"] as? String) == it.contentHash { continue }
+            // `createdAt` is captured here at discovery (the SSOT moment for intrinsic file metadata).
+            // `size` is best-effort here — a Photos asset is size 0 until streamed; `markFileArchived`
+            // overwrites it with the exact plaintext byte count once the bytes are sealed.
             try run("""
-                INSERT INTO files(id, relativePath, size, contentHash, status) VALUES(?1,?2,?3,?4,?5)
+                INSERT INTO files(id, relativePath, size, contentHash, status, createdAt) VALUES(?1,?2,?3,?4,?5,?6)
                 ON CONFLICT(id) DO UPDATE SET relativePath=excluded.relativePath, size=excluded.size,
-                    contentHash=excluded.contentHash, status=excluded.status
-                """, [.text(it.id), .text(it.relativePath), .int(it.size), .text(it.contentHash), .text(FileStatus.planned.rawValue)])
+                    contentHash=excluded.contentHash, status=excluded.status, createdAt=excluded.createdAt
+                """, [.text(it.id), .text(it.relativePath), .int(it.size), .text(it.contentHash), .text(FileStatus.planned.rawValue),
+                      it.createdAt.map { .int(Int($0.timeIntervalSince1970)) } ?? .null])
         }
         try exec("COMMIT;")
     }
@@ -243,12 +258,13 @@ public final class Journal: @unchecked Sendable {
     /// `.discovered` rather than dropping the row (the file still exists; the UI coarsens status anyway).
     public func listFiles() throws -> [FileRow] {
         lock.lock(); defer { lock.unlock() }
-        return try run("SELECT id, relativePath, size, status, blobId FROM files WHERE status != 'deleted' ORDER BY relativePath").map {
+        return try run("SELECT id, relativePath, size, status, blobId, createdAt FROM files WHERE status != 'deleted' ORDER BY relativePath").map {
             FileRow(id: $0["id"] as? String ?? "",
                     relativePath: $0["relativePath"] as? String ?? "",
                     size: $0["size"] as? Int ?? 0,
                     status: FileStatus(rawValue: $0["status"] as? String ?? "") ?? .discovered,
-                    blobId: $0["blobId"] as? String)
+                    blobId: $0["blobId"] as? String,
+                    createdAt: $0["createdAt"] as? Int)
         }
     }
 
@@ -313,6 +329,14 @@ public final class Journal: @unchecked Sendable {
         return (try run("SELECT status FROM blobs WHERE id=?1", [.text(blobId)]).first?["status"] as? String) == BlobStatus.verified.rawValue
     }
 
+    /// Is this file row linked to its archived blob (status `archived`)? A verified blob whose files aren't all
+    /// `archived` is an ORPHAN — a prior run died between `markBlobVerified` and the `markFileArchived` loop, so
+    /// the bytes are in S3 but the tree shows nothing. The engine uses this to re-link instead of skip-and-strand.
+    public func isFileArchived(_ id: String) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return (try run("SELECT status FROM files WHERE id=?1", [.text(id)]).first?["status"] as? String) == FileStatus.archived.rawValue
+    }
+
     /// Snapshot counts for the daemon status surface.
     public func summary() throws -> (total: Int, archived: Int, blobsVerified: Int) {
         lock.lock(); defer { lock.unlock() }
@@ -354,11 +378,15 @@ public final class Journal: @unchecked Sendable {
         try run("UPDATE blobs SET status=?1 WHERE id=?2", [.text(BlobStatus.verified.rawValue), .text(blobId)])
     }
 
-    public func markFileArchived(_ id: String, blobId: String, offset: Int, length: Int, firstFrame: Int, plaintextSha256: String) throws {
+    /// `size` is the EXACT plaintext byte count measured while staging — the SSOT for the file's real size.
+    /// It overwrites the discovery-time estimate, which is 0 for a Photos asset (unknown until streamed) and
+    /// only stat-derived for a local file. `length` is the *ciphertext* span and is unrelated (it's larger:
+    /// plaintext + per-frame AEAD tags).
+    public func markFileArchived(_ id: String, blobId: String, offset: Int, length: Int, firstFrame: Int, plaintextSha256: String, size: Int) throws {
         lock.lock(); defer { lock.unlock() }
         try run("""
-            UPDATE files SET status=?1, blobId=?2, "offset"=?3, length=?4, firstFrame=?5, plaintextSha256=?6 WHERE id=?7
-            """, [.text(FileStatus.archived.rawValue), .text(blobId), .int(offset), .int(length), .int(firstFrame), .text(plaintextSha256), .text(id)])
+            UPDATE files SET status=?1, blobId=?2, "offset"=?3, length=?4, firstFrame=?5, plaintextSha256=?6, size=?7 WHERE id=?8
+            """, [.text(FileStatus.archived.rawValue), .text(blobId), .int(offset), .int(length), .int(firstFrame), .text(plaintextSha256), .int(size), .text(id)])
     }
 
     /// Mark logical files `failed` (+ record why) — written when their blob fails *permanently*, so the UI's

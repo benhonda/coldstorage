@@ -65,10 +65,18 @@ public enum PartStatus: String, Codable, Sendable { case pending, uploaded, veri
 
 public enum ColdStorageError: Error, CustomStringConvertible {
     case s3(String), integrity(String), staging(String)
+    /// The daemon lacks (full) Photos access, so a photo deposit can't read the picked assets. Carries a
+    /// user-facing, recoverable message — the UI maps this case to an "Open Photos settings" action.
+    case photosAccess(String)
+    /// A photo deposit resolved ZERO of its picked assets (all stale, or the daemon can't see them) even
+    /// though access is granted — so nothing would be archived. Surfaced rather than silently no-op'd.
+    case photosNoneResolved(String)
     /// The bare message — so `"\(error)"` (CLI stderr, daemon wire `error` field) reads cleanly instead
     /// of leaking the case name (`staging("…")`).
     public var description: String {
-        switch self { case .s3(let m), .integrity(let m), .staging(let m): return m }
+        switch self {
+        case .s3(let m), .integrity(let m), .staging(let m), .photosAccess(let m), .photosNoneResolved(let m): return m
+        }
     }
 }
 
