@@ -924,6 +924,36 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-quote-lead { font: var(--type-body); color: var(--text-secondary); margin-bottom: var(--space-2); }
 .cs-note { font: var(--type-label); color: var(--text-tertiary); margin-top: var(--space-2); line-height: var(--leading-normal); }
 
+/* deposit collision prompt — per-file Keep Both / Replace / Skip, with an apply-to-all row */
+.cs-collision-all {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.cs-collision-all-label { font: var(--type-label); color: var(--text-secondary); }
+.cs-collision-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; max-height: 280px; overflow-y: auto; display: flex; flex-direction: column; gap: var(--space-1); }
+.cs-collision-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-1) 0; }
+.cs-collision-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-body); color: var(--text-primary); }
+
+/* three-way segmented control (collision policy) */
+.cs-seg { display: inline-flex; flex: none; gap: 2px; padding: 2px; background: var(--surface-input); border-radius: var(--radius-md); }
+.cs-seg-opt {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  font: var(--type-label);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.cs-seg-opt:hover { color: var(--text-primary); }
+.cs-seg-opt--active { background: var(--accent); color: var(--accent-on); font-weight: var(--weight-medium); }
+
 /* native folder picker row (request-a-copy dialog) — no typing, opens the OS picker */
 .cs-folderpick {
   display: flex;

@@ -32,14 +32,18 @@ public struct PhotoDepositSource: IngestSource {
     }
 
     public func enumerate() async throws -> [IngestItem] {
-        // Re-base each resolved asset under dest for display/placement, but keep `id` = the asset's stable
-        // localIdentifier — so re-depositing the SAME photo dedups on its identity (the journal's upsert
-        // key), not on a filename that can collide across distinct photos (IMG_0001.jpg). Moves/deletes
-        // still operate by `relativePath`, independent of `id`, so path-keyed reorg keeps working.
+        // Re-base each resolved asset under dest and key it by that vault `relativePath` (id == path),
+        // EXACTLY like `ExplicitPathsSource` — so photos behave like files: the same photo dropped into a
+        // NEW folder is a new copy, and re-depositing into the SAME folder is idempotent (same path → same
+        // id). Dedup is NO LONGER keyed on Photos identity (which silently moved a photo across folders);
+        // same-name collisions in a folder are surfaced to the user via the deposit collision prompt
+        // (`CollisionResolvingSource`), never silently merged. Streaming is unaffected — `open` was built by
+        // the resolver from the assetId and is carried verbatim here, independent of `id`.
         let items = try await resolver.resolve(assetIds: assetIds).map { it in
-            IngestItem(id: it.id, relativePath: ExplicitPathsSource.join(destDir, it.relativePath),
-                       size: it.size, contentHash: it.contentHash, createdAt: it.createdAt,
-                       isFavorite: it.isFavorite, metadata: it.metadata, open: it.open)
+            let rel = ExplicitPathsSource.join(destDir, it.relativePath)
+            return IngestItem(id: rel, relativePath: rel,
+                              size: it.size, contentHash: it.contentHash, createdAt: it.createdAt,
+                              isFavorite: it.isFavorite, metadata: it.metadata, open: it.open)
         }
         // Nothing resolved → nothing would be archived. Surface it (don't silently no-op) so the picked rows
         // can't just flash then vanish. A PARTIAL resolve (some stale ids dropped) still proceeds for the ones

@@ -51,13 +51,13 @@ import Foundation
 
     // MARK: - source mapping (pure)
 
-    @Test func picksAreMountedUnderDestButKeepAssetIdentity() async throws {
+    @Test func picksAreMountedUnderDestAndKeyedByPath() async throws {
         let resolver = FakeResolver(library: ["asset-1": ("IMG_0001.jpg", Data("a".utf8))])
         let items = try await PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "Photos/2019").enumerate()
         let it = try #require(items.first)
         #expect(items.count == 1)
-        #expect(it.relativePath == "Photos/2019/IMG_0001.jpg")  // re-based under the picked folder for display
-        #expect(it.id == "asset-1")                              // …but id stays the asset's stable identity
+        #expect(it.relativePath == "Photos/2019/IMG_0001.jpg")  // re-based under the picked folder
+        #expect(it.id == "Photos/2019/IMG_0001.jpg")            // id == path (like files) — same photo in a new folder is a copy
     }
 
     @Test func picksAtRootHaveNoPrefix() async throws {
@@ -69,7 +69,7 @@ import Foundation
     @Test func staleOrUnknownPickIsSkippedNotFatal() async throws {
         let resolver = FakeResolver(library: ["asset-1": ("IMG_0001.jpg", Data("a".utf8))])
         let items = try await PhotoDepositSource(resolver: resolver, assetIds: ["asset-1", "gone"], destDir: "").enumerate()
-        #expect(items.map(\.id) == ["asset-1"])  // the missing id is dropped, the present one survives
+        #expect(items.map(\.relativePath) == ["IMG_0001.jpg"])  // the missing id is dropped, the present one survives
     }
 
     /// When EVERY pick is unresolvable (all stale, or — in prod — an id the daemon can't see), enumerate
@@ -112,8 +112,8 @@ import Foundation
         #expect(failures.isEmpty)
         let rows = try journal.listFiles()
         #expect(rows.allSatisfy { $0.status == .archived })                       // both archived end-to-end
-        #expect(Set(rows.map(\.id)) == ["asset-1", "asset-2"])                    // keyed by asset identity
         #expect(Set(rows.map(\.relativePath)) == ["Photos/Trip/IMG_0001.jpg", "Photos/Trip/IMG_0002.jpg"])
+        #expect(Set(rows.map(\.id)) == Set(rows.map(\.relativePath)))             // path-keyed, like files
         #expect(rows.allSatisfy { $0.blobId != nil })
 
         // The photo's plaintext was genuinely encrypted before upload — its marker must NOT appear on the wire.
@@ -121,18 +121,21 @@ import Foundation
         #expect(store.uploaded.range(of: plaintext) == nil)
     }
 
-    /// Re-depositing the SAME asset (even to a different folder) dedups on identity — `upsert`'s key is the
-    /// id (the asset's localIdentifier), not the display path, so a second pick doesn't duplicate the row.
-    @Test func reDepositingSameAssetDedupsOnIdentity() async throws {
+    /// Photos behave like files (Finder/remote-SSD semantics): the same asset deposited into a DIFFERENT
+    /// folder is a NEW copy (path-keyed id), not a silent move/dedup — the bug that made an overlapping
+    /// re-pick show "only 2 uploaded". Re-depositing into the SAME folder stays idempotent (same path → one
+    /// row). Cross-folder dedup is now the user's call via the collision prompt, never silent.
+    @Test func sameAssetToNewFolderIsACopyButSameFolderIsIdempotent() async throws {
         let resolver = FakeResolver(library: ["asset-1": ("IMG_0001.jpg", Data("a".utf8))])
         let store = RecordingStore()
         let (engine, journal) = try tempEngine(store: store)
 
         try await engine.run(source: PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "A"))
         try await engine.run(source: PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "B"))
+        try await engine.run(source: PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "A"))  // re-pick into A
 
         let rows = try journal.listFiles()
-        #expect(rows.count == 1)              // one asset, one row — no duplicate from the second deposit
-        #expect(rows.first?.id == "asset-1")
+        #expect(Set(rows.map(\.relativePath)) == ["A/IMG_0001.jpg", "B/IMG_0001.jpg"])  // two copies, not one moved row
+        #expect(rows.count == 2)                                                        // the A re-deposit didn't duplicate
     }
 }

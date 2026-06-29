@@ -143,6 +143,17 @@ row just selects it; the `⋯` per-row dropdown (and right-click) opens actions,
 4. **Edge states reflect the proven daemon honestly:** interrupted → resumes same `uploadId` (no
    re-upload); a blob fails → run continues, failure surfaced named (permanent vs transient); offline →
    queues.
+5. **Name collisions are Finder-style, never silent — DONE ✅ (2026-06-29).** A deposit feels like a remote
+   SSD: dropping into a *new* folder copies (each item a new file — photos are path-keyed now, `id ==
+   relativePath`, so the same photo in two folders is two copies, not a silent move). Dropping names that
+   already exist in the target folder PROMPTS (`CollisionModal`): per-file **Keep Both** (saves `name 2.ext`)
+   / **Replace** (overwrites) / **Skip**, with an *apply-to-all*, defaulting to Keep Both (never lose data).
+   Mechanics: the UI calls `previewDeposit` (a no-upload dry-run that resolves where each item lands — via the
+   *real* source, so picked-photo filenames resolve too — and flags which already exist); on collisions it
+   shows the modal, then issues `deposit`/`depositPhotos` with a `conflicts` map (vault relativePath →
+   policy) that the daemon's `CollisionResolvingSource` applies authoritatively. Copies re-upload their bytes
+   (content-addressed blob dedup is a deferred, UX-invisible storage optimization). **PENDING Ben (macOS):
+   visual-verify the modal.**
 
 ## Request-a-copy flow (available, not advertised — the honest limit)
 1. **Trigger:** the **secondary** "Request a copy…" action — in the row `⋯` menu or the Get-info modal
@@ -281,7 +292,8 @@ other clients of it). A Node client is ~30 lines and keeps the UI a pure consume
   (`{id, method, params?}`); replies carry `id` (`{id, result|error}`); pushed events carry `event`
   (`{event, data}`). The client distinguishes by which key is present.
 - **Commands (SSOT = `DaemonService.handle`):** `ping · getStatus · listSources · listFiles · addSource ·
-  removeSource · deposit · movePath · deletePath · triggerNow · restore · pause · resume`.
+  removeSource · previewDeposit · deposit · depositPhotos · movePath · deletePath · createFolder ·
+  listExcludes · addExclude · removeExclude · getPricing · triggerNow · pauseSource · resumeSource · restore`.
 - **Events (SSOT = `DaemonEvent(...)` call sites):** `runStarted · fileArchived · uploadProgress · runFinished ·
   blobFailed · sourcesChanged · filesChanged · restoreRequested · restoreInProgress · restoreCompleted · paused ·
   resumed · error`. `uploadProgress` carries `{file, path, bytes, totalBytes}`; `blobFailed` carries `{blob,

@@ -7,7 +7,7 @@
  * request-back issues the real `restore` command via `exec`.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ColdstoreApi, Pricing } from "../../../shared/ipc.ts";
+import type { ColdstoreApi, ConflictPolicy, DepositPreviewItem, Pricing } from "../../../shared/ipc.ts";
 import type { Exec } from "./types.ts";
 import type { FilesApi } from "./files/useFiles.ts";
 import {
@@ -20,7 +20,9 @@ import {
   formatBytes,
   formatDate,
   isEmptyFolder,
+  joinPath,
   parentOf,
+  planDeposit,
   reparent,
   rowKey,
   rowStatus,
@@ -31,6 +33,7 @@ import {
   uploadPercent,
 } from "./files/model.ts";
 import { Breadcrumb } from "./files/Breadcrumb.tsx";
+import { CollisionModal } from "./files/CollisionModal.tsx";
 import { ContextMenu, type MenuEntry } from "./files/ContextMenu.tsx";
 import { FolderTree } from "./files/FolderTree.tsx";
 import { InfoModal, type SelectionSummary } from "./files/InfoModal.tsx";
@@ -78,6 +81,13 @@ export const MyFilesView = ({
   const [moveTargets, setMoveTargets] = useState<RowTarget[] | null>(null);
   const [infoOpen, setInfoOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
+  // Finder-style deposit collision prompt. Promise-bridged: `promptCollisions` opens the modal and resolves
+  // when the user picks (a policy map) or cancels (null), so the deposit flow can `await` the decision.
+  const [collision, setCollision] = useState<{
+    folderName: string;
+    collisions: string[];
+    resolve: (policies: Record<string, ConflictPolicy> | null) => void;
+  } | null>(null);
 
   const dragDepth = useRef(0);
   const lastIndex = useRef<number | null>(null);
@@ -245,50 +255,110 @@ export const MyFilesView = ({
   // the controller refetches listFiles and the optimistic rows are replaced by the real archived files
   // (✓ stored) or, on failure, surface in the "couldn't upload" panel. Paths are resolved in the preload
   // (webUtils.getPathForFile — Electron 32+ removed File.path).
-  const depositFiles = (files: File[]): void => {
-    if (files.length === 0) return;
-    const items = files.map((f) => ({ name: f.name, srcPath: api.pathForFile(f) }));
-    const optimisticIds = filesApi.deposit(items, dir); // instant "uploading" feedback; rows carry srcPath
+  // Open the collision prompt and resolve when the user decides (policy map) or cancels (null).
+  const promptCollisions = (folderName: string, collisions: string[]): Promise<Record<string, ConflictPolicy> | null> =>
+    new Promise((resolve) => setCollision({ folderName, collisions, resolve }));
+
+  // The shared deposit pipeline for BOTH a file drop and a photo pick: preview placement (which target
+  // names already exist) → prompt the user on any collisions (Keep Both / Replace / Skip) → add optimistic
+  // rows for what will actually land → issue the real deposit with the chosen resolutions. The daemon's
+  // runStarted→fileArchived→runFinished events then refetch listFiles and reconcile to journal truth.
+  // Rethrows on command rejection so `exec` (at the call site) surfaces the toast. `fallback` seeds the
+  // preview when the daemon can't dry-run it (off-Mac / resolver hiccup) so the deposit still proceeds.
+  const runDeposit = async (opts: {
+    kind: "files" | "photos";
+    wire: string; // newline-joined absolute paths (files) or Photos localIdentifiers (photos)
+    dest: string;
+    srcByBase: Map<string, string>; // basename → local srcPath (files only) so a failed upload can retry
+    fallback: string[]; // target relativePaths to assume if preview is unavailable
+  }): Promise<void> => {
+    let preview: DepositPreviewItem[];
+    try {
+      preview = await api.request(
+        "previewDeposit",
+        opts.kind === "files" ? { dest: opts.dest, src: opts.wire } : { dest: opts.dest, assetIds: opts.wire },
+      );
+    } catch {
+      preview = opts.fallback.map((relativePath) => ({ relativePath, exists: false }));
+    }
+    const collisions = preview.filter((p) => p.exists).map((p) => p.relativePath);
+    let policies: Record<string, ConflictPolicy> = {};
+    if (collisions.length > 0) {
+      const chosen = await promptCollisions(opts.dest, collisions);
+      if (!chosen) return; // cancelled → abort the whole drop, no upload
+      policies = chosen;
+    }
+    const { rows, conflicts } = planDeposit(preview, policies, new Set(files.map((f) => f.relativePath)));
+    // Optimistic "uploading" rows for what will land — names carry their full vault path (so intoDir is "").
+    const optimisticIds = filesApi.deposit(
+      rows.map((r) => {
+        const srcPath = opts.srcByBase.get(baseName(r.original));
+        return srcPath ? { name: r.relativePath, srcPath } : { name: r.relativePath };
+      }),
+      "",
+    );
+    // Only attach `conflicts` when there's something to resolve (exactOptionalPropertyTypes — omit, don't undefined).
+    const extra = Object.keys(conflicts).length > 0 ? { conflicts: JSON.stringify(conflicts) } : {};
+    const sent =
+      opts.kind === "files"
+        ? api.request("deposit", { src: opts.wire, dest: opts.dest, ...extra })
+        : api.request("depositPhotos", { assetIds: opts.wire, dest: opts.dest, ...extra });
+    await sent.catch((e: unknown) => {
+      filesApi.setDepositStatus(optimisticIds, "failed"); // command rejected → ⚠ on the rows, don't strand them
+      throw e;
+    });
+  };
+
+  // ── deposit (hero) — REAL drop-to-upload ──
+  const depositFiles = (dropped: File[]): void => {
+    if (dropped.length === 0) return;
+    const items = dropped.map((f) => ({ name: f.name, srcPath: api.pathForFile(f) }));
     const paths = items.map((i) => i.srcPath).filter(Boolean);
     if (paths.length === 0) {
-      filesApi.setDepositStatus(optimisticIds, "failed"); // couldn't resolve paths → show ⚠, don't vanish
+      // Couldn't resolve any local paths → show ⚠ rows rather than vanishing.
+      const ids = filesApi.deposit(items.map((i) => ({ name: i.name })), dir);
+      filesApi.setDepositStatus(ids, "failed");
       return;
     }
-    issueDeposit(paths, dir, optimisticIds);
-  };
-  // Issue the real deposit; on command rejection flip rows to ⚠ failed (failure stays ON the file) and
-  // rethrow so `exec` surfaces the toast. (A failure of the actual upload arrives later as blobFailed.)
-  const issueDeposit = (paths: string[], dest: string, ids: string[]): void => {
+    const srcByBase = new Map(items.filter((i) => i.srcPath).map((i) => [i.name, i.srcPath]));
     exec(() =>
-      api.request("deposit", { src: paths.join("\n"), dest }).catch((e: unknown) => {
-        filesApi.setDepositStatus(ids, "failed");
-        throw e;
+      runDeposit({
+        kind: "files",
+        wire: paths.join("\n"),
+        dest: dir,
+        srcByBase,
+        fallback: items.map((i) => joinPath(dir, i.name)),
       }),
     );
   };
   // Retry a failed upload: flip the row back to uploading and re-issue its deposit (we kept its srcPath).
+  // No preview/prompt — a retry targets the same path it already owns (overwrite-self is a no-op upsert).
   const retryDeposit = (file: ArchivedFile): void => {
     if (!file.srcPath) return;
+    const srcPath = file.srcPath;
     filesApi.setDepositStatus([file.id], "uploading");
-    issueDeposit([file.srcPath], parentOf(file.relativePath), [file.id]);
+    exec(() =>
+      api.request("deposit", { src: srcPath, dest: parentOf(file.relativePath) }).catch((e: unknown) => {
+        filesApi.setDepositStatus([file.id], "failed");
+        throw e;
+      }),
+    );
   };
   // ── add photos (native picker) — REAL explicit photo deposit (option B) ──
   // The native macOS Photos picker (a separate helper) returns PHAsset localIdentifiers; the daemon
-  // resolves them to full-res originals (incl. iCloud download) and archives ONLY those into the current
-  // folder. No optimistic rows: unlike a file drop we don't know each photo's name/size until the daemon
-  // resolves the asset, so picked photos appear via the normal runStarted→fileArchived→runFinished
-  // refetch. Cancel / pick-nothing is a no-op (the helper returns []).
+  // resolves them to full-res originals (incl. iCloud download). Same collision handling as a file drop —
+  // previewDeposit resolves the true filenames so re-picking a photo already in this folder prompts rather
+  // than silently colliding. Cancel / pick-nothing is a no-op (the helper returns []).
   const addPhotos = (): void => {
     exec(async () => {
       const picks = await api.pickPhotos();
       if (picks.length === 0) return; // cancelled / nothing picked
-      // Optimistic "uploading" rows appear instantly (same machinery as a file drop) — labelled by the
-      // picker's suggested names; the daemon resolves the true filenames and the runFinished refetch swaps
-      // these rows for the real archived ones (✓). No srcPath: a photo retry would re-pick, not re-send a path.
-      const optimisticIds = filesApi.deposit(picks.map((p) => ({ name: p.name })), dir);
-      await api.request("depositPhotos", { assetIds: picks.map((p) => p.id).join("\n"), dest: dir }).catch((e: unknown) => {
-        filesApi.setDepositStatus(optimisticIds, "failed"); // command rejected → ⚠ on the rows, don't leave them stuck "uploading"
-        throw e;
+      await runDeposit({
+        kind: "photos",
+        wire: picks.map((p) => p.id).join("\n"),
+        dest: dir,
+        srcByBase: new Map(),
+        fallback: picks.map((p) => joinPath(dir, p.name)),
       });
     });
   };
@@ -489,6 +559,21 @@ export const MyFilesView = ({
           onClose={() => setMoveTargets(null)}
         />
       )}
+
+      {collision && (
+        <CollisionModal
+          folderName={baseName(collision.folderName)}
+          collisions={collision.collisions}
+          onConfirm={(policies) => {
+            collision.resolve(policies);
+            setCollision(null);
+          }}
+          onClose={() => {
+            collision.resolve(null); // cancel → abort the deposit
+            setCollision(null);
+          }}
+        />
+      )}
     </Page>
   );
 };
@@ -587,6 +672,7 @@ const FileList = ({
             ) : (
               <span
                 className="cs-fl-label"
+                title={row.name}
                 onPointerDown={(e) => startPress(e, row)}
                 onPointerMove={trackPress}
                 onPointerUp={cancelPress}
@@ -712,7 +798,7 @@ const Gallery = ({
           {/* file-type icon today; a real thumbnail when R2 lands (the only R2-gated piece) */}
           <span className="cs-tile-thumb">{row.type === "folder" ? <Icon name="folder" size={40} /> : <KindIcon kind={row.file.kind} size={40} />}</span>
           <span className="cs-tile-foot">
-            <span className="cs-tile-name">{row.name}</span>
+            <span className="cs-tile-name" title={row.name}>{row.name}</span>
             {!isEmptyFolder(row) && <StatusIcon status={rowStatus(row)} />}
           </span>
         </button>

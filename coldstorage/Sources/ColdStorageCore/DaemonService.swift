@@ -48,9 +48,10 @@ public actor DaemonService {
     /// over these paths, journaling them under `dir` (the browser folder dropped into) so they appear in
     /// `listFiles`. Non-throwing so the command can fire-and-forget it — any setup error surfaces as an
     /// `error` event; per-blob upload failures surface as `blobFailed` (same as a scheduled run).
-    func deposit(paths: [String], into dir: String) async {
+    func deposit(paths: [String], into dir: String, conflicts: [String: ConflictPolicy] = [:]) async {
         let entries = paths.map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: $0), destDir: dir) }
-        do { try await performRun(source: ExplicitPathsSource(entries: entries, exclude: excludeMatcher())) }
+        let base = ExplicitPathsSource(entries: entries, exclude: excludeMatcher())
+        do { try await performRun(source: resolveCollisions(base, conflicts)) }
         catch { bus.publish(DaemonEvent("error", ["message": "deposit: \(error)"])) }
     }
 
@@ -61,12 +62,13 @@ public actor DaemonService {
     /// archive ONLY the picked assets, never the whole library. Non-throwing so the command can
     /// fire-and-forget; a missing resolver (off macOS) or setup error surfaces as an `error` event, while
     /// per-blob upload failures surface as `blobFailed` (same as any run).
-    func depositPhotos(assetIds: [String], into dir: String) async {
+    func depositPhotos(assetIds: [String], into dir: String, conflicts: [String: ConflictPolicy] = [:]) async {
         guard let resolver = photoResolver else {
             bus.publish(DaemonEvent("error", ["message": "depositPhotos: Photos ingest is unavailable on this platform"]))
             return
         }
-        do { try await performRun(source: PhotoDepositSource(resolver: resolver, assetIds: assetIds, destDir: dir)) }
+        let base = PhotoDepositSource(resolver: resolver, assetIds: assetIds, destDir: dir)
+        do { try await performRun(source: resolveCollisions(base, conflicts)) }
         catch let e as ColdStorageError {
             // Photo-access / nothing-resolved are user-recoverable: surface the bare message (already a clean
             // sentence) plus a `code` the UI keys an action off (e.g. `photosAccessDenied` → "Open Photos
@@ -80,6 +82,24 @@ public actor DaemonService {
             bus.publish(DaemonEvent("error", data))
         }
         catch { bus.publish(DaemonEvent("error", ["message": "depositPhotos: \(error)"])) }
+    }
+
+    /// Wrap a deposit source so the user's collision choices are honored (Keep Both / Replace / Skip). A
+    /// no-op pass-through when there's nothing to resolve, so the common (no-collision) deposit is unchanged.
+    /// Snapshots `livePaths()` once here — the "taken" set the keepBoth uniquifier avoids.
+    private func resolveCollisions(_ source: any IngestSource, _ conflicts: [String: ConflictPolicy]) -> any IngestSource {
+        guard !conflicts.isEmpty else { return source }
+        let existing = (try? journal.livePaths()) ?? []
+        return CollisionResolvingSource(inner: source, existing: existing, conflicts: conflicts)
+    }
+
+    /// Parse the `conflicts` deposit param — a JSON object `{ "<vault/relativePath>": "keepBoth" }`. Unknown
+    /// policy strings and malformed JSON are dropped (treated as "no resolution" → the item passes through),
+    /// so a stale/garbled map can never abort a deposit.
+    private func parseConflicts(_ raw: String?) -> [String: ConflictPolicy] {
+        guard let raw, let data = raw.data(using: .utf8),
+              let dict = try? JSONDecoder().decode([String: String].self, from: data) else { return [:] }
+        return dict.compactMapValues { ConflictPolicy(rawValue: $0) }
     }
 
     /// One pass of the pipeline over `source` — the shared core of a scheduled run and an ad-hoc deposit.
@@ -217,6 +237,9 @@ public actor DaemonService {
     /// type trivial + lossless; the renderer owns ISO/display formatting (epoch × 1000 → JS `Date`).
     private struct FileDTO: Encodable { let id, relativePath: String; let size: Int; let status: String; let blobId: String?; let date: Int? }
     private struct AckDTO: Encodable { let ok: Bool }
+    /// One resolved target of a `previewDeposit` dry-run: the vault path the item WOULD land at, and whether
+    /// a live row already sits there (a collision the UI prompts on).
+    private struct DepositPreviewItemDTO: Encodable { let relativePath: String; let exists: Bool }
     /// One idempotent restore step's outcome. `state` ∈ restored | thawRequested | thawInProgress —
     /// re-issue `restore` until it's `restored`. `out` is set only when bytes landed; `tier`/`typicalWait`
     /// only while thawing, so the UI can show the quoted wait.
@@ -333,9 +356,12 @@ public actor DaemonService {
             guard let raw = p["src"], !raw.isEmpty else { throw ColdStorageError.staging("deposit requires params.src (newline-joined absolute paths)") }
             let paths = raw.split(separator: "\n").map(String.init)
             let dest = p["dest"] ?? ""
+            // Optional collision resolutions from the UI's Keep Both / Replace / Skip prompt (JSON map,
+            // keyed by vault relativePath). Absent → no collisions to resolve, deposit as-is.
+            let conflicts = parseConflicts(p["conflicts"])
             // Fire-and-forget: archiving can be slow, so don't block the reply. Progress + outcome flow as
             // runStarted/fileArchived/blobFailed/runFinished events (exactly like a scheduled run).
-            Task { await self.deposit(paths: paths, into: dest) }
+            Task { await self.deposit(paths: paths, into: dest, conflicts: conflicts) }
             return AnyEncodable(AckDTO(ok: true))
         case "depositPhotos":
             // Explicit photo deposit (the photo analogue of `deposit`): archive these PICKED Photos assets
@@ -345,8 +371,30 @@ public actor DaemonService {
             guard let raw = p["assetIds"], !raw.isEmpty else { throw ColdStorageError.staging("depositPhotos requires params.assetIds (newline-joined Photos localIdentifiers)") }
             let assetIds = raw.split(separator: "\n").map(String.init)
             let dest = p["dest"] ?? ""
-            Task { await self.depositPhotos(assetIds: assetIds, into: dest) }
+            let conflicts = parseConflicts(p["conflicts"])
+            Task { await self.depositPhotos(assetIds: assetIds, into: dest, conflicts: conflicts) }
             return AnyEncodable(AckDTO(ok: true))
+        case "previewDeposit":
+            // Dry-run a deposit's PLACEMENT (no upload): resolve the target paths the same way the real
+            // deposit would (file paths via ExplicitPathsSource, picked photos via PhotoDepositSource — the
+            // lazy `open` means no bytes stream), and report which already exist in the vault. The UI shows
+            // the Keep Both / Replace / Skip prompt for the collisions, then re-issues deposit with a
+            // `conflicts` map. Reusing the real source gives the EXACT resolved names — essential for photos,
+            // whose filenames the UI can't know until the daemon resolves them.
+            let dest = p["dest"] ?? ""
+            let source: any IngestSource
+            if let raw = p["src"], !raw.isEmpty {
+                let entries = raw.split(separator: "\n").map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: String($0)), destDir: dest) }
+                source = ExplicitPathsSource(entries: entries, exclude: excludeMatcher())
+            } else if let raw = p["assetIds"], !raw.isEmpty {
+                guard let resolver = photoResolver else { throw ColdStorageError.staging("previewDeposit: Photos ingest is unavailable on this platform") }
+                source = PhotoDepositSource(resolver: resolver, assetIds: raw.split(separator: "\n").map(String.init), destDir: dest)
+            } else {
+                throw ColdStorageError.staging("previewDeposit requires params.src (paths) or params.assetIds")
+            }
+            let live = try journal.livePaths()
+            let items = try await source.enumerate()
+            return AnyEncodable(items.map { DepositPreviewItemDTO(relativePath: $0.relativePath, exists: live.contains($0.relativePath)) })
         case "movePath":
             // Reorganize: relocate the subtree at `from` → `to` (a file/folder move OR rename). A cheap
             // journal `relativePath` edit — no S3, no thaw, the blob never moves. `filesChanged` tells a live

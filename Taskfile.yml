@@ -177,10 +177,10 @@ tasks:
       - swift run coldstorectl coldstored.sock restore file={{.FILE}} out={{.OUT | default "/tmp/restored.bin"}} tier={{.TIER | default "standard"}}
 
   daemon:deposit-ipc:
-    desc: "Deposit (ad-hoc drop-to-upload) over the running daemon's socket: SRC=/abs/path [DEST=folder]. Archives the path(s) once, NO watched source — the same command the UI's drag-drop issues. Fire-and-forget; watch events or check `daemon:ctl -- listFiles`."
+    desc: "Deposit (ad-hoc drop-to-upload) over the running daemon's socket: SRC=/abs/path [DEST=folder] [CONFLICTS='{\"dest/name\":\"keepBoth\"}']. Archives the path(s) once, NO watched source — the same command the UI's drag-drop issues. CONFLICTS is the JSON Keep Both / Replace / Skip map (see daemon:preview-deposit-ipc). Fire-and-forget; check `daemon:ctl -- listFiles`."
     dir: coldstorage
     cmds:
-      - swift run coldstorectl coldstored.sock deposit src={{.SRC}} dest={{.DEST | default ""}}
+      - swift run coldstorectl coldstored.sock deposit src={{.SRC}} dest={{.DEST | default ""}} {{if .CONFLICTS}}'conflicts={{.CONFLICTS}}'{{end}}
 
   daemon:logs:
     desc: "[macOS] Tail the installed daemon's stdout+stderr logs (live). Shows PhotoKitResolver auth/resolve diagnostics, deposit errors, etc."
@@ -222,10 +222,16 @@ tasks:
       - swift run coldstore-photo-picker
 
   daemon:deposit-photos-ipc:
-    desc: "Explicit photo deposit over the running daemon's socket: IDS='id1\\nid2' (newline-joined Photos localIdentifiers) [DEST=folder]. Archives ONLY those picked photos (never the whole library) — the same command the UI's photo picker issues. macOS only (PhotoKit); off-Mac the daemon emits an error event. Check `daemon:ctl -- listFiles`."
+    desc: "Explicit photo deposit over the running daemon's socket: IDS='id1\\nid2' (newline-joined Photos localIdentifiers) [DEST=folder] [CONFLICTS='{\"dest/name\":\"keepBoth\"}']. Archives ONLY those picked photos (never the whole library) — the same command the UI's photo picker issues. CONFLICTS is the JSON collision-resolution map. macOS only (PhotoKit); off-Mac the daemon emits an error event. Check `daemon:ctl -- listFiles`."
     dir: coldstorage
     cmds:
-      - swift run coldstorectl coldstored.sock depositPhotos assetIds={{.IDS}} dest={{.DEST | default ""}}
+      - swift run coldstorectl coldstored.sock depositPhotos assetIds={{.IDS}} dest={{.DEST | default ""}} {{if .CONFLICTS}}'conflicts={{.CONFLICTS}}'{{end}}
+
+  daemon:preview-deposit-ipc:
+    desc: "Dry-run a deposit's placement over the running daemon's socket (no upload): SRC=/abs/path OR IDS='id1\\nid2', plus [DEST=folder]. Prints each target's vault relativePath + whether it already EXISTS (a collision the UI prompts on). The same `previewDeposit` the UI runs before showing Keep Both / Replace / Skip."
+    dir: coldstorage
+    cmds:
+      - swift run coldstorectl coldstored.sock previewDeposit dest={{.DEST | default ""}} {{if .SRC}}src={{.SRC}}{{end}} {{if .IDS}}assetIds={{.IDS}}{{end}}
 
   daemon:move-ipc:
     desc: "Reorganize over the running daemon's socket — move OR rename: FROM=<vault/path> TO=<new/vault/path>. A cheap journal relativePath edit (no S3, no thaw); the same command the UI's move/rename issues. Check `daemon:ctl -- listFiles`."
@@ -414,6 +420,26 @@ tasks:
       - launchctl bootout "gui/$(id -u)/com.theadpharm.coldstored" 2>/dev/null || true
       - rm -f "{{.PLIST}}"
       - 'echo "removed {{.PLIST}}"'
+
+  daemon:reset:
+    desc: "[macOS] DESTRUCTIVE — wipe the installed daemon's local state for a clean slate: stop it, delete the journal (the tree SSOT) + status + staged blobs + logs, restart empty. Comes back with NO files and NO watched folders. KEEPS the encryption key (dev-kek.bin) and does NOT touch S3 — old blobs in the prod vault are left orphaned (harmless; purge with an admin profile if you care). Re-deposits re-upload from scratch (the journal no longer marks anything verified)."
+    dir: coldstorage
+    vars:
+      DATA_DIR: '{{.HOME}}/Library/Application Support/ColdStorage'
+      PLIST: '{{.HOME}}/Library/LaunchAgents/com.theadpharm.coldstored.plist'
+    cmds:
+      # 1. Stop the daemon FIRST — it holds the SQLite handle (+WAL); deleting the journal under a live
+      #    daemon would corrupt, not clean. bootout closes the log fds too, so truncating below is safe.
+      - launchctl bootout "gui/$(id -u)/com.theadpharm.coldstored" 2>/dev/null || true
+      # 2. Delete the journal + its WAL sidecars (the tree/sources/excludes SSOT) and the status cache.
+      - rm -f "{{.DATA_DIR}}/coldstore.sqlite" "{{.DATA_DIR}}/coldstore.sqlite-wal" "{{.DATA_DIR}}/coldstore.sqlite-shm" "{{.DATA_DIR}}/status.json"
+      # 3. Clear any half-staged blobs (orphaned once the journal is gone), then recreate the empty dir.
+      - rm -rf "{{.DATA_DIR}}/staging" && mkdir -p "{{.DATA_DIR}}/staging"
+      # 4. Fresh logs (the daemon will append to these on restart).
+      - ': > "{{.DATA_DIR}}/coldstored.out.log"; : > "{{.DATA_DIR}}/coldstored.err.log"'
+      # 5. Restart — the daemon recreates an empty journal on boot (RunAtLoad). dev-kek.bin is untouched.
+      - launchctl bootstrap "gui/$(id -u)" "{{.PLIST}}"
+      - 'echo "✓ reset — empty tree, no watched folders, fresh logs. Verify: task daemon:live -- listFiles (expect [])"'
 
   # ------------------------------------------------------------------ ui (domain: ui/)
   # Electron/React control panel — a THIN client over the daemon's control socket. Layer 1 = Node IPC

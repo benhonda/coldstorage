@@ -18,6 +18,13 @@ public struct IngestItem: Sendable {
         self.contentHash = contentHash; self.createdAt = createdAt
         self.isFavorite = isFavorite; self.metadata = metadata; self.open = open
     }
+
+    /// A copy re-keyed to a new vault path (path-keyed sources use id == relativePath), preserving the
+    /// captured byte stream + intrinsic metadata. Used to "Keep Both" a colliding deposit under a fresh name.
+    func rekeyed(to relativePath: String) -> IngestItem {
+        IngestItem(id: relativePath, relativePath: relativePath, size: size, contentHash: contentHash,
+                   createdAt: createdAt, isFavorite: isFavorite, metadata: metadata, open: open)
+    }
 }
 
 /// A group of items that becomes one S3 object. Small files batched; large files solo.

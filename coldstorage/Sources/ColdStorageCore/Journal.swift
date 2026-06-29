@@ -253,6 +253,17 @@ public final class Journal: @unchecked Sendable {
         return try run("SELECT pattern FROM excludes ORDER BY pattern").compactMap { $0["pattern"] as? String }
     }
 
+    /// The set of vault-relative paths currently occupied by a LIVE row (file OR folder marker; tombstoned
+    /// rows excluded). The SSOT for deposit collision detection — a dropped item collides iff its target
+    /// `relativePath` is in this set — and the "taken" set the `keepBoth` uniquifier avoids. One read; the
+    /// caller probes membership in-memory (the vault tree is personal-scale, so a full snapshot beats N
+    /// per-path queries).
+    public func livePaths() throws -> Set<String> {
+        lock.lock(); defer { lock.unlock() }
+        return Set(try run("SELECT relativePath FROM files WHERE status != 'deleted'")
+            .compactMap { $0["relativePath"] as? String })
+    }
+
     /// The browsable file tree (design: the journal is the tree SSOT). A pure metadata `SELECT` — no S3,
     /// no thaw. Ordered by path so the client renders a stable tree. Unknown/garbage status defaults to
     /// `.discovered` rather than dropping the row (the file still exists; the UI coarsens status anyway).

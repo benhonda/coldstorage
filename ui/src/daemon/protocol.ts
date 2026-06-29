@@ -81,6 +81,18 @@ export interface ListedFile {
   date: number | null;
 }
 
+/** How a deposit resolves a name-collision (the Finder-style prompt). Mirrors Swift `ConflictPolicy`.
+ *  `keepBoth` archives the incoming item under a fresh name; `replace` overwrites the existing file;
+ *  `skip` doesn't deposit it. */
+export type ConflictPolicy = "keepBoth" | "replace" | "skip";
+
+/** `DepositPreviewItemDTO` — one resolved target of a `previewDeposit` dry-run: the vault path the dropped
+ *  item WOULD land at, and whether a live row already sits there (a collision to prompt on). */
+export interface DepositPreviewItem {
+  relativePath: string;
+  exists: boolean;
+}
+
 /** `StatusDTO` — the daemon snapshot. `permanentlyFailedBlobs > 0` ⇒ a config/logic fault to fix. */
 export interface Status {
   filesTotal: number;
@@ -144,13 +156,22 @@ export interface Commands {
   /** Ad-hoc drop-to-upload: archive these paths once under `dest` (a vault-relative folder; "" = root),
    * without registering a watched source. `src` is newline-joined absolute paths. Fire-and-forget — the
    * reply just acks; progress/outcome arrive as runStarted/fileArchived/blobFailed/runFinished events. */
-  deposit: { params: { src: string; dest: string }; result: Ack };
+  deposit: { params: { src: string; dest: string; conflicts?: string }; result: Ack };
   /** Explicit photo deposit (the photo analogue of `deposit`): archive these PICKED Photos-library assets
    * once under `dest` (a vault-relative folder; "" = root). `assetIds` is newline-joined Photos
    * localIdentifiers — only the picked assets are read, never the whole library. Mac-only (PhotoKit); off
    * macOS the daemon emits an `error` event. Fire-and-forget — the reply acks, progress/outcome arrive as
    * runStarted/fileArchived/blobFailed/runFinished events (exactly like `deposit`). */
-  depositPhotos: { params: { assetIds: string; dest: string }; result: Ack };
+  depositPhotos: { params: { assetIds: string; dest: string; conflicts?: string }; result: Ack };
+  /** Dry-run a deposit's PLACEMENT (no upload): resolve where each dropped file / picked photo would land
+   * (same logic as `deposit`/`depositPhotos`) and report which targets already exist — the collisions the UI
+   * prompts on (Keep Both / Replace / Skip). Pass `src` (newline-joined absolute paths) OR `assetIds`
+   * (newline-joined Photos localIdentifiers), plus `dest`. The chosen resolutions ride back as the
+   * `conflicts` param on `deposit`/`depositPhotos` (a JSON map of vault relativePath → policy). */
+  previewDeposit: {
+    params: { dest: string; src?: string; assetIds?: string };
+    result: DepositPreviewItem[];
+  };
   /** Reorganize: relocate the subtree at `from` → `to` — a file/folder MOVE or RENAME (a rename is just a
    * move to a sibling path). A cheap journal `relativePath` edit (no S3, no thaw, the blob never moves);
    * the stable file id is unchanged. Emits `filesChanged`. */

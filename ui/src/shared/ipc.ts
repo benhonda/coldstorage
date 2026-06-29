@@ -15,8 +15,10 @@
 export type {
   Ack,
   Commands,
+  ConflictPolicy,
   DaemonEventName,
   DaemonEvents,
+  DepositPreviewItem,
   ListedFile,
   Method,
   ParamsArg,

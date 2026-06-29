@@ -7,7 +7,7 @@
  * The flat file list comes from the daemon's `listFiles` read (journal-backed); {@link fileFromJournal}
  * maps each raw wire row ({@link ListedFile}) into the {@link ArchivedFile} the browser draws.
  */
-import type { ListedFile } from "../../../../shared/ipc.ts";
+import type { ConflictPolicy, ListedFile } from "../../../../shared/ipc.ts";
 
 /**
  * Per-file state — the journal `FileStatus` folded with live restore activity.
@@ -114,6 +114,73 @@ export const rewritePrefix = (path: string, oldPrefix: string, newPrefix: string
 
 /** Join a directory + name into a path ("" + "a" → "a"; "a" + "b" → "a/b"). */
 export const joinPath = (dir: string, name: string): string => (dir ? `${dir}/${name}` : name);
+
+/**
+ * Finder-style "Keep Both" name: the first free `dir/stem N.ext` (a space, then 2, 3, …) not in `taken`.
+ * Mirrors Swift `CollisionResolvingSource.uniquify` — the daemon is authoritative, this only drives the
+ * optimistic row name (reconciled on the next `listFiles` read). A leading-dot leaf (`.gitignore`) is
+ * all-stem, no extension (dot must be past index 0), matching the daemon + Finder.
+ */
+export const uniquifyPath = (path: string, taken: ReadonlySet<string>): string => {
+  const slash = path.lastIndexOf("/");
+  const dir = slash >= 0 ? path.slice(0, slash) : "";
+  const leaf = slash >= 0 ? path.slice(slash + 1) : path;
+  const dot = leaf.lastIndexOf(".");
+  const stem = dot > 0 ? leaf.slice(0, dot) : leaf;
+  const ext = dot > 0 ? leaf.slice(dot) : "";
+  for (let n = 2; ; n++) {
+    const candidate = joinPath(dir, `${stem} ${n}${ext}`);
+    if (!taken.has(candidate)) return candidate;
+  }
+};
+
+/** One row a deposit will actually create after collision resolution. `relativePath` is where it shows
+ *  (renamed for keepBoth); `original` is the previewed path the daemon keys the policy on. */
+export interface DepositPlanItem {
+  relativePath: string;
+  original: string;
+}
+
+/**
+ * Apply the user's per-file collision choices to a previewed deposit. Returns the rows that will actually
+ * land (skips dropped, keepBoth renamed via {@link uniquifyPath}) plus the `conflicts` map to hand the
+ * daemon (vault relativePath → policy). Non-colliding items always pass through. Pure — drives both the
+ * optimistic rows and the wire param, and is unit-tested in isolation.
+ */
+export const planDeposit = (
+  preview: readonly { relativePath: string; exists: boolean }[],
+  policies: Readonly<Record<string, ConflictPolicy>>,
+  liveTreePaths: ReadonlySet<string>,
+): { rows: DepositPlanItem[]; conflicts: Record<string, ConflictPolicy> } => {
+  const policyOf = (p: { relativePath: string; exists: boolean }): ConflictPolicy | undefined =>
+    p.exists ? policies[p.relativePath] : undefined;
+  const taken = new Set(liveTreePaths);
+  // Pre-seed every item that KEEPS its path this run (new files + replace), so a keepBoth rename dodges a
+  // same-drop sibling that hasn't been processed yet — mirrors the daemon's CollisionResolvingSource.
+  for (const p of preview) {
+    const policy = policyOf(p);
+    if (policy !== "skip" && policy !== "keepBoth") taken.add(p.relativePath);
+  }
+  const rows: DepositPlanItem[] = [];
+  const conflicts: Record<string, ConflictPolicy> = {};
+  for (const p of preview) {
+    const policy = policyOf(p);
+    if (policy === "skip") {
+      conflicts[p.relativePath] = "skip";
+      continue;
+    }
+    if (policy === "keepBoth") {
+      conflicts[p.relativePath] = "keepBoth";
+      const renamed = uniquifyPath(p.relativePath, taken);
+      taken.add(renamed);
+      rows.push({ relativePath: renamed, original: p.relativePath });
+    } else {
+      if (policy === "replace") conflicts[p.relativePath] = "replace";
+      rows.push({ relativePath: p.relativePath, original: p.relativePath });
+    }
+  }
+  return { rows, conflicts };
+};
 
 /** The parent directory of a path ("a/b/c" → "a/b"; "a" → ""). */
 export const parentOf = (path: string): string => segments(path).slice(0, -1).join("/");

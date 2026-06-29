@@ -18,6 +18,8 @@ import {
   totalBytes,
   type UploadProgress,
   uploadPercent,
+  uniquifyPath,
+  planDeposit,
   withName,
 } from "./model.ts";
 
@@ -186,5 +188,57 @@ describe("uploadPercent", () => {
   test("clamps to 100 even if bytes overshoot the total", () => {
     const p = prog({ x: { path: "x", uploaded: 250, total: 200 } });
     expect(uploadPercent(p, { id: "x", relativePath: "x" })).toBe(100);
+  });
+});
+
+describe("uniquifyPath (Keep Both naming)", () => {
+  test("first free ' N' suffix, extension + dir preserved", () => {
+    expect(uniquifyPath("Photos/IMG_8114.HEIC", new Set(["Photos/IMG_8114.HEIC"]))).toBe("Photos/IMG_8114 2.HEIC");
+    expect(uniquifyPath("Photos/IMG_8114.HEIC", new Set(["Photos/IMG_8114.HEIC", "Photos/IMG_8114 2.HEIC"]))).toBe(
+      "Photos/IMG_8114 3.HEIC",
+    );
+  });
+  test("no extension / root / leading-dot leaf", () => {
+    expect(uniquifyPath("README", new Set(["README"]))).toBe("README 2");
+    expect(uniquifyPath("notes.txt", new Set(["notes.txt"]))).toBe("notes 2.txt");
+    expect(uniquifyPath("a/.gitignore", new Set(["a/.gitignore"]))).toBe("a/.gitignore 2"); // leading dot = no ext
+  });
+});
+
+describe("planDeposit (collision resolution)", () => {
+  const tree = new Set(["F/a.jpg"]); // one existing file in folder F
+
+  test("no collisions → every item lands, no conflicts map", () => {
+    const { rows, conflicts } = planDeposit(
+      [{ relativePath: "F/new.jpg", exists: false }],
+      {},
+      tree,
+    );
+    expect(rows.map((r) => r.relativePath)).toEqual(["F/new.jpg"]);
+    expect(conflicts).toEqual({});
+  });
+
+  test("skip drops the item; replace keeps the path; both recorded for the daemon", () => {
+    const skip = planDeposit([{ relativePath: "F/a.jpg", exists: true }], { "F/a.jpg": "skip" }, tree);
+    expect(skip.rows).toEqual([]);
+    expect(skip.conflicts).toEqual({ "F/a.jpg": "skip" });
+
+    const replace = planDeposit([{ relativePath: "F/a.jpg", exists: true }], { "F/a.jpg": "replace" }, tree);
+    expect(replace.rows.map((r) => r.relativePath)).toEqual(["F/a.jpg"]);
+    expect(replace.conflicts).toEqual({ "F/a.jpg": "replace" });
+  });
+
+  test("keepBoth renames optimistically, dodging the existing row AND a same-drop sibling", () => {
+    const { rows, conflicts } = planDeposit(
+      [
+        { relativePath: "F/a.jpg", exists: true }, // keepBoth → must avoid F/a.jpg and the new F/a 2.jpg
+        { relativePath: "F/a 2.jpg", exists: false }, // a brand-new sibling that keeps its name
+      ],
+      { "F/a.jpg": "keepBoth" },
+      tree,
+    );
+    expect(rows.map((r) => r.relativePath).sort()).toEqual(["F/a 2.jpg", "F/a 3.jpg"]);
+    expect(rows.find((r) => r.original === "F/a.jpg")?.relativePath).toBe("F/a 3.jpg");
+    expect(conflicts).toEqual({ "F/a.jpg": "keepBoth" });
   });
 });
