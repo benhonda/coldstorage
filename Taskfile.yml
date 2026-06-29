@@ -87,8 +87,8 @@ tasks:
           rm -f .build/.lock && echo "removed stale .build/.lock"
         fi
 
-  daemon:build:
-    desc: Build the Swift core (first run fetches deps — a few minutes)
+  daemon:build:dev:
+    desc: "Build the Swift core — DEBUG, for the MinIO/test dev loop (any OS). First run fetches deps (a few minutes). For the prod release build, see daemon:install."
     dir: coldstorage
     deps: [daemon:unlock]   # clear a stale lock left by a previously-killed build
     cmds: [swift build]
@@ -189,6 +189,15 @@ tasks:
       DATA_DIR: '{{.HOME}}/Library/Application Support/ColdStorage'
     cmds:
       - tail -n 40 -f "{{.DATA_DIR}}/coldstored.out.log" "{{.DATA_DIR}}/coldstored.err.log"
+
+  daemon:logs:clear:
+    desc: "[macOS] Truncate the installed daemon's logs in place — a clean slate before reproducing an issue, WITHOUT reinstalling. (daemon:install also resets them.) The daemon keeps writing to the same files."
+    dir: coldstorage
+    vars:
+      DATA_DIR: '{{.HOME}}/Library/Application Support/ColdStorage'
+    cmds:
+      - ': > "{{.DATA_DIR}}/coldstored.out.log"; : > "{{.DATA_DIR}}/coldstored.err.log"'
+      - 'echo "cleared daemon logs"'
 
   daemon:reset-photos-tcc:
     desc: "[macOS] Reset the daemon's Photos permission so the next depositPhotos re-prompts from scratch (use if you granted Limited instead of Full, or to re-test the grant). Derives the identifier from the signed binary, so it always matches the installed daemon."
@@ -334,8 +343,12 @@ tasks:
             launchd/com.theadpharm.coldstored.plist.template > "{{.PLIST}}"
         echo "wired: bucket=${bucket} region=${region} profile=${profile}"
       - launchctl bootout "gui/$(id -u)/com.theadpharm.coldstored" 2>/dev/null || true
+      # Fresh logs each install: launchd APPENDS to StandardOut/ErrorPath (never truncates across
+      # restarts), so a debugging run would otherwise be read against stale lines from prior runs. The old
+      # daemon is booted out above, so its log fd is closed — safe to truncate before the new one starts.
+      - ': > "{{.DATA_DIR}}/coldstored.out.log"; : > "{{.DATA_DIR}}/coldstored.err.log"'
       - launchctl bootstrap "gui/$(id -u)" "{{.PLIST}}"
-      - 'echo "installed → {{.PLIST}}  (socket: {{.DATA_DIR}}/coldstored.sock)"'
+      - 'echo "installed → {{.PLIST}}  (socket: {{.DATA_DIR}}/coldstored.sock; logs reset)"'
 
   daemon:creds:
     desc: "[macOS] Seed the daemon's IAM-user creds into the login Keychain + wire the `coldstorage` AWS profile. Needs the handoff file — run `task tf:coldstorage:creds-export` in the devcontainer first."
@@ -447,7 +460,7 @@ tasks:
       # Electron runs with cwd=ui/, so the DaemonClient's relative default would miss the daemon's
       # socket. Point at it explicitly (same path daemon:run creates). Mirrors ui:prove.
       COLDSTORE_SOCKET: '{{.ROOT_DIR}}/coldstorage/coldstored.sock'
-      # Absolute path to the native Photos-picker helper (built by daemon:build/install) — the "Add photos…"
+      # Absolute path to the native Photos-picker helper (built by daemon:build:dev/install) — the "Add photos…"
       # entry spawns it. Absolute so it resolves regardless of Electron's cwd.
       COLDSTORE_PHOTO_PICKER: '{{.ROOT_DIR}}/coldstorage/.build/release/coldstore-photo-picker'
     cmds:
@@ -469,6 +482,62 @@ tasks:
     dir: ui
     cmds:
       - bun run build
+
+  ui:package:
+    desc: "[macOS] Package a distributable ColdStorage.app (+ dmg/zip) via electron-builder. Bundles the release Swift binaries. Unsigned unless a Developer ID + notary creds are set — see ui/PACKAGING.md."
+    dir: ui
+    deps: [ui:_ensure-electron]
+    cmds:
+      # The bundled binaries must exist before electron-builder copies them (electron-builder.yml extraResources).
+      - swift build -c release --package-path "{{.ROOT_DIR}}/coldstorage"
+      - bun run build                # electron-vite → out/{main,preload,renderer}
+      - bunx electron-builder --mac  # node CLI (not --bun); reads electron-builder.yml → ui/dist/ColdStorage.app + dmg/zip
+
+  ui:package:verify:
+    desc: "[macOS] Sanity-check the packaged app: bundled Swift binaries present + their code-signing status (the bits that can't be checked off-Mac)."
+    dir: ui
+    cmds:
+      - |
+        app=$(find dist -maxdepth 3 -name 'ColdStorage.app' -type d 2>/dev/null | head -1)
+        [ -n "$app" ] || { echo "no ColdStorage.app under dist/ — run 'task ui:package' first"; exit 1; }
+        echo "app: $app"
+        echo "── bundled binaries (expect coldstored + helpers) ──"
+        ls -la "$app/Contents/Resources/bin" || { echo "MISSING bin/ — extraResources didn't copy"; exit 1; }
+        echo "── app signature ──";        codesign -dv --verbosity=2 "$app" 2>&1 | grep -Ei 'Identifier|Authority|Runtime' || echo "(unsigned)"
+        echo "── coldstored signature ──"; codesign -dv --verbosity=2 "$app/Contents/Resources/bin/coldstored" 2>&1 | grep -Ei 'Identifier|Authority|Runtime' || echo "(unsigned — nested binary not signed)"
+
+  ui:package:sign-adhoc:
+    desc: "[macOS] Ad-hoc sign the built ColdStorage.app so it (+ its bundled arm64 helpers) will LAUNCH locally on Apple Silicon — a smoke-test stopgap. Ad-hoc is per-build (no stable TCC grant); real Developer/Apple-Development signing lands with #2. NOT for distribution."
+    dir: ui
+    cmds:
+      - |
+        app=$(find dist -maxdepth 3 -name 'ColdStorage.app' -type d 2>/dev/null | head -1)
+        [ -n "$app" ] || { echo "no ColdStorage.app under dist/ — run 'task ui:package' first"; exit 1; }
+        # Sign the nested helpers FIRST (inside-out), then the app — codesign requires nested code be sealed
+        # before the outer bundle. `-s -` = ad-hoc (no cert needed, just enough for AMFI to let arm64 run).
+        for b in "$app/Contents/Resources/bin/coldstored" \
+                 "$app/Contents/Resources/bin/coldstore-photo-picker" \
+                 "$app/Contents/Resources/bin/coldstore-restore"; do
+          codesign --force --sign - "$b" && echo "ad-hoc signed: $(basename "$b")"
+        done
+        codesign --force --sign - "$app"
+        echo "ad-hoc signed $app — launching…"
+        open "$app"
+
+  ui:package:doctor:
+    desc: "[macOS] Diagnose a packaged app stuck on 'Connecting…': did the bundled coldstored spawn, bind its socket, and what did it log?"
+    cmds:
+      - |
+        echo "── data dir (auto-discovered) ──"
+        dir=$(ls -d "$HOME/Library/Application Support/"*[Cc]old[Ss]torage* 2>/dev/null | head -1)
+        if [ -z "$dir" ]; then
+          echo "NONE — the app never created a data dir ⇒ the daemon never started."
+          echo "Most likely the bundle is stale. Rebuild: task ui:package && task ui:package:sign-adhoc"; exit 0
+        fi
+        echo "$dir"
+        echo "── coldstored process ──"; pgrep -fl coldstored || echo "NOT running (never spawned, or crash-looping)"
+        echo "── control socket ──"; ls -l "$dir/coldstored.sock" 2>/dev/null || echo "no socket (daemon never bound it)"
+        echo "── coldstored.err.log (last 25) ──"; tail -n 25 "$dir/coldstored.err.log" 2>/dev/null || echo "(no err log — coldstored likely never spawned)"
 
   ui:demo:
     desc: "[macOS] One command to dogfood locally: MinIO + daemon (background) + the UI. Ctrl-C stops the UI; `task dev:stop` stops the rest."

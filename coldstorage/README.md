@@ -27,7 +27,7 @@ Driven from the **root Taskfile**. From the repo root:
 task daemon:setup        # one-time: Swift toolchain + MinIO binaries (idempotent)
 task daemon:minio        # start local MinIO + bucket
 task daemon:testdata     # sample files (coldstorage/testdata)
-task daemon:build        # first build fetches deps
+task daemon:build:dev    # debug build for the dev loop; first build fetches deps
 task daemon:archive      # scan → encrypt → resumable multipart → verify
 # Ctrl-C mid-run, re-run `task daemon:archive` → it resumes from S3's truth
 task daemon:test         # portable Core tests
