@@ -1,0 +1,53 @@
+# electron-builder — packages the electron-vite build into a signed **ColdStorage.app**. This is step #1
+# of the "real app identity" track (see PACKAGING.md): it produces a bundled, named, icon'd app so the
+# daemon's Photos grant can later (#2, SMAppService) show as "ColdStorage" instead of the raw "coldstored"
+# binary. Config targets electron-builder v26 (signing fields top-level under `mac`; v27 nests them in
+# `mac.sign`). Build with `task ui:package` (macOS only).
+appId: com.theadpharm.coldstorage
+productName: ColdStorage
+copyright: © 2026 The Adpharm
+
+# electron-vite emits the three processes to out/; that + package.json is the whole JS payload (the
+# renderer's deps are already bundled by Vite; main/preload use only `electron` + node builtins).
+directories:
+  buildResources: build          # icon.icns + entitlements live here (electron-builder convention)
+files:
+  - out/**
+  - package.json
+  - "!**/*.map"
+
+# The Swift engine + helpers ship INSIDE the bundle (Contents/Resources/bin) and get signed with the app,
+# so a packaged app is self-contained (no dev `.build/release` paths). `coldstored` is the daemon; the
+# others are the helpers the app shells out to (photo picker, restore). NOTE: in step #2 the daemon moves
+# to an SMAppService LaunchDaemon under Contents/Library/LaunchDaemons — at which point its TCC identity
+# becomes the app's. For now it's bundled-but-still-launched the old way; PACKAGING.md tracks the wire-up.
+extraResources:
+  - from: ../coldstorage/.build/release/coldstored
+    to: bin/coldstored
+  - from: ../coldstorage/.build/release/coldstore-photo-picker
+    to: bin/coldstore-photo-picker
+  - from: ../coldstorage/.build/release/coldstore-restore
+    to: bin/coldstore-restore
+  - from: ../coldstorage/launchd/coldstore-aws-credential-process.sh
+    to: bin/coldstore-aws-credential-process.sh
+
+mac:
+  category: public.app-category.utilities
+  icon: build/icon.icns          # SUPPLY THIS (1024px, from the DS) — else electron-builder uses its default
+  hardenedRuntime: true          # required for notarization; entitlements below carve out what Electron needs
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # The app's own Photos usage string — surfaced when the bundled daemon's grant is requested under the app
+  # identity (#2). Harmless before then. (NSPhotoLibraryUsageDescription is Info.plist, not an entitlement.)
+  extendInfo:
+    NSPhotoLibraryUsageDescription: "ColdStorage uploads the photos you choose to your private cold storage."
+  # Flip to true once an Apple Developer ID cert + notary credentials are configured (APPLE_ID / APPLE_TEAM_ID
+  # / APPLE_APP_SPECIFIC_PASSWORD, or an API key). See PACKAGING.md. Left false so a local unsigned build runs.
+  notarize: false
+  target:
+    - dmg
+    - zip                        # zip = the auto-update artifact when we wire updates later
+
+dmg:
+  title: ColdStorage

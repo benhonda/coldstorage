@@ -15,10 +15,20 @@ import { app, BrowserWindow, shell } from "electron";
 import { DaemonClient } from "../daemon/client.ts";
 import { registerBridge } from "./bridge.ts";
 import { registerSystemHandlers } from "./system.ts";
+import { startDaemon, daemonSocketPath } from "./daemon.ts";
 
-const client = new DaemonClient(); // autoReconnect on by default — survives launchd KeepAlive restarts
+// Pin the app name BEFORE any `getPath("userData")` call. The client resolves the socket path at module
+// load and the daemon supervisor resolves it in `whenReady`; both derive from userData (= appData + app
+// name). If the name weren't settled identically at both moments the two paths could diverge and never
+// meet (→ stuck "connecting"). Pinning it to the productName makes userData deterministic from the start.
+app.setName("ColdStorage");
+
+// Packaged: the app OWNS its daemon (spawned as a child → app's TCC identity, see daemon.ts), so dial the
+// per-user socket it creates. Dev: the daemon runs standalone (`task daemon:run`); use the env/default path.
+const client = new DaemonClient(app.isPackaged ? { socketPath: daemonSocketPath() } : undefined);
 const disposeBridge = registerBridge(client);
 const disposeSystem = registerSystemHandlers();
+let stopDaemon: () => void = () => {};
 
 const createWindow = (): void => {
   const win = new BrowserWindow({
@@ -51,8 +61,16 @@ const createWindow = (): void => {
 };
 
 app.whenReady().then(() => {
-  // Dial the daemon. If it's down, autoReconnect keeps retrying; the renderer shows "disconnected"
-  // until a 'connect' lifecycle push arrives. First dial failing is expected and non-fatal.
+  // Packaged: bring up our own daemon first (the child whose socket the client dials), and start at login
+  // so backups resume after a reboot — the menu-bar/background model a backup app follows. (TODO: expose
+  // openAtLogin as a Settings toggle; pair the background-run UX with a Tray + LSUIElement — see PACKAGING.md.)
+  if (app.isPackaged) {
+    stopDaemon = startDaemon();
+    app.setLoginItemSettings({ openAtLogin: true });
+  }
+
+  // Dial the daemon. If it's not up yet (the child is still binding its socket), autoReconnect keeps
+  // retrying; the renderer shows "connecting" until a 'connect' lifecycle push arrives. Non-fatal.
   client.connect().catch(() => {
     /* lifecycle/reconnect handles it */
   });
@@ -74,4 +92,5 @@ app.on("will-quit", () => {
   disposeBridge();
   disposeSystem();
   client.close();
+  stopDaemon(); // terminate the supervised child (no-op in dev)
 });
