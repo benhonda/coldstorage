@@ -188,6 +188,11 @@ properties rather than collapsing to a framework default — a raw `<a href>`, a
   `bun run typecheck`. Match existing tooling (`Taskfile.yml` → `task`, `bun.lock` → bun).
 - Infra: verify with `task tf:<component>:plan` / `terragrunt plan`; a clean plan is the only "done".
   **Never** run `apply`.
+- **Assume the `pharmer` SSO session is already live** — the default state is *logged in*.
+  Just run AWS/TF tasks (plans, S3, etc.) directly. Do **not** pre-run `task login`, refuse,
+  or treat yourself as logged out on a hunch. Only run `task login` (or flag it) **after** a
+  command actually fails with expired/missing creds, or the user tells you you're logged out
+  (identity facts: `references/aws-oidc.md`).
 - **Never** start a dev server (`task dev`/`bun run dev`/etc.) without explicit permission.
 - **Never** run a Drizzle migration or `db:push` without explicit permission
   (see `references/db.md`).
