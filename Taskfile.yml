@@ -9,6 +9,8 @@ output: prefixed
 #   tf:coldstorage:*  → infra (domain: infra/coldstorage) — Terragrunt, ENV-scoped, shared first
 vars:
   AWS_PROFILE: "pharmer"
+  # Pinned for reproducibility — bump deliberately. Used by `task scan` (leak guard).
+  GITLEAKS_IMAGE: "ghcr.io/gitleaks/gitleaks:v8.30.1"
 
 dotenv:
   - .env
@@ -666,6 +668,30 @@ tasks:
     desc: terraform fmt across infra/
     cmds:
       - terraform fmt -recursive infra/
+
+  # ------------------------------------------------------------------ Security — leak guard (core)
+  # Local secret scan over git HISTORY — the public-exposure surface for this public repo.
+  # Reads only committed content, so gitignored state/tfvars/.terragrunt-cache are excluded
+  # automatically (no false positives off the real secret sitting in local state).
+  # The at-PUSH net is GitHub push protection (server-side, free on public repos) — this is the
+  # before-push local check. Prefers a host `gitleaks`; else runs the pinned container (no install).
+  scan:
+    desc: "Scan git history for leaked secrets (run before pushing infra/ or anything sensitive)"
+    silent: true
+    cmds:
+      - >-
+        if command -v gitleaks >/dev/null 2>&1; then
+        gitleaks git . --no-banner --redact;
+        else
+        docker run --rm -v "{{.ROOT_DIR}}:/repo" {{.GITLEAKS_IMAGE}} git /repo --no-banner --redact;
+        fi && echo "✓ gitleaks: no secrets found in git history"
+
+  hooks:install:
+    desc: "Point git at the tracked .githooks/ dir → enables the pre-commit leak guard. Idempotent."
+    silent: true
+    cmds:
+      - git config core.hooksPath .githooks
+      - echo "✓ core.hooksPath → .githooks (pre-commit gitleaks scan active; bypass with 'git commit --no-verify')"
 
   # ------------------------------------------------------------------ One-offs (temp) — quarantined + dated
   # A throwaway is STILL a task (so .env/AWS load the same). Convention:

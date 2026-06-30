@@ -71,8 +71,10 @@ apps/analytics-docs/src/generated/
 .claude/settings.local.json
 .vercel
 
-# purposefully ignoring tf
-infra/
+# Terraform source IS committed (public repo). The secret-bearing artifacts —
+# state, tfvars, .terraform/, .terragrunt-cache/ — are excluded by the rules above.
+# Provider locks (.terraform.lock.hcl) are committed: those are public checksums.
+# Before `git add infra/`, sanity-check `git status` for stray state/tfvars.
 
 # Business/strategy docs — PRIVATE, never pushed to the public repo
 # (SPEC economics/margins, brand voice, marketing copy). Kept local; back up separately.

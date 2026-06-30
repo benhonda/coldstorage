@@ -37,6 +37,10 @@ sudo curl -fsSL "https://dl.min.io/server/minio/release/linux-${MA}/minio" -o /u
 sudo curl -fsSL "https://dl.min.io/client/mc/release/linux-${MA}/mc" -o /usr/local/bin/mc
 sudo chmod +x /usr/local/bin/minio /usr/local/bin/mc
 
+# Pre-commit leak guard: point git at the tracked .githooks/ dir (gitleaks scans staged
+# changes on every commit). Idempotent; mirrors `task hooks:install`.
+git -C /workspace config core.hooksPath .githooks
+
 # echo "Running init-firewall.sh..."
 # sudo /usr/local/bin/init-firewall.sh
 

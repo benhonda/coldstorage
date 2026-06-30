@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-06-30
+
+- chore: **secret leak guard** for the public repo — pinned `gitleaks` in the devcontainer image + a tracked `.githooks/pre-commit` (scans STAGED changes, blocks the commit on a hit; `core.hooksPath` wired by `post-create.sh` / new `task hooks:install`); new `task scan` (git-history scan, host binary or pinned `GITLEAKS_IMAGE` container). `.gitignore` now **commits `infra/` source** (state/tfvars/`.terragrunt-cache` still excluded).
+
 ## 2026-06-29
 
 - docs: ROADMAP flips the photo-deposit "0 uploaded" orphan bug from 🔧 in-flight to ✅ resolved — re-validated live on the Mac (`daemon:reset` + re-deposit); the follow-on "only 2 of 10" was a separate identity-dedup issue, fixed by the Finder-style deposit work (`5183ba0`); 69 Core tests, `Journal.isFileArchived` line ref updated.

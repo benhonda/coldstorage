@@ -46,7 +46,16 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
        -a "export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
        -x
 
-# 7. Firewall helper (vscode may call it via sudo)
+# 7. gitleaks — secret-scan leak guard (arch-aware), used by `task scan`.
+#    Pinned; bump in lockstep with GITLEAKS_IMAGE in Taskfile.yml.
+RUN GL_VER=8.30.1 && \
+    case "$(dpkg --print-architecture)" in amd64) GL_ARCH=x64 ;; arm64) GL_ARCH=arm64 ;; *) GL_ARCH=x64 ;; esac && \
+    curl -L -o /tmp/gitleaks.tar.gz \
+      "https://github.com/gitleaks/gitleaks/releases/download/v${GL_VER}/gitleaks_${GL_VER}_linux_${GL_ARCH}.tar.gz" && \
+    tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks && \
+    rm /tmp/gitleaks.tar.gz && gitleaks version
+
+# 8. Firewall helper (vscode may call it via sudo)
 COPY init-firewall.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/init-firewall.sh && \
     echo "vscode ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" \

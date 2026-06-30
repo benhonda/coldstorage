@@ -1,0 +1,21 @@
+#!/bin/sh
+# Pre-commit leak guard. Scans ONLY staged changes (fast, ~hundreds of ms) and blocks the
+# commit if a secret is staged. gitleaks is pinned in the devcontainer image (see
+# .devcontainer/Dockerfile) and Taskfile `scan`. Tracked + shared via core.hooksPath
+# (`task hooks:install`, also run by .devcontainer/post-create.sh).
+#
+# Bypass a false positive:  git commit --no-verify   (then add a .gitleaksignore entry)
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "⚠ gitleaks not on PATH — skipping pre-commit leak scan." >&2
+  echo "  Rebuild the devcontainer, or run 'task scan' before pushing." >&2
+  exit 0
+fi
+
+if ! gitleaks git --staged --redact --no-banner; then
+  echo "" >&2
+  echo "✗ gitleaks found a secret in your STAGED changes — commit blocked." >&2
+  echo "  Real secret:    unstage it, rotate if it ever touched disk in a shared place." >&2
+  echo "  False positive: git commit --no-verify   (and add a .gitleaksignore entry)" >&2
+  exit 1
+fi
