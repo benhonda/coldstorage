@@ -11,7 +11,7 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
-import { mkdirSync, openSync } from "node:fs";
+import { mkdirSync, openSync, readFileSync } from "node:fs";
 import { app } from "electron";
 
 /** Per-user data dir — the SSOT for everything the daemon persists. `userData` resolves to
@@ -26,19 +26,54 @@ export const daemonSocketPath = (): string => join(dataDir(), "coldstored.sock")
 /** Absolute path to the bundled daemon binary (Contents/Resources/bin — see electron-builder.yml). */
 const coldstoredPath = (): string => join(process.resourcesPath, "bin", "coldstored");
 
-/** The env `coldstored` reads (see coldstored/main.swift) — per-user paths under {@link dataDir}; the
- * launch env passes through for AWS bucket/region. NOTE: wiring production AWS credentials into a
- * Finder-launched app (which inherits no shell env) is a SEPARATE milestone — the daemon still STARTS and
- * serves the control socket without them (creds resolve lazily; only uploads need them), which is all
- * this step needs to get the UI connected. */
-const daemonEnv = (dir: string): NodeJS.ProcessEnv => ({
-  ...process.env,
-  COLDSTORE_SOCKET: join(dir, "coldstored.sock"),
-  COLDSTORE_JOURNAL: join(dir, "coldstore.sqlite"),
-  COLDSTORE_KEK: join(dir, "kek.bin"),
-  COLDSTORE_STAGING: join(dir, "staging"),
-  COLDSTORE_STATUS: join(dir, "status.json"),
-});
+/** The packaged app's per-user AWS config — the bucket/region/profile a Finder-launched app can't get
+ * from a shell env. Written by `task ui:config` (from the infra-outputs handoff, the same SSOT the launchd
+ * plist uses). NO secret lives here: creds resolve via the `awsProfile`'s `credential_process → Keychain`
+ * (set up once by `task daemon:creds`), exactly like the launchd daemon. */
+type AppConfig = { bucket?: string | undefined; region?: string | undefined; awsProfile?: string | undefined };
+
+/** Read `<dataDir>/config.json` best-effort. A missing/malformed file logs and returns `{}` so the daemon
+ * still starts + serves the control socket (the UI connects; only uploads need this) — the graceful
+ * "connected but can't upload" degrade, not a hard failure. */
+const readAppConfig = (dir: string): AppConfig => {
+  const path = join(dir, "config.json");
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    console.error(`no ${path} — daemon will start but can't upload. Run \`task ui:config\` on your Mac (see ui/PACKAGING.md).`);
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) throw new Error("not a JSON object");
+    const o = parsed as Record<string, unknown>;
+    const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined);
+    return { bucket: str(o.bucket), region: str(o.region), awsProfile: str(o.awsProfile) };
+  } catch (e) {
+    console.error(`ignoring malformed ${path}: ${String(e)}`);
+    return {};
+  }
+};
+
+/** The env `coldstored` reads (see coldstored/main.swift) — per-user paths under {@link dataDir}, plus the
+ * AWS bucket/region/profile from {@link readAppConfig} so a Finder-launched app (which inherits no shell
+ * env) can actually upload. Only keys present in config.json are set, so `coldstored`'s own defaults still
+ * apply when it's absent. Creds = `AWS_PROFILE` → credential_process → Keychain (no secret in env). */
+const daemonEnv = (dir: string): NodeJS.ProcessEnv => {
+  const cfg = readAppConfig(dir);
+  return {
+    ...process.env,
+    COLDSTORE_SOCKET: join(dir, "coldstored.sock"),
+    COLDSTORE_JOURNAL: join(dir, "coldstore.sqlite"),
+    COLDSTORE_KEK: join(dir, "kek.bin"),
+    COLDSTORE_STAGING: join(dir, "staging"),
+    COLDSTORE_STATUS: join(dir, "status.json"),
+    ...(cfg.bucket ? { COLDSTORE_BUCKET: cfg.bucket } : {}),
+    ...(cfg.region ? { AWS_REGION: cfg.region } : {}),
+    ...(cfg.awsProfile ? { AWS_PROFILE: cfg.awsProfile } : {}),
+  };
+};
 
 /**
  * Spawn + supervise `coldstored`. Returns a disposer that stops the supervisor and terminates the child.

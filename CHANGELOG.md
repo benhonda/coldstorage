@@ -2,6 +2,7 @@
 
 ## 2026-06-30
 
+- feat: **packaged `ColdStorage.app` can upload** — a Finder-launched app inherits no shell env, so it connected but couldn't upload. `main/daemon.ts` now reads a per-user `config.json` (`{bucket,region,awsProfile}`) and injects `COLDSTORE_BUCKET`/`AWS_REGION`/`AWS_PROFILE` into the daemon (best-effort: missing/malformed → daemon still starts, just can't upload). No secret in it — creds resolve via the `coldstorage` profile's `credential_process → Keychain`. New `task ui:config` (writes it from the infra-outputs handoff) + `task ui:bootstrap` (`daemon:creds` + `ui:config`); `ui:package:doctor` now checks config.json + `sts get-caller-identity`. Pending Ben's Mac verify.
 - chore: **secret leak guard** for the public repo — pinned `gitleaks` in the devcontainer image + a tracked `.githooks/pre-commit` (scans STAGED changes, blocks the commit on a hit; `core.hooksPath` wired by `post-create.sh` / new `task hooks:install`); new `task scan` (git-history scan, host binary or pinned `GITLEAKS_IMAGE` container). `.gitignore` now **commits `infra/` source** (state/tfvars/`.terragrunt-cache` still excluded).
 
 ## 2026-06-29

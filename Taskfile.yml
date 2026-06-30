@@ -552,6 +552,31 @@ tasks:
         echo "ad-hoc signed $app — launching…"
         open "$app"
 
+  ui:config:
+    desc: "[macOS] Write the packaged app's AWS config (~/Library/Application Support/ColdStorage/config.json: bucket/region/profile) from the infra-outputs handoff, so a Finder-launched ColdStorage.app — which inherits no shell env — can actually upload. NO secret is written here; creds resolve via the profile's credential_process → Keychain (run `task daemon:creds` once). Mirrors the env daemon:install bakes into the launchd plist."
+    dir: coldstorage
+    vars:
+      DATA_DIR: '{{.HOME}}/Library/Application Support/ColdStorage'
+    cmds:
+      - mkdir -p "{{.DATA_DIR}}"
+      - |
+        # Same SSOT + defaults as daemon:install: bucket/region/profile come from the handoff file written
+        # by `task tf:coldstorage:creds-export` in the devcontainer. Env vars still override (e.g. MinIO test).
+        CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
+        [ -f "$CREDS" ] && { set -a; . "$CREDS"; set +a; }
+        bucket="${COLDSTORE_BUCKET:-coldstorage}"
+        region="${AWS_REGION:-us-east-1}"
+        profile="${COLDSTORE_AWS_PROFILE:-coldstorage}"
+        printf '{\n  "bucket": "%s",\n  "region": "%s",\n  "awsProfile": "%s"\n}\n' "$bucket" "$region" "$profile" > "{{.DATA_DIR}}/config.json"
+        echo "wrote {{.DATA_DIR}}/config.json  (bucket=$bucket region=$region profile=$profile)"
+        echo "creds: ensure 'task daemon:creds' wired the '$profile' profile + Keychain (one-time). Verify: task ui:package:doctor"
+
+  ui:bootstrap:
+    desc: "[macOS] One-shot setup so the packaged ColdStorage.app can upload: seed creds (Keychain + `coldstorage` profile) → write the app's config.json. Run once after `task tf:coldstorage:creds-export` (devcontainer). The .app analogue of daemon:bootstrap."
+    cmds:
+      - task: daemon:creds
+      - task: ui:config
+
   ui:package:doctor:
     desc: "[macOS] Diagnose a packaged app stuck on 'Connecting…': did the bundled coldstored spawn, bind its socket, and what did it log?"
     cmds:
@@ -565,6 +590,18 @@ tasks:
         echo "$dir"
         echo "── coldstored process ──"; pgrep -fl coldstored || echo "NOT running (never spawned, or crash-looping)"
         echo "── control socket ──"; ls -l "$dir/coldstored.sock" 2>/dev/null || echo "no socket (daemon never bound it)"
+        # Upload prerequisites (the "connects but can't upload" blocker): config.json + the AWS profile it names.
+        echo "── upload config (config.json) ──"
+        if [ -f "$dir/config.json" ]; then
+          cat "$dir/config.json"
+          profile=$(sed -n 's/.*"awsProfile"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$dir/config.json")
+          profile="${profile:-coldstorage}"
+          echo "── AWS auth (profile '$profile' → credential_process → Keychain) ──"
+          aws sts get-caller-identity --profile "$profile" 2>&1 | grep -Ei 'Arn|error|could not|Unable' \
+            || echo "auth FAILED — run 'task daemon:creds' (wires the profile + Keychain)"
+        else
+          echo "MISSING — a Finder-launched app can't upload without it. Run 'task ui:config' (or 'task ui:bootstrap')."
+        fi
         echo "── coldstored.err.log (last 25) ──"; tail -n 25 "$dir/coldstored.err.log" 2>/dev/null || echo "(no err log — coldstored likely never spawned)"
 
   ui:demo:

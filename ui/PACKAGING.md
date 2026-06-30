@@ -6,8 +6,10 @@
 > **still lists "coldstored", not "ColdStorage"** — responsible-process attribution did NOT make the child
 > inherit the app's TCC identity (and this was an *ad-hoc*-signed build, which gives TCC an unstable,
 > filename-defaulted identity anyway). So the original screenshot problem is **still open**; see
-> "Identity — UNRESOLVED" below. Two things also remain before it's actually usable: production AWS
-> credentials (the app connects but can't upload) and real code signing.
+> "Identity — UNRESOLVED" below. Two things also remain before it's actually usable: ~~production AWS
+> credentials (the app connects but can't upload)~~ **AWS creds wiring is now BUILT (2026-06-29) — pending
+> Ben's Mac verify** (`task ui:bootstrap` + `config.json`; see "Production AWS credentials" below) and real
+> code signing.
 
 ## Why this exists
 
@@ -87,9 +89,22 @@ Options for when we return to this (need a **properly signed** build to evaluate
 build — defer it to the signing milestone. Prioritize the two things that block actually USING the app:
 
 **Still to do (own milestones):**
-- **Production AWS credentials** for a Finder-launched app (inherits no shell env) — the daemon starts +
-  serves the socket without them, but **uploads can't complete**. This is the real blocker to dogfooding.
-  Likely a bundled credential flow / config file. ← **next priority**
+- **Production AWS credentials** for a Finder-launched app — **BUILT ✅ (2026-06-29), PENDING Ben's Mac
+  verify.** A Finder-launched app inherits no shell env, so the daemon started + served the socket but
+  **uploads couldn't complete** (the real dogfooding blocker). Fix reuses the launchd machinery wholesale:
+  the supervisor (`main/daemon.ts`) reads a per-user **`config.json`** in the app's data dir
+  (`~/Library/Application Support/ColdStorage/config.json` → `{bucket, region, awsProfile}`) and injects
+  `COLDSTORE_BUCKET`/`AWS_REGION`/`AWS_PROFILE` into the daemon env — exactly the three values
+  `daemon:install` bakes into the launchd plist. **No secret is in config.json**: creds resolve via the
+  `coldstorage` profile's `credential_process → Keychain`, the same path `task daemon:creds` already sets
+  up. Write it with **`task ui:config`** (from the infra-outputs handoff SSOT) or **`task ui:bootstrap`**
+  (`daemon:creds` + `ui:config`, the .app analogue of `daemon:bootstrap`). Reading is best-effort — a
+  missing/malformed file logs + the daemon still starts (graceful "connected but can't upload" degrade).
+  `task ui:package:doctor` now reports config.json + runs `aws sts get-caller-identity` on its profile.
+  **NOTE: the packaged app's data dir == the launchd daemon's `DATA_DIR`** (both `~/Library/Application
+  Support/ColdStorage`, same `coldstored.sock`) — don't run both at once; `task daemon:uninstall` the
+  launchd one before dogfooding the .app. **Ben to verify on Mac:** `task ui:bootstrap` → launch the .app →
+  deposit a file → confirm it lands in the prod vault (`task ui:package:doctor` should show a valid Arn).
 - **Real code signing** (Developer ID / the Apple Development cert `daemon:install` already uses) — needed
   for arm64 launch beyond the ad-hoc stopgap, for the grant to persist across rebuilds, AND to even judge
   the identity options above. Confirm electron-builder signs `Contents/Resources/bin/*` (may need `mac.binaries`).
