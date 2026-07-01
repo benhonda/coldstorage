@@ -148,9 +148,33 @@ server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
    `task tf:coldstorage:creds-export` (devcontainer) → `task daemon:bootstrap` or `task ui:bootstrap` (Mac)
    to pick up the new handoff values, then a manually-minted Cognito token to call `authenticate` over the
    control socket.
-3. **ZK crypto** — `UserMasterKeyProvider` (Argon2id + MK hierarchy) replacing `LocalFileKEK`; recovery
-   code; the encrypted key-blob format. *Gate:* unit tests — password change re-wraps MK without touching
-   DEKs; recovery code unlocks; round-trip still byte-identical; wrong password fails closed.
+3. **ZK crypto — primitives DONE ✅ (2026-07-01, 79 Core tests green).** New
+   `Sources/ColdStorageCore/ZeroKnowledgeKeys.swift`: `KeyBlob` (wrappedMK under BOTH a password- and a
+   recovery-code-derived Argon2id key, + their salts + the ops/mem tuning used, stored alongside since the
+   raw KDF — unlike libsodium's self-describing `pwhash_str` — doesn't embed its params) and
+   `ZeroKnowledgeKeys` (`mint`/`unlock`/`unlockWithRecoveryCode`/`rewrapPassword`/
+   `resetPasswordUsingRecoveryCode`). MK is a random 256-bit key — the existing `userKEK()` `wrap()`/
+   `unwrap()`/`EnvelopeCipher`/`UploadEngine`/`RestoreEngine` are byte-for-byte UNCHANGED, only what
+   *produces* the KEK is new. `UserMasterKeyProvider: KeyProvider` is the drop-in production conformer
+   (construction IS the unlock; a wrong secret throws `.wrongSecret` up front, never silently). **Argon2id
+   library decided: swift-sodium** (wraps libsodium, which defaults `crypto_pwhash` to Argon2id) — chosen
+   over `calebkleveter/Argon2` (unmaintained since 2018) and `Argon2Swift` (unmaintained since 2023, no
+   Linux platform declared); verified against the actual vendored SDK/library source, not just docs.
+   **Linux gotcha found + fixed:** Ubuntu 24.04's apt `libsodium-dev` is 1.0.18, which predates AEGIS
+   (needs 1.0.19+) that swift-sodium's Linux binding references — build failed with "cannot find
+   'crypto_aead_aegis128l_...'". Fixed by building current libsodium (1.0.22) from the official source
+   release instead of apt (new `task daemon:setup` sub-task `_libsodium-dev`, Linux-only — Apple platforms
+   get a prebuilt XCFramework bundled in the SPM package itself, no system lib needed). *Gate met:* unit
+   tests — password change re-wraps MK without touching DEKs (proven: a DEK wrapped under MK before a
+   password change still unwraps clean after, no re-encryption) ✅; recovery code unlocks (to the SAME MK
+   as the password path) ✅; round-trip still byte-identical through the real `EnvelopeCipher` ✅; wrong
+   password/recovery code fails closed (AES-GCM auth tag rejects, no silent garbage key) ✅; production
+   Argon2id tuning (`defaultOpsLimit`/`defaultMemLimit`, libsodium's "Moderate" preset) verified to
+   actually derive a key in this environment (~1.4s), not just the lightened test tuning ✅.
+   **NOT yet wired into `coldstored/main.swift`** (unlike Phase 2's `CognitoAuth`) — there's nowhere
+   legitimate to source a `KeyBlob` from yet (Phase 4, the account backend) or a password/recovery code
+   from (Phase 5, the sign-in UI), so wiring it now would have no real caller. That wiring is now this
+   phase's remaining work, landing naturally with P4/P5.
 4. **Account backend** — Cognito↔Paddle↔key-blob API + webhooks + `subscription_active` gate. *Gate:*
    webhook flips state; upload blocked when inactive.
 5. **App auth + paywall UX** — sign-in/up + recovery-code capture + subscribe flow in the Electron UI;
@@ -159,14 +183,19 @@ server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
    a notarized build launches Gatekeeper-clean on a non-dev Mac and self-updates.
 
 ## Open sub-decisions (don't block P1; flagged for when their phase lands)
-- **Encryption password vs auth credential (LOAD-BEARING for P3).** With **Sign in with Apple there is no
-  password** to derive KEK_pw from — so the encryption secret that protects the MasterKey **cannot** be the
-  login. Options: (a) a *separate* "encryption passphrase" the user sets at signup (one more thing to
-  remember, but clean ZK), (b) make the recovery code the *primary* MK protector + escrow a device-local
-  copy of MK in the macOS Keychain (smooth per-device UX, recovery code is the cross-device/new-device key),
-  (c) email/password users derive from password, Apple users get a generated passphrase. Leaning (b) — it
-  matches "remote SSD" muscle memory (no passphrase prompt every launch) while staying ZK. Decide at P3.
-- **Argon2id library** for Swift (swift-sodium vs a focused Argon2 wrapper) — P3.
+- **Encryption password vs auth credential (LOAD-BEARING for P3 wiring, NOT for the primitives).** With
+  **Sign in with Apple there is no password** to derive KEK_pw from — so the encryption secret that
+  protects the MasterKey **cannot** be the login. Options: (a) a *separate* "encryption passphrase" the
+  user sets at signup (one more thing to remember, but clean ZK), (b) make the recovery code the *primary*
+  MK protector + escrow a device-local copy of MK in the macOS Keychain (smooth per-device UX, recovery
+  code is the cross-device/new-device key), (c) email/password users derive from password, Apple users get
+  a generated passphrase. Leaning (b) — it matches "remote SSD" muscle memory (no passphrase prompt every
+  launch) while staying ZK. **Still open** — doesn't block the primitives (`ZeroKnowledgeKeys` supports
+  both a password path and a recovery-code path unconditionally, per-account choice of which is "primary"
+  is a P4/P5 wiring decision) and Apple Sign-In is `enable_apple_idp`-gated OFF today, so it isn't a live
+  gap yet. Decide before Apple Sign-In ships (P5 at the earliest, or whenever `enable_apple_idp=true`).
+- ~~**Argon2id library** for Swift (swift-sodium vs a focused Argon2 wrapper) — P3.~~ **DECIDED ✅
+  (2026-07-01): swift-sodium.** See Phase 3 above.
 - **Account backend shape** (Lambda+APIGW+DynamoDB vs a managed app) — P4.
 - **Apple Sign-in prerequisites** — Apple Developer Services ID + key (Ben provides) — P1 (var-gated; email
   /password works without it).

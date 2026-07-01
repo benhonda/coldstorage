@@ -65,10 +65,39 @@ tasks:
   # Native — no Docker. Swift toolchain (swiftly) + a standalone MinIO binary.
   # `task daemon:setup` installs both if missing; the devcontainer post-create does it on rebuild.
   daemon:setup:
-    desc: Install the Swift toolchain (Linux) + OS-correct MinIO/mc binaries if missing (idempotent)
+    desc: Install the Swift toolchain (Linux) + OS-correct MinIO/mc binaries + libsodium (Linux) if missing (idempotent)
     cmds:
       - bash .devcontainer/install-swift.sh
       - task: _minio-binaries
+      - task: _libsodium-dev
+
+  _libsodium-dev:
+    # libsodium the C library — the Linux systemLibrary target swift-sodium's Argon2id path (ZeroKnowledgeKeys,
+    # PROD.md Phase 3) needs. Apple platforms instead get a prebuilt XCFramework bundled in the SPM package
+    # itself, so this is a no-op there. NOT `apt install libsodium-dev`: Ubuntu 24.04 ships 1.0.18, which
+    # predates AEGIS (added 1.0.19) that swift-sodium's Linux binding references — the build fails with
+    # "cannot find 'crypto_aead_aegis128l_...' in scope". Build+install a current release from source
+    # instead (same "get current upstream directly" call as _minio-binaries's curl'd binaries). Idempotent
+    # via status (pkg-config version check); a dep of daemon:setup so a fresh devcontainer needs no manual step.
+    internal: true
+    vars:
+      VERSION: "1.0.22"
+    status:
+      - '[ "$(uname -s)" != "Linux" ] || pkg-config --atleast-version=1.0.19 libsodium'
+    cmds:
+      - |
+        [ "$(uname -s)" != "Linux" ] && exit 0
+        set -e
+        cd /tmp
+        curl -fsSL "https://github.com/jedisct1/libsodium/releases/download/{{.VERSION}}-RELEASE/libsodium-{{.VERSION}}.tar.gz" -o libsodium.tar.gz
+        tar xzf libsodium.tar.gz
+        cd "libsodium-{{.VERSION}}"
+        ./configure --prefix=/usr/local
+        make -j"$(nproc)"
+        sudo make install
+        sudo ldconfig
+        cd /tmp && rm -rf libsodium.tar.gz "libsodium-{{.VERSION}}"
+        echo "installed libsodium {{.VERSION}} to /usr/local (was: apt's 1.0.18, too old for AEGIS)"
 
   _minio-binaries:
     # Download the minio + mc binaries for THIS OS/arch (macOS or Linux) if missing. Idempotent via
