@@ -10,12 +10,33 @@ import ColdStorageMac   // FolderWatcher (FSEvents). Also home of PhotoKitSource
 //   COLDSTORE_BUCKET, COLDSTORE_ENDPOINT (MinIO), COLDSTORE_SOURCES=dir1:dir2  (one-time seed),
 //   COLDSTORE_ONCE=1 (run once vs loop), COLDSTORE_INTERVAL=300, COLDSTORE_STATUS=status.json,
 //   COLDSTORE_SOCKET=coldstored.sock (control plane), COLDSTORE_JOURNAL, COLDSTORE_KEK, COLDSTORE_STAGING
+//   COLDSTORE_COGNITO_IDENTITY_POOL_ID + COLDSTORE_COGNITO_USER_POOL_PROVIDER (multi-user prod; both
+//   required together, empty/unset ⇒ today's single-operator dogfood mode), optional COLDSTORE_COGNITO_REGION
+//   (falls back to AWS_REGION — only needed if Cognito and the vault ever live in different regions)
 let env = ProcessInfo.processInfo.environment
 let bucket = env["COLDSTORE_BUCKET"] ?? "coldstorage"
 let endpoint = env["COLDSTORE_ENDPOINT"]
 let folderRoots = (env["COLDSTORE_SOURCES"] ?? "").split(separator: ":").map { URL(fileURLWithPath: String($0)) }
 
-let config = try await S3Client.S3ClientConfiguration(region: env["AWS_REGION"] ?? "us-east-1")
+// Cognito (multi-user prod, PROD.md Phase 2) is opt-in: unset ⇒ the default AWS credential chain (the
+// scoped IAM user via `daemon:bootstrap`'s profile/Keychain) and the "blobs" keyPrefix, exactly as today.
+// Set ⇒ every S3 call signs as whoever is signed in over the control socket (`authenticate` command); until
+// that succeeds, S3 calls fail clean on Cognito's own auth error — the identity pool grants no
+// unauthenticated role (infra/coldstorage/modules/stack/cognito.tf: allow_unauthenticated_identities = false).
+// Non-empty check (not just non-nil): the launchd plist always sets these two keys, blank when the
+// handoff predates Phase 2c or was never re-exported — that must read as "not configured", same as unset.
+func nonEmpty(_ key: String) -> String? { env[key].flatMap { $0.isEmpty ? nil : $0 } }
+let cognitoAuth: CognitoAuth?
+let config: S3Client.S3ClientConfiguration
+if let poolId = nonEmpty("COLDSTORE_COGNITO_IDENTITY_POOL_ID"), let providerName = nonEmpty("COLDSTORE_COGNITO_USER_POOL_PROVIDER") {
+    let cognitoRegion = env["COLDSTORE_COGNITO_REGION"] ?? env["AWS_REGION"] ?? "us-east-1"
+    let auth = try CognitoAuth(identityPoolId: poolId, identityPoolRegion: cognitoRegion, userPoolProviderName: providerName)
+    cognitoAuth = auth
+    config = try await S3Client.S3ClientConfiguration(awsCredentialIdentityResolver: auth.resolver, region: cognitoRegion)
+} else {
+    cognitoAuth = nil
+    config = try await S3Client.S3ClientConfiguration(region: env["AWS_REGION"] ?? "us-east-1")
+}
 if let endpoint { config.endpoint = endpoint; config.forcePathStyle = true }
 let client = S3Client(config: config)
 
@@ -65,7 +86,8 @@ let bus = EventBus()
 let daemon = DaemonService(engine: engine, restoreEngine: restoreEngine, journal: journal, bus: bus,
                            statusPath: env["COLDSTORE_STATUS"] ?? "status.json",
                            platformSources: platformSources,
-                           photoResolver: photoResolver)
+                           photoResolver: photoResolver,
+                           cognitoAuth: cognitoAuth)
 
 // Control plane: a local unix socket the UI/cli drives (getStatus, add/removeSource, triggerNow, …).
 let socketPath = env["COLDSTORE_SOCKET"] ?? "coldstored.sock"

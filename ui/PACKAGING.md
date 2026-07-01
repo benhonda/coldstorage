@@ -93,14 +93,21 @@ build — defer it to the signing milestone. Prioritize the two things that bloc
   verify.** A Finder-launched app inherits no shell env, so the daemon started + served the socket but
   **uploads couldn't complete** (the real dogfooding blocker). Fix reuses the launchd machinery wholesale:
   the supervisor (`main/daemon.ts`) reads a per-user **`config.json`** in the app's data dir
-  (`~/Library/Application Support/ColdStorage/config.json` → `{bucket, region, awsProfile}`) and injects
-  `COLDSTORE_BUCKET`/`AWS_REGION`/`AWS_PROFILE` into the daemon env — exactly the three values
-  `daemon:install` bakes into the launchd plist. **No secret is in config.json**: creds resolve via the
-  `coldstorage` profile's `credential_process → Keychain`, the same path `task daemon:creds` already sets
-  up. Write it with **`task ui:config`** (from the infra-outputs handoff SSOT) or **`task ui:bootstrap`**
-  (`daemon:creds` + `ui:config`, the .app analogue of `daemon:bootstrap`). Reading is best-effort — a
-  missing/malformed file logs + the daemon still starts (graceful "connected but can't upload" degrade).
-  `task ui:package:doctor` now reports config.json + runs `aws sts get-caller-identity` on its profile.
+  (`~/Library/Application Support/ColdStorage/config.json` → `{bucket, region, awsProfile,
+  cognitoIdentityPoolId, cognitoUserPoolProvider}` — the last two added 2026-07-01 for the Cognito
+  multi-user seam, PROD.md Phase 2c; empty/absent until `tf:coldstorage:creds-export` has been re-run
+  since) and injects `COLDSTORE_BUCKET`/`AWS_REGION`/`AWS_PROFILE`/`COLDSTORE_COGNITO_IDENTITY_POOL_ID`/
+  `COLDSTORE_COGNITO_USER_POOL_PROVIDER` into the daemon env — exactly what `daemon:install` bakes into the
+  launchd plist. **No secret is in config.json**: creds resolve via the `coldstorage` profile's
+  `credential_process → Keychain`, the same path `task daemon:creds` already sets up. Write it with
+  **`task ui:config`** (from the infra-outputs handoff SSOT) or **`task ui:bootstrap`** (`daemon:creds` +
+  `ui:config`, the .app analogue of `daemon:bootstrap`). Reading is best-effort — a missing/malformed file
+  logs + the daemon still starts (graceful "connected but can't upload" degrade).
+  `task ui:package:doctor` now reports config.json + runs `aws sts get-caller-identity` on its profile —
+  **but note it auto-discovers by data dir, which the packaged app SHARES with the launchd daemon (see the
+  NOTE just below), so a `daemon:install`ed launchd daemon still running will make `doctor` report on
+  *that* process, not the packaged app's own bundled `coldstored` — check the binary path it prints
+  (`Contents/Resources/bin/coldstored` = the real packaged-app process).**
   **NOTE: the packaged app's data dir == the launchd daemon's `DATA_DIR`** (both `~/Library/Application
   Support/ColdStorage`, same `coldstored.sock`) — don't run both at once; `task daemon:uninstall` the
   launchd one before dogfooding the .app. **Ben to verify on Mac:** `task ui:bootstrap` → launch the .app →

@@ -102,41 +102,52 @@ server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
    client ids (not secrets) are available via `cd infra/coldstorage/live/production && terragrunt output`;
    they'll flow to the daemon/app through the **gitignored handoff in 2c** — kept OUT of tracked docs
    (public repo).
-2. **Daemon credential seam — IN PROGRESS.** Built in gated sub-steps:
+2. **Daemon credential seam — DONE ✅ (2026-07-01, all 3 sub-steps landed).** Built in gated sub-steps:
    - **2a — per-user key as journal SSOT: DONE ✅ (2026-06-30, 71 Core tests green).** `keyPrefix` threads
      `BlobPlan`(`Models.swift`)→`BlobPlanner`→`UploadEngine.run(keyPrefix:)` to the real S3 PUT; it's stored
      as `s3Key`; **`RestoreEngine` reads the stored key** via new `Journal.blobS3Key(_:)` (the keystone fix —
      a `blobs/<cognito-id>/<id>` object is now found, not missed). Backward-compatible (default `"blobs"`);
      proven by `PerUserPrefixTests` (prefix reaches store + journal; default path unchanged).
-   - **2b — TODO:** `CognitoAuth` actor + `CognitoAWSCredentialIdentityResolver` in `main.swift` + `GetId`→
-     prefix + `authenticate` control command + `Package.swift` (`AWSSDKIdentity`/`AWSCognitoIdentity`).
-   - **2c — TODO:** `creds-export` emits Cognito ids → gitignored handoff; daemon/app config reads them;
-     `protocol.ts` `authenticate`.
+   - **2b — DONE ✅ (2026-07-01, 72 Core tests green + `ui:typecheck`/`ui:test` green).** New `CognitoAuth`
+     actor (`Sources/ColdStorageCore/CognitoAuth.swift`) owns a single long-lived
+     `CognitoAWSCredentialIdentityResolver` (built once, unauthenticated, at init — the resolver makes no
+     network call until something needs credentials, confirmed by reading the vendored SDK source, not just
+     the docs); `authenticate(idToken:)` calls `updateLogins` on it (so `S3Client` — which holds a reference,
+     not a copy — signs every later call as this user) and separately calls `CognitoIdentityClient.getId`
+     (the resolver never exposes the identity id it resolves internally) to set
+     `vaultPrefix = "blobs/\(identityId)"`. `coldstored/main.swift` is opt-in gated on 3 new env vars
+     (`COLDSTORE_COGNITO_IDENTITY_POOL_ID`/`_USER_POOL_PROVIDER`/`_REGION`) — unset ⇒ today's default
+     credential chain + `"blobs"`, byte-for-byte the old behavior; set ⇒ `S3Client` is built from
+     `CognitoAuth.resolver`. `DaemonService` takes `cognitoAuth: CognitoAuth?` and `performRun` reads
+     `await cognitoAuth?.vaultPrefix ?? "blobs"` into `engine.run(keyPrefix:)` — one edit point covers
+     scheduled runs + both deposit paths (all three call `performRun`). New control command
+     `authenticate idToken=…` (`DaemonService.handle`) → `AuthDTO{ok,identityId}`; errors clean on a daemon
+     with no `cognitoAuth` configured. `protocol.ts` `Auth`/`authenticate` added (typecheck + `ui:test`
+     green) — the login UI itself is still Phase 5. `CognitoAuthTests` proves the actor starts
+     unauthenticated (`vaultPrefix == nil`) with no network call.
+   - **2c — DONE ✅ (2026-07-01).** `tf:coldstorage:creds-export` now also emits
+     `COLDSTORE_COGNITO_IDENTITY_POOL_ID` + `COLDSTORE_COGNITO_USER_POOL_PROVIDER` (composed from the
+     already-applied `cognito_identity_pool_id`/`cognito_user_pool_id`/`aws_region` TF outputs — no new
+     Terraform output needed, so no apply required for this sub-step) into the gitignored handoff. Both
+     consumers read them: **`daemon:install`** substitutes 2 new plist placeholders
+     (`__COGNITO_IDENTITY_POOL_ID__`/`__COGNITO_USER_POOL_PROVIDER__`) into
+     `launchd/com.theadpharm.coldstored.plist.template`, blank when the handoff predates 2c; **`ui:config`**
+     writes the same 2 values into the packaged app's `config.json`, read by `ui/src/main/daemon.ts`'s
+     `AppConfig`/`daemonEnv` (same pass-through pattern as `bucket`/`region`/`awsProfile`) so the Electron-app
+     daemon supervisor picks them up too. `coldstored/main.swift`'s gate now treats an **empty string** the
+     same as unset (`nonEmpty(_:)`) — needed because the plist/config.json always set the keys now, blank
+     when not configured, instead of omitting them. Verified: `daemon:build:dev` + `daemon:test` (72 green) +
+     `ui:typecheck` + `ui:test` (51 green); all 3 new/changed shell blocks passed `bash -n`.
 
    Why **atomic** to actually upload as a user: the IAM policy only grants `blobs/<sub>/*`, so the credential
-   swap (2b) and the per-user prefix (2a) must both be live or every PUT is `AccessDenied`. Verified the SDK is turnkey
-   (`CognitoAWSCredentialIdentityResolver` in `AWSSDKIdentity`: `init(identityPoolId:logins:identityPoolRegion:)`,
-   actor-isolated `updateLogins(...)` for token refresh, plugs into
-   `S3Client.S3ClientConfig(awsCredentialIdentityResolver:region:)`). File-level plan, all sites mapped:
-   - **`Package.swift`** — add `AWSSDKIdentity` (resolver) + `AWSCognitoIdentity` (call `GetId` to learn the
-     identity id → the prefix; the resolver doesn't expose it).
-   - **New `CognitoAuth` actor (Core)** — owns the resolver; `authenticate(idToken)` → `updateLogins` +
-     `GetId` → holds `vaultPrefix = "blobs/\(identityId)"`. Unauthed → nil prefix (uploads fail clean).
-   - **`coldstored/main.swift`** — at the `S3Client.S3ClientConfiguration` line (~:18) build the resolver
-     first (empty logins) and build the `S3Client` from it; then pass the `CognitoAuth` holder through the
-     `S3Store`/`UploadEngine`/`DaemonService` construction that follows (the `DaemonService(engine:…)` line).
-   - **Per-user key as journal SSOT — DONE ✅ in 2a** (`BlobPlan.keyPrefix`/`BlobPlanner`/`UploadEngine.run`
-     + `RestoreEngine` reads `Journal.blobS3Key`; see the 2a entry above + `PerUserPrefixTests`). **Remaining
-     in 2b:** `performRun` must pass `CognitoAuth`'s live `vaultPrefix` into `engine.run(keyPrefix:)` (today it
-     still passes the default `"blobs"`).
-   - **Control** — `authenticate idToken=…` command in `DaemonService.handle` (`DaemonService.swift:286`) +
-     `ControlServer`; `protocol.ts` typed command + UI bridge (the login UI itself is Phase 5).
-   - **Config/handoff** — `tf:coldstorage:creds-export` emits the Cognito ids (user pool / client / identity
-     pool / region) into the **gitignored** handoff (public repo — never a tracked file); daemon + app config
-     read them.
-   *Gates:* unit test (a custom prefix round-trips; restore reads the stored key) + build green; **LIVE gate**
-   (real token → own-prefix PUT ok, cross-prefix `AccessDenied`) is Ben's once a test user exists (P5) or via
-   a manually-minted token.
+   swap (2b) and the per-user prefix (2a) must both be live or every PUT is `AccessDenied`. All of 2a/2b/2c
+   are now live end-to-end (daemon wiring + the handoff that populates it) — what's left is a real Cognito
+   user/token to actually exercise the path, which is Phase 5 (app auth UX) or a manually-minted token.
+   *Gates:* unit test (a custom prefix round-trips; restore reads the stored key) + build green — **MET**.
+   **LIVE gate** (real token → own-prefix PUT ok, cross-prefix `AccessDenied`) is Ben's: re-run
+   `task tf:coldstorage:creds-export` (devcontainer) → `task daemon:bootstrap` or `task ui:bootstrap` (Mac)
+   to pick up the new handoff values, then a manually-minted Cognito token to call `authenticate` over the
+   control socket.
 3. **ZK crypto** — `UserMasterKeyProvider` (Argon2id + MK hierarchy) replacing `LocalFileKEK`; recovery
    code; the encrypted key-blob format. *Gate:* unit tests — password change re-wraps MK without touching
    DEKs; recovery code unlocks; round-trip still byte-identical; wrong password fails closed.

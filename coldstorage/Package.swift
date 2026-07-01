@@ -22,6 +22,8 @@ let package = Package(
             dependencies: [
                 .product(name: "AWSS3", package: "aws-sdk-swift"),
                 .product(name: "AWSClientRuntime", package: "aws-sdk-swift"),   // AWSServiceError (thaw idempotency)
+                .product(name: "AWSSDKIdentity", package: "aws-sdk-swift"),     // CognitoAWSCredentialIdentityResolver
+                .product(name: "AWSCognitoIdentity", package: "aws-sdk-swift"), // GetId — resolves the per-user vault prefix
                 .product(name: "Crypto", package: "swift-crypto"),
                 "Csqlite3",
             ]

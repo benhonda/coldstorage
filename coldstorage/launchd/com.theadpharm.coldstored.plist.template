@@ -7,10 +7,16 @@
   protocol (journal + ListParts) makes restart-after-anything safe.
 
   Placeholders are substituted by `task daemon:install` (which writes the rendered copy to
-  ~/Library/LaunchAgents/): __BINARY__, __DATA_DIR__, __SOCKET__, __BUCKET__, __REGION__, __PROFILE__.
+  ~/Library/LaunchAgents/): __BINARY__, __DATA_DIR__, __SOCKET__, __BUCKET__, __REGION__, __PROFILE__,
+  __COGNITO_IDENTITY_POOL_ID__, __COGNITO_USER_POOL_PROVIDER__.
 
   AWS creds: NOT in this file. AWS_PROFILE points at the `coldstorage` profile in ~/.aws/config,
   whose `credential_process` reads the IAM-user secret from the Keychain (see `task daemon:creds`).
+
+  Cognito (multi-user prod, PROD.md Phase 2) is opt-in: the two COLDSTORE_COGNITO_* vars are empty unless
+  `task tf:coldstorage:creds-export` has been re-run since Phase 2c landed — an empty value is what
+  `coldstored/main.swift` treats as "not configured", so a stale/pre-2c handoff keeps today's
+  single-operator dogfood behavior unchanged.
 -->
 <plist version="1.0">
 <dict>
@@ -33,6 +39,8 @@
         <key>COLDSTORE_INTERVAL</key> <string>300</string>
         <key>AWS_REGION</key>        <string>__REGION__</string>
         <key>AWS_PROFILE</key>       <string>__PROFILE__</string>
+        <key>COLDSTORE_COGNITO_IDENTITY_POOL_ID</key>   <string>__COGNITO_IDENTITY_POOL_ID__</string>
+        <key>COLDSTORE_COGNITO_USER_POOL_PROVIDER</key> <string>__COGNITO_USER_POOL_PROVIDER__</string>
     </dict>
 
     <!-- Run in-session at login; restart after a crash. -->

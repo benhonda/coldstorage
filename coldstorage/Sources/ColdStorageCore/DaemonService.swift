@@ -18,6 +18,10 @@ public actor DaemonService {
     /// Resolves explicitly-picked Photos assets for `depositPhotos` (Mac PhotoKit); nil off macOS, where
     /// the command reports photos-unavailable. The seam that keeps PhotoKit out of this portable actor.
     let photoResolver: (any PhotoResolver)?
+    /// Cognito credential/identity seam (PROD.md Phase 2); nil in single-operator dogfood mode, where
+    /// every run keeps the default `"blobs"` keyPrefix. Set only once a real multi-user daemon is
+    /// configured — see `coldstored/main.swift`.
+    let cognitoAuth: CognitoAuth?
 
     private var running = false
     // Blobs that failed *permanently* (config/logic — won't self-heal) this session. Skipped on the next
@@ -31,10 +35,10 @@ public actor DaemonService {
 
     public init(engine: UploadEngine, restoreEngine: RestoreEngine, journal: Journal, bus: EventBus,
                 statusPath: String, platformSources: [IngestSource] = [],
-                photoResolver: (any PhotoResolver)? = nil) {
+                photoResolver: (any PhotoResolver)? = nil, cognitoAuth: CognitoAuth? = nil) {
         self.engine = engine; self.restoreEngine = restoreEngine; self.journal = journal; self.bus = bus
         self.statusPath = statusPath; self.platformSources = platformSources
-        self.photoResolver = photoResolver
+        self.photoResolver = photoResolver; self.cognitoAuth = cognitoAuth
     }
 
     // MARK: - run loop
@@ -124,10 +128,14 @@ public actor DaemonService {
         // (e.g. a photo deposit that can't read the library). Otherwise the UI is stuck "syncing" forever and
         // the optimistic rows never reconcile. We re-throw so the caller still surfaces the cause as an
         // `error` event — runFinished just lets the UI leave the running state + re-read the tree.
+        // Single-user dogfood ⇒ "blobs" (unchanged); a signed-in Cognito user ⇒ their own
+        // "blobs/<identity-id>" prefix, the one the IAM role's policy variable actually matches.
+        let keyPrefix = await cognitoAuth?.vaultPrefix ?? "blobs"
         let failures: [BlobFailure]
         do {
             failures = try await engine.run(source: source,
                                             skipBlobIds: permanentlyFailedBlobs,
+                                            keyPrefix: keyPrefix,
                                             onFileArchived: onFile, onProgress: onProgress)
         } catch {
             let s = try? journal.summary()
@@ -237,6 +245,10 @@ public actor DaemonService {
     /// type trivial + lossless; the renderer owns ISO/display formatting (epoch × 1000 → JS `Date`).
     private struct FileDTO: Encodable { let id, relativePath: String; let size: Int; let status: String; let blobId: String?; let date: Int? }
     private struct AckDTO: Encodable { let ok: Bool }
+    /// `authenticate`'s result: the Cognito identity id this daemon's uploads are now scoped under
+    /// (`blobs/<identityId>`) — surfaced mainly for the UI/logs, since the daemon itself just reads
+    /// `cognitoAuth.vaultPrefix` on the next run.
+    private struct AuthDTO: Encodable { let ok: Bool; let identityId: String }
     /// One resolved target of a `previewDeposit` dry-run: the vault path the item WOULD land at, and whether
     /// a live row already sits there (a collision the UI prompts on).
     private struct DepositPreviewItemDTO: Encodable { let relativePath: String; let exists: Bool }
@@ -419,6 +431,14 @@ public actor DaemonService {
             try journal.deletePath(path)
             bus.publish(DaemonEvent("filesChanged", ["deleted": path]))
             return AnyEncodable(AckDTO(ok: true))
+        case "authenticate":
+            // Exchange a Cognito User Pool ID token for real per-user AWS credentials + the identity id
+            // this daemon's uploads will be scoped under. Only meaningful on a daemon built with a Cognito
+            // identity pool configured (main.swift); a dogfood daemon has no `cognitoAuth` to authenticate.
+            guard let auth = cognitoAuth else { throw ColdStorageError.staging("authenticate: this daemon has no Cognito identity pool configured") }
+            guard let idToken = p["idToken"] else { throw ColdStorageError.staging("authenticate requires params.idToken") }
+            let identityId = try await auth.authenticate(idToken: idToken)
+            return AnyEncodable(AuthDTO(ok: true, identityId: identityId))
         case "triggerNow":
             trigger()
             return AnyEncodable(AckDTO(ok: true))

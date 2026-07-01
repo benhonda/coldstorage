@@ -133,6 +133,13 @@ export interface Pricing {
   note: string;
 }
 
+/** `AuthDTO` — `authenticate`'s result: the Cognito identity id this daemon's uploads are now scoped
+ *  under (`blobs/<identityId>`), the per-user prefix the IAM role's policy variable matches against. */
+export interface Auth {
+  ok: boolean;
+  identityId: string;
+}
+
 /**
  * Typed command surface — method → {params, result}. Mirrors the `switch` in `DaemonService.handle`.
  * Params with no entries take no params; optional keys (`tier`, `days`) match the Swift defaults.
@@ -193,6 +200,11 @@ export interface Commands {
    * Persisted in the journal; both emit `sourcesChanged` so the UI refetches. (There is no global pause.) */
   pauseSource: { params: { id: string }; result: Ack };
   resumeSource: { params: { id: string }; result: Ack };
+  /** Exchange a Cognito User Pool ID token for real per-user AWS credentials — every upload/restore after
+   * this signs as the returned identity, whose uploads land under `blobs/<identityId>`. Errors on a daemon
+   * with no Cognito identity pool configured (today's single-operator dogfood mode). The sign-in UI itself
+   * is a later phase (PROD.md Phase 5); this is just the wire contract. */
+  authenticate: { params: { idToken: string }; result: Auth };
 }
 
 export type Method = keyof Commands;

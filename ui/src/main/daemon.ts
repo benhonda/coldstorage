@@ -29,8 +29,16 @@ const coldstoredPath = (): string => join(process.resourcesPath, "bin", "coldsto
 /** The packaged app's per-user AWS config — the bucket/region/profile a Finder-launched app can't get
  * from a shell env. Written by `task ui:config` (from the infra-outputs handoff, the same SSOT the launchd
  * plist uses). NO secret lives here: creds resolve via the `awsProfile`'s `credential_process → Keychain`
- * (set up once by `task daemon:creds`), exactly like the launchd daemon. */
-type AppConfig = { bucket?: string | undefined; region?: string | undefined; awsProfile?: string | undefined };
+ * (set up once by `task daemon:creds`), exactly like the launchd daemon. `cognitoIdentityPoolId`/
+ * `cognitoUserPoolProvider` are the multi-user seam (PROD.md Phase 2) — absent until a real sign-in UI
+ * (Phase 5) exists to produce an idToken for the `authenticate` command. */
+type AppConfig = {
+  bucket?: string | undefined;
+  region?: string | undefined;
+  awsProfile?: string | undefined;
+  cognitoIdentityPoolId?: string | undefined;
+  cognitoUserPoolProvider?: string | undefined;
+};
 
 /** Read `<dataDir>/config.json` best-effort. A missing/malformed file logs and returns `{}` so the daemon
  * still starts + serves the control socket (the UI connects; only uploads need this) — the graceful
@@ -49,7 +57,13 @@ const readAppConfig = (dir: string): AppConfig => {
     if (typeof parsed !== "object" || parsed === null) throw new Error("not a JSON object");
     const o = parsed as Record<string, unknown>;
     const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined);
-    return { bucket: str(o.bucket), region: str(o.region), awsProfile: str(o.awsProfile) };
+    return {
+      bucket: str(o.bucket),
+      region: str(o.region),
+      awsProfile: str(o.awsProfile),
+      cognitoIdentityPoolId: str(o.cognitoIdentityPoolId),
+      cognitoUserPoolProvider: str(o.cognitoUserPoolProvider),
+    };
   } catch (e) {
     console.error(`ignoring malformed ${path}: ${String(e)}`);
     return {};
@@ -72,6 +86,8 @@ const daemonEnv = (dir: string): NodeJS.ProcessEnv => {
     ...(cfg.bucket ? { COLDSTORE_BUCKET: cfg.bucket } : {}),
     ...(cfg.region ? { AWS_REGION: cfg.region } : {}),
     ...(cfg.awsProfile ? { AWS_PROFILE: cfg.awsProfile } : {}),
+    ...(cfg.cognitoIdentityPoolId ? { COLDSTORE_COGNITO_IDENTITY_POOL_ID: cfg.cognitoIdentityPoolId } : {}),
+    ...(cfg.cognitoUserPoolProvider ? { COLDSTORE_COGNITO_USER_POOL_PROVIDER: cfg.cognitoUserPoolProvider } : {}),
   };
 };
 

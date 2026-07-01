@@ -7,6 +7,27 @@ output: prefixed
 # CORE cross-cutting tasks + per-domain blocks namespaced by component:
 #   daemon:*          → the Swift core / container dev loop (domain: coldstorage/)
 #   tf:coldstorage:*  → infra (domain: infra/coldstorage) — Terragrunt, ENV-scoped, shared first
+#
+# THREE WAYS TO RUN `coldstored` — pick the one matching what you're doing, not all three at once:
+#
+#   1. DEV SANDBOX (fake AWS via MinIO — safe to break)
+#        daemon:run (or daemon:run:bg) + ui:dev
+#        For changing Swift/UI code. Its own journal/socket under coldstorage/ — never touches the
+#        real vault; daemon:reset wipes it clean any time.
+#
+#   2. YOUR REAL BACKGROUND DAEMON (real AWS/Deep Archive, always-on)
+#        daemon:bootstrap (once) → then it just runs; drive/watch it via daemon:live / ui:live
+#        A launchd LaunchAgent — starts at login, restarts on crash. This IS your day-to-day backup
+#        service. Leave it running; you don't re-bootstrap it to "start" it.
+#
+#   3. THE PACKAGED APP (what a real future customer downloads)
+#        ui:package (+ ui:package:sign-adhoc) → open the built ColdStorage.app → ui:package:doctor
+#        Bundles + spawns its OWN coldstored, Finder-launched with no shell env — tests the actual
+#        end-user experience (Photos permission grant, etc.), not day-to-day dogfooding.
+#        ⚠ COLLIDES with #2 — both use the SAME ~/Library/Application Support/ColdStorage (same
+#        socket/journal). `task daemon:uninstall` before testing this; `task daemon:bootstrap` again
+#        afterward to bring your real daemon (#2) back. (Temporary: once packaging's background-run/
+#        Tray UX lands, the packaged app replaces #2 outright and this toggle goes away.)
 vars:
   AWS_PROFILE: "pharmer"
   # Pinned for reproducibility — bump deliberately. Used by `task scan` (leak guard).
@@ -131,7 +152,7 @@ tasks:
       - swift run coldstore-restore {{.FILE}} {{.OUT | default "/tmp/restored.bin"}} coldstorage http://localhost:9000 --tier {{.TIER | default "standard"}}
 
   daemon:run:
-    desc: "Run coldstored (loop + control socket) against MinIO. Drive it with `task daemon:ctl`."
+    desc: "[Mode 1: dev sandbox] Run coldstored (loop + control socket) against MinIO. Drive it with `task daemon:ctl`."
     dir: coldstorage
     env: &daemon_run_env
       AWS_ACCESS_KEY_ID: minioadmin
@@ -256,7 +277,7 @@ tasks:
       - swift run coldstorectl coldstored.sock listExcludes
 
   daemon:live:
-    desc: '[macOS] Drive the INSTALLED launchd daemon (real prod AWS / Deep Archive), e.g. `task daemon:live -- getStatus` · `-- addSource path=/abs/dir` · `-- triggerNow` · `-- watch`. (daemon:ctl targets the dev/MinIO daemon instead.) Uses the release binary built by daemon:install.'
+    desc: '[Mode 2: your real daemon] [macOS] Drive the INSTALLED launchd daemon (real prod AWS / Deep Archive), e.g. `task daemon:live -- getStatus` · `-- addSource path=/abs/dir` · `-- triggerNow` · `-- watch`. (daemon:ctl targets the dev/MinIO daemon instead.) Uses the release binary built by daemon:install.'
     dir: coldstorage
     vars:
       SOCK: '{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock'
@@ -342,14 +363,20 @@ tasks:
         bucket="${COLDSTORE_BUCKET:-coldstorage}"
         region="${AWS_REGION:-us-east-1}"
         profile="${COLDSTORE_AWS_PROFILE:-coldstorage}"   # creds resolve via this profile's credential_process (task daemon:creds)
+        # Cognito (multi-user prod) is opt-in — empty when the handoff predates Phase 2c or was never
+        # re-exported, which coldstored's own gate treats as "not configured" (dogfood mode, unchanged).
+        cognito_pool_id="${COLDSTORE_COGNITO_IDENTITY_POOL_ID:-}"
+        cognito_provider="${COLDSTORE_COGNITO_USER_POOL_PROVIDER:-}"
         sed -e "s#__BINARY__#$(pwd)/.build/release/coldstored#g" \
             -e "s#__DATA_DIR__#{{.DATA_DIR}}#g" \
             -e "s#__SOCKET__#{{.DATA_DIR}}/coldstored.sock#g" \
             -e "s#__BUCKET__#${bucket}#g" \
             -e "s#__REGION__#${region}#g" \
             -e "s#__PROFILE__#${profile}#g" \
+            -e "s#__COGNITO_IDENTITY_POOL_ID__#${cognito_pool_id}#g" \
+            -e "s#__COGNITO_USER_POOL_PROVIDER__#${cognito_provider}#g" \
             launchd/com.theadpharm.coldstored.plist.template > "{{.PLIST}}"
-        echo "wired: bucket=${bucket} region=${region} profile=${profile}"
+        echo "wired: bucket=${bucket} region=${region} profile=${profile} cognito=${cognito_pool_id:+configured}${cognito_pool_id:-not configured}"
       - launchctl bootout "gui/$(id -u)/com.theadpharm.coldstored" 2>/dev/null || true
       # Fresh logs each install: launchd APPENDS to StandardOut/ErrorPath (never truncates across
       # restarts), so a debugging run would otherwise be read against stale lines from prior runs. The old
@@ -395,7 +422,7 @@ tasks:
         echo "  health check: task daemon:doctor"
 
   daemon:bootstrap:
-    desc: "[macOS] One-shot daemon setup: seed creds (Keychain + profile) → build + install the LaunchAgent. Run once, after `task tf:coldstorage:creds-export` in the devcontainer. After this, launchd keeps the daemon running (RunAtLoad/KeepAlive) — you don't re-run it to start it."
+    desc: "[Mode 2: your real daemon] [macOS] One-shot daemon setup: seed creds (Keychain + profile) → build + install the LaunchAgent. Run once, after `task tf:coldstorage:creds-export` in the devcontainer. After this, launchd keeps the daemon running (RunAtLoad/KeepAlive) — you don't re-run it to start it."
     cmds:
       - task: daemon:creds
       - task: daemon:install
@@ -415,7 +442,7 @@ tasks:
       - test -S "{{.SOCK}}" && ./.build/release/coldstorectl "{{.SOCK}}" getStatus || echo "no control socket at {{.SOCK}} — last errors:" && tail -n 20 "{{.ERRLOG}}" 2>/dev/null || true
 
   daemon:uninstall:
-    desc: "[macOS] Stop + remove the coldstored LaunchAgent."
+    desc: "[macOS] Stop + remove the coldstored LaunchAgent. Needed before testing Mode 3 (ui:package) — it and Mode 2 share the same socket/data dir; `task daemon:bootstrap` brings Mode 2 back afterward."
     vars:
       PLIST: '{{.HOME}}/Library/LaunchAgents/com.theadpharm.coldstored.plist'
     cmds:
@@ -481,7 +508,7 @@ tasks:
       - bun run test
 
   ui:dev:
-    desc: "[macOS] Run the Electron app with HMR (electron-vite dev). Start `task daemon:run` first."
+    desc: "[Mode 1: dev sandbox] [macOS] Run the Electron app with HMR (electron-vite dev). Start `task daemon:run` first."
     dir: ui
     deps: [ui:_ensure-electron]
     env:
@@ -495,7 +522,7 @@ tasks:
       - bun run dev
 
   ui:live:
-    desc: "[macOS] Run the UI against the INSTALLED launchd daemon (real prod AWS), not the dev/MinIO one — dogfood the real thing. Needs task daemon:bootstrap done."
+    desc: "[Mode 2: your real daemon] [macOS] Run the UI against the INSTALLED launchd daemon (real prod AWS), not the dev/MinIO one — dogfood the real thing. Needs task daemon:bootstrap done."
     dir: ui
     deps: [ui:_ensure-electron]
     env:
@@ -512,7 +539,7 @@ tasks:
       - bun run build
 
   ui:package:
-    desc: "[macOS] Package a distributable ColdStorage.app (+ dmg/zip) via electron-builder. Bundles the release Swift binaries. Unsigned unless a Developer ID + notary creds are set — see ui/PACKAGING.md."
+    desc: "[Mode 3: packaged app] [macOS] Package a distributable ColdStorage.app (+ dmg/zip) via electron-builder. Bundles the release Swift binaries. Unsigned unless a Developer ID + notary creds are set — see ui/PACKAGING.md."
     dir: ui
     deps: [ui:_ensure-electron]
     cmds:
@@ -535,7 +562,7 @@ tasks:
         echo "── coldstored signature ──"; codesign -dv --verbosity=2 "$app/Contents/Resources/bin/coldstored" 2>&1 | grep -Ei 'Identifier|Authority|Runtime' || echo "(unsigned — nested binary not signed)"
 
   ui:package:sign-adhoc:
-    desc: "[macOS] Ad-hoc sign the built ColdStorage.app so it (+ its bundled arm64 helpers) will LAUNCH locally on Apple Silicon — a smoke-test stopgap. Ad-hoc is per-build (no stable TCC grant); real Developer/Apple-Development signing lands with #2. NOT for distribution."
+    desc: "[Mode 3: packaged app] [macOS] Ad-hoc sign the built ColdStorage.app so it (+ its bundled arm64 helpers) will LAUNCH locally on Apple Silicon — a smoke-test stopgap. Ad-hoc is per-build (no stable TCC grant); real Developer/Apple-Development signing lands with #2. NOT for distribution. Run `task daemon:uninstall` first — this collides with the Mode 2 launchd daemon's socket/data dir."
     dir: ui
     cmds:
       - |
@@ -553,7 +580,7 @@ tasks:
         open "$app"
 
   ui:config:
-    desc: "[macOS] Write the packaged app's AWS config (~/Library/Application Support/ColdStorage/config.json: bucket/region/profile) from the infra-outputs handoff, so a Finder-launched ColdStorage.app — which inherits no shell env — can actually upload. NO secret is written here; creds resolve via the profile's credential_process → Keychain (run `task daemon:creds` once). Mirrors the env daemon:install bakes into the launchd plist."
+    desc: "[macOS] Write the packaged app's AWS config (~/Library/Application Support/ColdStorage/config.json: bucket/region/profile + the Cognito identity pool id/provider, when the handoff has them) from the infra-outputs handoff, so a Finder-launched ColdStorage.app — which inherits no shell env — can actually upload. NO secret is written here; creds resolve via the profile's credential_process → Keychain (run `task daemon:creds` once). Mirrors the env daemon:install bakes into the launchd plist."
     dir: coldstorage
     vars:
       DATA_DIR: '{{.HOME}}/Library/Application Support/ColdStorage'
@@ -567,8 +594,13 @@ tasks:
         bucket="${COLDSTORE_BUCKET:-coldstorage}"
         region="${AWS_REGION:-us-east-1}"
         profile="${COLDSTORE_AWS_PROFILE:-coldstorage}"
-        printf '{\n  "bucket": "%s",\n  "region": "%s",\n  "awsProfile": "%s"\n}\n' "$bucket" "$region" "$profile" > "{{.DATA_DIR}}/config.json"
-        echo "wrote {{.DATA_DIR}}/config.json  (bucket=$bucket region=$region profile=$profile)"
+        # Cognito (multi-user prod) is opt-in — empty when the handoff predates Phase 2c, which the app's
+        # daemon supervisor (main/daemon.ts) treats the same as "not configured" (dogfood mode, unchanged).
+        cognito_pool_id="${COLDSTORE_COGNITO_IDENTITY_POOL_ID:-}"
+        cognito_provider="${COLDSTORE_COGNITO_USER_POOL_PROVIDER:-}"
+        printf '{\n  "bucket": "%s",\n  "region": "%s",\n  "awsProfile": "%s",\n  "cognitoIdentityPoolId": "%s",\n  "cognitoUserPoolProvider": "%s"\n}\n' \
+          "$bucket" "$region" "$profile" "$cognito_pool_id" "$cognito_provider" > "{{.DATA_DIR}}/config.json"
+        echo "wrote {{.DATA_DIR}}/config.json  (bucket=$bucket region=$region profile=$profile cognito=${cognito_pool_id:+configured}${cognito_pool_id:-not configured})"
         echo "creds: ensure 'task daemon:creds' wired the '$profile' profile + Keychain (one-time). Verify: task ui:package:doctor"
 
   ui:bootstrap:
@@ -578,7 +610,7 @@ tasks:
       - task: ui:config
 
   ui:package:doctor:
-    desc: "[macOS] Diagnose a packaged app stuck on 'Connecting…': did the bundled coldstored spawn, bind its socket, and what did it log?"
+    desc: "[Mode 3: packaged app] [macOS] Diagnose a packaged app stuck on 'Connecting…': did the bundled coldstored spawn, bind its socket, and what did it log? If the process path it finds is coldstorage/.build/release/coldstored (not Contents/Resources/bin/coldstored), that's actually the Mode 2 launchd daemon still holding the shared socket — run `task daemon:uninstall` and re-launch the app."
     cmds:
       - |
         echo "── data dir (auto-discovered) ──"
@@ -697,6 +729,12 @@ tasks:
           echo "AWS_REGION=$(terragrunt output -raw aws_region)"
           echo "DAEMON_AKID=$(terragrunt output -raw daemon_access_key_id)"
           echo "DAEMON_SECRET=$(terragrunt output -raw daemon_secret_access_key)"
+          # Cognito (PROD.md Phase 2, multi-user) — NOT secrets (public client config), so they ride the
+          # handoff untouched by daemon:creds' secret-stripping step. Provider name is Cognito's documented
+          # `Logins` key shape (cognito-idp.<region>.amazonaws.com/<userPoolId>) — same one cognito.tf notes
+          # next to `aws_cognito_user_pool.main.endpoint`.
+          echo "COLDSTORE_COGNITO_IDENTITY_POOL_ID=$(terragrunt output -raw cognito_identity_pool_id)"
+          echo "COLDSTORE_COGNITO_USER_POOL_PROVIDER=cognito-idp.$(terragrunt output -raw aws_region).amazonaws.com/$(terragrunt output -raw cognito_user_pool_id)"
         } > "{{.OUT}}"
         echo "✓ wrote {{.OUT}} (0600, gitignored)."
         echo "  now on the Mac:  task daemon:creds && task daemon:install"
