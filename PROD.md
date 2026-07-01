@@ -175,8 +175,40 @@ server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
    legitimate to source a `KeyBlob` from yet (Phase 4, the account backend) or a password/recovery code
    from (Phase 5, the sign-in UI), so wiring it now would have no real caller. That wiring is now this
    phase's remaining work, landing naturally with P4/P5.
-4. **Account backend** — Cognito↔Paddle↔key-blob API + webhooks + `subscription_active` gate. *Gate:*
-   webhook flips state; upload blocked when inactive.
+4. **Account backend — SCAFFOLDED ✅ (2026-07-01), NOT DEPLOYED.** Stack decided with Ben: **Hono on
+   Vercel + Neon/Drizzle** (not Lambda+DynamoDB) — Vercel-project infra is already the adpharm-stack
+   convention (`references/terraform.md`), Neon is that convention's DB default, and this needed no AWS
+   SDK/credentials at runtime (Cognito ID-token verification is a plain JWKS check), so the daemon's
+   `aws-oidc.md` credential dance doesn't apply here. New `account-backend/` (Taskfile `backend:*`):
+   `accountsTable` (Drizzle, one row per Cognito **User Pool** `sub` — NOT the Identity Pool identity id
+   S3 keys are prefixed with, see cognito.tf; this service never touches S3) holds the `KeyBlob` fields
+   verbatim (base64 text — blind ciphertext storage, never decoded here) + `subscriptionActive` +
+   Paddle customer/subscription ids. Routes: `GET/PUT /key-blob` (Cognito-ID-token-authenticated, via
+   `aws-jwt-verify`'s `CognitoJwtVerifier`), `GET /entitlement` (`{active: bool}`), `POST /webhooks/paddle`
+   (`@paddle/paddle-node-sdk`'s `webhooks.unmarshal` HMAC-verifies `paddle-signature`; a subscription is
+   linked to a user via `customData.cognitoSub`, which the Paddle checkout must set — Paddle.js
+   `customData` param, still TODO wherever checkout gets built in P5). Subscription status → `active`
+   mapped by `isActiveStatus` (`active`/`trialing` → true), the one piece with a real unit test
+   (`paddle-status.test.ts`) since everything else needs a live DB/Cognito/Paddle to exercise.
+   **`bun run typecheck` + `bun test` green.** Infra: new `infra/account-backend/` (Taskfile
+   `tf:account-backend:*`) mirrors `infra/coldstorage`'s Terragrunt layout but — unlike coldstorage,
+   which deliberately opted OUT of the Vercel convention — this IS the Vercel app, so it gets the OIDC
+   role + TF-managed env vars in full. The Cognito user-pool id/client-id are read via a cross-component
+   Terragrunt `dependency` on `infra/coldstorage/live/production` (SSOT — no hand-copying `terragrunt
+   output` values). **`terragrunt plan` is clean against real AWS + Vercel providers (`8 to add`)** —
+   confirms the account's `oidc.vercel.com/adpharm` OIDC provider and the `/adpharm/vercel-api-token-
+   benhonda` SSM param already exist (an open question going in; now resolved). No custom domain yet
+   (v1 runs on Vercel's default domain — YAGNI, same call coldstorage made for DNS); **no staging**
+   (pre-launch/dogfood-only, matching coldstorage's own prod-only precedent — `vercel dev` + a local
+   Neon branch is the dev loop). **Gate not yet met — blocked on manual, Ben-only setup** (none of this
+   can be scripted from here): (1) create the Vercel project (`vercel link` or dashboard) and drop its
+   real id into `live/production/terragrunt.hcl` (currently `prj_TODO`); (2) create a Neon project +
+   database; (3) create a Paddle account (sandbox to start) and pull the webhook secret + API key;
+   (4) `task tf:account-backend:apply ENV=production`, then set the 3 manual-secret values
+   (`DATABASE_URL`/`PADDLE_WEBHOOK_SECRET`/`PADDLE_API_KEY`) for real in the Vercel dashboard (flagged
+   non-sensitive/pullable — this stack is prod-only, see `terraform.md`'s env-var-ownership rule);
+   (5) `task backend:db:push` to create the `accounts` table. Only once those land does "webhook flips
+   state; upload blocked when inactive" become testable end-to-end — that gate is unchanged from before.
 5. **App auth + paywall UX** — sign-in/up + recovery-code capture + subscribe flow in the Electron UI;
    token handed to the daemon. *Gate:* Ben signs up fresh → subscribes → deposits → restores, on a Mac.
 6. **Sign + notarize + ship** — Developer ID signing + notarization + auto-update + download page. *Gate:*

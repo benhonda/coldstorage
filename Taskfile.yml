@@ -686,6 +686,42 @@ tasks:
     cmds:
       - bun run prove
 
+  # ------------------------------------------------------------------ account-backend (domain: account-backend/)
+  # Hono on Vercel + Neon/Drizzle — Cognito↔Paddle↔zero-knowledge-key-blob API (PROD.md Phase 4).
+  # Needs account-backend/.env (copy .env.example) for backend:dev/test/db:push; DATABASE_URL
+  # there is a local/dev Neon branch, NOT the Vercel-managed prod one (tf:account-backend:* owns that).
+  backend:setup:
+    desc: "Install account-backend deps (Bun)."
+    dir: account-backend
+    cmds:
+      - bun install
+
+  backend:typecheck:
+    desc: "Type-check account-backend (strict tsc)."
+    dir: account-backend
+    cmds:
+      - bun run typecheck
+
+  backend:test:
+    desc: "Run account-backend's headless tests (pure logic only — no live DB/Cognito/Paddle needed)."
+    dir: account-backend
+    cmds:
+      - bun run test
+
+  backend:dev:
+    desc: "Run the API locally via the Vercel CLI (needs `vercel login` once + account-backend/.env filled from .env.example)."
+    dir: account-backend
+    cmds:
+      - bun run dev
+
+  backend:db:push:
+    desc: "Push the Drizzle schema to Neon (drizzle-kit push) — NO migration files. Reads DATABASE_URL from account-backend/.env."
+    dir: account-backend
+    interactive: true
+    prompt: "Before pushing schema changes, double-check DATABASE_URL — is it correct?"
+    cmds:
+      - bun run db:push
+
   # ------------------------------------------------------------------ infra — tf:coldstorage:* (domain: infra/coldstorage)
   # Storage buckets (S3 Glacier Deep Archive + R2) + lifecycle rules. State in
   # terraform-state-sensitive (pharmer / ca-central-1); ENV-scoped; shared planned first.
@@ -767,6 +803,63 @@ tasks:
         } > "{{.OUT}}"
         echo "✓ wrote {{.OUT}} (0600, gitignored)."
         echo "  now on the Mac:  task daemon:creds && task daemon:install"
+
+  # ------------------------------------------------------------------ infra — tf:account-backend:* (domain: infra/account-backend)
+  # The Vercel project's OIDC role + TF-managed env vars (Cognito ids sourced from
+  # infra/coldstorage via a cross-component `dependency` block — SSOT, no manual copy-paste).
+  # Production only (no staging yet) — see infra/account-backend/live/production/terragrunt.hcl.
+  # Secrets (DATABASE_URL, Paddle keys) are declared here but their VALUES are set once in the
+  # Vercel dashboard after first apply (terraform.md's manual_secrets pattern) — never in this repo.
+  tf:account-backend:_validate-env:
+    internal: true
+    requires:
+      vars: [ENV]
+    cmds:
+      - 'case "{{.ENV}}" in production) ;; *) echo "ENV must be production (no staging yet)"; exit 1 ;; esac'
+
+  tf:account-backend:plan:
+    desc: Terragrunt plan (ENV=production) — plans shared first
+    requires:
+      vars: [ENV]
+    deps: [check-aws-identity]
+    dir: infra/account-backend/live/{{.ENV}}
+    cmds:
+      - task: tf:account-backend:_validate-env
+      - task: tf:account-backend:plan:shared
+      - terragrunt plan {{.CLI_ARGS}}
+  tf:account-backend:plan:shared:
+    deps: [check-aws-identity]
+    dir: infra/account-backend/live/shared
+    cmds:
+      - terragrunt plan {{.CLI_ARGS}}
+
+  tf:account-backend:apply:
+    desc: Terragrunt apply (ENV=production) — applies shared then env. Never run without a reviewed plan.
+    interactive: true
+    prompt: "Apply account-backend infra to {{.ENV}}?"
+    requires:
+      vars: [ENV]
+    deps: [check-aws-identity]
+    dir: infra/account-backend/live/{{.ENV}}
+    cmds:
+      - task: tf:account-backend:_validate-env
+      - task: tf:account-backend:apply:shared
+      - terragrunt apply {{.CLI_ARGS}}
+  tf:account-backend:apply:shared:
+    internal: true
+    interactive: true
+    dir: infra/account-backend/live/shared
+    cmds:
+      - terragrunt apply {{.CLI_ARGS}}
+
+  tf:account-backend:init:
+    requires:
+      vars: [ENV]
+    deps: [check-aws-identity]
+    dir: infra/account-backend/live/{{.ENV}}
+    cmds:
+      - task: tf:account-backend:_validate-env
+      - terragrunt init {{.CLI_ARGS}}
 
   tf:fmt:
     desc: terraform fmt across infra/

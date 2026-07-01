@@ -1,0 +1,40 @@
+variable "project_name" {
+  type = string
+}
+
+variable "aws_profile" {
+  type = string
+}
+
+variable "aws_region" {
+  type = string
+}
+
+variable "env" {
+  type        = string
+  description = "production (no staging yet — see live/production/terragrunt.hcl)"
+}
+
+variable "vercel_project_id" {
+  type        = string
+  description = "The Vercel project id (prj_...) — created outside Terraform (vercel link / dashboard), then wired in here."
+}
+
+variable "vercel_team_slug" {
+  type = string
+}
+
+variable "cognito_user_pool_id" {
+  type        = string
+  description = "From infra/coldstorage's Cognito output — the ID token issuer this service verifies against."
+}
+
+variable "cognito_user_pool_client_id" {
+  type        = string
+  description = "From infra/coldstorage's Cognito output — the desktop app's public client id (audience check)."
+}
+
+variable "manual_secrets" {
+  type        = map(string)
+  description = "Vercel env vars this Terraform config declares but does NOT own the value of (DATABASE_URL, Paddle keys) — set for real in the Vercel dashboard after first apply."
+}

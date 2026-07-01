@@ -1,0 +1,28 @@
+{
+  "name": "coldstorage-account-backend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ColdStorage account backend — Cognito ↔ Paddle ↔ zero-knowledge key-blob API (PROD.md Phase 4). Hono on Vercel, Neon/Drizzle for storage.",
+  "scripts": {
+    "dev": "vercel dev",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test src",
+    "db:push": "drizzle-kit push"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
+    "@paddle/paddle-node-sdk": "^3.8.0",
+    "aws-jwt-verify": "^5.2.1",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.27",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "@types/node": "^26.1.0",
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^6.0.3",
+    "vercel": "^54.18.7"
+  }
+}
