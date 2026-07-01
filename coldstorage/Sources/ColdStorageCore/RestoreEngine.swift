@@ -24,7 +24,9 @@ public struct RestoreEngine: Sendable {
     public func restore(fileId: String, to outURL: URL,
                         tier: RestoreTier = .standard, days: Int = 7) async throws -> RestoreOutcome {
         guard let f = try journal.fileMapping(fileId) else { throw ColdStorageError.staging("no archived file '\(fileId)'") }
-        let key = "blobs/\(f.blobId)"
+        // Read the STORED key (SSOT) rather than recomputing `"blobs/<blobId>"` — a multi-user object lives
+        // under its owner's prefix (`blobs/<cognito-identity-id>/<blobId>`), so recomputing would miss it.
+        guard let key = try journal.blobS3Key(f.blobId) else { throw ColdStorageError.staging("no S3 key for blob \(f.blobId)") }
         switch try await store.thawState(key: key) {
         case .needed:
             try await store.requestThaw(key: key, days: days, tier: tier)

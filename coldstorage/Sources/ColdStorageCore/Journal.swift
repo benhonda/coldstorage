@@ -327,6 +327,15 @@ public final class Journal: @unchecked Sendable {
         return try run("SELECT uploadId FROM blobs WHERE id=?1", [.text(blobId)]).first?["uploadId"] as? String
     }
 
+    /// The blob's stored S3 key — the SSOT for where its bytes live, set at `ensureBlob` from `plan.s3Key`
+    /// (which carries the per-user prefix). Restore reads THIS rather than recomputing `"blobs/<id>"`, so a
+    /// per-user-prefixed object (`blobs/<cognito-id>/<id>`) is found correctly. `s3Key` is NOT NULL, so a
+    /// known blob always has one.
+    public func blobS3Key(_ blobId: String) throws -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return try run("SELECT s3Key FROM blobs WHERE id=?1", [.text(blobId)]).first?["s3Key"] as? String
+    }
+
     /// Stored key material for an existing blob — so a resumed upload re-stages identical ciphertext.
     public func blobCrypto(_ blobId: String) throws -> (noncePrefix: Data, wrappedDEK: Data)? {
         lock.lock(); defer { lock.unlock() }

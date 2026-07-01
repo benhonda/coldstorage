@@ -18,7 +18,10 @@ public struct BlobPlanner: Sendable {
         return SHA256.hash(data: Data(key.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
     }
 
-    public func plan(_ items: [IngestItem]) -> [BlobPlan] {
+    /// `keyPrefix` namespaces every produced blob's S3 key (default `"blobs"`; multi-user passes
+    /// `"blobs/<cognito-identity-id>"`). It does NOT affect the content-derived blob `id` — only where the
+    /// object lands — so the same files resume/dedup identically regardless of which user owns them.
+    public func plan(_ items: [IngestItem], keyPrefix: String = "blobs") -> [BlobPlan] {
         let ordered = items.sorted { a, b in
             if a.isFavorite != b.isFavorite { return a.isFavorite }                       // favorites first
             let (ca, cb) = (a.createdAt ?? .distantPast, b.createdAt ?? .distantPast)
@@ -30,11 +33,11 @@ public struct BlobPlanner: Sendable {
 
         func flush() {
             guard !bucket.isEmpty else { return }
-            blobs.append(BlobPlan(id: Self.stableId(bucket), items: bucket))
+            blobs.append(BlobPlan(id: Self.stableId(bucket), items: bucket, keyPrefix: keyPrefix))
             bucket = []; bucketSize = 0; bucketDir = ""
         }
         for item in ordered {
-            if item.size > smallFileMax { blobs.append(BlobPlan(id: Self.stableId([item]), items: [item])); continue }
+            if item.size > smallFileMax { blobs.append(BlobPlan(id: Self.stableId([item]), items: [item], keyPrefix: keyPrefix)); continue }
             let dir = (item.relativePath as NSString).deletingLastPathComponent
             if bucketSize + item.size > blobCap || (!bucket.isEmpty && dir != bucketDir) { flush() }
             if bucket.isEmpty { bucketDir = dir }

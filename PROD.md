@@ -92,17 +92,29 @@ server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
   a download page. The bundled `coldstored` keeps its `-sectcreate` Info.plist for the Photos grant.
 
 ## Delivery plan — phases, each with a proof gate
-1. **Infra foundation — DONE ✅ (plan-clean 2026-06-29, PENDING Ben's apply).** Cognito User Pool (+ Apple
+1. **Infra foundation — DONE ✅ + APPLIED (2026-06-30). Cognito is LIVE in prod.** Cognito User Pool (+ Apple
    IdP, var-gated off) + Identity Pool + **authenticated IAM role** scoped to
    `blobs/${cognito-identity.amazonaws.com:sub}/*`, in `infra/coldstorage/modules/stack/cognito.tf`
-   (+ `variables.tf`/`outputs.tf`). *Gate met:* `terragrunt plan ENV=production` = **6 to add, 0 change, 0
-   destroy** (purely additive — doesn't touch the live vault/daemon user), and the policy rendered the
-   **literal** `${cognito-identity.amazonaws.com:sub}` variable (the `$${` escape worked). **Ben: apply
-   with `task tf:coldstorage:apply ENV=production`, then `creds-export` won't carry the Cognito ids — read
-   them from `terragrunt output` (user pool / client / identity pool ids) for Phase 2/5.**
-2. **Daemon credential seam — DESIGNED + MAPPED (2026-06-29), implementation is the next pass.** This is
-   **atomic** (can't half-ship): the IAM policy only grants `blobs/<sub>/*`, so the credential swap and the
-   per-user prefix must land together or every PUT is `AccessDenied`. Verified the SDK is turnkey
+   (+ `variables.tf`/`outputs.tf`; committed in `8b25956`). *Gate met:* plan was **6 add / 0 change / 0
+   destroy** (additive — untouched vault/daemon) with the **literal** `${cognito-identity.amazonaws.com:sub}`
+   rendered (the `$${` escape), then **`terragrunt apply ENV=production` → `Apply complete! Resources: 6
+   added`**. The user pool / client / identity pool / user-role exist in prod (`ca-central-1`). The public
+   client ids (not secrets) are available via `cd infra/coldstorage/live/production && terragrunt output`;
+   they'll flow to the daemon/app through the **gitignored handoff in 2c** — kept OUT of tracked docs
+   (public repo).
+2. **Daemon credential seam — IN PROGRESS.** Built in gated sub-steps:
+   - **2a — per-user key as journal SSOT: DONE ✅ (2026-06-30, 71 Core tests green).** `keyPrefix` threads
+     `BlobPlan`(`Models.swift`)→`BlobPlanner`→`UploadEngine.run(keyPrefix:)` to the real S3 PUT; it's stored
+     as `s3Key`; **`RestoreEngine` reads the stored key** via new `Journal.blobS3Key(_:)` (the keystone fix —
+     a `blobs/<cognito-id>/<id>` object is now found, not missed). Backward-compatible (default `"blobs"`);
+     proven by `PerUserPrefixTests` (prefix reaches store + journal; default path unchanged).
+   - **2b — TODO:** `CognitoAuth` actor + `CognitoAWSCredentialIdentityResolver` in `main.swift` + `GetId`→
+     prefix + `authenticate` control command + `Package.swift` (`AWSSDKIdentity`/`AWSCognitoIdentity`).
+   - **2c — TODO:** `creds-export` emits Cognito ids → gitignored handoff; daemon/app config reads them;
+     `protocol.ts` `authenticate`.
+
+   Why **atomic** to actually upload as a user: the IAM policy only grants `blobs/<sub>/*`, so the credential
+   swap (2b) and the per-user prefix (2a) must both be live or every PUT is `AccessDenied`. Verified the SDK is turnkey
    (`CognitoAWSCredentialIdentityResolver` in `AWSSDKIdentity`: `init(identityPoolId:logins:identityPoolRegion:)`,
    actor-isolated `updateLogins(...)` for token refresh, plugs into
    `S3Client.S3ClientConfig(awsCredentialIdentityResolver:region:)`). File-level plan, all sites mapped:
@@ -110,13 +122,13 @@ server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
      identity id → the prefix; the resolver doesn't expose it).
    - **New `CognitoAuth` actor (Core)** — owns the resolver; `authenticate(idToken)` → `updateLogins` +
      `GetId` → holds `vaultPrefix = "blobs/\(identityId)"`. Unauthed → nil prefix (uploads fail clean).
-   - **`coldstored/main.swift:18-20,56-64`** — build the resolver at startup (empty logins), build the
-     `S3Client` from it, pass the `CognitoAuth` holder into the run path.
-   - **Per-user key as journal SSOT** — `BlobPlan.s3Key` (`Models.swift:35`) + `BlobPlanner`
-     (`BlobPlanner.swift:33,37`) take a run-time `keyPrefix`; `performRun` reads the current prefix from
-     `CognitoAuth` and passes it to the planner. Journal already stores the full `s3Key` (`Journal.swift:322`);
-     **`RestoreEngine.swift:27` must READ it** (new `Journal.blobS3Key(id)` accessor) instead of recomputing
-     `"blobs/\(blobId)"` — the keystone correctness change.
+   - **`coldstored/main.swift`** — at the `S3Client.S3ClientConfiguration` line (~:18) build the resolver
+     first (empty logins) and build the `S3Client` from it; then pass the `CognitoAuth` holder through the
+     `S3Store`/`UploadEngine`/`DaemonService` construction that follows (the `DaemonService(engine:…)` line).
+   - **Per-user key as journal SSOT — DONE ✅ in 2a** (`BlobPlan.keyPrefix`/`BlobPlanner`/`UploadEngine.run`
+     + `RestoreEngine` reads `Journal.blobS3Key`; see the 2a entry above + `PerUserPrefixTests`). **Remaining
+     in 2b:** `performRun` must pass `CognitoAuth`'s live `vaultPrefix` into `engine.run(keyPrefix:)` (today it
+     still passes the default `"blobs"`).
    - **Control** — `authenticate idToken=…` command in `DaemonService.handle` (`DaemonService.swift:286`) +
      `ControlServer`; `protocol.ts` typed command + UI bridge (the login UI itself is Phase 5).
    - **Config/handoff** — `tf:coldstorage:creds-export` emits the Cognito ids (user pool / client / identity
