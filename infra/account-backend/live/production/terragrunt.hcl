@@ -1,8 +1,8 @@
 # Production env stack — the Vercel project's env vars + OIDC role.
-# No staging: this service is pre-launch/dogfood-only (Ben is user #1, same call ROADMAP.md
-# made for infra/coldstorage) — `vercel dev` + a local Neon branch is the dev loop, matching
-# how MinIO stands in for coldstorage's local dev. Add live/staging/ (copy this dir, env =
-# "staging") if/when there's a real second environment to isolate.
+# Staging exists (live/staging/) so Paddle SANDBOX webhooks have a stable, deployed URL to
+# hit and a database isolated from real subscription data — this is the "sandbox Paddle
+# account" case, not a general-purpose dev environment (vercel dev + a local Neon branch
+# still covers day-to-day local dev).
 terraform {
   source = "../../modules/stack"
 }
@@ -23,25 +23,22 @@ dependency "coldstorage" {
 }
 
 inputs = {
-  env = "production"
+  env         = "production"
+  has_staging = true # live/staging/ exists → these manual secrets go sensitive, see below
 
-  # TODO(ben): fill in vercel_project_id once the Vercel project exists — `vercel link` (or
-  # the dashboard) after a first `vercel deploy` from account-backend/, then `vercel project
-  # ls` for the id. vercel_project_name MUST be created with exactly this name (it's the
-  # OIDC trust condition's project slug, oidc.tf) — recommended so it reads clearly in a
-  # multi-project team dashboard: coldstorage-<component>, matching this repo's directory.
-  vercel_project_id   = "prj_TODO"
+  # Verified 2026-07-01 via the Vercel API (GET /v9/projects/<id>): name is exactly
+  # "coldstorage-account-backend", matching the OIDC trust condition below (oidc.tf).
+  vercel_project_id   = "prj_IhOlkinKj2zIuHQBBTJhdP7s008w"
   vercel_project_name = "coldstorage-account-backend"
   vercel_team_slug    = "adpharm"
 
   cognito_user_pool_id        = dependency.coldstorage.outputs.cognito_user_pool_id
   cognito_user_pool_client_id = dependency.coldstorage.outputs.cognito_user_pool_client_id
 
-  # Prod-only (no staging) → these target ["production","preview","development"] (Vercel's
-  # "All Environments") and stay non-sensitive per terraform.md's env-var-ownership rule —
-  # `vercel env pull` can't fetch sensitive vars, and prod-only must still feed preview/dev
-  # deploys. Flag: their values are readable/pullable. Set real values in the Vercel
-  # dashboard after the first apply (this placeholder is intentionally not a secret).
+  # target=["production"] only, sensitive=true (has_staging=true above) per terraform.md's
+  # env-var-ownership rule — these are REAL Paddle live-mode credentials + the real prod
+  # Neon URL, never readable via `vercel env pull`. Set real values in the Vercel dashboard
+  # after the first apply (these placeholders are intentionally not secrets themselves).
   manual_secrets = {
     DATABASE_URL          = "SET_IN_VERCEL_DASHBOARD"
     PADDLE_WEBHOOK_SECRET = "SET_IN_VERCEL_DASHBOARD"

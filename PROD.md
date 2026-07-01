@@ -195,19 +195,31 @@ server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
    which deliberately opted OUT of the Vercel convention — this IS the Vercel app, so it gets the OIDC
    role + TF-managed env vars in full. The Cognito user-pool id/client-id are read via a cross-component
    Terragrunt `dependency` on `infra/coldstorage/live/production` (SSOT — no hand-copying `terragrunt
-   output` values). **`terragrunt plan` is clean against real AWS + Vercel providers (`8 to add`)** —
-   confirms the account's `oidc.vercel.com/adpharm` OIDC provider and the `/adpharm/vercel-api-token-
+   output` values). Vercel project **created — `coldstorage-account-backend`** (`prj_IhOlkinKj2zIuHQ
+   BBTJhdP7s008w`, verified via the Vercel API to confirm the name matches exactly what the OIDC trust
+   condition expects), wired into `live/production/terragrunt.hcl`. **`terragrunt plan` is clean against
+   real AWS + Vercel providers for BOTH stacks** (production `9 to add`; staging `10 to add`) — also
+   confirmed the account's `oidc.vercel.com/adpharm` OIDC provider and the `/adpharm/vercel-api-token-
    benhonda` SSM param already exist (an open question going in; now resolved). No custom domain yet
-   (v1 runs on Vercel's default domain — YAGNI, same call coldstorage made for DNS); **no staging**
-   (pre-launch/dogfood-only, matching coldstorage's own prod-only precedent — `vercel dev` + a local
-   Neon branch is the dev loop). **Gate not yet met — blocked on manual, Ben-only setup** (none of this
-   can be scripted from here): (1) create the Vercel project (`vercel link` or dashboard) and drop its
-   real id into `live/production/terragrunt.hcl` (currently `prj_TODO`); (2) create a Neon project +
-   database; (3) create a Paddle account (sandbox to start) and pull the webhook secret + API key;
-   (4) `task tf:account-backend:apply ENV=production`, then set the 3 manual-secret values
-   (`DATABASE_URL`/`PADDLE_WEBHOOK_SECRET`/`PADDLE_API_KEY`) for real in the Vercel dashboard (flagged
-   non-sensitive/pullable — this stack is prod-only, see `terraform.md`'s env-var-ownership rule);
-   (5) `task backend:db:push` to create the `accounts` table. Only once those land does "webhook flips
+   (v1 runs on Vercel's default domain — YAGNI, same call coldstorage made for DNS).
+   **Staging added (2026-07-01)** — Ben flagged the sandbox-Paddle case: webhooks need a stable deployed
+   URL (not local `vercel dev`) and sandbox test events must never touch production subscription data.
+   `live/staging/terragrunt.hcl` is a Vercel **custom environment** (branch-tracked on `staging`) within
+   the SAME project — not a second project. `modules/stack/vercel-env-vars.tf` now implements the full
+   `is_prod`/`has_staging` split from `terraform.md`: production's manual secrets go `sensitive=true`
+   / `target=["production"]` only (now that staging exists to cover preview/development); staging's stay
+   non-sensitive (Vercel can't pull sensitive vars for preview/dev), scoped to its `custom_environment_id`.
+   `PADDLE_ENVIRONMENT` (`"production"`/`"sandbox"`) is TF-managed, not a manual secret — it's fully
+   determined by which stack this is, not external secret material. Cognito is NOT duplicated for
+   staging (`infra/coldstorage` has no staging tier) — both stacks read the same production Cognito
+   outputs; auth isn't what's being sandboxed. **Gate not yet met — blocked on manual, Ben-only setup**
+   (none of this can be scripted from here): (1) create a Neon project (production DB) + a second
+   Neon project/branch for staging; (2) create a Paddle **sandbox** account (for staging) and, later, a
+   live account (for production) — pull each one's webhook secret + API key; (3) `task
+   tf:account-backend:apply ENV=production` then `ENV=staging`; (4) set each stack's 3 manual-secret
+   values for real in the Vercel dashboard, scoped to the right environment; (5) `task backend:db:push`
+   against each database (points at whatever `DATABASE_URL` is in `account-backend/.env` at the time —
+   swap it per target, there's no per-env push command yet). Only once those land does "webhook flips
    state; upload blocked when inactive" become testable end-to-end — that gate is unchanged from before.
 5. **App auth + paywall UX** — sign-in/up + recovery-code capture + subscribe flow in the Electron UI;
    token handed to the daemon. *Gate:* Ben signs up fresh → subscribes → deposits → restores, on a Mac.

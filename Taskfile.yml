@@ -807,18 +807,20 @@ tasks:
   # ------------------------------------------------------------------ infra — tf:account-backend:* (domain: infra/account-backend)
   # The Vercel project's OIDC role + TF-managed env vars (Cognito ids sourced from
   # infra/coldstorage via a cross-component `dependency` block — SSOT, no manual copy-paste).
-  # Production only (no staging yet) — see infra/account-backend/live/production/terragrunt.hcl.
-  # Secrets (DATABASE_URL, Paddle keys) are declared here but their VALUES are set once in the
-  # Vercel dashboard after first apply (terraform.md's manual_secrets pattern) — never in this repo.
+  # ENV=production|staging — staging exists so Paddle SANDBOX webhooks have a stable deployed
+  # URL + a database isolated from real subscription data (both share ONE Vercel project;
+  # staging is a branch-tracked custom environment within it, see modules/stack). Secrets
+  # (DATABASE_URL, Paddle keys) are declared here but their VALUES are set once in the Vercel
+  # dashboard after first apply (terraform.md's manual_secrets pattern) — never in this repo.
   tf:account-backend:_validate-env:
     internal: true
     requires:
       vars: [ENV]
     cmds:
-      - 'case "{{.ENV}}" in production) ;; *) echo "ENV must be production (no staging yet)"; exit 1 ;; esac'
+      - 'case "{{.ENV}}" in production|staging) ;; *) echo "ENV must be production|staging"; exit 1 ;; esac'
 
   tf:account-backend:plan:
-    desc: Terragrunt plan (ENV=production) — plans shared first
+    desc: Terragrunt plan (ENV=production|staging) — plans shared first
     requires:
       vars: [ENV]
     deps: [check-aws-identity]
@@ -834,7 +836,7 @@ tasks:
       - terragrunt plan {{.CLI_ARGS}}
 
   tf:account-backend:apply:
-    desc: Terragrunt apply (ENV=production) — applies shared then env. Never run without a reviewed plan.
+    desc: Terragrunt apply (ENV=production|staging) — applies shared then env. Never run without a reviewed plan.
     interactive: true
     prompt: "Apply account-backend infra to {{.ENV}}?"
     requires:

@@ -12,7 +12,13 @@ variable "aws_region" {
 
 variable "env" {
   type        = string
-  description = "production (no staging yet — see live/production/terragrunt.hcl)"
+  description = "production | staging"
+}
+
+variable "has_staging" {
+  type        = bool
+  default     = false
+  description = "Only meaningful on the production stack — true once live/staging exists, so production's manual secrets go sensitive (target=[\"production\"] only) instead of also covering preview/development. Unused on the staging stack itself."
 }
 
 variable "vercel_project_id" {
