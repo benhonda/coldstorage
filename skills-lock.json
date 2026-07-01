@@ -5,7 +5,7 @@
       "source": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",
       "skillPath": "skills/engineering/add-and-commit/SKILL.md",
-      "computedHash": "3f4b95c8d0c16349fc71fae3e84b75e5f9564dac83eccac3875405d82fc2de85"
+      "computedHash": "7ea0e3b1cf1e9965f50c056431383f34eaad5b0a1704e2b0dcb0d50269747567"
     },
     "adpharm-stack": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
@@ -35,7 +35,7 @@
       "source": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",
       "skillPath": "skills/engineering/checkpoint/SKILL.md",
-      "computedHash": "0721a13e163cabf6859fbed5b6c7cfa9262e482926e59b48cac43084626c96b3"
+      "computedHash": "21b0ffc4acb1cffc1aec087c3a7db47f85aef0b931fb7304a1dfab5d2659502a"
     },
     "product-brainstorming": {
       "source": "git@github.com:adpharm/adpharm-skills.git",

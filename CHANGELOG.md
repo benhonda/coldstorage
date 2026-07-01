@@ -2,6 +2,7 @@
 
 ## 2026-07-01
 
+- chore: pin `model: claude-haiku-4-5-20251001` on the `add-and-commit`/`checkpoint` skills (cheap, mechanical tasks).
 - feat: `infra/account-backend` **APPLIED for real** (production + staging) — `terragrunt state list` confirms the Vercel project's OIDC role, the `staging` custom environment, and every TF-managed/manual env var exist on both stacks. New `task link`/`pull` (+ `link:account-backend`/`pull:account-backend`) pull real Vercel env values into a gitignored `account-backend/.env.vercel` (loaded before the local `.env` override) so `backend:dev`/`backend:db:push` can run against real values; new root `.gitignore` `.env*` pattern. `infra/coldstorage/README.md` + new `infra/account-backend/README.md` correct/document that Terraform source (not state) is meant to be committed. Docs (CLAUDE.md/PROD.md/ROADMAP.md) synced to "applied, not yet deployed."
 - fix: `infra/account-backend/modules/stack/vercel-env-vars.tf` staging targeting reverted to `terraform.md`'s documented `target=["preview","development"]` + `custom_environment_ids` shape (briefly second-guessed toward a `git_branch`-based approach mid-task; Ben caught it — re-verified plan-clean, `9`/`10` to add).
 - feat: `task tf:plan`/`tf:apply`/`tf:init` — interactive picker (component + env) dispatching to the per-component `tf:<service>:*` tasks; a friendlier front door, not a replacement.

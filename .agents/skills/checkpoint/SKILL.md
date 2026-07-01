@@ -1,6 +1,7 @@
 ---
 name: checkpoint
 description: Leave the repo in a clean, pick-up-able state — reconcile every doc surface against what the code/git actually say now, kill stale references, and capture ongoing + planned work where it belongs so a fresh agent (or future you) can resume without losing the thread. Use this WHENEVER wrapping up a work session, pausing mid-feature, handing off, running low on context, or the user says "checkpoint", "checkpoint this", "leave a clean state", "update the docs", "make this pick-up-able", "snapshot where we are", "hand this off", or "save progress so someone can continue". Reach for it even when they don't say "docs" — the goal is a faithful, verifiable handoff, not just prose touch-ups.
+model: claude-haiku-4-5-20251001
 ---
 
 A checkpoint is a clean save-point: the repo's docs tell the truth about where things stand, no reference points at something that moved or died, and the next agent can find ongoing + planned work — then **verify it themselves** rather than trust it. You're writing for a skeptic who will (rightly) confirm before acting. Don't make them sift fiction.

@@ -1,6 +1,7 @@
 ---
 name: add-and-commit
 description: Add and commit changes, update changelog & readme.
+model: claude-haiku-4-5-20251001
 ---
 
 Quick add + commit of ALL pending changes (except out of scope below). **No typecheck, no fix, no lint** — this is a stenographer, not a reviewer. Keep it quick. Changes may be ongoing - be aware.
