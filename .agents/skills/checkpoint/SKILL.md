@@ -22,7 +22,7 @@ Before touching a doc, find out what's actually true — don't open the docs and
 
 You have context on what this repo is doing and what changed. Use it. There's no fixed set — find the surfaces that exist here and matter to what moved:
 
-- Root + nested `CLAUDE.md`, `README.md`, `CHANGELOG.md`, per-package docs, a docs site, generated reference docs.
+- Root + nested `CLAUDE.md`, `README.md`, per-package docs, a docs site, generated reference docs.
 - A handoff/checkpoint/notes doc **if the repo already keeps one** — update it; don't resurrect one the repo deliberately dropped.
 - In-code TODOs, FIXMEs, and comments that narrate intent.
 - An external tracker (issues, Asana) if that's where this team's planned work lives.
@@ -45,10 +45,12 @@ When you fix one, fix it at the source of truth and let derived/generated docs r
 
 - **Never hand-edit a generated file.** If a file carries a "generated" banner or the repo derives it from inputs, edit the *input* and note that a rebuild is needed (or run the generator). Hand-patching generated output is stale-reference debt waiting to happen.
 - **Don't overwrite docs you didn't write without reading them first.** If a doc contradicts what you found, that's a flag to surface — maybe you're wrong, maybe it's stale. Investigate before bulldozing.
-- Follow the repo's doc conventions (changelog format, where things go). When in doubt, match what's already there.
+- **The CHANGELOG (and commit log) isn't yours** — logging what shipped belongs to the add-and-commit skill. A checkpoint reconciles docs against ground truth; it never writes changelog entries. Leave `CHANGELOG.md` alone.
+- Follow the repo's doc conventions (where things go, format). When in doubt, match what's already there.
 
 ## Write honest, verifiable notes
 
+- **Smallest footprint that stays true.** A checkpoint edits in place and deletes stale — it doesn't accrete. If a surface is already honest, leave it untouched; net doc length should fall as often as it rises. Never paste walls of status prose a `git log` already carries.
 - **State true status, including ugly.** Half-done is "half-done, blocked on X at file:line" — never rounded up to done. Fabricated completeness is the one thing that makes a checkpoint actively harmful.
 - **Point, don't restate.** Anchor claims to `file:line`, a commit SHA, a test name. Prose drifts; references can be checked.
 - **Flag your own uncertainty.** "I believe X but didn't confirm" tells the next agent exactly where to start digging. That's a feature.
