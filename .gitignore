@@ -101,3 +101,4 @@ xcuserdata/
 # one-off scripts (taskfile convention) — never committed
 scripts/tmp/*
 !scripts/tmp/.gitkeep
+.env*

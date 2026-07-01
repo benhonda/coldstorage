@@ -35,6 +35,7 @@ vars:
 
 dotenv:
   - .env
+  - .env.vercel
 
 tasks:
   default:
@@ -120,13 +121,13 @@ tasks:
     dir: coldstorage
     deps: [_minio-binaries]
     cmds:
-      - 'pgrep -x minio >/dev/null || { mkdir -p .minio-data && MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin nohup minio server .minio-data --address :9000 --console-address :9001 > .minio.log 2>&1 & }'
+      - "pgrep -x minio >/dev/null || { mkdir -p .minio-data && MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin nohup minio server .minio-data --address :9000 --console-address :9001 > .minio.log 2>&1 & }"
       - sleep 2
       - mc alias set local http://localhost:9000 minioadmin minioadmin
       - mc mb local/coldstorage 2>/dev/null || true
   daemon:minio:stop:
     desc: Stop the local MinIO
-    cmds: ['pkill -x minio || true']
+    cmds: ["pkill -x minio || true"]
 
   daemon:unlock:
     desc: "Clear a stale SwiftPM build lock (the 0%-CPU 'hung build' footgun) — only if no build/test is live."
@@ -142,7 +143,7 @@ tasks:
   daemon:build:dev:
     desc: "Build the Swift core — DEBUG, for the MinIO/test dev loop (any OS). First run fetches deps (a few minutes). For the prod release build, see daemon:install."
     dir: coldstorage
-    deps: [daemon:unlock]   # clear a stale lock left by a previously-killed build
+    deps: [daemon:unlock] # clear a stale lock left by a previously-killed build
     cmds: [swift build]
   daemon:test:
     desc: Run the portable Core tests (swift-testing — no XCTest/CFRunLoop hang)
@@ -166,7 +167,7 @@ tasks:
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
       AWS_REGION: us-east-1
-      COLDSTORE_PART_DELAY_MS: "800"   # slows parts so kill/resume is visible; set 0 for full speed
+      COLDSTORE_PART_DELAY_MS: "800" # slows parts so kill/resume is visible; set 0 for full speed
     cmds:
       - swift run coldstore-cli {{.DIR | default "testdata"}} coldstorage http://localhost:9000
 
@@ -188,27 +189,27 @@ tasks:
       AWS_SECRET_ACCESS_KEY: minioadmin
       AWS_REGION: us-east-1
       COLDSTORE_ENDPOINT: http://localhost:9000
-      COLDSTORE_SOURCES: testdata          # one-time seed → journal registry (SSOT thereafter)
+      COLDSTORE_SOURCES: testdata # one-time seed → journal registry (SSOT thereafter)
       COLDSTORE_SOCKET: coldstored.sock
-      COLDSTORE_INTERVAL: '{{.INTERVAL | default "30"}}'   # overridable (fsevents-test bumps it to 600)
+      COLDSTORE_INTERVAL: '{{.INTERVAL | default "30"}}' # overridable (fsevents-test bumps it to 600)
     cmds:
       - swift run coldstored
 
   daemon:fsevents-test:
     desc: "[macOS] Runtime-test the FSEvents FolderWatcher: runs coldstored vs MinIO with a 600s poll interval (so a prompt re-scan can ONLY be FSEvents, never the poll). Drop a file into coldstorage/testdata in Finder → expect a 'FolderWatcher: FSEvents fired' line + a runStarted→fileArchived→runFinished within ~1-2s. Watch events in another terminal with `task daemon:ctl -- watch`."
     dir: coldstorage
-    deps: [daemon:minio, daemon:unlock]   # unlock: clear a stale .build/.lock so the build can't wedge at 0% CPU
+    deps: [daemon:minio, daemon:unlock] # unlock: clear a stale .build/.lock so the build can't wedge at 0% CPU
     vars:
-      INTERVAL: "600"   # huge on purpose: a re-scan within seconds of a drop is FSEvents, not the poll
+      INTERVAL: "600" # huge on purpose: a re-scan within seconds of a drop is FSEvents, not the poll
     env: *daemon_run_env
     cmds:
-      - mkdir -p testdata   # FSEvents needs the watched path to exist before the stream starts
+      - mkdir -p testdata # FSEvents needs the watched path to exist before the stream starts
       - swift run coldstored
 
   daemon:run:bg:
     desc: "Start coldstored in the background (logs → coldstorage/.coldstored.log), wait for its socket. Stop: task dev:stop."
     dir: coldstorage
-    env: *daemon_run_env                   # same MinIO config as daemon:run (YAML anchor — SSOT)
+    env: *daemon_run_env # same MinIO config as daemon:run (YAML anchor — SSOT)
     cmds:
       - 'pgrep -f "coldstored$" >/dev/null || nohup swift run coldstored > .coldstored.log 2>&1 &'
       - |
@@ -217,7 +218,7 @@ tasks:
         echo "timed out — check coldstorage/.coldstored.log" >&2; exit 1
 
   daemon:ctl:
-    desc: 'Send a control command, e.g. `task daemon:ctl -- getStatus` or `-- addSource path=/abs/dir`.'
+    desc: "Send a control command, e.g. `task daemon:ctl -- getStatus` or `-- addSource path=/abs/dir`."
     dir: coldstorage
     cmds:
       - swift run coldstorectl coldstored.sock {{.CLI_ARGS | default "getStatus"}}
@@ -229,7 +230,7 @@ tasks:
       - swift run coldstorectl coldstored.sock restore file={{.FILE}} out={{.OUT | default "/tmp/restored.bin"}} tier={{.TIER | default "standard"}}
 
   daemon:deposit-ipc:
-    desc: "Deposit (ad-hoc drop-to-upload) over the running daemon's socket: SRC=/abs/path [DEST=folder] [CONFLICTS='{\"dest/name\":\"keepBoth\"}']. Archives the path(s) once, NO watched source — the same command the UI's drag-drop issues. CONFLICTS is the JSON Keep Both / Replace / Skip map (see daemon:preview-deposit-ipc). Fire-and-forget; check `daemon:ctl -- listFiles`."
+    desc: 'Deposit (ad-hoc drop-to-upload) over the running daemon''s socket: SRC=/abs/path [DEST=folder] [CONFLICTS=''{"dest/name":"keepBoth"}'']. Archives the path(s) once, NO watched source — the same command the UI''s drag-drop issues. CONFLICTS is the JSON Keep Both / Replace / Skip map (see daemon:preview-deposit-ipc). Fire-and-forget; check `daemon:ctl -- listFiles`.'
     dir: coldstorage
     cmds:
       - swift run coldstorectl coldstored.sock deposit src={{.SRC}} dest={{.DEST | default ""}} {{if .CONFLICTS}}'conflicts={{.CONFLICTS}}'{{end}}
@@ -238,7 +239,7 @@ tasks:
     desc: "[macOS] Tail the installed daemon's stdout+stderr logs (live). Shows PhotoKitResolver auth/resolve diagnostics, deposit errors, etc."
     dir: coldstorage
     vars:
-      DATA_DIR: '{{.HOME}}/Library/Application Support/ColdStorage'
+      DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
     cmds:
       - tail -n 40 -f "{{.DATA_DIR}}/coldstored.out.log" "{{.DATA_DIR}}/coldstored.err.log"
 
@@ -246,7 +247,7 @@ tasks:
     desc: "[macOS] Truncate the installed daemon's logs in place — a clean slate before reproducing an issue, WITHOUT reinstalling. (daemon:install also resets them.) The daemon keeps writing to the same files."
     dir: coldstorage
     vars:
-      DATA_DIR: '{{.HOME}}/Library/Application Support/ColdStorage'
+      DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
     cmds:
       - ': > "{{.DATA_DIR}}/coldstored.out.log"; : > "{{.DATA_DIR}}/coldstored.err.log"'
       - 'echo "cleared daemon logs"'
@@ -301,24 +302,24 @@ tasks:
     desc: "Manage scan exclude patterns over the running daemon's socket: ADD=<glob> or REMOVE=<glob> (omit both to just list). gitignore-style — bare names match at any depth, globs use */?. The next scan/deposit skips matches. Quote globs so the shell doesn't expand them, e.g. ADD='*.log'."
     dir: coldstorage
     cmds:
-      - '{{if .ADD}}swift run coldstorectl coldstored.sock addExclude pattern={{.ADD}}{{end}}'
-      - '{{if .REMOVE}}swift run coldstorectl coldstored.sock removeExclude pattern={{.REMOVE}}{{end}}'
+      - "{{if .ADD}}swift run coldstorectl coldstored.sock addExclude pattern={{.ADD}}{{end}}"
+      - "{{if .REMOVE}}swift run coldstorectl coldstored.sock removeExclude pattern={{.REMOVE}}{{end}}"
       - swift run coldstorectl coldstored.sock listExcludes
 
   daemon:live:
-    desc: '[Mode 2: your real daemon] [macOS] Drive the INSTALLED launchd daemon (real prod AWS / Deep Archive), e.g. `task daemon:live -- getStatus` · `-- addSource path=/abs/dir` · `-- triggerNow` · `-- watch`. (daemon:ctl targets the dev/MinIO daemon instead.) Uses the release binary built by daemon:install.'
+    desc: "[Mode 2: your real daemon] [macOS] Drive the INSTALLED launchd daemon (real prod AWS / Deep Archive), e.g. `task daemon:live -- getStatus` · `-- addSource path=/abs/dir` · `-- triggerNow` · `-- watch`. (daemon:ctl targets the dev/MinIO daemon instead.) Uses the release binary built by daemon:install."
     dir: coldstorage
     vars:
-      SOCK: '{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock'
+      SOCK: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
     cmds:
       - test -S "{{.SOCK}}" || { echo "no installed daemon socket at {{.SOCK}} — run task daemon:bootstrap first"; exit 1; }
       - ./.build/release/coldstorectl "{{.SOCK}}" {{.CLI_ARGS | default "getStatus"}}
 
   daemon:verify-aws:
-    desc: "[macOS] HEAD a single LIVE vault blob directly in S3 (bypasses the daemon) to confirm StorageClass=DEEP_ARCHIVE + see the Restore (thaw) status. BLOB=<blobId> (the hash from listFiles). Uses head-object, so it stays within the daemon's least-priv GetObject grant (no ListBucket). Also the way to poll a thaw: re-run until Restore shows ongoing-request=\"false\"."
+    desc: '[macOS] HEAD a single LIVE vault blob directly in S3 (bypasses the daemon) to confirm StorageClass=DEEP_ARCHIVE + see the Restore (thaw) status. BLOB=<blobId> (the hash from listFiles). Uses head-object, so it stays within the daemon''s least-priv GetObject grant (no ListBucket). Also the way to poll a thaw: re-run until Restore shows ongoing-request="false".'
     dir: coldstorage
     vars:
-      CREDS: '{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env'
+      CREDS: "{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
     cmds:
       - |
         [ -f "{{.CREDS}}" ] && { set -a; . "{{.CREDS}}"; set +a; }
@@ -334,7 +335,7 @@ tasks:
     desc: "[macOS] Hands-off Deep Archive restore: re-fires `restore` against the INSTALLED daemon every INTERVAL until state=restored, then shows the recovered file. Start it and walk away (Glacier Standard thaw is ~12h). FILE=<id> OUT=<path> [TIER=standard] [INTERVAL=900]. Idempotent — re-issues no duplicate thaw while in progress."
     dir: coldstorage
     vars:
-      SOCK: '{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock'
+      SOCK: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
       OUT: '{{.OUT | default "/tmp/coldstore-restore-test.out"}}'
       TIER: '{{.TIER | default "standard"}}'
       INTERVAL: '{{.INTERVAL | default "900"}}'
@@ -358,8 +359,8 @@ tasks:
     desc: "[macOS] Build release + install the coldstored LaunchAgent (RunAtLoad/KeepAlive)."
     dir: coldstorage
     vars:
-      DATA_DIR: '{{.HOME}}/Library/Application Support/ColdStorage'
-      PLIST: '{{.HOME}}/Library/LaunchAgents/com.theadpharm.coldstored.plist'
+      DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
+      PLIST: "{{.HOME}}/Library/LaunchAgents/com.theadpharm.coldstored.plist"
     cmds:
       # Photos access prerequisite (explicit photo-deposit path): the Info.plist is embedded into coldstored
       # at link time via Package.swift (-sectcreate, macOS-only), and we codesign with a STABLE identity
@@ -420,8 +421,8 @@ tasks:
     vars:
       # SCRIPT_DIR is a SPACE-FREE path on purpose: AWS splits `credential_process` on
       # whitespace, so the helper can't live under "…/Application Support/…".
-      SCRIPT_DIR: '{{.HOME}}/.coldstorage'
-      CREDS: '{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env'
+      SCRIPT_DIR: "{{.HOME}}/.coldstorage"
+      CREDS: "{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
     cmds:
       - mkdir -p "{{.SCRIPT_DIR}}" && chmod 700 "{{.SCRIPT_DIR}}"
       - |
@@ -460,8 +461,8 @@ tasks:
     desc: "[macOS] Health-check the installed daemon: launchd state, AWS auth via the coldstorage profile (Keychain), and getStatus over the control socket."
     dir: coldstorage
     vars:
-      SOCK: '{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock'
-      ERRLOG: '{{.HOME}}/Library/Application Support/ColdStorage/coldstored.err.log'
+      SOCK: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
+      ERRLOG: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.err.log"
     cmds:
       - 'echo "── launchd ──"'
       - launchctl print "gui/$(id -u)/com.theadpharm.coldstored" 2>/dev/null | grep -iE "state =|pid =|last exit" || echo "not loaded — run task daemon:bootstrap"
@@ -473,7 +474,7 @@ tasks:
   daemon:uninstall:
     desc: "[macOS] Stop + remove the coldstored LaunchAgent. Needed before testing Mode 3 (ui:package) — it and Mode 2 share the same socket/data dir; `task daemon:bootstrap` brings Mode 2 back afterward."
     vars:
-      PLIST: '{{.HOME}}/Library/LaunchAgents/com.theadpharm.coldstored.plist'
+      PLIST: "{{.HOME}}/Library/LaunchAgents/com.theadpharm.coldstored.plist"
     cmds:
       - launchctl bootout "gui/$(id -u)/com.theadpharm.coldstored" 2>/dev/null || true
       - rm -f "{{.PLIST}}"
@@ -483,8 +484,8 @@ tasks:
     desc: "[macOS] DESTRUCTIVE — wipe the installed daemon's local state for a clean slate: stop it, delete the journal (the tree SSOT) + status + staged blobs + logs, restart empty. Comes back with NO files and NO watched folders. KEEPS the encryption key (dev-kek.bin) and does NOT touch S3 — old blobs in the prod vault are left orphaned (harmless; purge with an admin profile if you care). Re-deposits re-upload from scratch (the journal no longer marks anything verified)."
     dir: coldstorage
     vars:
-      DATA_DIR: '{{.HOME}}/Library/Application Support/ColdStorage'
-      PLIST: '{{.HOME}}/Library/LaunchAgents/com.theadpharm.coldstored.plist'
+      DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
+      PLIST: "{{.HOME}}/Library/LaunchAgents/com.theadpharm.coldstored.plist"
     cmds:
       # 1. Stop the daemon FIRST — it holds the SQLite handle (+WAL); deleting the journal under a live
       #    daemon would corrupt, not clean. bootout closes the log fds too, so truncating below is safe.
@@ -521,7 +522,7 @@ tasks:
       - test -f node_modules/electron/path.txt
       - test -d node_modules/electron/dist
     cmds:
-      - '[ -d node_modules/electron ] || bun install'
+      - "[ -d node_modules/electron ] || bun install"
       - node node_modules/electron/install.js
 
   ui:typecheck:
@@ -543,10 +544,10 @@ tasks:
     env:
       # Electron runs with cwd=ui/, so the DaemonClient's relative default would miss the daemon's
       # socket. Point at it explicitly (same path daemon:run creates). Mirrors ui:prove.
-      COLDSTORE_SOCKET: '{{.ROOT_DIR}}/coldstorage/coldstored.sock'
+      COLDSTORE_SOCKET: "{{.ROOT_DIR}}/coldstorage/coldstored.sock"
       # Absolute path to the native Photos-picker helper (built by daemon:build:dev/install) — the "Add photos…"
       # entry spawns it. Absolute so it resolves regardless of Electron's cwd.
-      COLDSTORE_PHOTO_PICKER: '{{.ROOT_DIR}}/coldstorage/.build/release/coldstore-photo-picker'
+      COLDSTORE_PHOTO_PICKER: "{{.ROOT_DIR}}/coldstorage/.build/release/coldstore-photo-picker"
     cmds:
       - bun run dev
 
@@ -556,8 +557,8 @@ tasks:
     deps: [ui:_ensure-electron]
     env:
       # The launchd daemon's socket (daemon:install path), NOT the dev socket ui:dev/ui:demo use.
-      COLDSTORE_SOCKET: '{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock'
-      COLDSTORE_PHOTO_PICKER: '{{.ROOT_DIR}}/coldstorage/.build/release/coldstore-photo-picker'
+      COLDSTORE_SOCKET: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
+      COLDSTORE_PHOTO_PICKER: "{{.ROOT_DIR}}/coldstorage/.build/release/coldstore-photo-picker"
     cmds:
       - bun run dev
 
@@ -574,8 +575,8 @@ tasks:
     cmds:
       # The bundled binaries must exist before electron-builder copies them (electron-builder.yml extraResources).
       - swift build -c release --package-path "{{.ROOT_DIR}}/coldstorage"
-      - bun run build                # electron-vite → out/{main,preload,renderer}
-      - bunx electron-builder --mac  # node CLI (not --bun); reads electron-builder.yml → ui/dist/ColdStorage.app + dmg/zip
+      - bun run build # electron-vite → out/{main,preload,renderer}
+      - bunx electron-builder --mac # node CLI (not --bun); reads electron-builder.yml → ui/dist/ColdStorage.app + dmg/zip
 
   ui:package:verify:
     desc: "[macOS] Sanity-check the packaged app: bundled Swift binaries present + their code-signing status (the bits that can't be checked off-Mac)."
@@ -612,7 +613,7 @@ tasks:
     desc: "[macOS] Write the packaged app's AWS config (~/Library/Application Support/ColdStorage/config.json: bucket/region/profile + the Cognito identity pool id/provider, when the handoff has them) from the infra-outputs handoff, so a Finder-launched ColdStorage.app — which inherits no shell env — can actually upload. NO secret is written here; creds resolve via the profile's credential_process → Keychain (run `task daemon:creds` once). Mirrors the env daemon:install bakes into the launchd plist."
     dir: coldstorage
     vars:
-      DATA_DIR: '{{.HOME}}/Library/Application Support/ColdStorage'
+      DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
     cmds:
       - mkdir -p "{{.DATA_DIR}}"
       - |
@@ -667,10 +668,10 @@ tasks:
 
   ui:demo:
     desc: "[macOS] One command to dogfood locally: MinIO + daemon (background) + the UI. Ctrl-C stops the UI; `task dev:stop` stops the rest."
-    deps: [daemon:minio]       # MinIO (bg) + bucket + OS-correct binaries
+    deps: [daemon:minio] # MinIO (bg) + bucket + OS-correct binaries
     cmds:
-      - task: daemon:run:bg    # daemon in the background, waits for its socket
-      - task: ui:dev           # the UI in the foreground
+      - task: daemon:run:bg # daemon in the background, waits for its socket
+      - task: ui:dev # the UI in the foreground
 
   dev:stop:
     desc: "Stop the background daemon + MinIO left running by `task ui:demo`."
@@ -682,14 +683,17 @@ tasks:
     desc: "Prove the layer-1 IPC bridge against a running daemon. Start `task daemon:run` first."
     dir: ui
     env:
-      COLDSTORE_SOCKET: '{{.ROOT_DIR}}/coldstorage/coldstored.sock'
+      COLDSTORE_SOCKET: "{{.ROOT_DIR}}/coldstorage/coldstored.sock"
     cmds:
       - bun run prove
 
   # ------------------------------------------------------------------ account-backend (domain: account-backend/)
   # Hono on Vercel + Neon/Drizzle — Cognito↔Paddle↔zero-knowledge-key-blob API (PROD.md Phase 4).
-  # Needs account-backend/.env (copy .env.example) for backend:dev/test/db:push; DATABASE_URL
-  # there is a local/dev Neon branch, NOT the Vercel-managed prod one (tf:account-backend:* owns that).
+  # Two env files, both gitignored, both in account-backend/: .env.vercel is the pulled
+  # baseline (`task pull:account-backend` — staging's real values); .env is optional LOCAL
+  # OVERRIDES on top (e.g. point DATABASE_URL at your own local Postgres instead of staging's)
+  # — loaded second via --env-file so it wins. Neither is auto-loaded by bun/drizzle-kit/vercel
+  # dev on their own (only plain .env is), hence the explicit --env-file flags below.
   backend:setup:
     desc: "Install account-backend deps (Bun)."
     dir: account-backend
@@ -709,18 +713,72 @@ tasks:
       - bun run test
 
   backend:dev:
-    desc: "Run the API locally via the Vercel CLI (needs `vercel login` once + account-backend/.env filled from .env.example)."
+    desc: "Run the API locally via the Vercel CLI (needs `vercel login` once + `task pull:account-backend`, or fill account-backend/.env by hand from .env.example)."
     dir: account-backend
     cmds:
-      - bun run dev
+      - bun --env-file=.env.vercel --env-file=.env run dev
 
   backend:db:push:
-    desc: "Push the Drizzle schema to Neon (drizzle-kit push) — NO migration files. Reads DATABASE_URL from account-backend/.env."
+    desc: "Push the Drizzle schema to Neon (drizzle-kit push) — NO migration files. Reads DATABASE_URL from account-backend/.env.vercel (or .env override)."
     dir: account-backend
     interactive: true
     prompt: "Before pushing schema changes, double-check DATABASE_URL — is it correct?"
     cmds:
-      - bun run db:push
+      - bun --env-file=.env.vercel --env-file=.env run db:push
+
+  # ====================================================================================================================
+  #  Vercel (link + env pull — domain namespaced by app, like tf:<component>:*)
+  # ====================================================================================================================
+  # Pulls into account-backend/.env.vercel (see the account-backend section above for how
+  # that + .env get loaded). Bare `vercel env pull` defaults to the "development" target —
+  # which, by construction (vercel-env-vars.tf), resolves ONLY to staging's values: once
+  # staging exists, production's manual secrets are sensitive=true and don't target
+  # "development" at all, so there's no accidental-production-pull footgun, no --environment
+  # flag needed.
+  link:account-backend:
+    desc: Link account-backend to its Vercel project
+    dir: account-backend
+    interactive: true
+    cmds:
+      - bunx vercel link
+
+  pull:account-backend:
+    desc: Pull account-backend's env vars from Vercel into .env.vercel (staging's values — production is sensitive, not pullable)
+    dir: account-backend
+    interactive: true
+    cmds:
+      - bunx vercel env pull .env.vercel
+
+  link:
+    desc: Link an app to its Vercel project (interactive app picker)
+    interactive: true
+    silent: true
+    cmds:
+      - |
+        echo "Link which app?"
+        select app in account-backend quit; do
+          case "$app" in
+            account-backend) exec task link:account-backend ;;
+            quit) break ;;
+            *) echo "invalid" ;;
+          esac
+        done
+
+  pull:
+    desc: Pull an app's Vercel env vars into .env (interactive app picker)
+    interactive: true
+    silent: true
+    cmds:
+      - |
+        echo "Pull env for which app?"
+        select app in account-backend all quit; do
+          case "$app" in
+            account-backend) exec task pull:account-backend ;;
+            all) exec task pull:account-backend ;;
+            quit) break ;;
+            *) echo "invalid" ;;
+          esac
+        done
 
   # ------------------------------------------------------------------ infra — tf:coldstorage:* (domain: infra/coldstorage)
   # Storage buckets (S3 Glacier Deep Archive + R2) + lifecycle rules. State in
@@ -782,8 +840,8 @@ tasks:
     deps: [check-aws-identity]
     dir: infra/coldstorage/live/production
     vars:
-      DIR: '{{.ROOT_DIR}}/coldstorage/.local'
-      OUT: '{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env'
+      DIR: "{{.ROOT_DIR}}/coldstorage/.local"
+      OUT: "{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
     cmds:
       - mkdir -p "{{.DIR}}" && chmod 700 "{{.DIR}}"
       - |

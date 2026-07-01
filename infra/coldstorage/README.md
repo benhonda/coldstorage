@@ -5,7 +5,11 @@ Terragrunt root for ColdStorage's AWS storage. Follows the adpharm-stack `terraf
 verify-with-plan / never-apply) but **diverges in content** because ColdStorage is a Mac
 daemon + a private S3 vault, not a Vercel web app.
 
-> `infra/` is fully gitignored — nothing here is committed to the public repo.
+> The Terraform/Terragrunt **source** here (`.tf`/`.hcl`) IS committed to this public repo —
+> that's the point of IaC. What's gitignored is state + secret-bearing artifacts: `.terraform/`,
+> `.terragrunt-cache/`, `*.tfvars`, and the daemon-creds handoff file (`.gitignore`'s
+> "Terraform / Terragrunt" section). Before `git add infra/`, sanity-check `git status` for
+> stray state — the pre-commit gitleaks hook (`task hooks:install`) is the backstop.
 
 ## What it provisions (production-only for now)
 - **S3 vault** (`coldstorage-production-<acct>`) — private, versioned, SSE-S3, written to

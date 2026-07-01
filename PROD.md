@@ -175,7 +175,10 @@ server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
    legitimate to source a `KeyBlob` from yet (Phase 4, the account backend) or a password/recovery code
    from (Phase 5, the sign-in UI), so wiring it now would have no real caller. That wiring is now this
    phase's remaining work, landing naturally with P4/P5.
-4. **Account backend — SCAFFOLDED ✅ (2026-07-01), NOT DEPLOYED.** Stack decided with Ben: **Hono on
+4. **Account backend — SCAFFOLDED ✅, infra APPLIED ✅ (2026-07-01), app not yet deployed.** (Infra
+   = Terraform-provisioned Vercel project settings/env vars/IAM role, applied for real — see below.
+   App deploy = actually pushing the Hono code to Vercel so it serves requests; that hasn't happened
+   yet, and is a separate step from `terragrunt apply`.) Stack decided with Ben: **Hono on
    Vercel + Neon/Drizzle** (not Lambda+DynamoDB) — Vercel-project infra is already the adpharm-stack
    convention (`references/terraform.md`), Neon is that convention's DB default, and this needed no AWS
    SDK/credentials at runtime (Cognito ID-token verification is a plain JWKS check), so the daemon's
@@ -220,15 +223,37 @@ server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
    `PADDLE_ENVIRONMENT` (`"production"`/`"sandbox"`) is TF-managed, not a manual secret — it's fully
    determined by which stack this is, not external secret material. Cognito is NOT duplicated for
    staging (`infra/coldstorage` has no staging tier) — both stacks read the same production Cognito
-   outputs; auth isn't what's being sandboxed. **Gate not yet met — blocked on manual, Ben-only setup**
-   (none of this can be scripted from here): (1) create a Neon project (production DB) + a second
-   Neon project/branch for staging; (2) create a Paddle **sandbox** account (for staging) and, later, a
-   live account (for production) — pull each one's webhook secret + API key; (3) `task
-   tf:account-backend:apply ENV=production` then `ENV=staging`; (4) set each stack's 3 manual-secret
-   values for real in the Vercel dashboard, scoped to the right environment; (5) `task backend:db:push`
-   against each database (points at whatever `DATABASE_URL` is in `account-backend/.env` at the time —
-   swap it per target, there's no per-env push command yet). Only once those land does "webhook flips
-   state; upload blocked when inactive" become testable end-to-end — that gate is unchanged from before.
+   outputs; auth isn't what's being sandboxed.
+   **Vercel link/pull wired (2026-07-01)** — `task link`/`task pull` (generic pickers, `select`+`case`,
+   matching the `tf:plan`/`tf:apply`/`tf:init` picker convention added the same day) and their direct
+   `link:account-backend`/`pull:account-backend` forms. `pull` writes `account-backend/.env.vercel`
+   (bare `vercel env pull` defaults to the `development` target, which by construction only resolves to
+   staging's non-sensitive values — production's are `sensitive=true` and don't target `development` at
+   all, so there's no accidental-prod-pull path, no flags needed). `backend:dev`/`backend:db:push` load
+   `.env.vercel` then `.env` via `bun --env-file` (later wins) — `.env` is an optional local override on
+   top of the pulled staging baseline, never auto-loaded by bun/drizzle-kit/`vercel dev` on its own for a
+   non-standard filename like this, hence the explicit flags. **Not yet tried for real** — needs
+   `task link` run once against an authenticated `vercel` CLI, which this environment can't do (no
+   Vercel login here); the picker/dispatch mechanics are verified, the actual pull isn't.
+   **Infra APPLIED for real (confirmed 2026-07-01 via `terragrunt state list`)** — both stacks are live,
+   not just plan-clean: production shows all 9 resources in state (the OIDC role +
+   `coldstorage-account-backend-production-vercel`, the 5 TF-managed vars, the 3 manual-secret
+   placeholders), staging shows all 10 (same set + the `staging` custom environment); re-plans on both
+   come back "No changes." This must have been run directly by Ben — not by me (I don't run `apply`).
+   **Unverified from here:** whether the 6 manual-secret values (3 per stack) still hold their
+   Terraform-written placeholder (`SET_IN_VERCEL_DASHBOARD`) or have already been replaced with real
+   values in the Vercel dashboard — production's are `sensitive=true` (can't be read back at all, by
+   design) and staging's weren't checked (technically readable via the Vercel API, but pulling live
+   secret material into a doc/transcript isn't something to do just to satisfy a checkpoint). **Gate not
+   yet met — remaining blockers are all non-Terraform, Ben-only steps:** (1) create a Neon project
+   (`coldstorage-account-backend`, branches `production`/`staging` — Neon's own one-project-many-branches
+   model, not two projects); (2) create a Paddle **sandbox** account (staging) and, later, a live account
+   (production) — pull each one's webhook secret + API key; (3) set the 6 real secret values in the
+   Vercel dashboard (confirm they're not still placeholders, per the open question above); (4) `task
+   link` once, then `task pull` for staging's values, `task backend:db:push` against staging; production's
+   DB gets pushed by pointing `.env`'s `DATABASE_URL` at it directly (not pullable, see above). Only once
+   those land does "webhook flips state; upload blocked when inactive" become testable end-to-end — that
+   gate is unchanged from before.
 5. **App auth + paywall UX** — sign-in/up + recovery-code capture + subscribe flow in the Electron UI;
    token handed to the daemon. *Gate:* Ben signs up fresh → subscribes → deposits → restores, on a Mac.
 6. **Sign + notarize + ship** — Developer ID signing + notarization + auto-update + download page. *Gate:*
