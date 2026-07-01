@@ -22,17 +22,19 @@ locals {
     PADDLE_ENVIRONMENT          = local.is_prod ? "production" : "sandbox"
   }
 
-  # terraform.md env-var-ownership: prod-only ⇒ all 3 targets (preview/dev need real values
-  # too, since nothing else covers them); prod-with-staging ⇒ production only (staging owns
-  # preview/development via its own custom environment); non-prod (staging) ⇒ preview+dev,
-  # scoped further by custom_environment_ids below so it's THIS stack's staging values, not
-  # some other branch's.
+  # terraform.md env-var-ownership, applied verbatim (not the git_branch approach an earlier
+  # version of this file used — reverted, see PROD.md Phase 4 for why): prod-only ⇒ all 3
+  # targets (preview/dev need real values too); prod-with-staging ⇒ production only; staging
+  # ⇒ preview+development, scoped to ITS custom environment via custom_environment_ids below.
+  # "devs `vercel env pull` the development target for local dev" is the convention's own
+  # reasoning — this is a stack-wide pattern other Adpharm projects rely on, even though
+  # account-backend's own Taskfile currently fills .env by hand instead.
   targets = local.is_prod ? (var.has_staging ? ["production"] : ["production", "preview", "development"]) : ["preview", "development"]
 }
 
 # Only for non-production stacks — gives `staging` a STABLE URL (branch-tracked), unlike ad
 # hoc preview deployments which get a new URL per push. Paddle's sandbox webhook needs one
-# fixed destination to point at, not a moving target.
+# fixed destination to point at.
 resource "vercel_custom_environment" "env" {
   count      = local.is_prod ? 0 : 1
   project_id = var.vercel_project_id
@@ -59,8 +61,10 @@ resource "vercel_project_environment_variable" "manual" {
   key        = each.key
   value      = each.value
   # sensitive=true only once this is a prod-WITH-staging stack (target=["production"] only —
-  # preview/development can't hold sensitive vars, `vercel env pull` can't fetch them). Real
-  # production Paddle live keys + prod DATABASE_URL become non-pullable once staging exists.
+  # preview/development can't hold sensitive vars fetchable via `vercel env pull`, and
+  # terraform.md's convention deliberately keeps staging's non-sensitive so `vercel env pull`
+  # CAN fetch real sandbox values for local testing). Real production Paddle live keys + prod
+  # DATABASE_URL become non-pullable once staging exists.
   sensitive              = local.is_prod && var.has_staging
   target                 = local.targets
   custom_environment_ids = local.is_prod ? null : [vercel_custom_environment.env[0].id]

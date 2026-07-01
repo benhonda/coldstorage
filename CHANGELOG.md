@@ -2,6 +2,7 @@
 
 ## 2026-07-01
 
+- fix: `infra/account-backend/modules/stack/vercel-env-vars.tf` staging targeting reverted to `terraform.md`'s documented `target=["preview","development"]` + `custom_environment_ids` shape (briefly second-guessed toward a `git_branch`-based approach mid-task; Ben caught it — re-verified plan-clean, `9`/`10` to add).
 - feat: `task tf:plan`/`tf:apply`/`tf:init` — interactive picker (component + env) dispatching to the per-component `tf:<service>:*` tasks; a friendlier front door, not a replacement.
 - feat: `infra/account-backend` **staging environment** — sandbox-Paddle case (stable deployed URL + DB isolated from real subscriptions), a Vercel custom environment (`live/staging/terragrunt.hcl`, branch-tracked on `staging`) in the same project, not a second project. `vercel-env-vars.tf` gains `is_prod`/`has_staging` split (`terraform.md`'s env-var-ownership rule) + TF-managed `PADDLE_ENVIRONMENT`; production's manual secrets now `sensitive=true`/`target=["production"]` once staging exists. Vercel project created (`coldstorage-account-backend`, `prj_IhOlkinKj2zIuHQBBTJhdP7s008w`) and wired into `live/production/terragrunt.hcl`. `terragrunt plan` clean for both stacks. `tf:account-backend:*` tasks + docs (CLAUDE.md/PROD.md/ROADMAP.md) updated for `ENV=production|staging`.
 - chore: vendor `spec-driven-dev` skill (`.agents`/`.claude` install + `skills-lock.json`); trim `checkpoint` skill's changelog-writing overlap with add-and-commit + tighten its "smallest footprint" guidance.

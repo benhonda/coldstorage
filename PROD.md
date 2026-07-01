@@ -208,7 +208,15 @@ server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
    the SAME project — not a second project. `modules/stack/vercel-env-vars.tf` now implements the full
    `is_prod`/`has_staging` split from `terraform.md`: production's manual secrets go `sensitive=true`
    / `target=["production"]` only (now that staging exists to cover preview/development); staging's stay
-   non-sensitive (Vercel can't pull sensitive vars for preview/dev), scoped to its `custom_environment_id`.
+   non-sensitive (Vercel can't pull sensitive vars for preview/dev — the convention deliberately keeps
+   these pullable so `vercel env pull` can fetch real sandbox values for local testing).
+   **Correction (2026-07-01):** briefly second-guessed this into `target=["preview"]` +
+   `git_branch="staging"` based on my own read of the generic `vercel/terraform-provider-vercel` docs
+   (worried `target`/`custom_environment_ids` don't narrow each other) — Ben caught it and pointed back
+   at `terraform.md`'s own documented shape, which already answers this (`target=["preview","development"]`
+   **+** `custom_environment_ids`, exactly what was there originally). Reverted to the skill's convention
+   as written — it's the org's vetted pattern, not something to relitigate from generic docs mid-task.
+   Re-verified clean: production `9 to add`, staging `10 to add`.
    `PADDLE_ENVIRONMENT` (`"production"`/`"sandbox"`) is TF-managed, not a manual secret — it's fully
    determined by which stack this is, not external secret material. Cognito is NOT duplicated for
    staging (`infra/coldstorage` has no staging tier) — both stacks read the same production Cognito
