@@ -863,6 +863,82 @@ tasks:
       - task: tf:account-backend:_validate-env
       - terragrunt init {{.CLI_ARGS}}
 
+  # ------------------------------------------------------------------ infra — pick a target (one cli step, like the app `dev` picker)
+  # `task tf:plan` / `tf:apply` / `tf:init` with no args — prompts for which component + env,
+  # then dispatches to the per-component tf:<service>:* tasks above (those stay the SSOT for
+  # each component's env list/dependencies/validation — coldstorage is production-only,
+  # account-backend also has staging). Still fine to call `task tf:coldstorage:plan
+  # ENV=production` etc. directly (e.g. scripted use, or to pass extra terragrunt flags after
+  # `--`) — this is a friendlier front door, not a replacement.
+  tf:plan:
+    desc: "Pick an infra component + env to plan"
+    interactive: true
+    cmds:
+      - |
+        echo
+        echo "Plan which infra?"
+        echo "  1) coldstorage      — production"
+        echo "  2) account-backend  — production"
+        echo "  3) account-backend  — staging"
+        echo "  q) quit"
+        echo
+        printf "Choice [1]: "
+        read -r choice
+        choice="${choice:-1}"
+        case "$choice" in
+          1|coldstorage)                        task tf:coldstorage:plan ENV=production ;;
+          2|account-backend|ab)                 task tf:account-backend:plan ENV=production ;;
+          3|account-backend:staging|ab:staging)  task tf:account-backend:plan ENV=staging ;;
+          q|Q|quit) ;;
+          *) echo "Invalid choice: $choice"; exit 1 ;;
+        esac
+
+  tf:apply:
+    desc: "Pick an infra component + env to apply. Never run without a reviewed plan (each target still confirms separately before applying)."
+    interactive: true
+    cmds:
+      - |
+        echo
+        echo "Apply which infra?"
+        echo "  1) coldstorage      — production"
+        echo "  2) account-backend  — production"
+        echo "  3) account-backend  — staging"
+        echo "  q) quit"
+        echo
+        printf "Choice [1]: "
+        read -r choice
+        choice="${choice:-1}"
+        case "$choice" in
+          1|coldstorage)                        task tf:coldstorage:apply ENV=production ;;
+          2|account-backend|ab)                 task tf:account-backend:apply ENV=production ;;
+          3|account-backend:staging|ab:staging)  task tf:account-backend:apply ENV=staging ;;
+          q|Q|quit) ;;
+          *) echo "Invalid choice: $choice"; exit 1 ;;
+        esac
+
+  tf:init:
+    desc: "Pick an infra component + env to init"
+    interactive: true
+    cmds:
+      - |
+        echo
+        echo "Init which infra?"
+        echo "  1) coldstorage      — production"
+        echo "  2) account-backend  — production"
+        echo "  3) account-backend  — staging"
+        echo "  q) quit"
+        echo
+        printf "Choice [1]: "
+        read -r choice
+        choice="${choice:-1}"
+        case "$choice" in
+          1|coldstorage)                        task tf:coldstorage:init ENV=production ;;
+          2|account-backend|ab)                 task tf:account-backend:init ENV=production ;;
+          3|account-backend:staging|ab:staging)  task tf:account-backend:init ENV=staging ;;
+          q|Q|quit) ;;
+          *) echo "Invalid choice: $choice"; exit 1 ;;
+        esac
+
   tf:fmt:
     desc: terraform fmt across infra/
     cmds:
