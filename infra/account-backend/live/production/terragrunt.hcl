@@ -25,10 +25,14 @@ dependency "coldstorage" {
 inputs = {
   env = "production"
 
-  # TODO(ben): fill in once the Vercel project exists — `vercel link` (or the dashboard)
-  # after a first `vercel deploy` from account-backend/, then `vercel project ls` for the id.
-  vercel_project_id = "prj_TODO"
-  vercel_team_slug  = "adpharm"
+  # TODO(ben): fill in vercel_project_id once the Vercel project exists — `vercel link` (or
+  # the dashboard) after a first `vercel deploy` from account-backend/, then `vercel project
+  # ls` for the id. vercel_project_name MUST be created with exactly this name (it's the
+  # OIDC trust condition's project slug, oidc.tf) — recommended so it reads clearly in a
+  # multi-project team dashboard: coldstorage-<component>, matching this repo's directory.
+  vercel_project_id   = "prj_TODO"
+  vercel_project_name = "coldstorage-account-backend"
+  vercel_team_slug    = "adpharm"
 
   cognito_user_pool_id        = dependency.coldstorage.outputs.cognito_user_pool_id
   cognito_user_pool_client_id = dependency.coldstorage.outputs.cognito_user_pool_client_id

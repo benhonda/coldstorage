@@ -20,6 +20,11 @@ variable "vercel_project_id" {
   description = "The Vercel project id (prj_...) — created outside Terraform (vercel link / dashboard), then wired in here."
 }
 
+variable "vercel_project_name" {
+  type        = string
+  description = "The Vercel project's actual slug/name (as created in the dashboard/CLI) — MUST match exactly, since it's embedded in the OIDC trust condition (oidc.tf). Not necessarily the same string as project_name (this component's Terraform/state label)."
+}
+
 variable "vercel_team_slug" {
   type = string
 }
