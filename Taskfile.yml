@@ -653,6 +653,28 @@ tasks:
       - task: daemon:creds
       - task: ui:config
 
+  ui:auth:doctor:
+    desc: "[macOS] Diagnose a hanging/broken sign-in (Phase 5a). Run in a SECOND terminal while the browser is stuck. Checks: who owns loopback port 53682 (an Electron process = healthy pending sign-in; Code/Docker/OrbStack = a devcontainer port-forward stole it), whether the app's one-shot listener answers, and whether the sign-in config resolves."
+    cmds:
+      - |
+        echo "── who owns 127.0.0.1:53682 ──"
+        lsof -nP -iTCP:53682 || echo "nothing listening — no pending sign-in (the listener only runs between clicking sign-in and the callback), or the app isn't running"
+        echo "── listener probe (a 404 is HEALTHY — deliberately NOT /auth/callback, which would consume the one-shot listener) ──"
+        curl -s -o /dev/null -w "HTTP %{http_code} in %{time_total}s\n" --max-time 5 "http://localhost:53682/ping" || echo "no response — refused (no listener) or TIMED OUT (something accepted but never answered ⇒ a port-forward proxy, see above)"
+        echo "── sign-in config (what the dev lanes source from the handoff) ──"
+        CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
+        if [ -f "$CREDS" ]; then
+          . "$CREDS"
+          echo "domain: ${COLDSTORE_COGNITO_DOMAIN:-MISSING}"
+          echo "client: ${COLDSTORE_COGNITO_CLIENT_ID:-MISSING}"
+        else
+          echo "handoff MISSING — run 'task tf:coldstorage:creds-export' in the devcontainer first"
+        fi
+        echo "── Cognito reachability from this Mac ──"
+        if [ -n "${COLDSTORE_COGNITO_DOMAIN:-}" ]; then
+          curl -s -o /dev/null -w "HTTP %{http_code} in %{time_total}s\n" --max-time 10 "https://${COLDSTORE_COGNITO_DOMAIN}/oauth2/authorize"
+        fi
+
   ui:package:doctor:
     desc: "[Mode 3: packaged app] [macOS] Diagnose a packaged app stuck on 'Connecting…': did the bundled coldstored spawn, bind its socket, and what did it log? If the process path it finds is coldstorage/.build/release/coldstored (not Contents/Resources/bin/coldstored), that's actually the Mode 2 launchd daemon still holding the shared socket — run `task daemon:uninstall` and re-launch the app."
     cmds:
