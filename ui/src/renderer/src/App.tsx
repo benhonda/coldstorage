@@ -155,15 +155,24 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
       return <SignInView auth={state.auth} onSignIn={() => void api.signIn()} />;
     }
     const v = state.vault;
+    const email = state.auth.email;
+    const signOut = (): void => void api.signOut();
     // The one-time recovery code (fresh signup) takes precedence — show it before anything else.
     if (v.recoveryCode) {
-      return <RecoveryCodeShow code={v.recoveryCode} onAcknowledge={() => void api.acknowledgeRecoveryCode()} />;
+      return (
+        <RecoveryCodeShow
+          code={v.recoveryCode}
+          email={email}
+          onAcknowledge={() => void api.acknowledgeRecoveryCode()}
+          onSignOut={signOut}
+        />
+      );
     }
     if (v.state === "needsRecoveryCode") {
-      return <RecoveryCodeEnter onSubmit={(code) => api.submitRecoveryCode(code)} />;
+      return <RecoveryCodeEnter email={email} onSubmit={(code) => api.submitRecoveryCode(code)} onSignOut={signOut} />;
     }
     if (v.state !== "unlocked") {
-      return <VaultGate state={v.state} error={v.error} onSignOut={() => void api.signOut()} />;
+      return <VaultGate state={v.state} error={v.error} email={email} onSignOut={signOut} />;
     }
   }
 

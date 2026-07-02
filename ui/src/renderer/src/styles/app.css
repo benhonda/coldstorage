@@ -1030,3 +1030,17 @@ button.cs-kv:hover { background: var(--surface-hover); }
   color: var(--text-secondary);
   cursor: pointer;
 }
+
+/* Account context on the vault gate screens (Phase 5b) — so a wrong-account sign-in is caught early. */
+.cs-signin-account { font: var(--type-label); color: var(--text-secondary); margin: 0; }
+.cs-signin-account strong { color: var(--text-primary); font-weight: 600; }
+.cs-linkbtn {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.cs-linkbtn:hover { color: var(--text-primary); }

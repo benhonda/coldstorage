@@ -12,12 +12,27 @@
 import { useState } from "react";
 import { Button, Field } from "../ui/primitives.tsx";
 
+/** Which account these vault screens are acting as — so a wrong-account sign-in is caught BEFORE the
+ * user commits (saves a recovery code / types one in). "Not you?" is the escape hatch back to sign-in. */
+const AccountLine = ({ email, onSignOut }: { email: string | null; onSignOut: () => void }): React.JSX.Element => (
+  <p className="cs-signin-account">
+    {email ? <>Signed in as <strong>{email}</strong></> : "Signed in"} ·{" "}
+    <button type="button" className="cs-linkbtn" onClick={onSignOut}>
+      Not you?
+    </button>
+  </p>
+);
+
 export const RecoveryCodeShow = ({
   code,
+  email,
   onAcknowledge,
+  onSignOut,
 }: {
   code: string;
+  email: string | null;
   onAcknowledge: () => void;
+  onSignOut: () => void;
 }): React.JSX.Element => {
   const [copied, setCopied] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
@@ -29,6 +44,7 @@ export const RecoveryCodeShow = ({
   return (
     <div className="cs-signin">
       <div className="cs-signin-card">
+        <AccountLine email={email} onSignOut={onSignOut} />
         <h1 className="cs-signin-title">Save your recovery code</h1>
         <p className="cs-signin-text">
           This code is how you get back into your files on another computer. It&apos;s shown once and
@@ -55,14 +71,17 @@ export const RecoveryCodeShow = ({
 export const VaultGate = ({
   state,
   error,
+  email,
   onSignOut,
 }: {
   state: "locked" | "provisioning" | "error";
   error: string | null;
+  email: string | null;
   onSignOut: () => void;
 }): React.JSX.Element => (
   <div className="cs-signin">
     <div className="cs-signin-card">
+      <AccountLine email={email} onSignOut={onSignOut} />
       {state === "error" ? (
         <>
           <h1 className="cs-signin-title">Couldn&apos;t set up encryption</h1>
@@ -84,9 +103,13 @@ export const VaultGate = ({
 );
 
 export const RecoveryCodeEnter = ({
+  email,
   onSubmit,
+  onSignOut,
 }: {
+  email: string | null;
   onSubmit: (code: string) => Promise<void>;
+  onSignOut: () => void;
 }): React.JSX.Element => {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -107,6 +130,7 @@ export const RecoveryCodeEnter = ({
   return (
     <div className="cs-signin">
       <div className="cs-signin-card">
+        <AccountLine email={email} onSignOut={onSignOut} />
         <h1 className="cs-signin-title">Enter your recovery code</h1>
         <p className="cs-signin-text">
           This is a new computer. Enter the recovery code you saved when you first signed up to unlock
