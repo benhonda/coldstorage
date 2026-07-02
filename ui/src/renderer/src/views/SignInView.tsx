@@ -13,13 +13,20 @@ import type { AuthStatus } from "../../../shared/ipc.ts";
 interface Props {
   auth: AuthStatus;
   onSignIn: () => void;
+  /** Startup: the real sign-in state isn't known yet. Show the card with a disabled "Checking…" button
+   * instead of committing to a screen, so the app never flashes the shell or the wrong gate first. */
+  checking?: boolean;
 }
 
-export const SignInView = ({ auth, onSignIn }: Props): React.JSX.Element => (
+export const SignInView = ({ auth, onSignIn, checking = false }: Props): React.JSX.Element => (
   <div className="cs-signin">
     <div className="cs-signin-card">
       <h1 className="cs-signin-title">ColdStorage</h1>
-      {auth.state === "signingIn" ? (
+      {checking ? (
+        <Button variant="primary" full disabled>
+          Checking…
+        </Button>
+      ) : auth.state === "signingIn" ? (
         <>
           <p className="cs-signin-text">Finish signing in in your browser.</p>
           <Button variant="ghost" onClick={onSignIn}>
@@ -34,7 +41,7 @@ export const SignInView = ({ auth, onSignIn }: Props): React.JSX.Element => (
           </Button>
         </>
       )}
-      {auth.error && <p className="cs-signin-error">Sign-in didn&apos;t complete: {auth.error}</p>}
+      {!checking && auth.error && <p className="cs-signin-error">Sign-in didn&apos;t complete: {auth.error}</p>}
     </div>
   </div>
 );

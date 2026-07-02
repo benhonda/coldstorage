@@ -146,6 +146,13 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
     setDismissedError(liveError);
   };
 
+  // Startup: until main reports the real sign-in/vault state, show a neutral "checking…" card rather
+  // than flashing the shell (or the wrong gate) and then correcting it. Cleared by the controller's
+  // first-paint fetch. After every hook above, so the hook order is identical across renders.
+  if (state.initializing) {
+    return <SignInView auth={state.auth} onSignIn={() => {}} checking />;
+  }
+
   // Sign-in + vault gates (Phase 5): a configured (multi-user) install shows the shell only once the
   // user is signed in AND the zero-knowledge vault is unlocked — uploads have no per-user prefix without
   // a user, and no encryption key without an unlocked vault. Dogfood mode (unconfigured) never sees any

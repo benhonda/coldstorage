@@ -54,6 +54,10 @@ export interface RestoreActivity {
 }
 
 export interface AppState {
+  /** True until the first status batch (connection + auth + vault) has arrived from main. Gates the whole
+   * app on a neutral "checking…" screen so we never flash the shell or the wrong gate before we know
+   * whether the user is signed in. Cleared once by the controller's first-paint fetch. */
+  initializing: boolean;
   connection: ConnectionState;
   /** Sign-in status (Phase 5), pushed from main. Starts unconfigured — dogfood mode until the first
    * push says otherwise, so the auth gate never flashes for a dogfood install. */
@@ -82,6 +86,7 @@ export interface AppState {
 }
 
 export const initialState: AppState = {
+  initializing: true,
   connection: "connecting",
   auth: { configured: false, state: "signedOut", email: null, error: null },
   vault: { state: "locked", recoveryCode: null, error: null },
@@ -104,6 +109,7 @@ type EventAction = {
 
 export type Action =
   | { type: "connection"; state: ConnectionState }
+  | { type: "initialized" }
   | { type: "authChanged"; auth: AuthStatus }
   | { type: "vaultChanged"; vault: VaultStatus }
   | { type: "statusLoaded"; status: Status }
@@ -146,6 +152,9 @@ export const reducer = (state: AppState, action: Action): AppState => {
   switch (action.type) {
     case "connection":
       return { ...state, connection: action.state };
+
+    case "initialized":
+      return { ...state, initializing: false };
 
     case "authChanged":
       return { ...state, auth: action.auth };

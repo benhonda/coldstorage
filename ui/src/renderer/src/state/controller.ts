@@ -90,6 +90,9 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
     store.dispatch({ type: "connection", state });
     store.dispatch({ type: "authChanged", auth });
     store.dispatch({ type: "vaultChanged", vault });
+    // We now know the real sign-in/vault state — drop the "checking…" gate. Done before the (slower)
+    // connected refreshes so the right screen paints as soon as the auth answer is in.
+    store.dispatch({ type: "initialized" });
     if (state === "connected") {
       await Promise.all([refreshStatus(), refreshFiles(), refreshExcludes(), refreshPricing()]);
     }

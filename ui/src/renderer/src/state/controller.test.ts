@@ -195,6 +195,15 @@ describe("controller sync policy", () => {
     expect(store.getState().auth).toEqual({ configured: true, state: "signedIn", email: "ben@example.com", error: null });
   });
 
+  test("starts in 'initializing' and clears it once the first status batch lands (no startup flash)", async () => {
+    const f = makeApi("connected");
+    const store = createStore();
+    expect(store.getState().initializing).toBe(true); // before first paint → app shows the checking gate
+    connectController(f.api, store);
+    await tick();
+    expect(store.getState().initializing).toBe(false); // real auth/vault known → the right screen paints
+  });
+
   test("reads the initial vault status and folds pushed changes", async () => {
     const f = makeApi("connected");
     const store = createStore();
