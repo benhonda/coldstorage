@@ -42,6 +42,9 @@ export type AppConfig = {
   cognitoUserPoolProvider?: string | undefined;
   cognitoDomain?: string | undefined;
   cognitoClientId?: string | undefined;
+  /** Account-backend base URL (Phase 5b) — where the app fetches/stores the zero-knowledge key-blob and
+   * checks entitlement. Absent ⇒ the staging default (which accepts production Cognito tokens). */
+  accountApiBaseUrl?: string | undefined;
 };
 
 /** Read `<dataDir>/config.json` best-effort. A missing/malformed file logs and returns `{}` so the daemon
@@ -69,6 +72,7 @@ export const readAppConfig = (dir: string): AppConfig => {
       cognitoUserPoolProvider: str(o.cognitoUserPoolProvider),
       cognitoDomain: str(o.cognitoDomain),
       cognitoClientId: str(o.cognitoClientId),
+      accountApiBaseUrl: str(o.accountApiBaseUrl),
     };
   } catch (e) {
     console.error(`ignoring malformed ${path}: ${String(e)}`);

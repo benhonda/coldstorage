@@ -25,6 +25,11 @@ import { startDaemon, daemonSocketPath } from "./daemon.ts";
 import { AuthManager } from "./auth/manager.ts";
 import { resolveOAuthConfig } from "./auth/config.ts";
 import { registerAuthIpc } from "./auth/ipc.ts";
+import { VaultManager } from "./vault/manager.ts";
+import { VaultStore } from "./vault/storage.ts";
+import { KeyBlobClient } from "./vault/keyblob-client.ts";
+import { resolveAccountApiBaseUrl } from "./vault/config.ts";
+import { registerVaultIpc } from "./vault/ipc.ts";
 
 // Pin the app name BEFORE any `getPath("userData")` call. The client resolves the socket path at module
 // load and the daemon supervisor resolves it in `whenReady`; both derive from userData (= appData + app
@@ -44,6 +49,17 @@ let stopDaemon: () => void = () => {};
 // Electron can't receive custom-scheme deep links on macOS).
 const auth = new AuthManager(resolveOAuthConfig(), { useLoopback: !app.isPackaged });
 const disposeAuthIpc = registerAuthIpc(auth);
+
+// The zero-knowledge vault (encryption-key half of being signed in). Escrows the MasterKey per-account
+// in userData/vault.json (safeStorage), fetches/stores the key-blob at the account backend, and drives
+// the daemon's mint/unlock/lock commands. Only ever exercised in multi-user mode (its provision runs
+// after a successful `authenticate`, which only happens when sign-in is configured).
+const vault = new VaultManager(
+  client,
+  new VaultStore(join(app.getPath("userData"), "vault.json")),
+  new KeyBlobClient(resolveAccountApiBaseUrl()),
+);
+const disposeVaultIpc = registerVaultIpc(vault);
 
 // ── Deep links (macOS delivers them as open-url, launch AND while running). Registered before
 //    `ready` because a URL can be what LAUNCHES the app — those arrive pre-ready and are buffered.
@@ -77,25 +93,32 @@ const focusMainWindow = (): void => {
   win.focus();
 };
 
-// ── Daemon handoff: every fresh ID token (sign-in + hourly refresh) re-runs `authenticate`, keeping
-//    the daemon's Cognito logins valid; and a (re)connected daemon starts unauthenticated, so push the
-//    current token at it too. Failures are logged, not fatal — a daemon without Cognito config (dogfood)
-//    just rejects the command. ──
+// ── Daemon handoff: provision the daemon for the signed-in user — `authenticate` (per-user AWS creds)
+//    THEN vault `provision` (the encryption key). Both are needed before a deposit works, so they run in
+//    sequence. Fires on every fresh ID token (sign-in + hourly refresh) and on daemon (re)connect, since
+//    a freshly-connected daemon starts unauthenticated AND locked. Failures are logged, not fatal — a
+//    dogfood daemon rejects `authenticate` and provision never proceeds. ──
+const provisionDaemon = async (idToken: string): Promise<void> => {
+  await client.request("authenticate", { idToken });
+  await vault.provision(idToken);
+};
 const offIdToken = auth.onIdToken((idToken) => {
-  void client.request("authenticate", { idToken }).catch((e: unknown) => console.error("daemon authenticate failed:", e));
+  void provisionDaemon(idToken).catch((e: unknown) => console.error("daemon provision failed:", e));
 });
 const offClientConnect = client.on("connect", () => {
   void auth
     .getFreshIdToken()
-    .then((idToken) => (idToken ? client.request("authenticate", { idToken }) : null))
-    .catch((e: unknown) => console.error("daemon authenticate failed:", e));
+    .then((idToken) => (idToken ? provisionDaemon(idToken) : null))
+    .catch((e: unknown) => console.error("daemon provision failed:", e));
 });
 
 // Bring the window back when a sign-in completes — the user is off in the browser; the deep link
-// should land them back in the app, signed in. (Not on background refreshes: only signingIn→signedIn.)
+// should land them back in the app, signed in. And when sign-out happens, tell the vault to relock the
+// daemon (drop the MasterKey). (Focus only on signingIn→signedIn, not background refreshes.)
 let prevAuthState = auth.status().state;
 const offAuthFocus = auth.onStatus((s) => {
   if (prevAuthState === "signingIn" && s.state === "signedIn") focusMainWindow();
+  if (prevAuthState !== "signedOut" && s.state === "signedOut") void vault.relock();
   prevAuthState = s.state;
 });
 
@@ -170,10 +193,12 @@ app.on("will-quit", () => {
   disposeBridge();
   disposeSystem();
   disposeAuthIpc();
+  disposeVaultIpc();
   offIdToken();
   offClientConnect();
   offAuthFocus();
   auth.dispose();
+  vault.dispose();
   client.close();
   stopDaemon(); // terminate the supervised child (no-op in dev)
 });

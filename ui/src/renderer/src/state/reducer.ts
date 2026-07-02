@@ -15,6 +15,7 @@ import type {
   Pricing,
   Source,
   Status,
+  VaultStatus,
 } from "../../../shared/ipc.ts";
 import { FALLBACK_PRICING } from "../views/files/pricing.ts";
 
@@ -57,6 +58,9 @@ export interface AppState {
   /** Sign-in status (Phase 5), pushed from main. Starts unconfigured — dogfood mode until the first
    * push says otherwise, so the auth gate never flashes for a dogfood install. */
   auth: AuthStatus;
+  /** Zero-knowledge vault status (Phase 5b), pushed from main. Starts locked; only gates the app once
+   * the user is signed in (a dogfood install never signs in, so it never matters). */
+  vault: VaultStatus;
   status: Status | null;
   /** The browsable tree, straight from the daemon's `listFiles` (journal-backed). Raw wire shape —
    * the file-browser maps it to its own model. Empty until the first read lands. */
@@ -80,6 +84,7 @@ export interface AppState {
 export const initialState: AppState = {
   connection: "connecting",
   auth: { configured: false, state: "signedOut", email: null, error: null },
+  vault: { state: "locked", recoveryCode: null, error: null },
   status: null,
   files: [],
   excludes: [],
@@ -100,6 +105,7 @@ type EventAction = {
 export type Action =
   | { type: "connection"; state: ConnectionState }
   | { type: "authChanged"; auth: AuthStatus }
+  | { type: "vaultChanged"; vault: VaultStatus }
   | { type: "statusLoaded"; status: Status }
   | { type: "sourcesLoaded"; sources: Source[] }
   | { type: "filesLoaded"; files: ListedFile[] }
@@ -143,6 +149,9 @@ export const reducer = (state: AppState, action: Action): AppState => {
 
     case "authChanged":
       return { ...state, auth: action.auth };
+
+    case "vaultChanged":
+      return { ...state, vault: action.vault };
 
     case "statusLoaded":
       return { ...state, status: action.status };

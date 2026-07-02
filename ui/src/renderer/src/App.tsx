@@ -25,6 +25,7 @@ import type { BlobFailure } from "./state/reducer.ts";
 import { MyFilesView } from "./views/MyFilesView.tsx";
 import { SettingsView, type SettingsApi } from "./views/SettingsView.tsx";
 import { SignInView } from "./views/SignInView.tsx";
+import { RecoveryCodeShow, RecoveryCodeEnter, VaultGate } from "./views/RecoveryCodeView.tsx";
 
 /** Plain status when the background uploader isn't connected — no "daemon" jargon, quiet when healthy. */
 const NOT_RUNNING: Partial<Record<ConnectionState, string>> = {
@@ -145,11 +146,25 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
     setDismissedError(liveError);
   };
 
-  // Sign-in gate (Phase 5): a configured (multi-user) install with nobody signed in shows only the
-  // gate — uploads have no vault prefix without a user. Dogfood mode (unconfigured) never sees this.
-  // After every hook above, so the hook order is identical with and without the gate.
-  if (state.auth.configured && state.auth.state !== "signedIn") {
-    return <SignInView auth={state.auth} onSignIn={() => void api.signIn()} />;
+  // Sign-in + vault gates (Phase 5): a configured (multi-user) install shows the shell only once the
+  // user is signed in AND the zero-knowledge vault is unlocked — uploads have no per-user prefix without
+  // a user, and no encryption key without an unlocked vault. Dogfood mode (unconfigured) never sees any
+  // of this. After every hook above, so the hook order is identical with and without a gate.
+  if (state.auth.configured) {
+    if (state.auth.state !== "signedIn") {
+      return <SignInView auth={state.auth} onSignIn={() => void api.signIn()} />;
+    }
+    const v = state.vault;
+    // The one-time recovery code (fresh signup) takes precedence — show it before anything else.
+    if (v.recoveryCode) {
+      return <RecoveryCodeShow code={v.recoveryCode} onAcknowledge={() => void api.acknowledgeRecoveryCode()} />;
+    }
+    if (v.state === "needsRecoveryCode") {
+      return <RecoveryCodeEnter onSubmit={(code) => api.submitRecoveryCode(code)} />;
+    }
+    if (v.state !== "unlocked") {
+      return <VaultGate state={v.state} error={v.error} onSignOut={() => void api.signOut()} />;
+    }
   }
 
   return (

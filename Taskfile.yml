@@ -744,8 +744,11 @@ tasks:
         # Empty when the handoff predates Phase 5 → the app hides sign-in entirely (dogfood mode).
         cognito_domain="${COLDSTORE_COGNITO_DOMAIN:-}"
         cognito_client_id="${COLDSTORE_COGNITO_CLIENT_ID:-}"
-        printf '{\n  "bucket": "%s",\n  "region": "%s",\n  "awsProfile": "%s",\n  "cognitoIdentityPoolId": "%s",\n  "cognitoUserPoolProvider": "%s",\n  "cognitoDomain": "%s",\n  "cognitoClientId": "%s"\n}\n' \
-          "$bucket" "$region" "$profile" "$cognito_pool_id" "$cognito_provider" "$cognito_domain" "$cognito_client_id" > "{{.DATA_DIR}}/config.json"
+        # Account-backend base URL (Phase 5b, key-blob + entitlement). Defaults to the staging lane, which
+        # accepts production Cognito tokens; the production lane overrides via COLDSTORE_ACCOUNT_API.
+        account_api="${COLDSTORE_ACCOUNT_API:-https://api-staging.coldstorage.sh}"
+        printf '{\n  "bucket": "%s",\n  "region": "%s",\n  "awsProfile": "%s",\n  "cognitoIdentityPoolId": "%s",\n  "cognitoUserPoolProvider": "%s",\n  "cognitoDomain": "%s",\n  "cognitoClientId": "%s",\n  "accountApiBaseUrl": "%s"\n}\n' \
+          "$bucket" "$region" "$profile" "$cognito_pool_id" "$cognito_provider" "$cognito_domain" "$cognito_client_id" "$account_api" > "{{.DATA_DIR}}/config.json"
         echo "wrote {{.DATA_DIR}}/config.json  (bucket=$bucket region=$region profile=$profile cognito=${cognito_pool_id:+configured}${cognito_pool_id:-not configured} sign-in=${cognito_domain:+configured}${cognito_domain:-not configured})"
         echo "creds: ensure 'task daemon:creds' wired the '$profile' profile + Keychain (one-time). Verify: task ui:package:doctor"
 

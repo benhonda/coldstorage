@@ -340,11 +340,23 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
        *Gate met:* unit tests — locked provider throws `.vaultLocked`, unlock round-trips a real DEK
        through the exact `EnvelopeCipher`, wrong recovery code fails closed, mint MK == recovery-unlock
        MK, seeded (dogfood) provider never gates.
-     - **5b-2 — app vault orchestration + recovery-code UI (NEXT):** backend key-blob GET/PUT client
-       (Bearer ID token — the account-backend routes already exist from P4), a VaultManager doing
-       mint-on-first-signin / unlock-on-new-device / auto-unlock-from-safeStorage-cache-on-launch
-       (MK escrowed per-account by `sub`), re-unlock on daemon reconnect (mirrors authenticate),
-       lockVault + drop-cache on sign-out, and the show-once + enter-code screens.
+     - **5b-2 — app vault orchestration + recovery-code UI: DONE ✅ (2026-07-02, `ui:typecheck` +
+       72 ui tests green).** New `ui/src/main/vault/` (keyblob-client/storage/manager/config/ipc): the
+       `VaultManager` runs after `authenticate` in the daemon handoff and decides per-device — cached MK
+       (safeStorage, keyed by `sub`) → `unlockVault` (silent, the day-to-day + reconnect path); no cache
+       + 404 key-blob → `mintVault` → PUT the blob + escrow the MK + show the one-time recovery code;
+       no cache + existing blob → NEW device → prompt → `unlockVaultWithRecoveryCode`. Backend key-blob
+       client maps the `wrappedMk`↔`wrappedMK` casing at the one boundary; base URL defaults to the
+       staging lane (accepts production Cognito tokens, so this works end-to-end today). Renderer sees
+       only `VaultStatus` over IPC (never key material except the one-time code): reducer/controller
+       fold + `views/RecoveryCodeView.tsx` (show-once, enter-code, provisioning/error gates) wired into
+       `App.tsx`'s gate. Sign-out relocks the daemon but KEEPS the per-device escrow (re-signin is
+       silent; `daemon:reset:local` wipes it). Tests: `VaultManager` cached/mint/new-device/error/relock
+       branches headless + the vault-status fold. **Gate (Ben, Mac) — the real ZK proof:** fresh Google
+       sign-in → recovery code shown once → a deposit; then `task daemon:reset:local`'s vault wipe (or a
+       second machine) → re-sign-in prompts for the code → same files decrypt. The deposit's blob must
+       be openable with the MK and NOT with a random key (the crypto for that is already unit-proven in
+       5b-1; the app gate is what 5b-2 adds).
      - **5b-3 — email-OTP sign-in + signup lane:** the independent auth lane (Cognito USER_AUTH via
        plain HTTPS), a second entry on the sign-in screen; feeds the same token/vault machinery.
      Verified shapes for 5b-3: `SignUp`

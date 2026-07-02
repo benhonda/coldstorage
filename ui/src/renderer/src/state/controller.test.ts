@@ -4,7 +4,7 @@
  * real store correctly: initial fetch, refetch-on-(re)connect, and sourcesChanged → listSources.
  */
 import { describe, expect, test } from "bun:test";
-import type { AuthStatus, ColdstoreApi, ConnectionState, ListedFile, Source, Status } from "../../../shared/ipc.ts";
+import type { AuthStatus, ColdstoreApi, ConnectionState, ListedFile, Source, Status, VaultStatus } from "../../../shared/ipc.ts";
 import { connectController } from "./controller.ts";
 import { createStore } from "./store.ts";
 
@@ -28,6 +28,7 @@ const makeApi = (initial: ConnectionState) => {
   let eventCb: ((name: never, data: never) => void) | null = null;
   let lifeCb: ((s: ConnectionState) => void) | null = null;
   let authCb: ((s: AuthStatus) => void) | null = null;
+  let vaultCb: ((s: VaultStatus) => void) | null = null;
 
   const api: ColdstoreApi = {
     request: ((method: string) => {
@@ -56,6 +57,13 @@ const makeApi = (initial: ConnectionState) => {
       authCb = cb;
       return () => (authCb = null);
     },
+    getVaultStatus: () => Promise.resolve({ state: "locked", recoveryCode: null, error: null }),
+    submitRecoveryCode: () => Promise.resolve(),
+    acknowledgeRecoveryCode: () => Promise.resolve(),
+    onVaultStatus: (cb) => {
+      vaultCb = cb;
+      return () => (vaultCb = null);
+    },
   };
 
   return {
@@ -70,6 +78,7 @@ const makeApi = (initial: ConnectionState) => {
     fireEvent: (name: string, data: Record<string, string>) =>
       eventCb?.(name as never, data as never),
     fireAuth: (s: AuthStatus) => authCb?.(s),
+    fireVault: (s: VaultStatus) => vaultCb?.(s),
   };
 };
 
@@ -184,5 +193,16 @@ describe("controller sync policy", () => {
 
     f.fireAuth({ configured: true, state: "signedIn", email: "ben@example.com", error: null });
     expect(store.getState().auth).toEqual({ configured: true, state: "signedIn", email: "ben@example.com", error: null });
+  });
+
+  test("reads the initial vault status and folds pushed changes", async () => {
+    const f = makeApi("connected");
+    const store = createStore();
+    connectController(f.api, store);
+    await tick();
+    expect(store.getState().vault.state).toBe("locked"); // the initial pull landed
+
+    f.fireVault({ state: "unlocked", recoveryCode: null, error: null });
+    expect(store.getState().vault).toEqual({ state: "unlocked", recoveryCode: null, error: null });
   });
 });

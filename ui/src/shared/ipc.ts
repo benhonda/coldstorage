@@ -57,6 +57,14 @@ export const IPC = {
   authSignOut: "auth:signOut",
   /** push: the auth status changed, `(status)`. */
   authStatusChanged: "auth:statusChanged",
+  /** invoke: current {@link VaultStatus} — for first paint before any push arrives. */
+  vaultStatus: "vault:status",
+  /** invoke: submit a recovery code to unlock the vault on a new device. */
+  vaultSubmitRecoveryCode: "vault:submitRecoveryCode",
+  /** invoke: acknowledge the one-time recovery code was saved (clears it from status). */
+  vaultAckRecoveryCode: "vault:ackRecoveryCode",
+  /** push: the vault status changed, `(status)`. */
+  vaultStatusChanged: "vault:statusChanged",
 } as const;
 
 /** Whether the main process currently holds a live socket to `coldstored`. */
@@ -74,6 +82,24 @@ export interface AuthStatus {
   email: string | null;
   /** The most recent sign-in failure, for the sign-in screen. Null when none (including a plain
    * user-cancelled attempt, which isn't an error worth showing). */
+  error: string | null;
+}
+
+/**
+ * The renderer's view of the zero-knowledge vault (PROD.md Phase 5b) — the encryption-key half of being
+ * signed in, distinct from {@link AuthStatus} (the AWS-credentials half). No key material crosses this
+ * seam EXCEPT `recoveryCode`, which is shown once at signup and then acknowledged away.
+ *   - `locked`         signed out, or not yet provisioned.
+ *   - `provisioning`   fetching/minting the key-blob, unlocking the daemon.
+ *   - `unlocked`       the daemon holds the MasterKey; deposits encrypt under it.
+ *   - `needsRecoveryCode`  existing account on a NEW device — the user must enter their recovery code.
+ *   - `error`          provisioning failed (backend unreachable, etc.); retryable.
+ */
+export interface VaultStatus {
+  state: "locked" | "provisioning" | "unlocked" | "needsRecoveryCode" | "error";
+  /** Set ONLY immediately after a fresh signup mint: the one-time recovery code to show the user once.
+   * Never persisted, never re-derivable. Cleared as soon as the user acknowledges saving it. */
+  recoveryCode: string | null;
   error: string | null;
 }
 
@@ -122,4 +148,13 @@ export interface ColdstoreApi {
   signOut(): Promise<void>;
   /** Subscribe to sign-in status changes. */
   onAuthStatus(listener: (status: AuthStatus) => void): () => void;
+  /** Current vault status — for first paint before any {@link onVaultStatus} push arrives. */
+  getVaultStatus(): Promise<VaultStatus>;
+  /** Submit a recovery code to unlock the vault on a new device. Rejects (with a message) on a wrong
+   * code; a resolved promise means the vault is unlocking (watch {@link onVaultStatus}). */
+  submitRecoveryCode(code: string): Promise<void>;
+  /** Acknowledge the one-time recovery code was saved — clears it from the vault status. */
+  acknowledgeRecoveryCode(): Promise<void>;
+  /** Subscribe to vault status changes. */
+  onVaultStatus(listener: (status: VaultStatus) => void): () => void;
 }

@@ -168,6 +168,12 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   token, and the daemon handoff (fresh ID token → the `authenticate` command). The renderer sees only
   `AuthStatus` over IPC (`getAuthStatus`/`signIn`/`signOut`/`onAuthStatus`) — never a token. Gate UI:
   `views/SignInView.tsx` + the account card in Settings.
+- `ui/src/main/vault/` — the zero-knowledge vault (PROD.md Phase 5b): the encryption-key half of being
+  signed in. `manager.ts` decides per-device — cached MK → `unlockVault`; new account → `mintVault` +
+  store the key-blob + show the recovery code once; new device → prompt + `unlockVaultWithRecoveryCode`.
+  `keyblob-client.ts` = blind GET/PUT at the account backend; `storage.ts` = per-account MK escrow in
+  safeStorage. Renderer sees only `VaultStatus` (never key material, except the one-time code to show).
+  Gate UI: `views/RecoveryCodeView.tsx`. The daemon handoff runs `authenticate` THEN vault `provision`.
 - `src/renderer/src/styles/tokens/` — the 5 DS token CSS files **vendored verbatim** (SSOT — re-sync,
   don't hand-edit) from the coldstorage Design System (Claude Design `41ebafc1`), ported to native
   React 19 TSX (the DS's UMD/CDN runtime isn't consumable in electron-vite). Primitives in

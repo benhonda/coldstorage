@@ -79,15 +79,17 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
     }
   });
 
-  // Sign-in status is push-driven from main (no daemon involved); the fold is a plain replace.
+  // Sign-in + vault status are push-driven from main (no daemon involved); the fold is a plain replace.
   const offAuth = api.onAuthStatus((auth) => store.dispatch({ type: "authChanged", auth }));
+  const offVault = api.onVaultStatus((vault) => store.dispatch({ type: "vaultChanged", vault }));
 
   // First paint: read the current connection + sign-in state and, if already connected, the snapshot
   // + tree + excludes + pricing.
   void (async () => {
-    const [state, auth] = await Promise.all([api.getConnectionState(), api.getAuthStatus()]);
+    const [state, auth, vault] = await Promise.all([api.getConnectionState(), api.getAuthStatus(), api.getVaultStatus()]);
     store.dispatch({ type: "connection", state });
     store.dispatch({ type: "authChanged", auth });
+    store.dispatch({ type: "vaultChanged", vault });
     if (state === "connected") {
       await Promise.all([refreshStatus(), refreshFiles(), refreshExcludes(), refreshPricing()]);
     }
@@ -97,5 +99,6 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
     offEvent();
     offLifecycle();
     offAuth();
+    offVault();
   };
 };
