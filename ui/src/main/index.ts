@@ -102,14 +102,22 @@ const provisionDaemon = async (idToken: string): Promise<void> => {
   await client.request("authenticate", { idToken });
   await vault.provision(idToken);
 };
+// A failure here that ISN'T just "the daemon isn't connected yet" (which the reconnect handler below
+// retries) means authenticate itself failed — surface it in the vault status so the UI shows a real
+// error instead of hanging on "Setting up…" forever.
+const onProvisionFailure = (e: unknown): void => {
+  const msg = e instanceof Error ? e.message : String(e);
+  console.error("daemon provision failed:", e);
+  if (!msg.includes("not connected")) vault.markProvisionError(msg);
+};
 const offIdToken = auth.onIdToken((idToken) => {
-  void provisionDaemon(idToken).catch((e: unknown) => console.error("daemon provision failed:", e));
+  void provisionDaemon(idToken).catch(onProvisionFailure);
 });
 const offClientConnect = client.on("connect", () => {
   void auth
     .getFreshIdToken()
     .then((idToken) => (idToken ? provisionDaemon(idToken) : null))
-    .catch((e: unknown) => console.error("daemon provision failed:", e));
+    .catch(onProvisionFailure);
 });
 
 // Bring the window back when a sign-in completes — the user is off in the browser; the deep link

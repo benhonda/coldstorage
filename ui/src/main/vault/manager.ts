@@ -105,6 +105,14 @@ export class VaultManager {
     this.setStatus({ state: "unlocked", recoveryCode: null, error: null });
   }
 
+  /** Surface a failure from the step BEFORE vault provisioning (the daemon `authenticate` call in the
+   * handoff) so the UI shows a real error instead of an eternal "Setting up…". Ignored once the vault is
+   * already unlocked (a later transient blip shouldn't blank a working session). */
+  markProvisionError(message: string): void {
+    if (this.status.state === "unlocked") return;
+    this.setStatus({ state: "error", recoveryCode: null, error: message });
+  }
+
   /** The user acknowledged saving their one-time recovery code — clear it from the status. */
   acknowledgeRecoveryCode(): void {
     if (this.status.recoveryCode) this.setStatus({ ...this.status, recoveryCode: null });
