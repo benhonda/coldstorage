@@ -24,7 +24,7 @@ import {
   type OAuthConfig,
   type TokenSet,
 } from "./oauth.ts";
-import { awaitLoopbackCallback } from "./loopback.ts";
+import { awaitLoopbackCallback, LOOPBACK_PORT } from "./loopback.ts";
 
 /** Refresh this far before token expiry (tokens live 1h — cognito.tf `id_token_validity`). */
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
@@ -112,7 +112,22 @@ export class AuthManager {
     const { verifier, challenge, state } = createPkce();
     const pending: PendingSignIn = { state, verifier, expiresAt: Date.now() + PENDING_TTL_MS, stopLoopback: null };
     if (this.useLoopback) {
-      pending.stopLoopback = awaitLoopbackCallback((url) => void this.handleCallbackUrl(url)).stop;
+      // Bind BEFORE opening the browser — an unbindable port must fail here, visibly, not as a
+      // browser redirect hanging against whatever process owns it (see loopback.ts).
+      const { stop, ready } = awaitLoopbackCallback((url) => void this.handleCallbackUrl(url));
+      pending.stopLoopback = stop;
+      try {
+        await ready;
+      } catch (e) {
+        stop();
+        this.pending = null;
+        this.lastError =
+          `port ${LOOPBACK_PORT} is taken on this Mac, so the sign-in redirect can't come back — ` +
+          `often a VS Code forwarded port (Ports panel → remove it). Run: task ui:auth:doctor ` +
+          `(${e instanceof Error ? e.message : String(e)})`;
+        this.emitStatus();
+        return;
+      }
     }
     this.pending = pending;
     this.lastError = null;

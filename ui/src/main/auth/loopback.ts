@@ -21,8 +21,13 @@ const PAGE = `<!doctype html><meta charset="utf-8"><title>ColdStorage</title>
  * Listen for the one redirect. `onUrl` receives the full callback URL (same shape the deep-link path
  * delivers, so the manager handles both identically); the server closes itself after serving it.
  * The returned `stop` closes early — a superseding sign-in attempt or app quit.
+ *
+ * `ready` MUST be awaited before opening the browser: if the port can't be bound (EADDRINUSE — in
+ * practice a VS Code devcontainer port-forward squatting 127.0.0.1:53682 on the host, bitten
+ * 2026-07-02), the sign-in has to fail loudly UP FRONT. Opening the browser anyway sends the user
+ * through Google into a redirect that black-holes against whoever owns the port.
  */
-export const awaitLoopbackCallback = (onUrl: (url: string) => void): { stop: () => void } => {
+export const awaitLoopbackCallback = (onUrl: (url: string) => void): { stop: () => void; ready: Promise<void> } => {
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost:${LOOPBACK_PORT}`);
     if (url.pathname !== "/auth/callback") {
@@ -33,7 +38,10 @@ export const awaitLoopbackCallback = (onUrl: (url: string) => void): { stop: () 
     server.close();
     onUrl(url.toString());
   });
-  server.on("error", (e) => console.error("loopback listener error (is another sign-in attempt running?):", e));
+  const ready = new Promise<void>((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", (e) => reject(e instanceof Error ? e : new Error(String(e))));
+  });
   server.listen(LOOPBACK_PORT, "127.0.0.1");
-  return { stop: () => server.close() };
+  return { stop: () => server.close(), ready };
 };

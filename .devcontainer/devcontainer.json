@@ -83,6 +83,13 @@
     // the host keeps its own macOS copy. post-create.sh chowns + populates it.
     "source=coldstorage-ui-node-modules,target=/workspace/ui/node_modules,type=volume"
   ],
+  "portsAttributes": {
+    // The app's dev OAuth loopback (ui/src/main/auth/loopback.ts) lives on the macOS HOST, not in this
+    // container. VS Code auto-forwards any port it sees printed as localhost:… in terminal output
+    // (terraform plans print the callback URL!), and its forwarder then squats 127.0.0.1:53682 on the
+    // Mac — the app can't bind, the browser redirect black-holes, sign-in hangs (bitten 2026-07-02).
+    "53682": { "onAutoForward": "ignore" }
+  },
   "remoteEnv": {
     "NODE_OPTIONS": "--max-old-space-size=4096",
     "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
