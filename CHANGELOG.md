@@ -2,6 +2,8 @@
 
 ## 2026-07-02
 
+- docs: consolidate root docs into README + per-project DESIGN files — ROADMAP merged into README (now project entrance: orientation + state + dev gotchas); per-project DESIGN.md replaces root design docs; PROD.md is the active work SSOT.
+- docs: PROD.md Phase 4 — staging lane stood up end-to-end: Neon DB created, Paddle sandbox live, Vercel secrets configured; first deploy fixed (path alias → relative imports). Remaining: disable Deployment Protection, test webhook state flip.
 - docs: PROD.md Phase 4 — custom domains decided: `api.coldstorage.sh` (production) + `api-staging.coldstorage.sh` (staging); hand-managed in Vercel dashboard (not Terraform).
 
 ## 2026-07-01
