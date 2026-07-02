@@ -1,5 +1,5 @@
 import { pgTable, text, integer, boolean } from "drizzle-orm/pg-core";
-import { timestamps } from "./schema-utils";
+import { timestamps } from "./schema-utils.js";
 
 /**
  * One row per user. Keyed on the Cognito **User Pool** `sub` (the ID token's `sub` claim) —

@@ -1,5 +1,5 @@
 import { CognitoJwtVerifier } from "aws-jwt-verify";
-import { env } from "../env.server";
+import { env } from "../env.server.js";
 
 /**
  * Verifies the app's Cognito **ID** token (not the access token) — we need the `sub` claim

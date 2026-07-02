@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { keyBlobRoute } from "./routes/key-blob";
-import { entitlementRoute } from "./routes/entitlement";
-import { paddleWebhookRoute } from "./routes/webhooks/paddle";
+import { keyBlobRoute } from "./routes/key-blob.js";
+import { entitlementRoute } from "./routes/entitlement.js";
+import { paddleWebhookRoute } from "./routes/webhooks/paddle.js";
 
 const app = new Hono();
 

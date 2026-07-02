@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isActiveStatus } from "./paddle-status";
+import { isActiveStatus } from "./paddle-status.js";
 import type { SubscriptionStatus } from "@paddle/paddle-node-sdk";
 
 describe("isActiveStatus", () => {

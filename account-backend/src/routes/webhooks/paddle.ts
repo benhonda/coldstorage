@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { EventName } from "@paddle/paddle-node-sdk";
-import { db } from "../../db/index.server";
-import { accountsTable } from "../../db/schema";
-import { paddle } from "../../paddle.server";
-import { env } from "../../env.server";
-import { isActiveStatus } from "../../paddle-status";
+import { db } from "../../db/index.server.js";
+import { accountsTable } from "../../db/schema.js";
+import { paddle } from "../../paddle.server.js";
+import { env } from "../../env.server.js";
+import { isActiveStatus } from "../../paddle-status.js";
 
 /**
  * Paddle → account backend. Not authenticated with a Cognito token (Paddle is the caller,
