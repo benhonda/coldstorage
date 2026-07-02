@@ -29,7 +29,7 @@ export const SignInView = ({ auth, onSignIn }: Props): React.JSX.Element => (
       ) : (
         <>
           <p className="cs-signin-text">Sign in to get started.</p>
-          <Button variant="primary" onClick={onSignIn}>
+          <Button variant="primary" full onClick={onSignIn}>
             Continue with Google
           </Button>
         </>

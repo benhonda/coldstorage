@@ -51,14 +51,14 @@ export const RecoveryCodeShow = ({
           can&apos;t be looked up later — keep it somewhere you won&apos;t lose it.
         </p>
         <code className="cs-recovery-code">{code}</code>
-        <Button variant="secondary" icon={copied ? "check" : "content_copy"} onClick={copy}>
+        <Button variant="secondary" full icon={copied ? "check" : "content_copy"} onClick={copy}>
           {copied ? "Copied" : "Copy code"}
         </Button>
         <label className="cs-recovery-confirm">
           <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
           I&apos;ve saved my recovery code
         </label>
-        <Button variant="primary" disabled={!confirmed} onClick={onAcknowledge}>
+        <Button variant="primary" full disabled={!confirmed} onClick={onAcknowledge}>
           Continue
         </Button>
       </div>
@@ -145,7 +145,7 @@ export const RecoveryCodeEnter = ({
           onKeyDown={(e) => e.key === "Enter" && submit()}
         />
         {error && <p className="cs-signin-error">{error}</p>}
-        <Button variant="primary" disabled={!code.trim() || busy} onClick={submit}>
+        <Button variant="primary" full disabled={!code.trim() || busy} onClick={submit}>
           {busy ? "Unlocking…" : "Unlock"}
         </Button>
       </div>
