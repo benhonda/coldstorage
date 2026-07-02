@@ -203,8 +203,13 @@ server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
    condition expects), wired into `live/production/terragrunt.hcl`. **`terragrunt plan` is clean against
    real AWS + Vercel providers for BOTH stacks** (production `9 to add`; staging `10 to add`) — also
    confirmed the account's `oidc.vercel.com/adpharm` OIDC provider and the `/adpharm/vercel-api-token-
-   benhonda` SSM param already exist (an open question going in; now resolved). No custom domain yet
-   (v1 runs on Vercel's default domain — YAGNI, same call coldstorage made for DNS).
+   benhonda` SSM param already exist (an open question going in; now resolved). Custom domains DECIDED
+   (2026-07-02): **`api.coldstorage.sh`** (production) / **`api-staging.coldstorage.sh`** (staging
+   custom environment). `coldstorage.sh` is registered with its nameservers delegated to Vercel DNS
+   (`ns1/ns2.vercel-dns.com`). **Deliberately NOT Terraform-managed** — Ben manages the domains by
+   hand in the Vercel dashboard (his experience: mixing Vercel-DNS-hosted domains with the Vercel TF
+   provider is a mess). A `vercel_project_domain` version was built + plan-verified (1 to add per
+   stack, staging bound via `custom_environment_id`) then reverted on that call — don't re-add it.
    **Staging added (2026-07-01)** — Ben flagged the sandbox-Paddle case: webhooks need a stable deployed
    URL (not local `vercel dev`) and sandbox test events must never touch production subscription data.
    `live/staging/terragrunt.hcl` is a Vercel **custom environment** (branch-tracked on `staging`) within
