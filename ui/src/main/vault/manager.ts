@@ -99,7 +99,17 @@ export class VaultManager {
    * wrong code so the entry screen can show it; on success the daemon is unlocked and the MK escrowed. */
   async submitRecoveryCode(code: string): Promise<void> {
     if (!this.sub || !this.pendingBlob) throw new Error("no vault is awaiting a recovery code");
-    const res = await this.client.request("unlockVaultWithRecoveryCode", { ...this.pendingBlob, recoveryCode: code.trim() });
+    const b = this.pendingBlob;
+    // opsLimit/memLimit go as strings — the control wire is [String:String] (see protocol.ts).
+    const res = await this.client.request("unlockVaultWithRecoveryCode", {
+      wrappedMKPassword: b.wrappedMKPassword,
+      saltPassword: b.saltPassword,
+      wrappedMKRecovery: b.wrappedMKRecovery,
+      saltRecovery: b.saltRecovery,
+      opsLimit: String(b.opsLimit),
+      memLimit: String(b.memLimit),
+      recoveryCode: code.trim(),
+    });
     await this.store.setMasterKey(this.sub, res.masterKey);
     this.pendingBlob = null;
     this.setStatus({ state: "unlocked", recoveryCode: null, error: null });

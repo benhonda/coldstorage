@@ -112,7 +112,12 @@ describe("VaultManager.provision", () => {
 
     await vault.submitRecoveryCode("  ab3de-fg4hj  "); // trimmed
     expect(calls[0]?.[0]).toBe("unlockVaultWithRecoveryCode");
-    expect((calls[0]?.[1] as { recoveryCode: string }).recoveryCode).toBe("ab3de-fg4hj");
+    const params = calls[0]?.[1] as { recoveryCode: string; opsLimit: unknown; memLimit: unknown };
+    expect(params.recoveryCode).toBe("ab3de-fg4hj");
+    // The control wire is [String:String] — numeric key-blob params MUST be strings or the daemon's
+    // param decode fails (looks like a wrong code). Guard against a regression.
+    expect(params.opsLimit).toBe("3");
+    expect(params.memLimit).toBe("65536");
     expect(store.saved["user-1"]).toBe("UNLOCKEDMK");
     expect(t.last().state).toBe("unlocked");
   });

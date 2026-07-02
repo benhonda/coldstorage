@@ -242,7 +242,21 @@ export interface Commands {
    * - `lockVault` (sign-out): drop the MK; later deposits/restores fail until the next unlock. */
   mintVault: { params: Record<string, never>; result: MintVault };
   unlockVault: { params: { masterKey: string }; result: Ack };
-  unlockVaultWithRecoveryCode: { params: KeyBlobFields & { recoveryCode: string }; result: UnlockVault };
+  // The control wire is [String:String] (like restore's `days`), so the key-blob's numeric opsLimit/
+  // memLimit must go as strings — the daemon re-parses them with Int(...). Sending them as JSON numbers
+  // fails the daemon's param decode outright (looks like a wrong code, but the crypto never runs).
+  unlockVaultWithRecoveryCode: {
+    params: {
+      wrappedMKPassword: string;
+      saltPassword: string;
+      wrappedMKRecovery: string;
+      saltRecovery: string;
+      opsLimit: string;
+      memLimit: string;
+      recoveryCode: string;
+    };
+    result: UnlockVault;
+  };
   lockVault: { params: Record<string, never>; result: Ack };
 }
 
