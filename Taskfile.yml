@@ -247,6 +247,67 @@ tasks:
         rm -rf "{{.DATA_DIR}}/staging"
         echo "✓ local archive state wiped. Re-add watched folders in Settings after the next launch."
 
+  daemon:gate-test:
+    desc: "[devcontainer] ADVERSARIAL test of the per-user S3 boundary (PROD.md P2/P5a gate): mints a throwaway Cognito user (admin-create + password — USER_AUTH accepts PASSWORD as a factor, no inbox needed), exchanges its ID token for real STS creds via the identity pool, then proves own-prefix PUT is ALLOWED while a cross-prefix PUT and a GET of a real foreign object are DENIED. Cleans up the user/identity/probe object after."
+    deps: [check-aws-identity]
+    dir: infra/coldstorage/live/production
+    cmds:
+      - |
+        set -u
+        REGION=$(terragrunt output -raw aws_region)
+        BUCKET=$(terragrunt output -raw bucket_name)
+        POOL=$(terragrunt output -raw cognito_user_pool_id)
+        CLIENT=$(terragrunt output -raw cognito_user_pool_client_id)
+        IDPOOL=$(terragrunt output -raw cognito_identity_pool_id)
+        EMAIL="gate-test@coldstorage.sh"
+        PASS="$(openssl rand -base64 24)aA1!"
+        TMP=$(mktemp -d)
+        json() { python3 -c "import json,sys;print(json.load(sys.stdin)$1)"; }
+        cip() { curl -s "https://cognito-idp.$REGION.amazonaws.com/" -H "Content-Type: application/x-amz-json-1.0" -H "X-Amz-Target: AWSCognitoIdentityProviderService.$1" -d "$2"; }
+        cid() { curl -s "https://cognito-identity.$REGION.amazonaws.com/" -H "Content-Type: application/x-amz-json-1.1" -H "X-Amz-Target: AWSCognitoIdentityService.$1" -d "$2"; }
+        IDENTITY=""
+        cleanup() {
+          aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username "$EMAIL" --profile {{.AWS_PROFILE}} 2>/dev/null || true
+          [ -n "$IDENTITY" ] && aws cognito-identity delete-identities --identity-ids-to-delete "$IDENTITY" --profile {{.AWS_PROFILE}} --region "$REGION" > /dev/null 2>&1 || true
+          [ -n "$IDENTITY" ] && aws s3 rm "s3://$BUCKET/blobs/$IDENTITY/gate-probe.bin" --profile {{.AWS_PROFILE}} 2>/dev/null || true
+          rm -rf "$TMP"
+        }
+        trap cleanup EXIT
+        echo "── mint throwaway user ──"
+        aws cognito-idp admin-create-user --user-pool-id "$POOL" --username "$EMAIL" --message-action SUPPRESS \
+          --user-attributes Name=email,Value="$EMAIL" Name=email_verified,Value=true --profile {{.AWS_PROFILE}} > /dev/null
+        aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --username "$EMAIL" --password "$PASS" --permanent --profile {{.AWS_PROFILE}}
+        echo "── sign it in (USER_AUTH / PASSWORD factor, plain HTTPS — same lane the app's 5b email-OTP uses) ──"
+        AUTH=$(cip InitiateAuth "{\"AuthFlow\":\"USER_AUTH\",\"ClientId\":\"$CLIENT\",\"AuthParameters\":{\"USERNAME\":\"$EMAIL\",\"PASSWORD\":\"$PASS\",\"PREFERRED_CHALLENGE\":\"PASSWORD\"}}")
+        IDTOKEN=$(printf %s "$AUTH" | json "['AuthenticationResult']['IdToken']" 2>/dev/null) || { echo "✗ sign-in failed: $AUTH"; exit 1; }
+        echo "── exchange for STS creds (identity pool) ──"
+        LOGINS="{\"cognito-idp.$REGION.amazonaws.com/$POOL\":\"$IDTOKEN\"}"
+        IDENTITY=$(cid GetId "{\"IdentityPoolId\":\"$IDPOOL\",\"Logins\":$LOGINS}" | json "['IdentityId']")
+        CREDS=$(cid GetCredentialsForIdentity "{\"IdentityId\":\"$IDENTITY\",\"Logins\":$LOGINS}")
+        export AWS_ACCESS_KEY_ID=$(printf %s "$CREDS" | json "['Credentials']['AccessKeyId']")
+        export AWS_SECRET_ACCESS_KEY=$(printf %s "$CREDS" | json "['Credentials']['SecretKey']")
+        export AWS_SESSION_TOKEN=$(printf %s "$CREDS" | json "['Credentials']['SessionToken']")
+        unset AWS_PROFILE; echo "test identity: $IDENTITY"
+        echo "gate" > "$TMP/probe"
+        FOREIGN_KEY=$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix blobs/ --query "Contents[?!starts_with(Key, 'blobs/$IDENTITY/')] | [0].Key" --output text --profile {{.AWS_PROFILE}})
+        PASS_ALL=1
+        echo "── assert 1: PUT own prefix → ALLOWED ──"
+        if aws s3api put-object --bucket "$BUCKET" --key "blobs/$IDENTITY/gate-probe.bin" --body "$TMP/probe" --region "$REGION" > /dev/null 2>"$TMP/e1"; then
+          echo "✓ allowed"; else echo "✗ FAIL — own-prefix PUT denied: $(cat "$TMP/e1")"; PASS_ALL=0; fi
+        echo "── assert 2: PUT another user's prefix → DENIED ──"
+        if aws s3api put-object --bucket "$BUCKET" --key "blobs/ca-central-1:00000000-dead-beef-0000-000000000000/gate-probe.bin" --body "$TMP/probe" --region "$REGION" > /dev/null 2>"$TMP/e2"; then
+          echo "✗ FAIL — cross-prefix PUT was ALLOWED (boundary broken)"; PASS_ALL=0
+        else grep -q "AccessDenied" "$TMP/e2" && echo "✓ AccessDenied" || { echo "✗ FAIL — denied but not AccessDenied: $(cat "$TMP/e2")"; PASS_ALL=0; }; fi
+        if [ "$FOREIGN_KEY" != "None" ] && [ -n "$FOREIGN_KEY" ]; then
+          echo "── assert 3: GET a real foreign object ($FOREIGN_KEY) → DENIED ──"
+          if aws s3api get-object --bucket "$BUCKET" --key "$FOREIGN_KEY" "$TMP/stolen" --region "$REGION" > /dev/null 2>"$TMP/e3"; then
+            echo "✗ FAIL — read another user's object (boundary broken)"; PASS_ALL=0
+          else grep -q "AccessDenied" "$TMP/e3" && echo "✓ AccessDenied" || { echo "✗ FAIL — denied but not AccessDenied: $(cat "$TMP/e3")"; PASS_ALL=0; }; fi
+        else
+          echo "── assert 3 skipped: no foreign object in the vault to probe ──"
+        fi
+        [ "$PASS_ALL" = "1" ] && echo "GATE PASSED — per-user boundary holds" || { echo "GATE FAILED"; exit 1; }
+
   daemon:reset:vault:
     desc: "[devcontainer] DESTRUCTIVE: delete every object under blobs/ in the REAL production vault (the pre-auth dogfood uploads at blobs/<hash> AND any per-user blobs/<identityId>/ objects). Confirm by typing the bucket name. Deep Archive objects delete fine (early-delete fee is pennies at dogfood scale)."
     interactive: true
