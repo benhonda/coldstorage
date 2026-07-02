@@ -993,3 +993,17 @@ button.cs-kv:hover { background: var(--surface-hover); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ── Sign-in gate (Phase 5) — full-window, replaces the shell until a user is signed in. ── */
+.cs-signin { display: grid; place-items: center; height: 100vh; background: var(--bg-app); }
+.cs-signin-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-8) var(--space-10);
+  text-align: center;
+}
+.cs-signin-title { font: var(--type-title); color: var(--text-primary); margin: 0; }
+.cs-signin-text { font: var(--type-body); color: var(--text-secondary); margin: 0; }
+.cs-signin-error { font: var(--type-label); color: var(--negative); margin: 0; max-width: 360px; overflow-wrap: anywhere; }

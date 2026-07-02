@@ -96,6 +96,15 @@ resource "aws_cognito_identity_provider" "google" {
     client_id        = data.aws_ssm_parameter.google_client_id[0].value
     client_secret    = data.aws_ssm_parameter.google_client_secret[0].value
     authorize_scopes = "email"
+    # AWS computes + backfills these six for provider_type=Google after the first apply; without them
+    # in config every later plan wants to strip them (perpetual harmless drift — surfaced 2026-07-02
+    # by the Phase 5 callback-URL plan). Pinning the values AWS itself wrote keeps plans surgical.
+    attributes_url                = "https://people.googleapis.com/v1/people/me?personFields="
+    attributes_url_add_attributes = "true"
+    authorize_url                 = "https://accounts.google.com/o/oauth2/v2/auth"
+    oidc_issuer                   = "https://accounts.google.com"
+    token_request_method          = "POST"
+    token_url                     = "https://www.googleapis.com/oauth2/v4/token"
   }
 
   attribute_mapping = {

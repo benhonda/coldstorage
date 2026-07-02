@@ -8,6 +8,12 @@
  * boundary here is contextIsolation, and we load only local bundled content (no remote URLs).
  * Hardening to `sandbox: true` (needs a CJS preload build) is a documented follow-up.
  *
+ * Sign-in (PROD.md Phase 5): main also owns the {@link AuthManager} — the OAuth flow, tokens, and
+ * the daemon handoff (each fresh ID token → the daemon's `authenticate` command, which swaps its S3
+ * credentials to the signed-in user so uploads land under `blobs/<identityId>/`). The redirect
+ * arrives as a `coldstorage://auth/callback` deep link (packaged; scheme registered via
+ * electron-builder `protocols`) or on the dev loopback listener (see auth/loopback.ts).
+ *
  * ESM main (package.json `type: module`): use `import.meta.dirname`, not `__dirname`.
  */
 import { join } from "node:path";
@@ -16,6 +22,9 @@ import { DaemonClient } from "../daemon/client.ts";
 import { registerBridge } from "./bridge.ts";
 import { registerSystemHandlers } from "./system.ts";
 import { startDaemon, daemonSocketPath } from "./daemon.ts";
+import { AuthManager } from "./auth/manager.ts";
+import { resolveOAuthConfig } from "./auth/config.ts";
+import { registerAuthIpc } from "./auth/ipc.ts";
 
 // Pin the app name BEFORE any `getPath("userData")` call. The client resolves the socket path at module
 // load and the daemon supervisor resolves it in `whenReady`; both derive from userData (= appData + app
@@ -29,6 +38,66 @@ const client = new DaemonClient(app.isPackaged ? { socketPath: daemonSocketPath(
 const disposeBridge = registerBridge(client);
 const disposeSystem = registerSystemHandlers();
 let stopDaemon: () => void = () => {};
+
+// Sign-in state machine. Null config = dogfood mode: status reports unconfigured, the renderer hides
+// auth entirely, and none of the wiring below ever fires. Dev uses the loopback redirect (an unpackaged
+// Electron can't receive custom-scheme deep links on macOS).
+const auth = new AuthManager(resolveOAuthConfig(), { useLoopback: !app.isPackaged });
+const disposeAuthIpc = registerAuthIpc(auth);
+
+// ── Deep links (macOS delivers them as open-url, launch AND while running). Registered before
+//    `ready` because a URL can be what LAUNCHES the app — those arrive pre-ready and are buffered.
+//    (The scheme itself comes from Info.plist CFBundleURLTypes — electron-builder `protocols` — so
+//    this is packaged-only in practice; setAsDefaultProtocolClient just claims default-handler.) ──
+let pendingDeepLink: string | null = null;
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  if (app.isReady()) void auth.handleCallbackUrl(url);
+  else pendingDeepLink = url;
+});
+if (app.isPackaged) app.setAsDefaultProtocolClient("coldstorage");
+
+// Single-instance hygiene. macOS Launch Services already routes protocol URLs to the running instance
+// (as open-url), but the lock guards CLI double-launches — and on Win/Linux (if we ever ship there)
+// protocol URLs arrive via second-instance argv instead, so the shape is already right.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on("second-instance", (_event, argv) => {
+    const url = argv.find((a) => a.startsWith("coldstorage://"));
+    if (url) void auth.handleCallbackUrl(url);
+    focusMainWindow();
+  });
+}
+
+const focusMainWindow = (): void => {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.focus();
+};
+
+// ── Daemon handoff: every fresh ID token (sign-in + hourly refresh) re-runs `authenticate`, keeping
+//    the daemon's Cognito logins valid; and a (re)connected daemon starts unauthenticated, so push the
+//    current token at it too. Failures are logged, not fatal — a daemon without Cognito config (dogfood)
+//    just rejects the command. ──
+const offIdToken = auth.onIdToken((idToken) => {
+  void client.request("authenticate", { idToken }).catch((e: unknown) => console.error("daemon authenticate failed:", e));
+});
+const offClientConnect = client.on("connect", () => {
+  void auth
+    .getFreshIdToken()
+    .then((idToken) => (idToken ? client.request("authenticate", { idToken }) : null))
+    .catch((e: unknown) => console.error("daemon authenticate failed:", e));
+});
+
+// Bring the window back when a sign-in completes — the user is off in the browser; the deep link
+// should land them back in the app, signed in. (Not on background refreshes: only signingIn→signedIn.)
+let prevAuthState = auth.status().state;
+const offAuthFocus = auth.onStatus((s) => {
+  if (prevAuthState === "signingIn" && s.state === "signedIn") focusMainWindow();
+  prevAuthState = s.state;
+});
 
 const createWindow = (): void => {
   const win = new BrowserWindow({
@@ -75,6 +144,15 @@ app.whenReady().then(() => {
     /* lifecycle/reconnect handles it */
   });
 
+  // Silent session restore (safeStorage needs `ready` for the Keychain), then any deep link that
+  // LAUNCHED the app. Both async; the renderer just sees status pushes whenever they land.
+  void auth.restore().then(() => {
+    if (pendingDeepLink) {
+      void auth.handleCallbackUrl(pendingDeepLink);
+      pendingDeepLink = null;
+    }
+  });
+
   createWindow();
 
   // macOS: re-create a window when the dock icon is clicked and none are open.
@@ -91,6 +169,11 @@ app.on("window-all-closed", () => {
 app.on("will-quit", () => {
   disposeBridge();
   disposeSystem();
+  disposeAuthIpc();
+  offIdToken();
+  offClientConnect();
+  offAuthFocus();
+  auth.dispose();
   client.close();
   stopDaemon(); // terminate the supervised child (no-op in dev)
 });

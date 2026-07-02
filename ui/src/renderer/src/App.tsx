@@ -24,6 +24,7 @@ import { FailuresPanel } from "./views/files/FailuresPanel.tsx";
 import type { BlobFailure } from "./state/reducer.ts";
 import { MyFilesView } from "./views/MyFilesView.tsx";
 import { SettingsView, type SettingsApi } from "./views/SettingsView.tsx";
+import { SignInView } from "./views/SignInView.tsx";
 
 /** Plain status when the background uploader isn't connected — no "daemon" jargon, quiet when healthy. */
 const NOT_RUNNING: Partial<Record<ConnectionState, string>> = {
@@ -144,6 +145,13 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
     setDismissedError(liveError);
   };
 
+  // Sign-in gate (Phase 5): a configured (multi-user) install with nobody signed in shows only the
+  // gate — uploads have no vault prefix without a user. Dogfood mode (unconfigured) never sees this.
+  // After every hook above, so the hook order is identical with and without the gate.
+  if (state.auth.configured && state.auth.state !== "signedIn") {
+    return <SignInView auth={state.auth} onSignIn={() => void api.signIn()} />;
+  }
+
   return (
     <div className="cs-shell" style={{ gridTemplateColumns: `${sidebarWidth}px 1fr` }}>
       <Sidebar items={NAV} active={route} onNavigate={(id) => isRoute(id) && setRoute(id)} footer={footer} />
@@ -186,6 +194,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           vaultBytes={vaultBytes}
           files={filesApi.files}
           virtualFolders={filesApi.virtualFolders}
+          auth={state.auth}
         />
       )}
 

@@ -43,6 +43,13 @@ output "cognito_identity_pool_id" {
   description = "→ daemon: identityPoolId for CognitoAWSCredentialIdentityResolver."
 }
 
+output "cognito_domain" {
+  # Full managed-login host. The domain resource is count-gated on a federated IdP being enabled;
+  # empty string when OAuth is off (the app treats that as "sign-in not configured").
+  value       = local.oauth_enabled ? "${one(aws_cognito_user_pool_domain.main[*].domain)}.auth.${var.aws_region}.amazoncognito.com" : ""
+  description = "→ app: the managed-login (hosted UI) host for /oauth2/authorize + /oauth2/token."
+}
+
 output "cognito_user_role_arn" {
   value       = aws_iam_role.user.arn
   description = "The per-user IAM role assumed via the Identity Pool (scoped to blobs/<sub>/*)."

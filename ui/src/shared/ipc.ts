@@ -49,10 +49,33 @@ export const IPC = {
   pickPhotos: "photos:pick",
   /** invoke: open System Settings ▸ Privacy & Security ▸ Photos (recovery for a denied/limited grant). */
   openPhotosSettings: "photos:openSettings",
+  /** invoke: current {@link AuthStatus} — for first paint before any push arrives. */
+  authStatus: "auth:status",
+  /** invoke: start a sign-in (opens the system browser; completes asynchronously via a status push). */
+  authSignIn: "auth:signIn",
+  /** invoke: sign out (drops the stored session + revokes it server-side). */
+  authSignOut: "auth:signOut",
+  /** push: the auth status changed, `(status)`. */
+  authStatusChanged: "auth:statusChanged",
 } as const;
 
 /** Whether the main process currently holds a live socket to `coldstored`. */
 export type ConnectionState = "connecting" | "connected" | "disconnected";
+
+/**
+ * The renderer's whole view of sign-in (PROD.md Phase 5) — no token ever crosses this seam.
+ * `configured: false` = single-operator dogfood mode (no Cognito sign-in config present); the UI
+ * hides the auth surface entirely and behaves exactly as before Phase 5.
+ */
+export interface AuthStatus {
+  configured: boolean;
+  state: "signedOut" | "signingIn" | "signedIn";
+  /** From the ID token's email claim — display only (verification happens daemon/backend-side). */
+  email: string | null;
+  /** The most recent sign-in failure, for the sign-in screen. Null when none (including a plain
+   * user-cancelled attempt, which isn't an error worth showing). */
+  error: string | null;
+}
 
 /** One photo picked in the native picker: the PHAsset localIdentifier (drives the daemon `depositPhotos`)
  * + a suggested name for the instant optimistic row label (the daemon resolves the true filename later). */
@@ -90,4 +113,13 @@ export interface ColdstoreApi {
   /** Absolute path of a dropped/picked File. Electron 32+ removed `File.path`; resolved in the preload
    * via `webUtils.getPathForFile`. "" if it can't be resolved (e.g. a synthetic File). Sync — no daemon. */
   pathForFile(file: File): string;
+  /** Current sign-in status — for first paint before any {@link onAuthStatus} push arrives. */
+  getAuthStatus(): Promise<AuthStatus>;
+  /** Start a sign-in: main opens the system browser at Cognito managed login; completion arrives as
+   * an {@link onAuthStatus} push (the browser redirect comes back to the main process, not here). */
+  signIn(): Promise<void>;
+  /** Sign out: drops the stored session and revokes it server-side. */
+  signOut(): Promise<void>;
+  /** Subscribe to sign-in status changes. */
+  onAuthStatus(listener: (status: AuthStatus) => void): () => void;
 }

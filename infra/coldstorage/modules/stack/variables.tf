@@ -67,7 +67,15 @@ variable "apple_private_key" {
 }
 
 variable "app_oauth_callback_urls" {
-  type        = list(string)
-  default     = ["coldstorage://auth/callback"]
-  description = "Redirect URIs for the desktop app's hosted-UI OAuth (Google/Apple) flow. A custom scheme the Electron app registers. Only used when a federated IdP is enabled."
+  type = list(string)
+  default = [
+    # Packaged app: the custom scheme electron-builder registers in the app's Info.plist (Phase 5).
+    "coldstorage://auth/callback",
+    # Dev (`task ui:dev`): custom-scheme deep links can't reach an unpackaged Electron on macOS (the
+    # running Electron.app's Info.plist has no `coldstorage` scheme — Electron docs are explicit), so
+    # dev sign-in redirects to a throwaway 127.0.0.1 listener the app binds per sign-in. Cognito allows
+    # plain http for localhost only; the port is fixed because Cognito exact-matches the URL.
+    "http://localhost:53682/auth/callback",
+  ]
+  description = "Redirect URIs for the desktop app's hosted-UI OAuth (Google/Apple) flow: the packaged app's custom scheme + the dev-mode loopback. Only used when a federated IdP is enabled."
 }

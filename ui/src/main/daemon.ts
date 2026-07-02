@@ -16,8 +16,9 @@ import { app } from "electron";
 
 /** Per-user data dir — the SSOT for everything the daemon persists. `userData` resolves to
  * `~/Library/Application Support/ColdStorage` (the productName), which is ALSO the `DATA_DIR` that
- * `task daemon:logs` tails — so the packaged daemon's logs land where the existing ops task expects. */
-const dataDir = (): string => app.getPath("userData");
+ * `task daemon:logs` tails — so the packaged daemon's logs land where the existing ops task expects.
+ * Exported for the auth config resolver (config.json is the packaged app's whole config seam). */
+export const dataDir = (): string => app.getPath("userData");
 
 /** The control-socket path the daemon creates AND the client dials — one value, both sides agree on it
  * (passed to `new DaemonClient({ socketPath })` in index.ts). */
@@ -30,20 +31,23 @@ const coldstoredPath = (): string => join(process.resourcesPath, "bin", "coldsto
  * from a shell env. Written by `task ui:config` (from the infra-outputs handoff, the same SSOT the launchd
  * plist uses). NO secret lives here: creds resolve via the `awsProfile`'s `credential_process → Keychain`
  * (set up once by `task daemon:creds`), exactly like the launchd daemon. `cognitoIdentityPoolId`/
- * `cognitoUserPoolProvider` are the multi-user seam (PROD.md Phase 2) — absent until a real sign-in UI
- * (Phase 5) exists to produce an idToken for the `authenticate` command. */
-type AppConfig = {
+ * `cognitoUserPoolProvider` are the daemon's multi-user seam (PROD.md Phase 2); `cognitoDomain`/
+ * `cognitoClientId` are the APP's sign-in config (Phase 5 — managed-login host + public client id,
+ * consumed by auth/config.ts, never passed to the daemon). */
+export type AppConfig = {
   bucket?: string | undefined;
   region?: string | undefined;
   awsProfile?: string | undefined;
   cognitoIdentityPoolId?: string | undefined;
   cognitoUserPoolProvider?: string | undefined;
+  cognitoDomain?: string | undefined;
+  cognitoClientId?: string | undefined;
 };
 
 /** Read `<dataDir>/config.json` best-effort. A missing/malformed file logs and returns `{}` so the daemon
  * still starts + serves the control socket (the UI connects; only uploads need this) — the graceful
  * "connected but can't upload" degrade, not a hard failure. */
-const readAppConfig = (dir: string): AppConfig => {
+export const readAppConfig = (dir: string): AppConfig => {
   const path = join(dir, "config.json");
   let raw: string;
   try {
@@ -63,6 +67,8 @@ const readAppConfig = (dir: string): AppConfig => {
       awsProfile: str(o.awsProfile),
       cognitoIdentityPoolId: str(o.cognitoIdentityPoolId),
       cognitoUserPoolProvider: str(o.cognitoUserPoolProvider),
+      cognitoDomain: str(o.cognitoDomain),
+      cognitoClientId: str(o.cognitoClientId),
     };
   } catch (e) {
     console.error(`ignoring malformed ${path}: ${String(e)}`);

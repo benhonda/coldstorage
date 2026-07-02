@@ -61,14 +61,16 @@ Everything runs through the root [`Taskfile.yml`](./Taskfile.yml) (`task --list`
 - **The UI** — My Files (drill-in browser, drop-to-upload, Finder-style collisions, reorganize,
   request-a-copy) + Settings (watched folders w/ mounts + per-source pause, exclude chips, real
   pricing), live progress + error surfacing. Packaged `ColdStorage.app` builds, connects, and uploads.
-- **Going-to-prod Phases 1–3** — Cognito live in prod, the daemon's per-user credential/prefix seam
-  fully wired (opt-in via env), ZK master-key primitives built + tested ([`PROD.md`](./PROD.md)).
+- **Going-to-prod Phases 1–4** — Cognito live in prod, the daemon's per-user credential/prefix seam
+  fully wired (opt-in via env), ZK master-key primitives built + tested, account-backend staging lane
+  live at `api-staging.coldstorage.sh` with the Paddle-webhook gate proven ([`PROD.md`](./PROD.md);
+  Phase 4's production lane is deliberately deferred until Phase 5/6 need it).
 
 **Open (priority order):**
-1. **[`PROD.md`](./PROD.md) Phase 4** — the staging lane is stood up (Neon, Paddle sandbox, secrets,
-   first deploy, 2026-07-02); remaining: disable Vercel Deployment Protection, prove the webhook
-   state-flip, then the production lane (live Paddle + prod Neon branch + real prod secrets) → Phase 5
-   (auth + paywall UX) and Phase 6 (Developer ID sign + notarize + ship).
+1. **[`PROD.md`](./PROD.md) Phase 5 — auth + paywall UX, IN PROGRESS (2026-07-02).** 5a (Google
+   sign-in steel thread: system-browser PKCE → `coldstorage://` callback → daemon `authenticate`) is
+   built, tests green; its live gate is Ben's Mac run. Then 5b (email-OTP + recovery code + ZK
+   wiring), 5c (Paddle subscribe flow), and Phase 6 (Developer ID sign + notarize + ship).
 2. **Packaging** — TCC identity (Photos pane still says "coldstored"), background-run UX
    ([`ui/PACKAGING.md`](./ui/PACKAGING.md)).
 3. **UI-lane gaps** — per-file live status, skipped/failed counts, retry depth, polish

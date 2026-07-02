@@ -4,7 +4,7 @@
  * real store correctly: initial fetch, refetch-on-(re)connect, and sourcesChanged → listSources.
  */
 import { describe, expect, test } from "bun:test";
-import type { ColdstoreApi, ConnectionState, ListedFile, Source, Status } from "../../../shared/ipc.ts";
+import type { AuthStatus, ColdstoreApi, ConnectionState, ListedFile, Source, Status } from "../../../shared/ipc.ts";
 import { connectController } from "./controller.ts";
 import { createStore } from "./store.ts";
 
@@ -27,6 +27,7 @@ const makeApi = (initial: ConnectionState) => {
   const calls: string[] = [];
   let eventCb: ((name: never, data: never) => void) | null = null;
   let lifeCb: ((s: ConnectionState) => void) | null = null;
+  let authCb: ((s: AuthStatus) => void) | null = null;
 
   const api: ColdstoreApi = {
     request: ((method: string) => {
@@ -48,6 +49,13 @@ const makeApi = (initial: ConnectionState) => {
     chooseFolder: () => Promise.resolve(null),
     getDownloadsDir: () => Promise.resolve("/tmp/Downloads"),
     pathForFile: () => "",
+    getAuthStatus: () => Promise.resolve({ configured: false, state: "signedOut", email: null, error: null }),
+    signIn: () => Promise.resolve(),
+    signOut: () => Promise.resolve(),
+    onAuthStatus: (cb) => {
+      authCb = cb;
+      return () => (authCb = null);
+    },
   };
 
   return {
@@ -61,6 +69,7 @@ const makeApi = (initial: ConnectionState) => {
     },
     fireEvent: (name: string, data: Record<string, string>) =>
       eventCb?.(name as never, data as never),
+    fireAuth: (s: AuthStatus) => authCb?.(s),
   };
 };
 
@@ -164,5 +173,16 @@ describe("controller sync policy", () => {
 
     f.fireEvent("fileArchived", { file: "x.jpg", blob: "b1" });
     expect(store.getState().run?.filesArchived).toBe(1);
+  });
+
+  test("reads the initial auth status and folds pushed changes", async () => {
+    const f = makeApi("connected");
+    const store = createStore();
+    connectController(f.api, store);
+    await tick();
+    expect(store.getState().auth.configured).toBe(false); // the initial pull landed
+
+    f.fireAuth({ configured: true, state: "signedIn", email: "ben@example.com", error: null });
+    expect(store.getState().auth).toEqual({ configured: true, state: "signedIn", email: "ben@example.com", error: null });
   });
 });

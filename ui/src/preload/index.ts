@@ -33,6 +33,16 @@ const api: ColdstoreApi = {
   getDownloadsDir: () => ipcRenderer.invoke(IPC.downloadsDir),
   pickPhotos: () => ipcRenderer.invoke(IPC.pickPhotos),
   openPhotosSettings: () => ipcRenderer.invoke(IPC.openPhotosSettings),
+
+  getAuthStatus: () => ipcRenderer.invoke(IPC.authStatus),
+  signIn: () => ipcRenderer.invoke(IPC.authSignIn),
+  signOut: () => ipcRenderer.invoke(IPC.authSignOut),
+  onAuthStatus: (listener) => {
+    const handler = (_e: IpcRendererEvent, status: unknown): void =>
+      (listener as (s: unknown) => void)(status);
+    ipcRenderer.on(IPC.authStatusChanged, handler);
+    return () => ipcRenderer.removeListener(IPC.authStatusChanged, handler);
+  },
   // Resolve a dropped/picked File → absolute path here in the preload (webUtils isn't in the renderer).
   pathForFile: (file: File) => webUtils.getPathForFile(file),
 };

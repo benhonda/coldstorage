@@ -281,10 +281,53 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
    in the staging DB, confirmed by Ben in the Neon console — "webhook flips state" proven with zero
    checkout UI. "Upload blocked when inactive" (the daemon consuming `/entitlement`) rides with
    Phase 5's auth handoff.
-5. **App auth + paywall UX** — passwordless sign-in/up (Google via Cognito managed login in the SYSTEM
-   browser — Google blocks embedded webviews — code+PKCE to the `coldstorage://` callback; email-OTP codes
-   via `ALLOW_USER_AUTH` as the no-Google path) + recovery-code capture + subscribe flow in the Electron
-   UI; token handed to the daemon. *Gate:* Ben signs up fresh → subscribes → deposits → restores, on a Mac.
+5. **App auth + paywall UX — IN PROGRESS (started 2026-07-02).** Passwordless sign-in/up (Google via
+   Cognito managed login in the SYSTEM browser — Google blocks embedded webviews — code+PKCE to the
+   `coldstorage://` callback; email-OTP codes via `ALLOW_USER_AUTH` as the no-Google path) +
+   recovery-code capture + subscribe flow in the Electron UI; token handed to the daemon. Cut
+   hardest-first into three gated sub-steps (research pass 2026-07-02 verified every endpoint shape
+   against current AWS/Electron/Paddle docs before building):
+   - **5a — auth steel thread: BUILT ✅ (2026-07-02; `ui:typecheck` green, 64 ui tests green, TF plan
+     surgical). LIVE gate is Ben's (below).** The riskiest slice end-to-end: system browser →
+     managed-login PKCE (S256; RFC 7636 vector-tested) → redirect → code exchange → tokens → daemon
+     `authenticate`. New `ui/src/main/auth/` (pkce/oauth/loopback/manager/config/ipc): access+ID
+     tokens in main-process MEMORY only, refresh token safeStorage-encrypted (Keychain; keytar is
+     dead/archived) in `userData/auth.json`, auto-refresh 5 min before the 1-h expiry, every fresh ID
+     token (sign-in + refresh + daemon reconnect) re-runs `authenticate` so the daemon's Cognito
+     logins never go stale. **Redirects, two lanes:** packaged = `coldstorage://auth/callback` deep
+     link (electron-builder `protocols` → CFBundleURLTypes; `open-url` registered pre-ready + buffered
+     — a URL can LAUNCH the app); dev = `http://localhost:53682/auth/callback` one-shot 127.0.0.1
+     listener, because an UNPACKAGED Electron on macOS physically can't receive custom-scheme links
+     (no Info.plist entry — Electron docs are explicit). Duplicate/foreign callbacks dropped by
+     `state`-match against the single pending attempt (also the CSRF guard). Renderer: `AuthStatus`
+     over IPC (never a token), sign-in gate view + Settings account card; dogfood installs
+     (`configured: false`) see zero auth UI, byte-for-byte the old behavior. Infra: callback list +
+     `cognito_domain` output (plan verified **0 add / 1 change / 0 destroy**; also pinned the six
+     AWS-computed Google `provider_details` keys that were causing perpetual plan drift); handoff →
+     `ui:config`/`ui:dev`/`ui:live` now carry `COLDSTORE_COGNITO_DOMAIN`/`_CLIENT_ID` (dev lanes strip
+     the daemon secrets). *5a gate (Ben, Mac):* `task tf:apply` (the 1-change plan) → re-run
+     `tf:coldstorage:creds-export` → `ui:config`/`ui:dev` → Google sign-in lands `identityId`; a
+     deposit lands under `blobs/<identityId>/` and a cross-prefix GET gets `AccessDenied` — which
+     also closes Phase 2's outstanding LIVE gate.
+   - **5b — email-OTP lane + signup + recovery code + ZK wiring (NEXT).** Verified shapes: `SignUp`
+     with NO password is first-class for passwordless pools; `ConfirmSignUp`'s `Session` feeds
+     `InitiateAuth USER_AUTH` so signup costs the user exactly ONE emailed code; sign-in =
+     `InitiateAuth` + `PREFERRED_CHALLENGE: EMAIL_OTP` → `RespondToAuthChallenge` — all callable as
+     plain unauthenticated HTTPS JSON-RPC (`X-Amz-Target`), no AWS SDK in the app. Plus the ZK leg:
+     daemon key-blob mint/unlock commands wiring `UserMasterKeyProvider` (today `coldstored` still
+     uses `LocalFileKEK`), recovery-code capture UI, key-blob GET/PUT against the backend, Keychain
+     MK caching, and a daemon sign-out/deauth command (today the daemon keeps its STS creds + prefix
+     until expiry after an app-side sign-out). *Gate:* fresh email signs up with one code, recovery
+     code shown once, key-blob lands server-side, deposit encrypts under the unlocked MK.
+   - **5c — paywall + subscribe (Paddle).** Decided pattern (verified vs Paddle docs 2026-07-02):
+     backend `POST /checkout-session` creates the transaction server-side (`POST /transactions` with
+     `custom_data: {cognitoSub}` — the ONLY way to guarantee custom_data; it propagates to the
+     subscription and its webhooks) → app opens **Paddle-hosted checkout** (`pay.paddle.io/...?
+     transaction_id=…`, redirect URL supports custom schemes) in the system browser → app polls
+     `/entitlement` (webhook is the source of truth; the `coldstorage://checkout-complete` redirect is
+     just a check-now nudge). Deposit gate on `/entitlement` in the app layer. Sandbox test card
+     `4242 4242 4242 4242`; `4000 0027 6000 3184` tests the renewal-decline/revoke path. *Gate:*
+     sandbox checkout flips entitlement, upload gate opens.
 6. **Sign + notarize + ship** — Developer ID signing + notarization + auto-update + download page. *Gate:*
    a notarized build launches Gatekeeper-clean on a non-dev Mac and self-updates.
 
@@ -312,3 +355,11 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
   (the unix group id) in go-task's mvdan/sh; renamed vars + shape guards now prevent that class.)
   Remaining for P5 (app side): system-browser flow + `coldstorage://auth/callback` handling in Electron.
 - **Free trial / plan tiers / retrieval-fee charging** — product/economics (private `strategy/`) — P4.
+- **[open] Same-email, two sign-in methods = two Cognito accounts.** A Google-federated user and an
+  email-OTP user with the SAME address are separate profiles (separate `sub`s → separate key-blobs,
+  separate S3 prefixes — under ZK they can't see each other's data) unless linked server-side
+  (`AdminLinkProviderForUser`, which must run BEFORE the federated first sign-in — a pre-signup
+  Lambda). Surfaced by the 2026-07-02 research pass. Leaning: ship 5a/5b unlinked with plain copy
+  ("sign in the way you signed up"), decide linking before public launch — but this is Ben's call.
+- **[open] Daemon-side sign-out** — app sign-out revokes tokens + drops the session, but the daemon
+  holds its STS creds/prefix until expiry (~1h). A `deauthenticate` control command rides with 5b.

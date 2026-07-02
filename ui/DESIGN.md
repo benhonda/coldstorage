@@ -161,6 +161,11 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   spawn; `daemon.ts`: the packaged-app daemon supervisor — see `PACKAGING.md`); `src/shared/ipc.ts` is
   the typed main↔renderer seam; `src/renderer/src/state/` is reducer (pure fold) → store
   (`useSyncExternalStore`) → controller (layer 2; `task ui:test`).
+- `ui/src/main/auth/` — sign-in (PROD.md Phase 5): Cognito managed-login OAuth (PKCE, system browser,
+  `coldstorage://auth/callback` deep link packaged / loopback in dev), safeStorage-encrypted refresh
+  token, and the daemon handoff (fresh ID token → the `authenticate` command). The renderer sees only
+  `AuthStatus` over IPC (`getAuthStatus`/`signIn`/`signOut`/`onAuthStatus`) — never a token. Gate UI:
+  `views/SignInView.tsx` + the account card in Settings.
 - `src/renderer/src/styles/tokens/` — the 5 DS token CSS files **vendored verbatim** (SSOT — re-sync,
   don't hand-edit) from the coldstorage Design System (Claude Design `41ebafc1`), ported to native
   React 19 TSX (the DS's UMD/CDN runtime isn't consumable in electron-vite). Primitives in

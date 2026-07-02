@@ -6,7 +6,7 @@
  * daemon's pricing rate card).
  */
 import { useState } from "react";
-import type { Pricing, Source } from "../../../shared/ipc.ts";
+import type { AuthStatus, Pricing, Source } from "../../../shared/ipc.ts";
 import type { ViewProps } from "./types.ts";
 import type { ArchivedFile } from "./files/model.ts";
 import { baseName, formatBytes } from "./files/model.ts";
@@ -44,7 +44,11 @@ export const SettingsView = ({
   vaultBytes,
   files,
   virtualFolders,
+  auth,
 }: ViewProps & {
+  /** Sign-in status (Phase 5). The account card renders only for a configured (multi-user) install —
+   * dogfood mode has no account to show. */
+  auth: AuthStatus;
   sources: Source[];
   /** A scan is in flight — the LIVE run state (`state.run.active`), folded from runStarted/runFinished.
    * NOT `status.running`, which only updates on a getStatus poll and so never flips during a quick run. */
@@ -250,6 +254,19 @@ export const SettingsView = ({
         <KeyValueRow label="Encryption" value="on this Mac, before upload" icon="lock" />
         <p className="cs-help" style={{ marginTop: "var(--space-3)" }}>{pricing.note}</p>
       </Card>
+
+      {auth.configured && (
+        <Card
+          title="Account"
+          action={
+            <Button size="sm" icon="logout" onClick={() => exec(() => api.signOut())}>
+              Sign out
+            </Button>
+          }
+        >
+          <KeyValueRow label="Signed in as" value={auth.email ?? "—"} />
+        </Card>
+      )}
     </Page>
   );
 };

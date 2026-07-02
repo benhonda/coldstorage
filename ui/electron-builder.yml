@@ -7,6 +7,13 @@ appId: com.theadpharm.coldstorage
 productName: ColdStorage
 copyright: © 2026 The Adpharm
 
+# Deep-link scheme for the OAuth sign-in callback (coldstorage://auth/callback — PROD.md Phase 5).
+# electron-builder writes this into Info.plist CFBundleURLTypes; macOS delivers matching URLs to the
+# running app as `open-url` events (main/index.ts). Packaged-only — dev sign-in uses a loopback redirect.
+protocols:
+  - name: ColdStorage
+    schemes: [coldstorage]
+
 # electron-vite emits the three processes to out/; that + package.json is the whole JS payload (the
 # renderer's deps are already bundled by Vite; main/preload use only `electron` + node builtins).
 directories:

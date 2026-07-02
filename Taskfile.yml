@@ -549,7 +549,13 @@ tasks:
       # entry spawns it. Absolute so it resolves regardless of Electron's cwd.
       COLDSTORE_PHOTO_PICKER: "{{.ROOT_DIR}}/coldstorage/.build/release/coldstore-photo-picker"
     cmds:
-      - bun run dev
+      - |
+        # Sign-in config (Phase 5): dev has no config.json, so the app reads COLDSTORE_COGNITO_DOMAIN/
+        # _CLIENT_ID from env — sourced from the same infra-outputs handoff ui:config uses. Secrets are
+        # stripped: the UI process must never carry the dogfood daemon's long-lived key.
+        CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
+        if [ -f "$CREDS" ]; then set -a; . "$CREDS"; set +a; unset DAEMON_AKID DAEMON_SECRET; fi
+        bun run dev
 
   ui:live:
     desc: "[Mode 2: your real daemon] [macOS] Run the UI against the INSTALLED launchd daemon (real prod AWS), not the dev/MinIO one — dogfood the real thing. Needs task daemon:bootstrap done."
@@ -560,7 +566,11 @@ tasks:
       COLDSTORE_SOCKET: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
       COLDSTORE_PHOTO_PICKER: "{{.ROOT_DIR}}/coldstorage/.build/release/coldstore-photo-picker"
     cmds:
-      - bun run dev
+      - |
+        # Same sign-in-config sourcing as ui:dev (see there for why); secrets stripped.
+        CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
+        if [ -f "$CREDS" ]; then set -a; . "$CREDS"; set +a; unset DAEMON_AKID DAEMON_SECRET; fi
+        bun run dev
 
   ui:build:
     desc: "Build all three Electron processes (main/preload/renderer) to ui/out."
@@ -610,7 +620,7 @@ tasks:
         open "$app"
 
   ui:config:
-    desc: "[macOS] Write the packaged app's AWS config (~/Library/Application Support/ColdStorage/config.json: bucket/region/profile + the Cognito identity pool id/provider, when the handoff has them) from the infra-outputs handoff, so a Finder-launched ColdStorage.app — which inherits no shell env — can actually upload. NO secret is written here; creds resolve via the profile's credential_process → Keychain (run `task daemon:creds` once). Mirrors the env daemon:install bakes into the launchd plist."
+    desc: "[macOS] Write the packaged app's config (~/Library/Application Support/ColdStorage/config.json: bucket/region/profile + the Cognito identity pool id/provider + the sign-in domain/client id, when the handoff has them) from the infra-outputs handoff, so a Finder-launched ColdStorage.app — which inherits no shell env — can upload and sign users in. NO secret is written here; creds resolve via the profile's credential_process → Keychain (run `task daemon:creds` once). Mirrors the env daemon:install bakes into the launchd plist."
     dir: coldstorage
     vars:
       DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
@@ -628,9 +638,13 @@ tasks:
         # daemon supervisor (main/daemon.ts) treats the same as "not configured" (dogfood mode, unchanged).
         cognito_pool_id="${COLDSTORE_COGNITO_IDENTITY_POOL_ID:-}"
         cognito_provider="${COLDSTORE_COGNITO_USER_POOL_PROVIDER:-}"
-        printf '{\n  "bucket": "%s",\n  "region": "%s",\n  "awsProfile": "%s",\n  "cognitoIdentityPoolId": "%s",\n  "cognitoUserPoolProvider": "%s"\n}\n' \
-          "$bucket" "$region" "$profile" "$cognito_pool_id" "$cognito_provider" > "{{.DATA_DIR}}/config.json"
-        echo "wrote {{.DATA_DIR}}/config.json  (bucket=$bucket region=$region profile=$profile cognito=${cognito_pool_id:+configured}${cognito_pool_id:-not configured})"
+        # OAuth sign-in (Phase 5): the managed-login host + public client id the app's sign-in flow uses.
+        # Empty when the handoff predates Phase 5 → the app hides sign-in entirely (dogfood mode).
+        cognito_domain="${COLDSTORE_COGNITO_DOMAIN:-}"
+        cognito_client_id="${COLDSTORE_COGNITO_CLIENT_ID:-}"
+        printf '{\n  "bucket": "%s",\n  "region": "%s",\n  "awsProfile": "%s",\n  "cognitoIdentityPoolId": "%s",\n  "cognitoUserPoolProvider": "%s",\n  "cognitoDomain": "%s",\n  "cognitoClientId": "%s"\n}\n' \
+          "$bucket" "$region" "$profile" "$cognito_pool_id" "$cognito_provider" "$cognito_domain" "$cognito_client_id" > "{{.DATA_DIR}}/config.json"
+        echo "wrote {{.DATA_DIR}}/config.json  (bucket=$bucket region=$region profile=$profile cognito=${cognito_pool_id:+configured}${cognito_pool_id:-not configured} sign-in=${cognito_domain:+configured}${cognito_domain:-not configured})"
         echo "creds: ensure 'task daemon:creds' wired the '$profile' profile + Keychain (one-time). Verify: task ui:package:doctor"
 
   ui:bootstrap:
@@ -881,6 +895,10 @@ tasks:
           # next to `aws_cognito_user_pool.main.endpoint`.
           echo "COLDSTORE_COGNITO_IDENTITY_POOL_ID=$(terragrunt output -raw cognito_identity_pool_id)"
           echo "COLDSTORE_COGNITO_USER_POOL_PROVIDER=cognito-idp.$(terragrunt output -raw aws_region).amazonaws.com/$(terragrunt output -raw cognito_user_pool_id)"
+          # OAuth sign-in config (PROD.md Phase 5) — also public client config. Domain is empty until a
+          # federated IdP is enabled in TF; the app treats empty as "sign-in not configured" (dogfood mode).
+          echo "COLDSTORE_COGNITO_DOMAIN=$(terragrunt output -raw cognito_domain)"
+          echo "COLDSTORE_COGNITO_CLIENT_ID=$(terragrunt output -raw cognito_user_pool_client_id)"
         } > "{{.OUT}}"
         echo "✓ wrote {{.OUT}} (0600, gitignored)."
         echo "  now on the Mac:  task daemon:creds && task daemon:install"
