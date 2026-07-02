@@ -2,10 +2,10 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "~/db/index.server";
-import { accountsTable } from "~/db/schema";
-import { requireAuth } from "~/middleware/require-auth";
-import type { AppEnv } from "~/hono-env";
+import { db } from "../db/index.server";
+import { accountsTable } from "../db/schema";
+import { requireAuth } from "../middleware/require-auth";
+import type { AppEnv } from "../hono-env";
 
 /**
  * Blind storage for the zero-knowledge KeyBlob (see ZeroKnowledgeKeys.swift). Every field

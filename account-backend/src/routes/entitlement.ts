@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { db } from "~/db/index.server";
-import { accountsTable } from "~/db/schema";
-import { requireAuth } from "~/middleware/require-auth";
-import type { AppEnv } from "~/hono-env";
+import { db } from "../db/index.server";
+import { accountsTable } from "../db/schema";
+import { requireAuth } from "../middleware/require-auth";
+import type { AppEnv } from "../hono-env";
 
 /**
  * Soft gate today (ROADMAP/PROD.md Phase 4 note): the app checks this before allowing a

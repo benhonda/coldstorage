@@ -1,7 +1,7 @@
 import { createMiddleware } from "hono/factory";
 import { HTTPException } from "hono/http-exception";
-import { cognitoVerifier } from "~/auth/cognito.server";
-import type { AppEnv } from "~/hono-env";
+import { cognitoVerifier } from "../auth/cognito.server";
+import type { AppEnv } from "../hono-env";
 
 /**
  * Verifies the caller's Cognito ID token (`Authorization: Bearer <idToken>`) and sets
