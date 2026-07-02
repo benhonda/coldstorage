@@ -1,0 +1,196 @@
+# ColdStorage UI — design & decisions in force
+
+> Moved from the root `ELECTRON-UI-DESIGN.md` (2026-07-02) and trimmed to what's in force. The daemon
+> (`coldstored`) is the whole backend — the UI is a **thin client over its control socket**. Orientation:
+> [`../README.md`](../README.md) · daemon design: [`../coldstorage/DESIGN.md`](../coldstorage/DESIGN.md) ·
+> package/dev docs: [`README.md`](./README.md) · packaged-app state: [`PACKAGING.md`](./PACKAGING.md).
+
+## What the UI is
+A control panel for `coldstored`: browse your files, drop files in to upload, reorganize, watch live
+progress, and request a copy back. It holds **no upload/restore logic** — the Swift daemon owns
+scan/encrypt/upload/restore/journal. The UI reads state and sends commands.
+
+> **VOICE — plain file-uploader, no reassurance theater (Ben, 2026-06-24).** Don't tell the user their
+> files are "safe," don't claim/advertise safety, don't editorialize ("steady", "reassuring"). Plain,
+> factual verbs: **upload** (not "archive" as the active verb), **stored** (not "safe"), **request a
+> copy** / **Start transfer** / **Transferring** (not "download"/"retrieve" — those imply immediacy;
+> the slow-thaw nuance lives in the dialog, not the label), **frozen** (factual: deep storage is slow
+> to open). Status is *information*, not comfort — neither alarm nor reassurance, just facts.
+
+## The mental model — a reorganizable filesystem (canonical since 2026-06-24)
+Two jobs are the whole product: **get files up** and **get them back**. The app does them as a
+**drive you browse like a filesystem** — not a dashboard, not a sync-status panel.
+
+- **Front door = the file browser itself.** No home dashboard; status is **ambient** (per-file badges
+  + a plain storage line), never a separate screen of counts.
+- **Ad-hoc deposit is the hero**, auto-watch is secondary: drop-to-upload is the front door; watched
+  folders demote to Settings.
+- **It's a real, reorganizable filesystem.** Move/rename/nest/new-folder/delete all work, cheaply and
+  honestly, because **the user's tree lives in the journal, not in S3 keys** — a move is a
+  `relativePath` edit; the encrypted blob never moves, nothing thaws, nothing re-uploads. (The naive
+  path==S3-key model is genuinely broken on Glacier — you can't `CopyObject` a Deep-Archive object
+  without a 12–48h restore. Verified vs AWS docs.)
+- **The one honest limit:** Deep Archive freezes *bytes*, never *metadata*. You browse instantly,
+  always (from the journal) — the multi-hour thaw appears only when you ask for a file's *contents*.
+  The UI's job at that moment is to make a long wait feel calm and certain.
+
+## Surfaces — two, not four
+*(The original 4-tab Vault/Sources/Restore/Browse layout is superseded and deleted.)*
+- **My Files** — the entire drive: browse, drop-to-upload, reorganize, request a copy.
+- **Settings** — watched folders, exclude patterns, storage/cost.
+
+Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-click) opens actions,
+**Get info** opens a modal.
+
+```
+┌────────────┬────────────────────────────────────────────────────────┐
+│ ❄ coldstor.│  My Files › Photos › 2019              ⊞ ⊟    ⊕ Add      │
+│            │  Name                          Size      Date            │
+│  My Files  │  📁 January                    1.2 GB    12 items        │
+│  Settings  │  📄 beach.jpg                  4.1 MB    Jul 12 2019  ✓ ⋯ │
+│            │  📄 sunset.jpg                 3.8 MB    Jul 12 2019  ↓ ⋯ │
+│            │  📄 hike.mov                   2.3 GB    Aug 3 2019      │
+│ 12 GB      │                                                          │
+│Transferring 1│ ────── drop anywhere to upload · right-click for more ─│
+└────────────┴────────────────────────────────────────────────────────┘
+   ⋯ → Get info · Rename · Move to… · New folder · Request a copy… · Delete
+```
+
+## My Files — the browser
+- **Navigation:** drill-in + breadcrumbs (like iOS Files / Explorer — scales to an 8,000-photo folder
+  where an inline tree would choke). **View:** list by default (name/size/date — no status column),
+  grid/gallery toggle (file-type icons today; thumbnails are the only R2-gated piece).
+- **Status is a small colored icon by the row's `⋯`**, not a column or text pill (fixed-width slot):
+  quiet green ✓ **stored** (explicit success is what makes silence trustworthy — stored must be
+  distinguishable from stuck) · blue ↑ **uploading** (a transient retry stays here; it self-heals) ·
+  muted-red ⚠ **couldn't upload** (permanent/stuck — also persistent in the sidebar → failures panel
+  + Try again, because a one-shot toast gets missed) · amber ↓ **Transferring** · green `download_done`
+  **saved on this Mac**. No icon = nothing in flight.
+- **Selection is just selection** (cmd/shift multi → batch ops); details live behind `⋯`/right-click;
+  double-click a file = Get info, a folder = drill in. No docked side-inspector.
+- **Getting a copy back is a SECONDARY action, never a promoted CTA** — in the row menu + Get-info
+  modal, labeled **"Request a copy…"** (*request* signals not-instant); the dialog's confirm is
+  **"Start transfer"** and owns the "ready in ~a day" detail.
+- **Empty/first-run:** a bounded, clickable drop-zone card (*"Drop files or folders to upload"* + one
+  factual line "encrypted on your Mac before upload" + a "Choose files" CTA). Delete-empty-folder
+  skips the confirm (no bytes at stake).
+- **Manipulation = standard Finder gestures:** rename (press-and-hold the name → inline edit, or the
+  menu — NOT double-click, which opens), new folder, drag-to-move, delete (⌫ → confirm). **Delete =
+  instant tombstone** with honest copy: *"removes it from your files; it doesn't lower your cost for
+  180 days"* (Deep Archive minimum-duration; never imply delete-to-save-money). Byte reclamation is
+  deferred/rare (thaw-to-repack — backend concern, invisible here).
+
+## Deposit flow (the hero)
+1. **Drop** anywhere (or ⊕ Add) → *"Drop to upload"*; items land in the currently-viewed folder.
+2. **Encrypt + upload** — daemon-owned, non-blocking: browse/close the app, it continues. Aggregate
+   headline + per-file badges updating live. Uploading rows show a **determinate** % bar for large
+   solo-blob files (the daemon's `uploadProgress`); small batched files keep the indeterminate stripe.
+3. **Done = quiet inline confirmation** (no celebration): *"240 photos uploaded. Skipped 1,203 files
+   in node_modules and caches. see what →"*. The skip line is cost-protection made factual — name the
+   junk, no salesy "saved you $X," no "safe." *(Needs skipped-count reporting — still open, below.)*
+4. **Edge states reflect the proven daemon honestly:** interrupted → resumes the same `uploadId`; a
+   blob fails → run continues, failure surfaced named (permanent vs transient); offline → queues.
+5. **Name collisions are Finder-style, never silent:** dropping into a *new* folder copies (photos are
+   path-keyed, `id == relativePath` — same photo in two folders is two copies, not a silent move).
+   Existing names PROMPT (`CollisionModal`): per-file **Keep Both** (`name 2.ext`) / **Replace** /
+   **Skip** + apply-to-all, defaulting to Keep Both. Mechanics: `previewDeposit` (no-upload dry-run via
+   the real source, so picked-photo names resolve) → modal → `deposit`/`depositPhotos` with a
+   `conflicts` map the daemon's `CollisionResolvingSource` applies authoritatively. Copies re-upload
+   bytes (content-addressed dedup is a deferred, UX-invisible optimization).
+
+## Request-a-copy flow (available, not advertised)
+1. Trigger from the row `⋯` / Get-info modal; works on one file, a multi-select, or a folder.
+2. **Confirm = explicit modal** (paid + multi-hour → never accidental), button **"Start transfer"**:
+   file · size · **ready in ~a day (up to 48h)** · **cost ~$X** · a "Save to" row with the native
+   folder picker (defaults to Downloads, chosen per request — no global setting) · "you can close the
+   app — we'll fetch it and let you know."
+3. **In-flight = named stages, NEVER a fake progress bar** (Deep Archive reports only warming vs
+   ready): **Preparing** (~12–48h, the honest unknown) → **Downloading** → **Ready**, with a quoted
+   ready-by time.
+4. **Ready → macOS system notification** (walk-away is the whole design): *"wedding.mov is ready — in
+   your Downloads folder [Show] [Open]."* *(Notification still open, below.)*
+5. The local copy expires after the requested `days`, then re-freezes → honest *"available until
+   Jun 28,"* download-again is one click.
+6. A persistent **"Transferring N"** indicator in the sidebar foot (→ queue popover) survives app close.
+7. Batch/folder request → one **combined** quote (`240 files · ~a day · ~$3.10`).
+
+## Settings
+- **Watched folders:** list + "Add a watched folder" + **"Sync now"** (global catch-up). Each row: a
+  rounded accent folder tile, source → destination (`~`-shortened Mac path over `↳ My Files / <mount>`),
+  a live status badge (🟢 Up to date · 🔵 Syncing… · 🟠 Not watching — driven by the live `run.active`,
+  not the poll-only `status.running`), and a ghost `⋯` with **Stop/Start watching** (persistent
+  per-source pause; the amber badge + dimmed row keep a stopped folder from looking protected) and
+  **Remove…** (confirm — uploaded files stay). Watched folders carry a **destination mount**
+  (`mountPath`, defaults to the source basename, never root) chosen in the add dialog via the shared
+  `FolderTree` drill-in picker; Model A (mirror mount) — watched trees stay daemon-owned/structure-
+  preserving, reorg is reserved for manual deposits. Manual deposits are unaffected by pause.
+- **Don't back up (excludes):** friendly removable chips over real gitignore-style globs, seeded with
+  smart defaults; daemon is the SSOT (journal-persisted, applied *inside* the directory walk so junk
+  is never hashed and node_modules is pruned whole). Per-source extras are a later refinement.
+- **Storage:** plain + factual — *"12 GB stored · ~$0.05/month · encrypted on this Mac"* (no "safe",
+  no privacy over-claim). Both numbers quote the daemon: bytes from the journal tree, rates from
+  `getPricing`.
+- **No "download location" setting** — destination is chosen per request in the dialog.
+
+## The one architectural decision (don't re-litigate)
+**Electron's main process speaks the daemon's JSONL protocol directly over the unix socket** — a Node
+`net.Socket` to `COLDSTORE_SOCKET`. **Not** by spawning `coldstorectl`, **not** via a Swift/native
+bridge. The control protocol is already the client contract; the renderer never touches the socket —
+it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `window.coldstore`).
+
+## The contract (SSOT — do not duplicate, bind to these)
+- **Wire shape:** `coldstorage/Sources/ColdStorageCore/ControlProtocol.swift` — one request per line
+  (`{id, method, params?}`); replies carry `id`; pushed events carry `event`. `ui/src/daemon/protocol.ts`
+  is the hand-kept TS mirror.
+- **Commands (SSOT = `DaemonService.handle`):** `ping · getStatus · listSources · listFiles ·
+  getPricing · listExcludes · addSource · removeSource · addExclude · removeExclude · restore ·
+  deposit · depositPhotos · previewDeposit · movePath · createFolder · deletePath · authenticate ·
+  triggerNow · pauseSource · resumeSource`.
+- **Events (SSOT = the `DaemonEvent(...)` call sites):** `runStarted · fileArchived · uploadProgress ·
+  runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged · restoreRequested ·
+  restoreInProgress · restoreCompleted · error`. `uploadProgress` carries `{file, path, bytes,
+  totalBytes}`; `blobFailed` carries `{blob, kind, message, paths}` (newline-joined relativePaths);
+  `filesChanged` carries `{moved, to}` / `{created}` / `{deleted}` — the cue to re-read `listFiles`.
+- **Connection model:** one long-lived socket for the event tail (blocks indefinitely by design) +
+  bounded request/response for commands (a `readTimeout` so a stalled daemon fails fast); match
+  replies by `id`, events interleave. Auto-reconnect covers launchd KeepAlive restarts.
+
+## Where the code lives (all built, tests green)
+- `ui/src/daemon/{protocol,client}.ts` — typed `DaemonClient` over the socket (layer 1; `task ui:prove`).
+- `ui/src/main/` — owns the one `DaemonClient` + native seams (`system.ts`: pickers, photo-picker
+  spawn; `daemon.ts`: the packaged-app daemon supervisor — see `PACKAGING.md`); `src/shared/ipc.ts` is
+  the typed main↔renderer seam; `src/renderer/src/state/` is reducer (pure fold) → store
+  (`useSyncExternalStore`) → controller (layer 2; `task ui:test`).
+- `src/renderer/src/styles/tokens/` — the 5 DS token CSS files **vendored verbatim** (SSOT — re-sync,
+  don't hand-edit) from the coldstorage Design System (Claude Design `41ebafc1`), ported to native
+  React 19 TSX (the DS's UMD/CDN runtime isn't consumable in electron-vite). Primitives in
+  `src/renderer/src/ui/`; the browser's domain components + pure model in `src/renderer/src/views/files/`
+  (headless-tested). Fonts self-hosted (Fontsource + material-symbols) for the locked-down CSP.
+
+## Remaining UI-lane work (still open)
+1. **Per-file live status:** icons need `frozen | uploading | failed | gettingBack | here` per file —
+   fold journal `FileStatus` with live restore state (restore state is per-request via `restore*`
+   events today, not queryable per file).
+2. **Skipped-count reporting** (daemon): the deposit "skipped 1,203" line needs the run to report how
+   many files the excludes filtered. Also a per-run **filesFailed** count (blobs ≠ files).
+3. **Retry depth:** row Retry re-issues `deposit` from the remembered `srcPath`; a failure *after* the
+   daemon accepted it (journal row, no `srcPath`) needs daemon support to retry.
+4. **Polish:** macOS notification on restore-ready; `Show in Finder` (`shell.showItemInFolder`);
+   subset the 5.3 MB Material Symbols woff2 to the ~12 glyphs used.
+5. `newFolder` is local-only until something lands in it (a virtual path — nothing to persist).
+
+## Gotchas (save the next agent hours)
+- **Browse is NOT R2-blocked — only photo thumbnails + cross-device index portability are.** Deep
+  Archive freezes object *bytes*, never *metadata*, and the tree comes from the journal (not
+  `ListObjectsV2` — blobs are opaque `blobs/<hash>` objects). Don't block browse work on R2.
+- **Socket perms:** `0600`, same user — fine. Dev socket `coldstorage/coldstored.sock`; installed
+  `~/Library/Application Support/ColdStorage/coldstored.sock` (`COLDSTORE_SOCKET`).
+- **Restore is idempotent/one-step:** `restore` returns `state ∈ restored | thawRequested |
+  thawInProgress` (+ `typicalWait`). Call, show the quoted wait, re-issue / reflect `restore*` events.
+  Don't expect one call to block for hours.
+- **JS tooling is Bun** (repo convention), but Electron's main runs its bundled Node — dev/test on Bun,
+  ship on Node, only `node:net`. Add deps with `bun add <pkg>@latest`.
+- `node_modules` is platform-native — each OS needs its own `bun install` (the container uses a named
+  volume; see [`README.md`](./README.md)).
+- There's a `status.json` first-paint seed (`COLDSTORE_STATUS`), but the socket is the live source.
+- **Pull current docs via Context7** before deep React/Vite/Electron work.
