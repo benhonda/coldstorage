@@ -247,6 +247,18 @@ tasks:
         rm -rf "{{.DATA_DIR}}/staging"
         echo "✓ local archive state wiped. Re-add watched folders in Settings after the next launch."
 
+  daemon:sim-new-device:
+    desc: "[macOS] Simulate signing in on a FRESH computer (PROD.md Phase 5b gate): delete this device's zero-knowledge MasterKey escrow (vault.json) so the next launch has no cached key and must prompt for the recovery code — proving the new-device unlock path without a second Mac. Keeps the sign-in session + the account's server-side key-blob, so it's a targeted 'forget my encryption key', not a full sign-out. QUIT the app first (it rewrites vault.json while running)."
+    vars:
+      DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
+    cmds:
+      - |
+        if [ ! -f "{{.DATA_DIR}}/vault.json" ]; then
+          echo "no {{.DATA_DIR}}/vault.json — this device has no cached MasterKey (already 'fresh'). Nothing to do."; exit 0
+        fi
+        rm -f "{{.DATA_DIR}}/vault.json"
+        echo "✓ forgot this device's MasterKey escrow. Next launch: sign in → you'll be asked for your recovery code."
+
   daemon:gate-test:
     desc: "[devcontainer] ADVERSARIAL test of the per-user S3 boundary (PROD.md P2/P5a gate): mints a throwaway Cognito user (admin-create + password — USER_AUTH accepts PASSWORD as a factor, no inbox needed), exchanges its ID token for real STS creds via the identity pool, then proves own-prefix PUT is ALLOWED while a cross-prefix PUT and a GET of a real foreign object are DENIED. Cleans up the user/identity/probe object after."
     deps: [check-aws-identity]

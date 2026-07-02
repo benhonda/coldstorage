@@ -350,13 +350,14 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
        staging lane (accepts production Cognito tokens, so this works end-to-end today). Renderer sees
        only `VaultStatus` over IPC (never key material except the one-time code): reducer/controller
        fold + `views/RecoveryCodeView.tsx` (show-once, enter-code, provisioning/error gates) wired into
-       `App.tsx`'s gate. Sign-out relocks the daemon but KEEPS the per-device escrow (re-signin is
-       silent; `daemon:reset:local` wipes it). Tests: `VaultManager` cached/mint/new-device/error/relock
-       branches headless + the vault-status fold. **Gate (Ben, Mac) — the real ZK proof:** fresh Google
-       sign-in → recovery code shown once → a deposit; then `task daemon:reset:local`'s vault wipe (or a
-       second machine) → re-sign-in prompts for the code → same files decrypt. The deposit's blob must
-       be openable with the MK and NOT with a random key (the crypto for that is already unit-proven in
-       5b-1; the app gate is what 5b-2 adds).
+       `App.tsx`'s gate. Sign-out relocks the daemon but KEEPS the per-device escrow (`vault.json`,
+       re-signin is silent); `task daemon:sim-new-device` deletes just that escrow to force the
+       recovery-code path. Tests: `VaultManager` cached/mint/new-device/error/relock branches headless +
+       the vault-status fold. **Gate (Ben, Mac) — the real ZK proof:** fresh Google sign-in → recovery
+       code shown once → a deposit; then `task daemon:sim-new-device` (deletes the MasterKey escrow, no
+       second Mac needed) → relaunch → sign-in prompts for the recovery code → same files decrypt. The
+       deposit's blob must be openable with the MK and NOT with a random key (that crypto is already
+       unit-proven in 5b-1; the app gate is what 5b-2 adds).
      - **5b-3 — email-OTP sign-in + signup lane:** the independent auth lane (Cognito USER_AUTH via
        plain HTTPS), a second entry on the sign-in screen; feeds the same token/vault machinery.
      Verified shapes for 5b-3: `SignUp`
