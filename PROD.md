@@ -237,28 +237,33 @@ server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
    all, so there's no accidental-prod-pull path, no flags needed). `backend:dev`/`backend:db:push` load
    `.env.vercel` then `.env` via `bun --env-file` (later wins) — `.env` is an optional local override on
    top of the pulled staging baseline, never auto-loaded by bun/drizzle-kit/`vercel dev` on its own for a
-   non-standard filename like this, hence the explicit flags. **Not yet tried for real** — needs
-   `task link` run once against an authenticated `vercel` CLI, which this environment can't do (no
-   Vercel login here); the picker/dispatch mechanics are verified, the actual pull isn't.
+   non-standard filename like this, hence the explicit flags. **Tried for real 2026-07-02** — Ben ran
+   `task link` → `task pull` → `task backend:db:push` on his Mac against the staging Neon branch; the
+   whole chain works (this was the step that stood the staging DB up).
    **Infra APPLIED for real (confirmed 2026-07-01 via `terragrunt state list`)** — both stacks are live,
    not just plan-clean: production shows all 9 resources in state (the OIDC role +
    `coldstorage-account-backend-production-vercel`, the 5 TF-managed vars, the 3 manual-secret
    placeholders), staging shows all 10 (same set + the `staging` custom environment); re-plans on both
    come back "No changes." This must have been run directly by Ben — not by me (I don't run `apply`).
-   **Unverified from here:** whether the 6 manual-secret values (3 per stack) still hold their
-   Terraform-written placeholder (`SET_IN_VERCEL_DASHBOARD`) or have already been replaced with real
-   values in the Vercel dashboard — production's are `sensitive=true` (can't be read back at all, by
-   design) and staging's weren't checked (technically readable via the Vercel API, but pulling live
-   secret material into a doc/transcript isn't something to do just to satisfy a checkpoint). **Gate not
-   yet met — remaining blockers are all non-Terraform, Ben-only steps:** (1) create a Neon project
-   (`coldstorage-account-backend`, branches `production`/`staging` — Neon's own one-project-many-branches
-   model, not two projects); (2) create a Paddle **sandbox** account (staging) and, later, a live account
-   (production) — pull each one's webhook secret + API key; (3) set the 6 real secret values in the
-   Vercel dashboard (confirm they're not still placeholders, per the open question above); (4) `task
-   link` once, then `task pull` for staging's values, `task backend:db:push` against staging; production's
-   DB gets pushed by pointing `.env`'s `DATABASE_URL` at it directly (not pullable, see above). Only once
-   those land does "webhook flips state; upload blocked when inactive" become testable end-to-end — that
-   gate is unchanged from before.
+   **Staging lane STOOD UP end-to-end (2026-07-02, Ben-executed; the four ex-blockers are done):**
+   Neon project created (staging DB; schema pushed via `task link`/`pull`/`backend:db:push` — the
+   pull mechanics verified for real); Paddle **sandbox** account live with the product catalog
+   (3 tiers × 4 term prices at the NEW no-multi-year-discount pricing — see `strategy/SPEC.md` §5,
+   re-decided 2026-07-01: terms are exactly N× the yearly rate, multi-year = rate-lock, not discount),
+   a zero-permission API key, and a webhook destination for the nine `subscription.*` events pointed
+   at `https://api-staging.coldstorage.sh/webhooks/paddle`; staging's 3 Vercel secrets set for real
+   (production's 3 remain `SET_IN_VERCEL_DASHBOARD` placeholders until a LIVE Paddle account + prod
+   Neon branch exist — that's the deferred production lane, nothing blocks on it). First `staging`
+   push deployed — and crashed: Vercel's zero-config Hono build transpiles per-file (no bundling), so
+   tsconfig `~/*` path aliases don't exist at runtime (`ERR_MODULE_NOT_FOUND: '~'`). Fixed by dropping
+   the alias for relative imports (commit `3352384`; typecheck + tests green). **Remaining before the
+   gate test (2026-07-02):** (a) **Vercel Deployment Protection** 302s all staging requests to
+   `vercel.com/sso-api` — Ben must disable Vercel Authentication (project Settings → Deployment
+   Protection); endpoints are self-securing (Cognito JWT / Paddle HMAC) so this is safe; (b) then
+   verify `GET /` returns the health text and fire the **Paddle simulator** (`subscription.activated`
+   with `custom_data.cognitoSub` set, then `.canceled`) and watch `subscriptionActive` flip in the
+   staging DB — that proves "webhook flips state" with zero checkout UI. "Upload blocked when
+   inactive" (the daemon consuming `/entitlement`) rides with Phase 5's auth handoff.
 5. **App auth + paywall UX** — sign-in/up + recovery-code capture + subscribe flow in the Electron UI;
    token handed to the daemon. *Gate:* Ben signs up fresh → subscribes → deposits → restores, on a Mac.
 6. **Sign + notarize + ship** — Developer ID signing + notarization + auto-update + download page. *Gate:*
