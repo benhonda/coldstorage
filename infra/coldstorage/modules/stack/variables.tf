@@ -26,12 +26,19 @@ variable "abort_incomplete_multipart_days" {
   description = "Server-side cleanup of orphaned multipart parts (the daemon reuses uploadIds across crashes, but never-completed uploads are garbage). Days after initiation."
 }
 
-# ── Multi-user identity (Cognito — see cognito.tf / PROD.md). Apple Sign-in is opt-in: it needs Apple
-#    Developer creds (Ben provides), so it's gated off by default to keep the email/password plan clean. ──
+# ── Multi-user identity (Cognito — see cognito.tf / PROD.md). Auth is PASSWORDLESS (2026-07-02):
+#    Google is the primary login, native email-OTP the fallback. Both IdPs are opt-in gates: they need
+#    external creds (Ben provides), so they default off to keep the plan clean until the creds exist. ──
+variable "enable_google_idp" {
+  type        = bool
+  default     = false
+  description = "Wire Google as a Cognito IdP (also creates the hosted-UI domain + OAuth client config). Reads the OAuth client id/secret from SSM — store them first with `task tf:coldstorage:google-creds`. Email-OTP works without it."
+}
+
 variable "enable_apple_idp" {
   type        = bool
   default     = false
-  description = "Wire Sign in with Apple as a Cognito IdP (also creates the hosted-UI domain + OAuth client config). Requires the apple_* vars below. Email/password works without it."
+  description = "Wire Sign in with Apple as a Cognito IdP (also creates the hosted-UI domain + OAuth client config). Requires the apple_* vars below. Email-OTP works without it."
 }
 
 variable "apple_services_id" {
@@ -62,5 +69,5 @@ variable "apple_private_key" {
 variable "app_oauth_callback_urls" {
   type        = list(string)
   default     = ["coldstorage://auth/callback"]
-  description = "Redirect URIs for the desktop app's hosted-UI OAuth (Apple) flow. A custom scheme the Electron app registers. Only used when enable_apple_idp=true."
+  description = "Redirect URIs for the desktop app's hosted-UI OAuth (Google/Apple) flow. A custom scheme the Electron app registers. Only used when a federated IdP is enabled."
 }

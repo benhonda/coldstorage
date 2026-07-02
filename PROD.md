@@ -12,16 +12,22 @@
 - **Billing: Paddle (Merchant of Record).** Paddle is the legal seller — handles global VAT/sales tax,
   chargebacks, invoicing. We integrate their checkout + webhooks; we are not the merchant of record.
 - **Encryption: true zero-knowledge, user-derived keys.** We cannot read user bytes. **Forces a recovery
-  mechanism** (a one-time recovery code) — without it a forgotten password = data gone forever, which
-  would break the "stuff you can't lose" promise. The recovery code is **non-optional**.
-- **Auth: Cognito** — email/password baseline + **Sign in with Apple** (smooth on macOS). Default unless
-  revisited.
+  mechanism** (a one-time recovery code) — with passwordless auth (below) the recovery code is the ONLY
+  human-held encryption secret, so it is **non-optional** and the whole ZK story rests on it.
+- **Auth: Cognito, PASSWORDLESS (revised by Ben 2026-07-02; was email/password + Apple).** **Google IdP
+  is the primary login** + Cognito **native email-OTP codes** as the no-Google path (Essentials tier;
+  NOT magic links — those aren't Cognito-native and aren't worth custom auth Lambdas). **No passwords
+  anywhere in the product.** Apple IdP stays var-gated off for later (direct download = no App Store
+  mandate to offer it). Infra: `cognito.tf` (`sign_in_policy` = PASSWORD+EMAIL_OTP — AWS refuses to
+  remove PASSWORD from the pool-level list (apply error 2026-07-02); passwordless is enforced by the
+  app client having no password flows AND OTP users never possessing a password — plus `ALLOW_USER_AUTH`
+  client flow, gated Google IdP awaiting Ben's Google Cloud OAuth client creds).
 - **One shared vault bucket, per-user prefix isolation** (not per-user buckets — those hit account caps).
 
 ## Architecture
 
 ### Identity & AWS credentials (verified vs aws-sdk-swift + Cognito IAM docs, 2026-06-29)
-- **Cognito User Pool** = authentication (sign-up/in, email + Apple IdP). Issues a user-pool ID token.
+- **Cognito User Pool** = authentication (passwordless: Google IdP + email-OTP; Apple gated off). Issues a user-pool ID token.
 - **Cognito Identity Pool** = authorization → exchanges that ID token for **short-lived STS credentials**
   via `AssumeRoleWithWebIdentity`, assuming the **authenticated IAM role** below.
 - **The daemon never holds a long-lived AWS key.** aws-sdk-swift ships a turnkey
@@ -44,31 +50,35 @@
 ### Zero-knowledge key hierarchy (refines the existing envelope crypto)
 Our crypto is **already** envelope encryption — `Crypto.swift`: a per-blob random **DEK** (AES-256-GCM)
 encrypts frames; the DEK is stored **wrapped** under a KEK in the journal `blobs.wrappedDEK` column;
-`KeyProvider` is just `func userKEK() throws -> SymmetricKey`. ZK swaps *what produces the KEK* — but
-naively deriving the KEK straight from the password would make a password change (new KEK) orphan every
-`wrappedDEK`. So we introduce a proper hierarchy (1Password/Bitwarden-style):
+`KeyProvider` is just `func userKEK() throws -> SymmetricKey`. ZK swaps *what produces the KEK*. A proper
+hierarchy (1Password/Bitwarden-style) keeps the DEKs stable under any secret rotation — and with
+**passwordless auth (2026-07-02) the password leg is RETIRED**: the recovery code is the only human-held
+secret, wrapping the MK alone (recovery-code-only model, the old "option (b)"):
 
 ```
-password ──Argon2id(salt_pw)──▶ KEK_pw ─┐
-                                          ├─▶ unwrap ──▶  MasterKey (MK, random, per-user, never leaves device decrypted)
-recovery code ─Argon2id(salt_rc)─▶ KEK_rc ┘                     │
-                                                                ├──wraps──▶ per-blob DEKs  (journal.wrappedDEK, byte-identical to today)
-server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
-(both ciphertext; server/AWS never see MK or password)          ▼
+recovery code ─Argon2id(salt_rc)─▶ KEK_rc ──▶ unwrap ──▶  MasterKey (MK, random, per-user, never leaves device decrypted)
+                                                                │
+server stores ONLY:  wrappedMK_rc + salt                        ├──wraps──▶ per-blob DEKs  (journal.wrappedDEK, byte-identical to today)
+(ciphertext; server/AWS never see MK or the code)               ▼
                                             DEK ──▶ AES-256-GCM frames ──▶ S3 (Deep Archive)
+
+each signed-in device: MK cached in the macOS Keychain (per-device escrow — no prompt at launch)
 ```
 
 - **MK** is a random 256-bit key minted once at signup. It is the `userKEK()` the wrap/unwrap code already
   expects — so `wrap()`/`unwrap()`/`blobCrypto`/UploadEngine/RestoreEngine are **unchanged**.
-- The MK is stored **twice, wrapped**: under `KEK_pw` (Argon2id of password) and under `KEK_rc` (Argon2id
-  of the one-time recovery code). Both ciphertexts + their salts live **server-side** (so a new device can
-  fetch + unwrap with the password) — this is the encrypted **key-blob**, the only new server-stored secret
-  material, and it's zero-knowledge (we hold ciphertext only).
-- **Password change** = re-wrap MK under the new `KEK_pw`. DEKs untouched, no re-encryption of data.
-- **Recovery code** = shown once at signup, unlocks MK if the password is lost. Lose both = data is
+- The MK is stored **once, wrapped under `KEK_rc`** (Argon2id of the one-time recovery code); ciphertext +
+  salt live **server-side** — the encrypted **key-blob**, the only new server-stored secret material, and
+  it's zero-knowledge (we hold ciphertext only). A **new device** fetches the key-blob and unwraps it with
+  the recovery code — day-to-day devices never re-enter it (Keychain-cached MK).
+- **Recovery-code reissue** = any signed-in device (it holds MK) mints a new code and re-wraps: new
+  `wrappedMK_rc` + salt to the server. DEKs untouched, no re-encryption of data — the same stability the
+  old password-change path had.
+- **Recovery code** = shown once at signup. Lose the code AND all signed-in devices = data is
   unrecoverable *by design* (honest ZK; we never claim we can recover it).
-- New `KeyProvider` impl: **`UserMasterKeyProvider`** (derives KEK_pw via Argon2id, unwraps MK) — **built**
-  (Phase 3; Argon2id via swift-sodium, decided 2026-07-01).
+- New `KeyProvider` impl: **`UserMasterKeyProvider`** — **built** (Phase 3; Argon2id via swift-sodium,
+  decided 2026-07-01). Its primitives support BOTH a password path and a recovery-code path (both tested);
+  passwordless simply leaves the pw path unused — no rework, the `wrappedMK_pw` slot just stays empty.
 - **Cross-device** now genuinely needs the server-side index (the deferred R2/portability piece): the
   wrapped MK + the journal/manifest must be fetchable on a fresh install. ZK makes this load-bearing, not
   optional.
@@ -271,27 +281,32 @@ server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
    in the staging DB, confirmed by Ben in the Neon console — "webhook flips state" proven with zero
    checkout UI. "Upload blocked when inactive" (the daemon consuming `/entitlement`) rides with
    Phase 5's auth handoff.
-5. **App auth + paywall UX** — sign-in/up + recovery-code capture + subscribe flow in the Electron UI;
-   token handed to the daemon. *Gate:* Ben signs up fresh → subscribes → deposits → restores, on a Mac.
+5. **App auth + paywall UX** — passwordless sign-in/up (Google via Cognito managed login in the SYSTEM
+   browser — Google blocks embedded webviews — code+PKCE to the `coldstorage://` callback; email-OTP codes
+   via `ALLOW_USER_AUTH` as the no-Google path) + recovery-code capture + subscribe flow in the Electron
+   UI; token handed to the daemon. *Gate:* Ben signs up fresh → subscribes → deposits → restores, on a Mac.
 6. **Sign + notarize + ship** — Developer ID signing + notarization + auto-update + download page. *Gate:*
    a notarized build launches Gatekeeper-clean on a non-dev Mac and self-updates.
 
 ## Open sub-decisions (don't block P1; flagged for when their phase lands)
-- **Encryption password vs auth credential (LOAD-BEARING for P3 wiring, NOT for the primitives).** With
-  **Sign in with Apple there is no password** to derive KEK_pw from — so the encryption secret that
-  protects the MasterKey **cannot** be the login. Options: (a) a *separate* "encryption passphrase" the
-  user sets at signup (one more thing to remember, but clean ZK), (b) make the recovery code the *primary*
-  MK protector + escrow a device-local copy of MK in the macOS Keychain (smooth per-device UX, recovery
-  code is the cross-device/new-device key), (c) email/password users derive from password, Apple users get
-  a generated passphrase. Leaning (b) — it matches "remote SSD" muscle memory (no passphrase prompt every
-  launch) while staying ZK. **Still open** — doesn't block the primitives (`ZeroKnowledgeKeys` supports
-  both a password path and a recovery-code path unconditionally, per-account choice of which is "primary"
-  is a P4/P5 wiring decision) and Apple Sign-In is `enable_apple_idp`-gated OFF today, so it isn't a live
-  gap yet. Decide before Apple Sign-In ships (P5 at the earliest, or whenever `enable_apple_idp=true`).
+- ~~**Encryption password vs auth credential** — with a federated login there is no password to derive
+  KEK_pw from.~~ **DECIDED ✅ (2026-07-02), forced universal by going passwordless:** option (b),
+  **recovery-code-only** — the recovery code is the sole MK protector (`wrappedMK_rc`; the `wrappedMK_pw`
+  slot goes unused), each signed-in device caches MK in the macOS Keychain (no prompt at launch), a new
+  device unwraps with the recovery code, and any signed-in device can reissue a fresh code by re-wrapping.
+  See the revised key-hierarchy diagram in §Architecture. Primitives unchanged — `ZeroKnowledgeKeys`
+  built both paths; we wire only the rc path in P5.
 - ~~**Argon2id library** for Swift (swift-sodium vs a focused Argon2 wrapper) — P3.~~ **DECIDED ✅
   (2026-07-01): swift-sodium.** See Phase 3 above.
 - ~~**Account backend shape** (Lambda+APIGW+DynamoDB vs a managed app) — P4.~~ **DECIDED ✅ (2026-07-01):
   Hono on Vercel + Neon/Drizzle.** See Phase 4.
-- **Apple Sign-in prerequisites** — Apple Developer Services ID + key (Ben provides) — P1 (var-gated; email
-  /password works without it).
+- **Apple Sign-in prerequisites** — Apple Developer Services ID + key (Ben provides) — var-gated off,
+  optional post-launch (email-OTP + Google cover sign-in without it).
+- **Google IdP prerequisites (NEW 2026-07-02, needed for P5)** — Ben: (1) Google Cloud Console → OAuth
+  consent screen (External), then Credentials → OAuth client, type **Web application**, authorized
+  redirect URI `https://coldstorage-production-731520377763.auth.ca-central-1.amazoncognito.com/oauth2/idpresponse`
+  (the Cognito domain name is deterministic — created on the same apply that enables Google);
+  (2) `task tf:coldstorage:google-creds` (stores id+secret in SSM); (3) flip `enable_google_idp = true`
+  in `live/production/terragrunt.hcl` → plan → apply (adds Google IdP + hosted-UI domain + OAuth client
+  config).
 - **Free trial / plan tiers / retrieval-fee charging** — product/economics (private `strategy/`) — P4.

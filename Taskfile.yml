@@ -835,6 +835,20 @@ tasks:
       - task: tf:coldstorage:_validate-env
       - terragrunt init {{.CLI_ARGS}}
 
+  tf:coldstorage:google-creds:
+    desc: Store the Google OAuth client id + secret in SSM (one-time; cognito.tf reads them once enable_google_idp=true)
+    interactive: true
+    deps: [check-aws-identity]
+    cmds:
+      - |
+        read -r -p "Google OAuth client id: " GID
+        read -r -s -p "Google OAuth client secret (hidden): " GSECRET; echo
+        aws ssm put-parameter --profile {{.AWS_PROFILE}} --region ca-central-1 \
+          --name /coldstorage/google-oauth-client-id --type String --overwrite --value "$GID" > /dev/null
+        aws ssm put-parameter --profile {{.AWS_PROFILE}} --region ca-central-1 \
+          --name /coldstorage/google-oauth-client-secret --type SecureString --overwrite --value "$GSECRET" > /dev/null
+        echo "✓ stored in SSM. Next: set enable_google_idp = true (infra/coldstorage/live/production/terragrunt.hcl), then: task tf:plan"
+
   tf:coldstorage:creds-export:
     desc: "[devcontainer] Export the daemon's creds from TF state → gitignored handoff file the macOS daemon:* tasks read (so the Mac needs no terragrunt). Run after apply; the file rides the bind mount to the Mac."
     deps: [check-aws-identity]

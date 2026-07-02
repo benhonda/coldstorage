@@ -11,4 +11,8 @@ include "root" {
 
 inputs = {
   env = "production"
+
+  # Google sign-in (PROD.md: passwordless auth, 2026-07-02). Creds stored in SSM via
+  # `task tf:coldstorage:google-creds` (2026-07-02).
+  enable_google_idp = true
 }

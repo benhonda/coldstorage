@@ -4,34 +4,43 @@
 # authenticate via Cognito and get SHORT-LIVED, per-user-scoped STS credentials — no shared key ever leaves
 # our control, and user A's creds physically cannot touch user B's objects.
 #
-#   User Pool      = authentication (email/password + optional Sign in with Apple). Issues an ID token.
+#   User Pool      = authentication — PASSWORDLESS (decided 2026-07-02): Google IdP + native email-OTP
+#                    codes. NO user/password auth anywhere in the product. Issues an ID token.
 #   Identity Pool  = authorization: exchanges that ID token for temporary STS creds via
 #                    AssumeRoleWithWebIdentity, assuming `aws_iam_role.user` below.
 #   user role      = S3 scoped to blobs/${cognito-identity.amazonaws.com:sub}/* — the per-user boundary.
 #
 # The daemon picks these up with aws-sdk-swift's CognitoAWSCredentialIdentityResolver (the 3 S3Client
 # sites swap from the default chain to this resolver — Phase 2). Verified vs aws-sdk-swift + Cognito IAM
-# docs 2026-06-29.
+# docs 2026-06-29. CognitoAuth.swift consumes a ready ID token — it never authenticates itself, so the
+# sign-in method is invisible to the daemon.
 #
-# NOTE on zero-knowledge: Cognito is AUTH ONLY. A Cognito email password-reset restores ACCOUNT ACCESS
-# (and thus S3 access to one's own prefix) but NEVER the encryption key — data is decryptable only with the
-# user's password-or-recovery-code (the MasterKey hierarchy in PROD.md). Auth ≠ key recovery, by design.
+# NOTE on zero-knowledge: Cognito is AUTH ONLY. Regaining ACCOUNT access (new email code, Google account
+# recovery) NEVER yields the encryption key — with passwordless auth the MasterKey is wrapped solely
+# under the recovery code (PROD.md; the KEK_pw leg is retired). Auth ≠ key recovery, by design.
 
-# ── User Pool: email/password sign-up + sign-in ────────────────────────────────────────────────────────
+# ── User Pool: passwordless (email-OTP first factor; Google federation below) ─────────────────────────
 resource "aws_cognito_user_pool" "main" {
   name                     = "${var.project_name}-${var.env}"
   username_attributes      = ["email"]
   auto_verified_attributes = ["email"]
 
-  password_policy {
-    minimum_length    = 12
-    require_lowercase = true
-    require_uppercase = true
-    require_numbers   = true
-    require_symbols   = false
+  # Native email-OTP passwordless needs the Essentials feature plan (Lite lacks choice-based auth;
+  # first 10k MAU free, then ~$0.015/MAU — verified 2026-07-02).
+  user_pool_tier = "ESSENTIALS"
+
+  # Product decision: NO passwords in the app, ever — but AWS REQUIRES "PASSWORD" in this list
+  # (UpdateUserPool rejects EMAIL_OTP-only with "Password should be configured as one of the allowed
+  # first auth factors"; learned on apply 2026-07-02, the API reference doesn't document it). The
+  # passwordless guarantee is enforced one level up: the app client never initiates a password flow
+  # (no SRP/USER_PASSWORD in explicit_auth_flows) and OTP-signed-up users never HAVE a password, so
+  # the factor is allowed-but-unusable. Passkeys/WEB_AUTHN wait until there's a reason.
+  sign_in_policy {
+    allowed_first_auth_factors = ["PASSWORD", "EMAIL_OTP"]
   }
 
-  # Email-based account recovery (account access only — see the zero-knowledge note above).
+  # Email-based account recovery (account access only — see the zero-knowledge note above). Inert while
+  # no user has a password, but harmless and required-shaped if an admin ever sets one.
   account_recovery_setting {
     recovery_mechanism {
       name     = "verified_email"
@@ -62,38 +71,79 @@ resource "aws_cognito_identity_provider" "apple" {
   }
 }
 
-# Hosted-UI domain — only needed for the Apple (OAuth) flow; gated with it.
+# Optional Google sign-in — the PRIMARY login (decided 2026-07-02). Same gating pattern as Apple:
+# off by default so the plan stays clean until the OAuth client exists. The creds live in SSM
+# (`task tf:coldstorage:google-creds` stores them once — same pattern as account-backend's Vercel
+# API token; no TF_VAR shell exports); flip enable_google_idp=true to read + wire them.
+data "aws_ssm_parameter" "google_client_id" {
+  count = var.enable_google_idp ? 1 : 0
+  name  = "/coldstorage/google-oauth-client-id"
+}
+
+data "aws_ssm_parameter" "google_client_secret" {
+  count = var.enable_google_idp ? 1 : 0
+  name  = "/coldstorage/google-oauth-client-secret"
+}
+
+resource "aws_cognito_identity_provider" "google" {
+  count = var.enable_google_idp ? 1 : 0
+
+  user_pool_id  = aws_cognito_user_pool.main.id
+  provider_name = "Google"
+  provider_type = "Google"
+
+  provider_details = {
+    client_id        = data.aws_ssm_parameter.google_client_id[0].value
+    client_secret    = data.aws_ssm_parameter.google_client_secret[0].value
+    authorize_scopes = "email"
+  }
+
+  attribute_mapping = {
+    email    = "email"
+    username = "sub"
+  }
+}
+
+locals {
+  # Any federated IdP needs the hosted-UI (managed login) domain + OAuth client config; email-OTP via
+  # the API needs neither.
+  oauth_enabled = var.enable_apple_idp || var.enable_google_idp
+}
+
+# Hosted-UI domain — only needed for federated (OAuth) sign-in; gated with it.
 resource "aws_cognito_user_pool_domain" "main" {
-  count = var.enable_apple_idp ? 1 : 0
+  count = local.oauth_enabled ? 1 : 0
 
   domain       = "${var.project_name}-${var.env}-${data.aws_caller_identity.current.account_id}"
   user_pool_id = aws_cognito_user_pool.main.id
 }
 
-# ── App client: the desktop app. Public client (no secret — a desktop app can't keep one); SRP for
-#    email/password, hosted-UI OAuth only when Apple is enabled. ──────────────────────────────────────────
+# ── App client: the desktop app. Public client (no secret — a desktop app can't keep one). Choice-based
+#    USER_AUTH for email-OTP; hosted-UI OAuth only when a federated IdP is enabled. No password/SRP
+#    flows — passwordless by product decision (2026-07-02). ────────────────────────────────────────────
 resource "aws_cognito_user_pool_client" "app" {
   name            = "${var.project_name}-${var.env}-desktop"
   user_pool_id    = aws_cognito_user_pool.main.id
   generate_secret = false
 
   explicit_auth_flows = [
-    "ALLOW_USER_SRP_AUTH",
+    "ALLOW_USER_AUTH", # choice-based sign-in — carries the EMAIL_OTP first factor
     "ALLOW_REFRESH_TOKEN_AUTH",
   ]
 
   supported_identity_providers = compact([
     "COGNITO",
     var.enable_apple_idp ? "SignInWithApple" : "",
+    var.enable_google_idp ? "Google" : "",
   ])
 
-  # OAuth/hosted-UI is required for Apple; for email/password (SRP) it's unused. Gated so the default
-  # email-only deployment doesn't carry dangling callback config.
-  allowed_oauth_flows_user_pool_client = var.enable_apple_idp
-  allowed_oauth_flows                  = var.enable_apple_idp ? ["code"] : []
-  allowed_oauth_scopes                 = var.enable_apple_idp ? ["email", "openid", "profile"] : []
-  callback_urls                        = var.enable_apple_idp ? var.app_oauth_callback_urls : []
-  logout_urls                          = var.enable_apple_idp ? var.app_oauth_callback_urls : []
+  # OAuth/hosted-UI is required for federated IdPs; for email-OTP (API) it's unused. Gated so the
+  # default deployment doesn't carry dangling callback config.
+  allowed_oauth_flows_user_pool_client = local.oauth_enabled
+  allowed_oauth_flows                  = local.oauth_enabled ? ["code"] : []
+  allowed_oauth_scopes                 = local.oauth_enabled ? ["email", "openid", "profile"] : []
+  callback_urls                        = local.oauth_enabled ? var.app_oauth_callback_urls : []
+  logout_urls                          = local.oauth_enabled ? var.app_oauth_callback_urls : []
 
   token_validity_units {
     access_token  = "hours"
@@ -104,7 +154,7 @@ resource "aws_cognito_user_pool_client" "app" {
   id_token_validity      = 1
   refresh_token_validity = 30
 
-  depends_on = [aws_cognito_identity_provider.apple]
+  depends_on = [aws_cognito_identity_provider.apple, aws_cognito_identity_provider.google]
 }
 
 # ── Identity Pool: ID token → temporary STS creds ───────────────────────────────────────────────────────
