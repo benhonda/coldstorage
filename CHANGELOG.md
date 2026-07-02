@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-02
+
+- docs: PROD.md Phase 4 — custom domains decided: `api.coldstorage.sh` (production) + `api-staging.coldstorage.sh` (staging); hand-managed in Vercel dashboard (not Terraform).
+
 ## 2026-07-01
 
 - chore: pin `model: claude-haiku-4-5-20251001` on the `add-and-commit`/`checkpoint` skills (cheap, mechanical tasks).
