@@ -139,6 +139,7 @@ export const RecoveryCodeEnter = ({
         <Field
           label="Recovery code"
           mono
+          placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX"
           value={code}
           autoFocus
           onChange={(e) => setCode(e.target.value)}

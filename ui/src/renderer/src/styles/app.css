@@ -1004,11 +1004,20 @@ button.cs-kv:hover { background: var(--surface-hover); }
   align-items: stretch;
   width: min(400px, 88vw);
   gap: var(--space-4);
-  padding: var(--space-8) var(--space-10);
+  padding: var(--space-8);
   text-align: center;
+  /* A real DS card surface — white, raised, hairline. The DS filled Field (--surface-input) is designed
+     to sit on a card, NOT on app-bg (which is nearly the same color → the field vanishes unfocused). This
+     gives the field its contrast for free instead of hacking a border onto it. */
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
 }
 /* Keep the checkbox row visually centered even though the card stretches it full-width. */
 .cs-recovery-confirm { justify-content: center; }
+/* The DS Field left-aligns its label/value everywhere else; the card's centered text would otherwise leak in. */
+.cs-signin .cs-field { text-align: left; }
 .cs-signin-title { font: var(--type-title); color: var(--text-primary); margin: 0; }
 .cs-signin-text { font: var(--type-body); color: var(--text-secondary); margin: 0; }
 .cs-signin-error { font: var(--type-label); color: var(--negative); margin: 0; max-width: 360px; overflow-wrap: anywhere; }
