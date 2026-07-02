@@ -223,6 +223,47 @@ tasks:
     cmds:
       - swift run coldstorectl coldstored.sock {{.CLI_ARGS | default "getStatus"}}
 
+  # ── One-time dogfood→multi-user reset (decided 2026-07-02): instead of migrating the pre-auth
+  #    archive (S3 re-prefix + journal rewrite + key rewrap), wipe it — the signed-in identity owns
+  #    everything from day one. Two halves, both confirm-gated. Order: quit the app / uninstall the
+  #    daemon → reset:local (Mac) → reset:vault (devcontainer) → daemon:bootstrap → ui:live. ──
+  daemon:reset:local:
+    desc: "[macOS] DESTRUCTIVE: wipe the local archive state — the journal (file index + watched-folder registry), staging, status — for the Mode 2 data dir AND the dev sandbox. Keeps kek.bin, config.json, the app's sign-in session, and logs. Stop the daemon/app first."
+    interactive: true
+    vars:
+      DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
+    cmds:
+      - |
+        if pgrep -fl coldstored >/dev/null 2>&1; then
+          echo "✗ coldstored is running — stop it first (quit ColdStorage.app / task daemon:uninstall / task dev:stop)"; exit 1
+        fi
+        echo "This deletes the LOCAL archive index (files list + watched folders start empty):"
+        echo "  {{.DATA_DIR}}/{coldstore.sqlite,status.json,staging/}"
+        echo "  {{.ROOT_DIR}}/coldstorage/coldstore.sqlite (dev sandbox journal)"
+        printf "type 'reset' to continue: "
+        read -r answer
+        [ "$answer" = "reset" ] || { echo "aborted — nothing deleted"; exit 1; }
+        rm -f "{{.DATA_DIR}}/coldstore.sqlite" "{{.DATA_DIR}}/status.json" "{{.ROOT_DIR}}/coldstorage/coldstore.sqlite"
+        rm -rf "{{.DATA_DIR}}/staging"
+        echo "✓ local archive state wiped. Re-add watched folders in Settings after the next launch."
+
+  daemon:reset:vault:
+    desc: "[devcontainer] DESTRUCTIVE: delete every object under blobs/ in the REAL production vault (the pre-auth dogfood uploads at blobs/<hash> AND any per-user blobs/<identityId>/ objects). Confirm by typing the bucket name. Deep Archive objects delete fine (early-delete fee is pennies at dogfood scale)."
+    interactive: true
+    deps: [check-aws-identity]
+    dir: infra/coldstorage/live/production
+    cmds:
+      - |
+        bucket=$(terragrunt output -raw bucket_name)
+        count=$(aws s3api list-objects-v2 --bucket "$bucket" --prefix blobs/ --query 'KeyCount' --output text --profile {{.AWS_PROFILE}})
+        echo "vault: s3://$bucket — $count object(s) under blobs/ will be PERMANENTLY deleted"
+        [ "$count" = "0" ] && { echo "nothing to delete"; exit 0; }
+        printf "type the bucket name ('%s') to continue: " "$bucket"
+        read -r answer
+        [ "$answer" = "$bucket" ] || { echo "aborted — nothing deleted"; exit 1; }
+        aws s3 rm "s3://$bucket/blobs/" --recursive --profile {{.AWS_PROFILE}} --only-show-errors
+        echo "✓ vault emptied (blobs/)."
+
   daemon:restore-ipc:
     desc: "Restore a file *over the running daemon's socket*: FILE=<fileId> [OUT=/tmp/restored.bin] [TIER=standard]. Idempotent — on real AWS re-run until state=restored (thaw takes hours)."
     dir: coldstorage
