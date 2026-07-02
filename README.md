@@ -14,7 +14,7 @@ Currently **dogfooding V1** (Ben is user #1); the multi-user/paid layer is in bu
 |---|---|
 | [`coldstorage/`](./coldstorage/) | The Swift package: portable `ColdStorageCore` (engine, journal, crypto, control plane) + `ColdStorageMac` adapter (PhotoKit, FSEvents) + executables (`coldstored`, `coldstorectl`, `coldstore-cli`, `coldstore-restore`, `coldstore-photo-picker`). Docs: [`README.md`](./coldstorage/README.md) (run it) · [`DESIGN.md`](./coldstorage/DESIGN.md) (how/why it's built). |
 | [`ui/`](./ui/) | Electron/React control panel — a thin client over the daemon's control socket. Docs: [`README.md`](./ui/README.md) · [`DESIGN.md`](./ui/DESIGN.md) (UX + contract) · [`PACKAGING.md`](./ui/PACKAGING.md) (the `.app`). |
-| [`account-backend/`](./account-backend/) | Hono API on Vercel + Neon/Drizzle: Cognito ↔ Paddle ↔ zero-knowledge key-blob backend for the paid layer. Scaffolded; not yet deployed ([`PROD.md`](./PROD.md) Phase 4). |
+| [`account-backend/`](./account-backend/) | Hono API on Vercel + Neon/Drizzle: Cognito ↔ Paddle ↔ zero-knowledge key-blob backend for the paid layer. Staging lane stood up 2026-07-02; production lane pending ([`PROD.md`](./PROD.md) Phase 4). |
 | [`infra/coldstorage/`](./infra/coldstorage/) | Terraform/Terragrunt: S3 Deep Archive vault + lifecycle + least-priv daemon IAM + Cognito. **Applied — prod is live.** |
 | [`infra/account-backend/`](./infra/account-backend/) | Terraform/Terragrunt for the backend's Vercel project (production + staging). **Applied.** |
 | `phase0-*-spike/` | De-risking spikes (both run + proven; seeds of the core). |
@@ -65,9 +65,10 @@ Everything runs through the root [`Taskfile.yml`](./Taskfile.yml) (`task --list`
   fully wired (opt-in via env), ZK master-key primitives built + tested ([`PROD.md`](./PROD.md)).
 
 **Open (priority order):**
-1. **[`PROD.md`](./PROD.md) Phase 4** — Ben-only manual setup (Neon DB, Paddle sandbox/live, the 6
-   real secret values) → deploy the backend → then Phase 5 (auth + paywall UX) and Phase 6
-   (Developer ID sign + notarize + ship).
+1. **[`PROD.md`](./PROD.md) Phase 4** — the staging lane is stood up (Neon, Paddle sandbox, secrets,
+   first deploy, 2026-07-02); remaining: disable Vercel Deployment Protection, prove the webhook
+   state-flip, then the production lane (live Paddle + prod Neon branch + real prod secrets) → Phase 5
+   (auth + paywall UX) and Phase 6 (Developer ID sign + notarize + ship).
 2. **Packaging** — TCC identity (Photos pane still says "coldstored"), background-run UX
    ([`ui/PACKAGING.md`](./ui/PACKAGING.md)).
 3. **UI-lane gaps** — per-file live status, skipped/failed counts, retry depth, polish

@@ -1,7 +1,7 @@
 # ColdStorage — Going to Prod (multi-user) — Design & Delivery Plan
 
 > The SSOT for taking ColdStorage from **single-operator dogfooding** to **real downloaded, paying,
-> multi-user prod**. Read [`ROADMAP.md`](./ROADMAP.md) first for what's already built/proven. This doc
+> multi-user prod**. Read [`README.md`](./README.md) first for what's already built/proven. This doc
 > owns the *new* surface: identity, per-user storage isolation, zero-knowledge keys, billing, distribution.
 > Decisions here were locked with Ben on 2026-06-29; don't re-litigate them, refine the *how*.
 
@@ -67,8 +67,8 @@ server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
 - **Password change** = re-wrap MK under the new `KEK_pw`. DEKs untouched, no re-encryption of data.
 - **Recovery code** = shown once at signup, unlocks MK if the password is lost. Lose both = data is
   unrecoverable *by design* (honest ZK; we never claim we can recover it).
-- New `KeyProvider` impl: **`UserMasterKeyProvider`** (derives KEK_pw via Argon2id, unwraps MK). Need an
-  Argon2id dependency (CryptoKit has no Argon2 — evaluate swift-sodium / a vetted Argon2 package).
+- New `KeyProvider` impl: **`UserMasterKeyProvider`** (derives KEK_pw via Argon2id, unwraps MK) — **built**
+  (Phase 3; Argon2id via swift-sodium, decided 2026-07-01).
 - **Cross-device** now genuinely needs the server-side index (the deferred R2/portability piece): the
   wrapped MK + the journal/manifest must be fetchable on a fresh install. ZK makes this load-bearing, not
   optional.
@@ -82,8 +82,8 @@ server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
 ### Account backend (new)
 - Minimal API linking **Cognito identity ↔ Paddle subscription ↔ the encrypted key-blob**. Responsibilities:
   (1) serve/store the wrapped-MK key-blob (ZK), (2) receive Paddle webhooks + expose `subscription_active`,
-  (3) optionally broker the Cognito identity id. Stateless-ish; smallest thing that works (the existing
-  infra is AWS — Lambda + API Gateway + a tiny DynamoDB table is the path-of-least-resistance, TBD in P4).
+  (3) optionally broker the Cognito identity id. Stateless-ish; smallest thing that works — **decided in
+  P4: Hono on Vercel + Neon/Drizzle** (not the originally-sketched Lambda+DynamoDB; see Phase 4).
 
 ### Distribution
 - electron-builder already configured. Add: **Developer ID Application** cert + notarization
@@ -283,7 +283,8 @@ server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
   gap yet. Decide before Apple Sign-In ships (P5 at the earliest, or whenever `enable_apple_idp=true`).
 - ~~**Argon2id library** for Swift (swift-sodium vs a focused Argon2 wrapper) — P3.~~ **DECIDED ✅
   (2026-07-01): swift-sodium.** See Phase 3 above.
-- **Account backend shape** (Lambda+APIGW+DynamoDB vs a managed app) — P4.
+- ~~**Account backend shape** (Lambda+APIGW+DynamoDB vs a managed app) — P4.~~ **DECIDED ✅ (2026-07-01):
+  Hono on Vercel + Neon/Drizzle.** See Phase 4.
 - **Apple Sign-in prerequisites** — Apple Developer Services ID + key (Ben provides) — P1 (var-gated; email
   /password works without it).
 - **Free trial / plan tiers / retrieval-fee charging** — product/economics (private `strategy/`) — P4.

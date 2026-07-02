@@ -18,7 +18,7 @@ Sources/coldstorectl/      # thin client over the daemon control socket (getStat
 Sources/coldstore-photo-picker/  # macOS native PHPickerViewController helper → prints picked {id,name} (option B)
 Sources/coldstored/        # daemon entrypoint — wires engine + EventBus + ControlServer (+ FSEvents on Mac)
 launchd/                   # plist template + coldstored-Info.plist (TCC identity for Photos); task daemon:install
-Tests/                     # Core tests (swift-testing — NOT XCTest; XCTest deadlocks on Linux, see ROADMAP)
+Tests/                     # Core tests (swift-testing — NOT XCTest; XCTest deadlocks on Linux, see the root README gotchas)
 ```
 
 ## Run the whole pipeline (native — no Docker, no Mac)
@@ -68,7 +68,7 @@ that was a forward-progress hazard); writes per connection are serialized. Clien
 readTimeout:)` — pass a `readTimeout` (seconds) for request/response calls so a stalled daemon fails fast;
 omit it for a live event tail (`watch`), which blocks indefinitely by design. A UI is just a long-lived
 `ControlClient`. **Non-Swift clients** (the Electron UI) speak the same JSONL protocol directly over the
-socket — `ControlProtocol.swift` is the wire contract; see [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md).
+socket — `ControlProtocol.swift` is the wire contract; see [`../ui/DESIGN.md`](../ui/DESIGN.md).
 
 ## Get a file back (restore)
 ```sh
@@ -109,12 +109,12 @@ real Mac — durable Photos TCC grant under launchd + full-res iCloud original).
 EXPLICIT-deposit only, never auto-watched** (product decision 2026-06-26): the daemon's old
 `COLDSTORE_PHOTOS=1` enumerate-everything path is **removed** (`platformSources` is empty); the explicit
 photo-deposit path is **built + proven end-to-end on a real Mac (2026-06-26)** — native PHPicker helper →
-`depositPhotos` → daemon archives full-res originals (see ROADMAP). **`FolderWatcher` FSEvents behavior is now PROVEN on a real Mac (2026-06-26)** — a drop fires a sub-second re-scan under a 600s poll (`task daemon:fsevents-test`). The watcher is now **re-armable** (`FolderWatcher.setPaths` + `main.swift` subscribes to `sourcesChanged`), so `addSource`'d/unpaused folders are watched without a daemon restart (**proven on a real Mac 2026-06-26** — a drop into a folder added post-startup fired a sub-second re-scan, no restart).
+`depositPhotos` → daemon archives full-res originals (see CHANGELOG). **`FolderWatcher` FSEvents behavior is now PROVEN on a real Mac (2026-06-26)** — a drop fires a sub-second re-scan under a 600s poll (`task daemon:fsevents-test`). The watcher is now **re-armable** (`FolderWatcher.setPaths` + `main.swift` subscribes to `sourcesChanged`), so `addSource`'d/unpaused folders are watched without a daemon restart (**proven on a real Mac 2026-06-26** — a drop into a folder added post-startup fired a sub-second re-scan, no restart).
 `S3ClientConfiguration`/`*Input` deprecation warnings remain (SDK moved to `S3ClientConfig`); a non-urgent cleanup.
 
 ## Known stubs / TODO (next build chunks)
-- ~~Live Deep Archive **thaw** leg~~ — **DONE ✅ (2026-06-27): PROVEN END-TO-END on the real prod vault.** First REAL thaw was requested + AWS-confirmed 2026-06-26 (`restore` → `state=thawRequested`; `head-object` `ongoing-request="true"`); after the ~12h Standard clock a single re-run returned `state=restored` with a verified file written (`RestoreEngine` won't write on hash mismatch, so that *is* the byte-identical proof). No longer a stub — the whole pipeline has zero unproven legs vs real AWS. `task daemon:restore-wait` remains the hands-off poller for future thaws. See ROADMAP.
-- **UI contract gaps** (the Electron panel needs these — see [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md) "Daemon contract gaps"):
+- ~~Live Deep Archive **thaw** leg~~ — **DONE ✅ (2026-06-27): PROVEN END-TO-END on the real prod vault.** First REAL thaw was requested + AWS-confirmed 2026-06-26 (`restore` → `state=thawRequested`; `head-object` `ongoing-request="true"`); after the ~12h Standard clock a single re-run returned `state=restored` with a verified file written (`RestoreEngine` won't write on hash mismatch, so that *is* the byte-identical proof). No longer a stub — the whole pipeline has zero unproven legs vs real AWS. `task daemon:restore-wait` remains the hands-off poller for future thaws. See CHANGELOG.
+- **UI contract gaps** (the Electron panel needs these — see [`../ui/DESIGN.md`](../ui/DESIGN.md) "Remaining UI-lane work"):
   - **`newFolder`** (a virtual path, still local-only); a per-run **filesFailed** count (blobs ≠ files); **skipped-count reporting** (how many files the excludes filtered). *(`move`/`rename`/`delete` landed as `movePath`/`deletePath`; **exclude get/set**, the **restore fee** estimate, and **bytes/size** all landed too — see below.)*
 - **Explicit photo-deposit path — DONE ✅ + proven on a real Mac (2026-06-26):** native PHPicker helper (`coldstore-photo-picker`) → `depositPhotos` → daemon resolves picked ids via `PhotoKitResolver` + archives full-res originals; `coldstored-Info.plist` embedded (`-sectcreate`) + codesigned `--identifier`-pinned in `task daemon:install`. *Remaining TODO in this area:* real plaintext hashing pre-pass for photos (the `contentHash` metadata still keys on `localIdentifier` — integrity is unaffected, it's computed from real bytes at archive time, but a real hash would dedup re-deposits better). *(FSEvents `FolderWatcher` — incl. live re-arm on `sourcesChanged` — is now PROVEN on a real Mac, 2026-06-26; was listed here as untested.)*
 - Cross-blob concurrency + adaptive throughput (engine is correct sequential today); persistent poison-blob state (skip-list is in-memory).

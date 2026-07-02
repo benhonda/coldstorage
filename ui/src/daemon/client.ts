@@ -1,7 +1,7 @@
 /**
  * Layer 1 — the IPC bridge. A Node `net.Socket` client for the `coldstored` control plane, speaking
  * its newline-delimited JSON directly (NOT by spawning `coldstorectl`, NOT via a native bridge — see
- * ELECTRON-UI-DESIGN.md). This is the whole backend contract for the UI; the renderer never touches
+ * ui/DESIGN.md). This is the whole backend contract for the UI; the renderer never touches
  * the socket, it talks to this over Electron IPC (layer 2).
  *
  * One long-lived connection carries both replies and pushed events (the daemon broadcasts events to

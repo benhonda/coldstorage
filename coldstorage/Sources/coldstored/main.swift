@@ -58,7 +58,7 @@ for root in folderRoots {
 // That deposit path will reuse the proven PhotoKitSource.stream(assetId:) (durable launchd TCC grant +
 // full-res iCloud originals — see phase0-photos-spike) and needs the daemon binary to embed
 // coldstored-Info.plist + be codesigned; it is not built yet, so the daemon archives folders + explicit
-// file deposits only. See ROADMAP / ELECTRON-UI-DESIGN.md.
+// file deposits only. See ui/DESIGN.md.
 let platformSources: [IngestSource] = []
 
 // Photo deposit IS wired (explicit-deposit only): the `depositPhotos` command resolves picked asset IDs

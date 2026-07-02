@@ -2,8 +2,8 @@
 
 The control panel for `coldstored` — a **thin client over the daemon's control socket**. Holds no
 archive logic: the Swift daemon owns scan/encrypt/upload/restore/journal; this reads state and sends
-commands. Full plan + decisions: [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md). Orientation:
-[`../ROADMAP.md`](../ROADMAP.md).
+commands. Full plan + decisions: [`DESIGN.md`](./DESIGN.md). Orientation:
+[`../README.md`](../README.md).
 
 ## Status
 
@@ -161,24 +161,8 @@ the *tokens*, not the bundle.
   `list_files`/`read_file` on project `41ebafc1`) — it has component specimens, the FORM RECIPE (normative
   spacing), and the iOS-app kit for reference. Keep new components in `src/ui/`, bound to the tokens.
 
-**Next UI work** (the redesign is BUILT — full spec in [`../ELECTRON-UI-DESIGN.md`](../ELECTRON-UI-DESIGN.md)):
-- **macOS visual verify** (Ben) — `task ui:demo` / `ui:live`. Container can't render Electron.
-- **`listFiles` + ad-hoc `deposit` + move/rename/delete + error states + upload progress — DONE ✅
-  (2026-06-24/25)** — browser tree is real journal data (`fixtures.ts` deleted), drop-to-upload really
-  archives through the daemon, **reorganize move/rename + delete issue real `movePath`/`deletePath`**
-  (optimistic edit → `filesChanged` → `listFiles` refetch reconciles), and failures surface (⚠ row from
-  journal truth + sidebar panel that **names** files + Retry + light-red toast). Uploading rows show a
-  **determinate** % bar for large solo-blob files (daemon `uploadProgress`), else an indeterminate stripe.
-  All proven vs MinIO.
-- **Remaining daemon contract** to activate the rest (each a source-swap, not a rebuild — mirror in
-  `protocol.ts`, fetch/issue, swap the stand-in):
-  - **exclude get/set**, **fee + bytes/cost** estimates (the placeholder numbers), a per-run **filesFailed**
-    count. *(`newFolder` is still a local-only virtual path — nothing to persist until a file lands in it.)*
-- **Retry depth:** row Retry covers up-front (command-rejection) failures — we hold `srcPath`. A failure
-  *after* the daemon accepts the upload (`blobFailed`) has no `srcPath` → needs daemon-side re-deposit/retry.
-- **Polish:** native folder picker + `webUtils.getPathForFile` are **done** (deposit + request-a-copy) —
-  still wanted for the Settings Add-folder field; `Show in Finder` (`shell.showItemInFolder` via IPC);
-  macOS system notification on restore-ready; subset the 5.3 MB Material Symbols woff2.
+**Next UI work:** the single maintained list is [`DESIGN.md`](./DESIGN.md) § "Remaining UI-lane work"
+(per-file live status, skipped/failed counts, retry depth, polish) — don't duplicate it here.
 
 ## Gotchas
 

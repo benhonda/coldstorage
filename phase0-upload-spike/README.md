@@ -1,6 +1,6 @@
 # Phase 0 — Kill/Resume Upload Spike
 
-Proves the load-bearing claim of the [upload daemon design](../UPLOAD-DAEMON-DESIGN.md): a **journal-backed S3 multipart upload survives a hard kill and resumes** instead of restarting — the foundation of "the best upload experience."
+Proves the load-bearing claim of the [daemon design](../coldstorage/DESIGN.md): a **journal-backed S3 multipart upload survives a hard kill and resumes** instead of restarting — the foundation of "the best upload experience."
 
 ## What it does
 1. Splits a file into 16 MiB parts, multipart-uploads them to **Glacier Deep Archive**.
@@ -14,7 +14,7 @@ Proves the load-bearing claim of the [upload daemon design](../UPLOAD-DAEMON-DES
 - AWS creds in the environment or default profile; a bucket you own — or point it at **MinIO / LocalStack** in your container to exercise resume/failures without real AWS.
 - First `swift run` resolves dependencies — **bump `aws-sdk-swift` to the latest 1.x tag** in `Package.swift`.
 
-> This is the **portable upload core** — see [daemon module split](../daemon-module-split.md). The macOS-only seam (Photos/TCC/launchd) is the separate [photos spike](../phase0-photos-spike/).
+> This is the **portable upload core** — see [daemon design § module split](../coldstorage/DESIGN.md). The macOS-only seam (Photos/TCC/launchd) is the separate [photos spike](../phase0-photos-spike/).
 
 ## Run it (with Taskfile, per house style)
 ```sh

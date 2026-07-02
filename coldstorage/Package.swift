@@ -3,7 +3,7 @@ import PackageDescription
 
 // ColdStorage daemon. Core is portable (Linux + macOS); the Mac target + daemon hold the
 // Apple-only seam. SQLite is the system library directly (no ORM dep) — Linux-clean, full control
-// over the journal SPOF. See ../daemon-module-split.md.
+// over the journal SPOF. See DESIGN.md.
 let package = Package(
     name: "ColdStorage",
     platforms: [.macOS(.v13)],

@@ -503,7 +503,7 @@ tasks:
   # ------------------------------------------------------------------ ui (domain: ui/)
   # Electron/React control panel — a THIN client over the daemon's control socket. Layer 1 = Node IPC
   # bridge (`node:net`); layer 2 = electron-vite shell (main/preload/renderer) + event-stream→state.
-  # Tooling is Bun; the Electron runtime is its own bundled Node. See ELECTRON-UI-DESIGN.md.
+  # Tooling is Bun; the Electron runtime is its own bundled Node. See ui/DESIGN.md.
   ui:setup:
     desc: "Install UI deps (Bun) + ensure Electron's native binary."
     dir: ui

@@ -1,6 +1,6 @@
 # Phase 0 — Photos TCC + Full-Res Original Spike
 
-The riskier of the two Phase 0 unknowns (see [upload daemon design §1](../UPLOAD-DAEMON-DESIGN.md)). Proves the two things that could quietly break the whole desktop-first bet:
+The riskier of the two Phase 0 unknowns (see [daemon design](../coldstorage/DESIGN.md)). Proves the two things that could quietly break the whole desktop-first bet:
 
 1. A **signed, launchd-style binary** can hold a Photos permission that **persists across runs and under `launchd`** (not just when launched from Terminal).
 2. We can read the **true full-res original** (`.photo` resource), **downloading from iCloud on demand** when "Optimize Mac Storage" left only a proxy local — the exact case the iOS review flagged.
