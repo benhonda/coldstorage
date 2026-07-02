@@ -21,7 +21,7 @@
   mandate to offer it). Infra: `cognito.tf` (`sign_in_policy` = PASSWORD+EMAIL_OTP — AWS refuses to
   remove PASSWORD from the pool-level list (apply error 2026-07-02); passwordless is enforced by the
   app client having no password flows AND OTP users never possessing a password — plus `ALLOW_USER_AUTH`
-  client flow, gated Google IdP awaiting Ben's Google Cloud OAuth client creds).
+  client flow; Google IdP + hosted-UI domain LIVE as of 2026-07-02, smoke-tested to the Google redirect).
 - **One shared vault bucket, per-user prefix isolation** (not per-user buckets — those hit account caps).
 
 ## Architecture
@@ -302,11 +302,13 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
   Hono on Vercel + Neon/Drizzle.** See Phase 4.
 - **Apple Sign-in prerequisites** — Apple Developer Services ID + key (Ben provides) — var-gated off,
   optional post-launch (email-OTP + Google cover sign-in without it).
-- **Google IdP prerequisites (NEW 2026-07-02, needed for P5)** — Ben: (1) Google Cloud Console → OAuth
-  consent screen (External), then Credentials → OAuth client, type **Web application**, authorized
-  redirect URI `https://coldstorage-production-731520377763.auth.ca-central-1.amazoncognito.com/oauth2/idpresponse`
-  (the Cognito domain name is deterministic — created on the same apply that enables Google);
-  (2) `task tf:coldstorage:google-creds` (stores id+secret in SSM); (3) flip `enable_google_idp = true`
-  in `live/production/terragrunt.hcl` → plan → apply (adds Google IdP + hosted-UI domain + OAuth client
-  config).
+- ~~**Google IdP prerequisites** — OAuth client, SSM creds, enable flag.~~ **DONE ✅ (2026-07-02): Google
+  sign-in is LIVE at the Cognito layer.** OAuth client created (Web application; redirect URI =
+  the Cognito domain's `/oauth2/idpresponse`), creds in SSM via `task tf:coldstorage:google-creds`,
+  `enable_google_idp = true` applied (Google IdP + hosted-UI domain
+  `coldstorage-production-731520377763` + OAuth client config). Smoke-tested: `/oauth2/authorize?...
+  identity_provider=Google` 302s to accounts.google.com with the full client id. (War story: the first
+  apply stored client_id `1000` — the creds task had used `read GID`, and GID is a READONLY built-in
+  (the unix group id) in go-task's mvdan/sh; renamed vars + shape guards now prevent that class.)
+  Remaining for P5 (app side): system-browser flow + `coldstorage://auth/callback` handling in Electron.
 - **Free trial / plan tiers / retrieval-fee charging** — product/economics (private `strategy/`) — P4.

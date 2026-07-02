@@ -841,13 +841,22 @@ tasks:
     deps: [check-aws-identity]
     cmds:
       - |
-        read -r -p "Google OAuth client id: " GID
-        read -r -s -p "Google OAuth client secret (hidden): " GSECRET; echo
+        # NOT named GID/UID — those are READONLY built-ins in Task's shell (mvdan/sh); `read GID`
+        # silently keeps the unix group id (=1000 here), which is exactly what got stored on the
+        # first run of this task (2026-07-02). The shape checks below catch any repeat of that class.
+        read -r -p "Google OAuth client id: " G_CLIENT_ID
+        read -r -s -p "Google OAuth client secret (hidden): " G_CLIENT_SECRET; echo
+        case "$G_CLIENT_ID" in
+          *.apps.googleusercontent.com) ;;
+          *) echo "✗ that doesn't look like a Google client id (want *.apps.googleusercontent.com, got ${#G_CLIENT_ID} chars) — nothing stored"; exit 1 ;;
+        esac
+        [ "${#G_CLIENT_SECRET}" -ge 10 ] || { echo "✗ secret looks too short (${#G_CLIENT_SECRET} chars) — nothing stored"; exit 1; }
         aws ssm put-parameter --profile {{.AWS_PROFILE}} --region ca-central-1 \
-          --name /coldstorage/google-oauth-client-id --type String --overwrite --value "$GID" > /dev/null
+          --name /coldstorage/google-oauth-client-id --type String --overwrite --value "$G_CLIENT_ID" > /dev/null
         aws ssm put-parameter --profile {{.AWS_PROFILE}} --region ca-central-1 \
-          --name /coldstorage/google-oauth-client-secret --type SecureString --overwrite --value "$GSECRET" > /dev/null
-        echo "✓ stored in SSM. Next: set enable_google_idp = true (infra/coldstorage/live/production/terragrunt.hcl), then: task tf:plan"
+          --name /coldstorage/google-oauth-client-secret --type SecureString --overwrite --value "$G_CLIENT_SECRET" > /dev/null
+        echo "✓ stored: id ${G_CLIENT_ID%%-*}-…(${#G_CLIENT_ID} chars), secret …(${#G_CLIENT_SECRET} chars)"
+        echo "  If enable_google_idp is already true, re-plan+apply so Cognito picks up the new values: task tf:plan"
 
   tf:coldstorage:creds-export:
     desc: "[devcontainer] Export the daemon's creds from TF state → gitignored handoff file the macOS daemon:* tasks read (so the Mac needs no terragrunt). Run after apply; the file rides the bind mount to the Mac."
