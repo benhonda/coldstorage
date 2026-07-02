@@ -146,10 +146,12 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
     setDismissedError(liveError);
   };
 
-  // Startup: until main reports the real sign-in/vault state, show a neutral "checking…" card rather
-  // than flashing the shell (or the wrong gate) and then correcting it. Cleared by the controller's
-  // first-paint fetch. After every hook above, so the hook order is identical across renders.
-  if (state.initializing) {
+  // Startup: show a neutral "checking…" card until we actually know the sign-in state, rather than
+  // flashing the shell or the login screen and then correcting it. Two windows: `initializing` (before
+  // main's first status push arrives) and `auth.state === "restoring"` (main IS checking a saved session
+  // — a returning user must not flash past "Continue with Google"). After every hook above, so the hook
+  // order is identical across renders.
+  if (state.initializing || state.auth.state === "restoring") {
     return <SignInView auth={state.auth} onSignIn={() => {}} checking />;
   }
 

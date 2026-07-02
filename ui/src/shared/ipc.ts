@@ -77,7 +77,10 @@ export type ConnectionState = "connecting" | "connected" | "disconnected";
  */
 export interface AuthStatus {
   configured: boolean;
-  state: "signedOut" | "signingIn" | "signedIn";
+  /** `restoring` = launch-time: a saved session is being checked/refreshed, so the answer (signed in or
+   * out) isn't known yet. The app shows a neutral "checking…" screen for it, never the login screen —
+   * otherwise a returning user flashes past "Continue with Google" before their session restores. */
+  state: "restoring" | "signedOut" | "signingIn" | "signedIn";
   /** From the ID token's email claim — display only (verification happens daemon/backend-side). */
   email: string | null;
   /** The most recent sign-in failure, for the sign-in screen. Null when none (including a plain

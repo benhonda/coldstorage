@@ -50,6 +50,9 @@ export class AuthManager {
   private pending: PendingSignIn | null = null;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private lastError: string | null = null;
+  /** False until {@link restore} finishes checking for a saved session — status reports `restoring`
+   * meanwhile so the UI shows "checking…" instead of flashing the login screen at a returning user. */
+  private settled = false;
   private readonly statusListeners = new Set<(s: AuthStatus) => void>();
   private readonly idTokenListeners = new Set<(idToken: string) => void>();
 
@@ -61,6 +64,8 @@ export class AuthManager {
   /** Serializable snapshot for the renderer (pushed on every change; pulled once at first paint). */
   status(): AuthStatus {
     if (!this.cfg) return { configured: false, state: "signedOut", email: null, error: null };
+    // Still checking a saved session — don't reveal signed-in/out yet (that's the login-flash).
+    if (!this.settled) return { configured: true, state: "restoring", email: null, error: null };
     const state = this.tokens ? "signedIn" : this.pending ? "signingIn" : "signedOut";
     const email = this.tokens ? decodeJwtClaims(this.tokens.idToken)?.email : null;
     return { configured: true, state, email: typeof email === "string" ? email : null, error: this.lastError };
@@ -84,22 +89,28 @@ export class AuthManager {
    * an unusable one (revoked, undecryptable after a signing-identity change) is dropped so we don't
    * retry forever. */
   async restore(): Promise<void> {
-    if (!this.cfg) return;
-    let raw: string;
+    // `settled` MUST flip in every exit path (no session / restored / failed / dogfood) — until it does,
+    // status() reports `restoring` and the UI holds on "checking…". The finally guarantees it.
     try {
-      raw = await readFile(this.authFile(), "utf8");
-    } catch {
-      return; // no stored session
-    }
-    try {
-      const parsed: unknown = JSON.parse(raw);
-      const b64 = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>).refreshToken : null;
-      if (typeof b64 !== "string") throw new Error("malformed auth.json");
-      const { result: refreshToken } = await safeStorage.decryptStringAsync(Buffer.from(b64, "base64"));
-      await this.adopt(await refreshTokens(this.cfg, refreshToken));
-    } catch (e) {
-      console.error("stored sign-in couldn't be restored (starting signed out):", e);
-      await rm(this.authFile(), { force: true });
+      if (!this.cfg) return;
+      let raw: string;
+      try {
+        raw = await readFile(this.authFile(), "utf8");
+      } catch {
+        return; // no stored session
+      }
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        const b64 = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>).refreshToken : null;
+        if (typeof b64 !== "string") throw new Error("malformed auth.json");
+        const { result: refreshToken } = await safeStorage.decryptStringAsync(Buffer.from(b64, "base64"));
+        await this.adopt(await refreshTokens(this.cfg, refreshToken));
+      } catch (e) {
+        console.error("stored sign-in couldn't be restored (starting signed out):", e);
+        await rm(this.authFile(), { force: true });
+      }
+    } finally {
+      this.settled = true;
       this.emitStatus();
     }
   }
