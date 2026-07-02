@@ -140,6 +140,33 @@ export interface Auth {
   identityId: string;
 }
 
+/** The zero-knowledge key-blob (PROD.md Phase 5b) — MK wrapped under a recovery-code-derived Argon2id
+ * key, ciphertexts + salts as base64. Exactly the shape the account backend stores (blind) and the
+ * `unlockVaultWithRecoveryCode` command reconstructs. The password slot is filled but unused (passwordless). */
+export interface KeyBlobFields {
+  wrappedMKPassword: string;
+  saltPassword: string;
+  wrappedMKRecovery: string;
+  saltRecovery: string;
+  opsLimit: number;
+  memLimit: number;
+}
+
+/** `mintVault`'s result (signup): the key-blob to store server-side + the one-time recovery code to show
+ * ONCE + the freshly-minted MasterKey (base64) for the app to escrow per-device. All local-socket only. */
+export interface MintVault extends KeyBlobFields {
+  ok: boolean;
+  recoveryCode: string;
+  masterKey: string;
+}
+
+/** `unlockVaultWithRecoveryCode`'s result: the unlocked MasterKey (base64) for the app to escrow so a
+ * new device won't need the recovery code again. */
+export interface UnlockVault {
+  ok: boolean;
+  masterKey: string;
+}
+
 /**
  * Typed command surface — method → {params, result}. Mirrors the `switch` in `DaemonService.handle`.
  * Params with no entries take no params; optional keys (`tier`, `days`) match the Swift defaults.
@@ -205,6 +232,18 @@ export interface Commands {
    * with no Cognito identity pool configured (today's single-operator dogfood mode). The sign-in UI itself
    * is a later phase (PROD.md Phase 5); this is just the wire contract. */
   authenticate: { params: { idToken: string }; result: Auth };
+  /** Zero-knowledge vault (PROD.md Phase 5b) — all multi-user only (error on a dogfood daemon), all
+   * carrying key material over the LOCAL control socket, never the network:
+   * - `mintVault` (signup): mint MK + one-time recovery code, load it live, return the blob to store +
+   *   the code to show once + the MK to escrow. No params.
+   * - `unlockVault` (day-to-day): load the app's per-device-cached MK (base64) after a (re)connect.
+   * - `unlockVaultWithRecoveryCode` (new device): unwrap MK from the backend's key-blob + the code the
+   *   user typed; returns the MK to escrow.
+   * - `lockVault` (sign-out): drop the MK; later deposits/restores fail until the next unlock. */
+  mintVault: { params: Record<string, never>; result: MintVault };
+  unlockVault: { params: { masterKey: string }; result: Ack };
+  unlockVaultWithRecoveryCode: { params: KeyBlobFields & { recoveryCode: string }; result: UnlockVault };
+  lockVault: { params: Record<string, never>; result: Ack };
 }
 
 export type Method = keyof Commands;

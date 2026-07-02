@@ -39,6 +39,10 @@ public enum ZeroKnowledgeError: Error, Equatable {
     case wrongSecret
     case saltGenerationFailed
     case derivationFailed
+    /// The vault has no MasterKey loaded (multi-user daemon, before the app has sent the unlocked MK).
+    /// Thrown by `SwappableKeyProvider.userKEK()` so a deposit/restore attempted before unlock fails
+    /// clean — the crypto analogue of the identity pool refusing an unauthenticated S3 call.
+    case vaultLocked
 }
 
 /// Argon2id-derive + AES-GCM wrap/unwrap of the MasterKey — the primitives `UserMasterKeyProvider` and
@@ -55,6 +59,35 @@ public enum ZeroKnowledgeKeys {
     /// stores — ciphertexts + salts only; MK/password/recoveryCode never leave this call.
     public static func mint(password: String, recoveryCode: String,
                             opsLimit: Int = defaultOpsLimit, memLimit: Int = defaultMemLimit) throws -> KeyBlob {
+        try mintReturningKey(password: password, recoveryCode: recoveryCode, opsLimit: opsLimit, memLimit: memLimit).blob
+    }
+
+    /// Passwordless signup (the decided 2026-07-02 model — recovery code is the ONLY human-held secret).
+    /// The password slot is still filled (a wrap under a random, immediately-discarded secret) so the
+    /// KeyBlob shape — and the account backend's not-null columns — stay intact while the slot is
+    /// permanently unreachable; the recovery code is the sole real lock. Returns the blob to store AND
+    /// the freshly-minted MK, since the caller (the daemon) both persists the blob and loads the key live.
+    public static func mintRecoveryOnly(recoveryCode: String,
+                                        opsLimit: Int = defaultOpsLimit, memLimit: Int = defaultMemLimit) throws -> (blob: KeyBlob, masterKey: SymmetricKey) {
+        // A random throwaway "password" — never shown, stored, or recoverable. Keeps the password path a
+        // valid (if unusable) wrap rather than junk bytes, so the KeyBlob stays internally consistent.
+        let throwaway = try randomSalt().base64EncodedString()
+        return try mintReturningKey(password: throwaway, recoveryCode: recoveryCode, opsLimit: opsLimit, memLimit: memLimit)
+    }
+
+    /// A cryptographically-random, transcription-safe recovery code: 25 chars of Crockford base32
+    /// (no I/L/O/U), grouped `XXXXX-XXXXX-XXXXX-XXXXX-XXXXX`. `byte & 0x1F` is uniform over the 32-char
+    /// alphabet (256 = 8×32), so this is a flat ~125 bits — enough to be the vault's sole lock.
+    public static func generateRecoveryCode() throws -> String {
+        let count = 25
+        guard let bytes = Sodium().randomBytes.buf(length: count) else { throw ZeroKnowledgeError.saltGenerationFailed }
+        let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+        let chars = bytes.map { alphabet[Int($0 & 0x1F)] }
+        return stride(from: 0, to: count, by: 5).map { String(chars[$0..<$0 + 5]) }.joined(separator: "-")
+    }
+
+    private static func mintReturningKey(password: String, recoveryCode: String,
+                                         opsLimit: Int, memLimit: Int) throws -> (blob: KeyBlob, masterKey: SymmetricKey) {
         let mk = SymmetricKey(size: .bits256)
         let saltPassword = try randomSalt()
         let saltRecovery = try randomSalt()
@@ -63,9 +96,9 @@ public enum ZeroKnowledgeKeys {
                                                                    opsLimit: opsLimit, memLimit: memLimit))
         let wrappedRecovery = try cipher.wrap(mk, kek: try derive(secret: recoveryCode, salt: saltRecovery,
                                                                    opsLimit: opsLimit, memLimit: memLimit))
-        return KeyBlob(wrappedMKPassword: wrappedPassword, saltPassword: saltPassword,
-                       wrappedMKRecovery: wrappedRecovery, saltRecovery: saltRecovery,
-                       opsLimit: opsLimit, memLimit: memLimit)
+        return (KeyBlob(wrappedMKPassword: wrappedPassword, saltPassword: saltPassword,
+                        wrappedMKRecovery: wrappedRecovery, saltRecovery: saltRecovery,
+                        opsLimit: opsLimit, memLimit: memLimit), mk)
     }
 
     /// Unwrap MK via the password path.

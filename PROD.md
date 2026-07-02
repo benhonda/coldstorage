@@ -318,7 +318,36 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      dogfood→multi-user is a clean RESET, not a migration (`task daemon:reset:{local,vault}`) — the
      pre-auth archive at `blobs/<hash>` is unreachable from a Cognito identity anyway, so no S3
      re-prefix / journal-rewrite / key-rewrap migration is needed.
-   - **5b — email-OTP lane + signup + recovery code + ZK wiring (NEXT).** Verified shapes: `SignUp`
+   - **5b — email-OTP lane + signup + recovery code + ZK wiring (IN PROGRESS, started 2026-07-02).**
+     Re-sliced hardest-first: the ZK vault spine is the load-bearing part, so it goes first and is
+     provable through the *existing* Google sign-in; email-OTP is genuinely independent scope (5b-3).
+     **Architecture decision (2026-07-02):** all ZK crypto stays in Swift/libsodium (daemon-side); the
+     app orchestrates + escrows. The daemon's `keys` is now a `SwappableKeyProvider` (lock-guarded
+     `@unchecked Sendable`, shared by BOTH engines by reference — same trick as CognitoAuth's resolver):
+     dogfood mode seeds it from the local file KEK (byte-for-byte unchanged), multi-user mode starts
+     LOCKED so `userKEK()` throws `.vaultLocked` and a deposit before unlock fails clean — the crypto
+     analogue of the identity pool gating S3.
+     - **5b-1 — daemon vault core: DONE ✅ (2026-07-02, 83 Core tests green + `ui:typecheck`/66 ui
+       tests green).** `SwappableKeyProvider` + `.vaultLocked` (`Crypto.swift`); `mintRecoveryOnly`
+       (passwordless — recovery code is the sole lock; password slot is a real wrap under a random
+       discarded secret, keeping the KeyBlob shape + the backend's not-null columns intact) +
+       `generateRecoveryCode` (25 chars Crockford base32, ~125 bits, `XXXXX-…` grouped)
+       (`ZeroKnowledgeKeys.swift`); four control commands gated on `cognitoAuth != nil` — `mintVault`
+       (returns blob-to-store + one-time code + MK-to-escrow), `unlockVault {masterKey}` (day-to-day
+       from the app's cache), `unlockVaultWithRecoveryCode {keyBlob…, recoveryCode}` (new device,
+       returns MK), `lockVault` (sign-out) — all key material over the LOCAL socket only, never the
+       network. `main.swift` builds the provider seeded/locked by mode; `protocol.ts` mirrors the DTOs.
+       *Gate met:* unit tests — locked provider throws `.vaultLocked`, unlock round-trips a real DEK
+       through the exact `EnvelopeCipher`, wrong recovery code fails closed, mint MK == recovery-unlock
+       MK, seeded (dogfood) provider never gates.
+     - **5b-2 — app vault orchestration + recovery-code UI (NEXT):** backend key-blob GET/PUT client
+       (Bearer ID token — the account-backend routes already exist from P4), a VaultManager doing
+       mint-on-first-signin / unlock-on-new-device / auto-unlock-from-safeStorage-cache-on-launch
+       (MK escrowed per-account by `sub`), re-unlock on daemon reconnect (mirrors authenticate),
+       lockVault + drop-cache on sign-out, and the show-once + enter-code screens.
+     - **5b-3 — email-OTP sign-in + signup lane:** the independent auth lane (Cognito USER_AUTH via
+       plain HTTPS), a second entry on the sign-in screen; feeds the same token/vault machinery.
+     Verified shapes for 5b-3: `SignUp`
      with NO password is first-class for passwordless pools; `ConfirmSignUp`'s `Session` feeds
      `InitiateAuth USER_AUTH` so signup costs the user exactly ONE emailed code; sign-in =
      `InitiateAuth` + `PREFERRED_CHALLENGE: EMAIL_OTP` → `RespondToAuthChallenge` — all callable as

@@ -64,3 +64,48 @@ public struct LocalFileKEK: KeyProvider {
         return k
     }
 }
+
+/// A `KeyProvider` whose key is swapped at RUNTIME — the seam that lets a multi-user daemon go from
+/// LOCKED (no MasterKey yet) to unlocked once the app sends the MK over the control socket, and back on
+/// sign-out, without rebuilding the upload/restore engines. Both engines are handed the SAME instance
+/// (a reference type), so one swap is seen by upload and restore at once — exactly like `CognitoAuth`'s
+/// resolver, which the `S3Client` holds by reference so `updateLogins` reaches every later call.
+///
+/// `@unchecked Sendable` guarded by a lock: `KeyProvider.userKEK()` is synchronous, so an `actor` (whose
+/// methods are async) can't conform; the lock is held only around a `Data` read/write — never around
+/// crypto — so there's no contention on the hot path.
+public final class SwappableKeyProvider: KeyProvider, @unchecked Sendable {
+    private let lock = NSLock()
+    private var mkBytes: Data?
+
+    /// `initial` present ⇒ dogfood mode: seed with the local-file KEK so behavior is byte-for-byte
+    /// unchanged. `nil` ⇒ multi-user, LOCKED until an unlock/mint command lands — `userKEK()` throws
+    /// `.vaultLocked`, so a deposit/restore attempted before unlock fails clean instead of encrypting
+    /// under a wrong or absent key.
+    public init(initial: SymmetricKey? = nil) {
+        self.mkBytes = initial.map { $0.withUnsafeBytes { Data($0) } }
+    }
+
+    public func userKEK() throws -> SymmetricKey {
+        lock.lock(); defer { lock.unlock() }
+        guard let mkBytes else { throw ZeroKnowledgeError.vaultLocked }
+        return SymmetricKey(data: mkBytes)
+    }
+
+    /// Load the unlocked MasterKey (from `mintVault`, an app-cached MK, or a recovery-code unlock).
+    public func setMasterKey(_ key: SymmetricKey) {
+        lock.lock(); defer { lock.unlock() }
+        mkBytes = key.withUnsafeBytes { Data($0) }
+    }
+
+    /// Drop the key — sign-out. Subsequent `userKEK()` calls throw `.vaultLocked` again.
+    public func clear() {
+        lock.lock(); defer { lock.unlock() }
+        mkBytes = nil
+    }
+
+    public var isUnlocked: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return mkBytes != nil
+    }
+}

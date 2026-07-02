@@ -75,19 +75,32 @@ let photoResolver: (any PhotoResolver)? = nil
 // Shared store + keys: the upload engine PUTs with them, the restore engine GETs/thaws + decrypts with
 // them. storageClass only affects PUT, so sharing one store is correct (restore ignores it).
 let store = S3Store(client: client, bucket: bucket, storageClass: endpoint != nil ? nil : .deepArchive)
-let keys = LocalFileKEK(path: env["COLDSTORE_KEK"] ?? "dev-kek.bin")
+
+// The encryption key is a runtime-SWAPPABLE provider shared by both engines (PROD.md Phase 5b).
+//   dogfood (no Cognito) → seed it eagerly from the local file KEK: byte-for-byte the old LocalFileKEK
+//     behavior, no unlock step, deposits work at launch as before.
+//   multi-user (Cognito configured) → start LOCKED: `userKEK()` throws `.vaultLocked` until the app
+//     sends the unlocked MasterKey over the control socket (mintVault/unlockVault*), so a deposit before
+//     the vault is unlocked fails clean — the crypto analogue of authenticate gating S3.
+let vaultKey: SwappableKeyProvider
+if cognitoAuth != nil {
+    vaultKey = SwappableKeyProvider()
+} else {
+    vaultKey = SwappableKeyProvider(initial: try LocalFileKEK(path: env["COLDSTORE_KEK"] ?? "dev-kek.bin").userKEK())
+}
 
 let engine = UploadEngine(
-    journal: journal, store: store, keys: keys,
+    journal: journal, store: store, keys: vaultKey,
     stagingDir: URL(fileURLWithPath: env["COLDSTORE_STAGING"] ?? ".staging"))
-let restoreEngine = RestoreEngine(journal: journal, store: store, keys: keys)
+let restoreEngine = RestoreEngine(journal: journal, store: store, keys: vaultKey)
 
 let bus = EventBus()
 let daemon = DaemonService(engine: engine, restoreEngine: restoreEngine, journal: journal, bus: bus,
                            statusPath: env["COLDSTORE_STATUS"] ?? "status.json",
                            platformSources: platformSources,
                            photoResolver: photoResolver,
-                           cognitoAuth: cognitoAuth)
+                           cognitoAuth: cognitoAuth,
+                           vaultKey: vaultKey)
 
 // Control plane: a local unix socket the UI/cli drives (getStatus, add/removeSource, triggerNow, …).
 let socketPath = env["COLDSTORE_SOCKET"] ?? "coldstored.sock"

@@ -1,4 +1,5 @@
 import Foundation
+import Crypto   // SymmetricKey — the vault commands (Phase 5b) decode/return the MasterKey
 
 /// The long-running service: turns the proven engine into `coldstored`. Owns the run loop, the live
 /// source set (rebuilt each pass from the journal registry, paused folders filtered out), per-source
@@ -22,6 +23,12 @@ public actor DaemonService {
     /// every run keeps the default `"blobs"` keyPrefix. Set only once a real multi-user daemon is
     /// configured — see `coldstored/main.swift`.
     let cognitoAuth: CognitoAuth?
+    /// The runtime-swappable encryption key shared with both engines (PROD.md Phase 5b). In dogfood mode
+    /// it's seeded at startup (behavior unchanged); in a multi-user daemon it starts LOCKED and the
+    /// vault commands below (`mintVault`/`unlockVault*`/`lockVault`) load or clear the MasterKey the app
+    /// derives. Gated on `cognitoAuth != nil` — the same signal as `authenticate`, so "multi-user daemon"
+    /// means one thing throughout.
+    let vaultKey: SwappableKeyProvider
 
     private var running = false
     // Blobs that failed *permanently* (config/logic — won't self-heal) this session. Skipped on the next
@@ -35,10 +42,11 @@ public actor DaemonService {
 
     public init(engine: UploadEngine, restoreEngine: RestoreEngine, journal: Journal, bus: EventBus,
                 statusPath: String, platformSources: [IngestSource] = [],
-                photoResolver: (any PhotoResolver)? = nil, cognitoAuth: CognitoAuth? = nil) {
+                photoResolver: (any PhotoResolver)? = nil, cognitoAuth: CognitoAuth? = nil,
+                vaultKey: SwappableKeyProvider = SwappableKeyProvider()) {
         self.engine = engine; self.restoreEngine = restoreEngine; self.journal = journal; self.bus = bus
         self.statusPath = statusPath; self.platformSources = platformSources
-        self.photoResolver = photoResolver; self.cognitoAuth = cognitoAuth
+        self.photoResolver = photoResolver; self.cognitoAuth = cognitoAuth; self.vaultKey = vaultKey
     }
 
     // MARK: - run loop
@@ -249,6 +257,55 @@ public actor DaemonService {
     /// (`blobs/<identityId>`) — surfaced mainly for the UI/logs, since the daemon itself just reads
     /// `cognitoAuth.vaultPrefix` on the next run.
     private struct AuthDTO: Encodable { let ok: Bool; let identityId: String }
+    /// `mintVault`'s result (signup): the key-blob to store server-side (base64 ciphertexts + salts), the
+    /// one-time recovery code to show the user ONCE, and the freshly-minted MasterKey (base64) for the app
+    /// to escrow in its per-device Keychain so day-to-day launches never re-prompt. All three cross only
+    /// the local unix socket; the recovery code + MK never touch the network from here.
+    private struct MintVaultDTO: Encodable {
+        let ok: Bool
+        let wrappedMKPassword, saltPassword, wrappedMKRecovery, saltRecovery: String
+        let opsLimit, memLimit: Int
+        let recoveryCode: String
+        let masterKey: String
+    }
+    /// `unlockVaultWithRecoveryCode`'s result: the unlocked MasterKey (base64) for the app to escrow, so
+    /// this new device won't need the recovery code again.
+    private struct UnlockVaultDTO: Encodable { let ok: Bool; let masterKey: String }
+
+    /// The vault commands are only meaningful on a multi-user daemon (one built with a Cognito identity
+    /// pool). A dogfood daemon's `vaultKey` is seeded from the local file KEK and never swapped — same
+    /// gate as `authenticate`, so the two multi-user seams stay in lockstep.
+    private func requireMultiUser(_ command: String) throws {
+        guard cognitoAuth != nil else { throw ColdStorageError.staging("\(command): this daemon has no Cognito identity pool configured") }
+    }
+
+    /// Decode a base64 32-byte key param, or nil if absent. Throws on present-but-malformed (wrong length
+    /// or bad base64) rather than silently truncating — a wrong-sized key would corrupt every blob.
+    private func decodeKey(_ raw: String?) throws -> SymmetricKey? {
+        guard let raw else { return nil }
+        guard let data = Data(base64Encoded: raw), data.count == 32 else {
+            throw ColdStorageError.staging("masterKey must be base64 of exactly 32 bytes")
+        }
+        return SymmetricKey(data: data)
+    }
+
+    /// Reconstruct a `KeyBlob` from the flat `[String:String]` control params (base64 ciphertexts/salts +
+    /// integer tuning). The app passes the six fields straight through from the backend's key-blob JSON.
+    private func keyBlob(from p: [String: String]) throws -> KeyBlob {
+        func b64(_ key: String) throws -> Data {
+            guard let raw = p[key], let d = Data(base64Encoded: raw) else {
+                throw ColdStorageError.staging("keyBlob field '\(key)' missing or not base64")
+            }
+            return d
+        }
+        func int(_ key: String) throws -> Int {
+            guard let raw = p[key], let v = Int(raw) else { throw ColdStorageError.staging("keyBlob field '\(key)' missing or not an integer") }
+            return v
+        }
+        return KeyBlob(wrappedMKPassword: try b64("wrappedMKPassword"), saltPassword: try b64("saltPassword"),
+                       wrappedMKRecovery: try b64("wrappedMKRecovery"), saltRecovery: try b64("saltRecovery"),
+                       opsLimit: try int("opsLimit"), memLimit: try int("memLimit"))
+    }
     /// One resolved target of a `previewDeposit` dry-run: the vault path the item WOULD land at, and whether
     /// a live row already sits there (a collision the UI prompts on).
     private struct DepositPreviewItemDTO: Encodable { let relativePath: String; let exists: Bool }
@@ -439,6 +496,46 @@ public actor DaemonService {
             guard let idToken = p["idToken"] else { throw ColdStorageError.staging("authenticate requires params.idToken") }
             let identityId = try await auth.authenticate(idToken: idToken)
             return AnyEncodable(AuthDTO(ok: true, identityId: identityId))
+        case "mintVault":
+            // Signup (first ever sign-in on any device for this account): mint a fresh MasterKey + a
+            // one-time recovery code, load the MK live (so this session can deposit immediately), and hand
+            // the app the key-blob (to store server-side), the recovery code (to show once), and the MK (to
+            // escrow per-device). Multi-user only — same gate as `authenticate`.
+            try requireMultiUser("mintVault")
+            let recoveryCode = try ZeroKnowledgeKeys.generateRecoveryCode()
+            let (blob, mk) = try ZeroKnowledgeKeys.mintRecoveryOnly(recoveryCode: recoveryCode)
+            vaultKey.setMasterKey(mk)
+            return AnyEncodable(MintVaultDTO(
+                ok: true,
+                wrappedMKPassword: blob.wrappedMKPassword.base64EncodedString(),
+                saltPassword: blob.saltPassword.base64EncodedString(),
+                wrappedMKRecovery: blob.wrappedMKRecovery.base64EncodedString(),
+                saltRecovery: blob.saltRecovery.base64EncodedString(),
+                opsLimit: blob.opsLimit, memLimit: blob.memLimit,
+                recoveryCode: recoveryCode,
+                masterKey: mk.withUnsafeBytes { Data($0).base64EncodedString() }))
+        case "unlockVault":
+            // Day-to-day unlock from the app's per-device Keychain cache: the app already holds the MK, so
+            // it just hands it back after a (re)connect. No crypto here — just load it.
+            try requireMultiUser("unlockVault")
+            guard let mk = try decodeKey(p["masterKey"]) else { throw ColdStorageError.staging("unlockVault requires params.masterKey (base64)") }
+            vaultKey.setMasterKey(mk)
+            return AnyEncodable(AckDTO(ok: true))
+        case "unlockVaultWithRecoveryCode":
+            // New device: the app fetched the key-blob from the backend and prompted for the recovery code.
+            // Unwrap MK (a wrong code fails closed via the AES-GCM tag), load it live, and return it so the
+            // app can escrow it — this device won't need the code again.
+            try requireMultiUser("unlockVaultWithRecoveryCode")
+            let blob = try keyBlob(from: p)
+            guard let code = p["recoveryCode"] else { throw ColdStorageError.staging("unlockVaultWithRecoveryCode requires params.recoveryCode") }
+            let mk = try ZeroKnowledgeKeys.unlockWithRecoveryCode(blob, recoveryCode: code)
+            vaultKey.setMasterKey(mk)
+            return AnyEncodable(UnlockVaultDTO(ok: true, masterKey: mk.withUnsafeBytes { Data($0).base64EncodedString() }))
+        case "lockVault":
+            // Sign-out: drop the MK. Subsequent deposits/restores fail `.vaultLocked` until the next unlock.
+            try requireMultiUser("lockVault")
+            vaultKey.clear()
+            return AnyEncodable(AckDTO(ok: true))
         case "triggerNow":
             trigger()
             return AnyEncodable(AckDTO(ok: true))

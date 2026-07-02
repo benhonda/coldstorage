@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Crypto   // SymmetricKey — the Phase 5b SwappableKeyProvider tests seed/compare raw keys
 @testable import ColdStorageCore
 
 /// PROD.md Phase 3 gate: password change re-wraps MK without touching DEKs; recovery code unlocks;
@@ -102,5 +103,61 @@ import Foundation
         }
         let viaRecovery = try UserMasterKeyProvider(unlockingWithRecoveryCode: blob, recoveryCode: "RECOVERY-CODE-1234")
         #expect(try viaRecovery.userKEK().withUnsafeBytes { Data($0) } == (try provider.userKEK().withUnsafeBytes { Data($0) }))
+    }
+
+    // MARK: - Phase 5b vault primitives (mintRecoveryOnly, recovery-code generator, SwappableKeyProvider)
+
+    /// Passwordless signup: the recovery code alone recovers the SAME MK the mint loaded live — and the
+    /// blob round-trips a real DEK through the exact EnvelopeCipher the engines use.
+    @Test func mintRecoveryOnlyUnlocksToTheSameMKViaRecoveryCode() throws {
+        let code = "AB3DE-FG4HJ-KM5NP-QR6ST-VW7XZ"
+        let (blob, mk) = try ZeroKnowledgeKeys.mintRecoveryOnly(recoveryCode: code, opsLimit: fastOps, memLimit: fastMem)
+        let mkViaRecovery = try ZeroKnowledgeKeys.unlockWithRecoveryCode(blob, recoveryCode: code)
+        #expect(mkViaRecovery.withUnsafeBytes { Data($0) } == mk.withUnsafeBytes { Data($0) })
+
+        // The password slot is a real (if permanently unreachable) wrap — the recovery code must NOT open it.
+        #expect(throws: ZeroKnowledgeError.wrongSecret) {
+            _ = try ZeroKnowledgeKeys.unlock(blob, password: code)
+        }
+    }
+
+    @Test func generateRecoveryCodeIsWellFormedAndUnique() throws {
+        let a = try ZeroKnowledgeKeys.generateRecoveryCode()
+        let b = try ZeroKnowledgeKeys.generateRecoveryCode()
+        #expect(a != b)
+        // XXXXX-XXXXX-XXXXX-XXXXX-XXXXX over the Crockford alphabet (no I/L/O/U).
+        #expect(a.count == 29)
+        #expect(a.allSatisfy { "0123456789ABCDEFGHJKMNPQRSTVWXYZ-".contains($0) })
+        #expect(a.split(separator: "-").count == 5)
+    }
+
+    /// The load-bearing 5b behavior: a multi-user daemon's key provider starts LOCKED (deposit/restore
+    /// fail `.vaultLocked`), unlocks when the MK is loaded (round-trips a DEK), and re-locks on sign-out.
+    @Test func swappableKeyProviderGatesOnUnlock() throws {
+        let vault = SwappableKeyProvider()   // multi-user: starts locked
+        #expect(vault.isUnlocked == false)
+        #expect(throws: ZeroKnowledgeError.vaultLocked) { _ = try vault.userKEK() }
+
+        let (_, mk) = try ZeroKnowledgeKeys.mintRecoveryOnly(recoveryCode: "AB3DE-FG4HJ-KM5NP-QR6ST-VW7XZ",
+                                                             opsLimit: fastOps, memLimit: fastMem)
+        vault.setMasterKey(mk)
+        #expect(vault.isUnlocked)
+        // A real DEK wrapped/unwrapped through the swapped-in key — proves the engines would encrypt under MK.
+        let cipher = EnvelopeCipher()
+        let dek = cipher.newDEK()
+        let wrapped = try cipher.wrap(dek, kek: try vault.userKEK())
+        #expect(try cipher.unwrap(wrapped, kek: try vault.userKEK()).withUnsafeBytes { Data($0) } == dek.withUnsafeBytes { Data($0) })
+
+        vault.clear()   // sign-out
+        #expect(vault.isUnlocked == false)
+        #expect(throws: ZeroKnowledgeError.vaultLocked) { _ = try vault.userKEK() }
+    }
+
+    /// Dogfood mode: seeded at construction, unlocked immediately, never gates — behavior unchanged.
+    @Test func swappableKeyProviderSeededIsUnlockedImmediately() throws {
+        let seed = SymmetricKey(size: .bits256)
+        let vault = SwappableKeyProvider(initial: seed)
+        #expect(vault.isUnlocked)
+        #expect(try vault.userKEK().withUnsafeBytes { Data($0) } == seed.withUnsafeBytes { Data($0) })
     }
 }

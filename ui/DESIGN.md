@@ -145,7 +145,9 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
 - **Commands (SSOT = `DaemonService.handle`):** `ping · getStatus · listSources · listFiles ·
   getPricing · listExcludes · addSource · removeSource · addExclude · removeExclude · restore ·
   deposit · depositPhotos · previewDeposit · movePath · createFolder · deletePath · authenticate ·
-  triggerNow · pauseSource · resumeSource`.
+  mintVault · unlockVault · unlockVaultWithRecoveryCode · lockVault · triggerNow · pauseSource ·
+  resumeSource`. (`authenticate` = per-user S3 creds; the `*Vault*` four = the zero-knowledge
+  encryption key, loaded/cleared over the local socket — both multi-user only, see PROD.md Phase 5.)
 - **Events (SSOT = the `DaemonEvent(...)` call sites):** `runStarted · fileArchived · uploadProgress ·
   runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged · restoreRequested ·
   restoreInProgress · restoreCompleted · error`. `uploadProgress` carries `{file, path, bytes,
