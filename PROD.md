@@ -175,10 +175,12 @@ server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
    legitimate to source a `KeyBlob` from yet (Phase 4, the account backend) or a password/recovery code
    from (Phase 5, the sign-in UI), so wiring it now would have no real caller. That wiring is now this
    phase's remaining work, landing naturally with P4/P5.
-4. **Account backend — SCAFFOLDED ✅, infra APPLIED ✅ (2026-07-01), app not yet deployed.** (Infra
-   = Terraform-provisioned Vercel project settings/env vars/IAM role, applied for real — see below.
-   App deploy = actually pushing the Hono code to Vercel so it serves requests; that hasn't happened
-   yet, and is a separate step from `terragrunt apply`.) Stack decided with Ben: **Hono on
+4. **Account backend — GATE MET ✅ (2026-07-02, staging lane): Paddle-simulator webhook flipped
+   `subscriptionActive` in the staging Neon DB, both confirmed by Ben.** Staging is deployed and
+   verified live at `https://api-staging.coldstorage.sh` (health + 400-on-unsigned-webhook +
+   401-on-tokenless routes smoke-tested). What's deliberately left of P4 is only the **production
+   lane** — live Paddle account, prod Neon branch, prod secrets, first production deploy — which
+   nothing blocks on until Phase 5/6 need it. History below. Stack decided with Ben: **Hono on
    Vercel + Neon/Drizzle** (not Lambda+DynamoDB) — Vercel-project infra is already the adpharm-stack
    convention (`references/terraform.md`), Neon is that convention's DB default, and this needed no AWS
    SDK/credentials at runtime (Cognito ID-token verification is a plain JWKS check), so the daemon's
@@ -254,16 +256,21 @@ server stores ONLY:  wrappedMK_pw, wrappedMK_rc, salts          │
    at `https://api-staging.coldstorage.sh/webhooks/paddle`; staging's 3 Vercel secrets set for real
    (production's 3 remain `SET_IN_VERCEL_DASHBOARD` placeholders until a LIVE Paddle account + prod
    Neon branch exist — that's the deferred production lane, nothing blocks on it). First `staging`
-   push deployed — and crashed: Vercel's zero-config Hono build transpiles per-file (no bundling), so
-   tsconfig `~/*` path aliases don't exist at runtime (`ERR_MODULE_NOT_FOUND: '~'`). Fixed by dropping
-   the alias for relative imports (commit `3352384`; typecheck + tests green). **Remaining before the
-   gate test (2026-07-02):** (a) **Vercel Deployment Protection** 302s all staging requests to
-   `vercel.com/sso-api` — Ben must disable Vercel Authentication (project Settings → Deployment
-   Protection); endpoints are self-securing (Cognito JWT / Paddle HMAC) so this is safe; (b) then
-   verify `GET /` returns the health text and fire the **Paddle simulator** (`subscription.activated`
-   with `custom_data.cognitoSub` set, then `.canceled`) and watch `subscriptionActive` flip in the
-   staging DB — that proves "webhook flips state" with zero checkout UI. "Upload blocked when
-   inactive" (the daemon consuming `/entitlement`) rides with Phase 5's auth handoff.
+   push deployed — and crashed twice, same root cause: Vercel's zero-config Hono build transpiles
+   per-file (NO bundling), so source must be valid runtime Node ESM — tsconfig `~/*` aliases don't
+   exist at runtime, and neither do extensionless relative imports. Fixed for good (`3352384` +
+   `55a5769`): relative imports with `.js` extensions + tsconfig on `module`/`moduleResolution`
+   `nodenext`, which makes an extensionless relative import a hard `tsc` error — `task
+   backend:typecheck` is itself the regression guard (verified: stripping one extension fails TS2307).
+   **Staging VERIFIED LIVE (2026-07-02):** Vercel Authentication disabled (endpoints are
+   self-securing — Cognito JWT / Paddle HMAC); smoke-tested from outside: `GET /` serves the health
+   text, unsigned `POST /webhooks/paddle` → 400 (HMAC guard), tokenless `/entitlement` + `/key-blob`
+   → 401. **Gate test PASSED (2026-07-02):** Paddle simulator (`subscription.activated` with
+   `custom_data.cognitoSub` edited into the payload — note the simulator only lets you edit AFTER a
+   first run: Payload tab → click to edit → Replay) delivered 200 and flipped `subscriptionActive`
+   in the staging DB, confirmed by Ben in the Neon console — "webhook flips state" proven with zero
+   checkout UI. "Upload blocked when inactive" (the daemon consuming `/entitlement`) rides with
+   Phase 5's auth handoff.
 5. **App auth + paywall UX** — sign-in/up + recovery-code capture + subscribe flow in the Electron UI;
    token handed to the daemon. *Gate:* Ben signs up fresh → subscribes → deposits → restores, on a Mac.
 6. **Sign + notarize + ship** — Developer ID signing + notarization + auto-update + download page. *Gate:*
