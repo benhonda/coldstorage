@@ -154,10 +154,12 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
    are now live end-to-end (daemon wiring + the handoff that populates it) — what's left is a real Cognito
    user/token to actually exercise the path, which is Phase 5 (app auth UX) or a manually-minted token.
    *Gates:* unit test (a custom prefix round-trips; restore reads the stored key) + build green — **MET**.
-   **LIVE gate** (real token → own-prefix PUT ok, cross-prefix `AccessDenied`) is Ben's: re-run
-   `task tf:coldstorage:creds-export` (devcontainer) → `task daemon:bootstrap` or `task ui:bootstrap` (Mac)
-   to pick up the new handoff values, then a manually-minted Cognito token to call `authenticate` over the
-   control socket.
+   **LIVE gate — MET ✅ (2026-07-02).** Proven for real via the 5a app flow: Ben signed in with Google,
+   deposited a file, and it landed at `blobs/<his-identityId>/…` in the production vault. The adversarial
+   half is a repeatable task (`task daemon:gate-test`): it mints a throwaway second Cognito user, gets it
+   real STS creds, and confirms own-prefix PUT is allowed while cross-prefix PUT AND a GET of Ben's real
+   object both return `AccessDenied` — **GATE PASSED**. The per-user boundary holds against a real
+   second identity, not just in theory.
 3. **ZK crypto — primitives DONE ✅ (2026-07-01, 79 Core tests green).** New
    `Sources/ColdStorageCore/ZeroKnowledgeKeys.swift`: `KeyBlob` (wrappedMK under BOTH a password- and a
    recovery-code-derived Argon2id key, + their salts + the ops/mem tuning used, stored alongside since the
@@ -305,10 +307,17 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      `cognito_domain` output (plan verified **0 add / 1 change / 0 destroy**; also pinned the six
      AWS-computed Google `provider_details` keys that were causing perpetual plan drift); handoff →
      `ui:config`/`ui:dev`/`ui:live` now carry `COLDSTORE_COGNITO_DOMAIN`/`_CLIENT_ID` (dev lanes strip
-     the daemon secrets). *5a gate (Ben, Mac):* `task tf:apply` (the 1-change plan) → re-run
-     `tf:coldstorage:creds-export` → `ui:config`/`ui:dev` → Google sign-in lands `identityId`; a
-     deposit lands under `blobs/<identityId>/` and a cross-prefix GET gets `AccessDenied` — which
-     also closes Phase 2's outstanding LIVE gate.
+     the daemon secrets). **5a gate — MET ✅ (2026-07-02):** Ben signed in with Google and deposited a
+     file that landed under his per-user prefix in the production vault; `task daemon:gate-test` then
+     proved the boundary adversarially (own-prefix PUT ok, cross-prefix PUT + GET of Ben's real object
+     both `AccessDenied`) — this also closes Phase 2's outstanding LIVE gate. **War story:** sign-in hung
+     because VS Code's devcontainer auto-forwarded the dev loopback port (it printed `localhost:53682`
+     in a terraform plan) and squatted `127.0.0.1:53682` on the Mac, black-holing the OAuth redirect;
+     fixed with `devcontainer.json` `portsAttributes` (`onAutoForward: ignore`) + a fail-loud bind in
+     `manager.signIn` (binds the listener BEFORE opening the browser). **Decided alongside:**
+     dogfood→multi-user is a clean RESET, not a migration (`task daemon:reset:{local,vault}`) — the
+     pre-auth archive at `blobs/<hash>` is unreachable from a Cognito identity anyway, so no S3
+     re-prefix / journal-rewrite / key-rewrap migration is needed.
    - **5b — email-OTP lane + signup + recovery code + ZK wiring (NEXT).** Verified shapes: `SignUp`
      with NO password is first-class for passwordless pools; `ConfirmSignUp`'s `Session` feeds
      `InitiateAuth USER_AUTH` so signup costs the user exactly ONE emailed code; sign-in =
