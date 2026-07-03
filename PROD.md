@@ -395,15 +395,27 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      MK caching, and a daemon sign-out/deauth command (today the daemon keeps its STS creds + prefix
      until expiry after an app-side sign-out). *Gate:* fresh email signs up with one code, recovery
      code shown once, key-blob lands server-side, deposit encrypts under the unlocked MK.
-   - **5c — paywall + subscribe (Paddle).** Decided pattern (verified vs Paddle docs 2026-07-02):
-     backend `POST /checkout-session` creates the transaction server-side (`POST /transactions` with
-     `custom_data: {cognitoSub}` — the ONLY way to guarantee custom_data; it propagates to the
-     subscription and its webhooks) → app opens **Paddle-hosted checkout** (`pay.paddle.io/...?
-     transaction_id=…`, redirect URL supports custom schemes) in the system browser → app polls
-     `/entitlement` (webhook is the source of truth; the `coldstorage://checkout-complete` redirect is
-     just a check-now nudge). Deposit gate on `/entitlement` in the app layer. Sandbox test card
-     `4242 4242 4242 4242`; `4000 0027 6000 3184` tests the renewal-decline/revoke path. *Gate:*
-     sandbox checkout flips entitlement, upload gate opens.
+   - **5c — paywall + subscribe (Paddle): DONE ✅ (2026-07-02, backend `bun run typecheck`/`bun test`
+     green + `ui:typecheck`/86 ui tests green).** Backend `POST /checkout-session` (requireAuth) creates
+     the transaction SERVER-SIDE via `@paddle/paddle-node-sdk` (`paddle.transactions.create` with
+     `customData: {cognitoSub}` — the only reliable way to carry it; Paddle copies it to the subscription
+     so the `subscription.*` webhooks link back) and returns `txn.checkout.url`; `PADDLE_PRICE_ID`
+     (optional env, non-secret) picks the plan, and the route errors clearly if it or the default payment
+     link is unset. App: `EntitlementManager` (`ui/src/main/entitlement/`) does `GET /entitlement` on
+     every fresh ID token, and `subscribe()` POSTs checkout-session → opens the URL in the system browser
+     → polls `/entitlement` until the webhook flips active (webhook is the source of truth; a
+     `coldstorage://checkout-complete` deep link is a check-now nudge into the same poll). **Deposit
+     gate**: `runDeposit`/`retryDeposit` in `MyFilesView` bail to a `SubscribeModal` when
+     `canDeposit` is false — a SOFT gate on NEW deposits only (browse/restore stay open, and dogfood +
+     the pre-first-check window are never gated). Settings account card shows subscription state + a
+     Subscribe entry. Tests: EntitlementManager refresh/subscribe/error branches (mocked fetch +
+     electron shell) + the entitlement fold. **Gate (Ben) — needs two Paddle-dashboard/Vercel steps
+     first:** (1) set `PADDLE_PRICE_ID` (a sandbox recurring price id) in the staging Vercel env;
+     (2) set a **default payment link** in the Paddle sandbox dashboard (Checkout settings — else
+     `transactions.create` returns no checkout URL). Then: sign in → try to deposit → paywall →
+     Subscribe → sandbox card `4242 4242 4242 4242` → the webhook flips `subscriptionActive` → the app
+     poll sees it → the deposit gate opens. (`4000 0027 6000 3184` = succeeds-then-declines-on-renewal,
+     to test the revoke path later.)
 6. **Sign + notarize + ship** — Developer ID signing + notarization + auto-update + download page. *Gate:*
    a notarized build launches Gatekeeper-clean on a non-dev Mac and self-updates.
 

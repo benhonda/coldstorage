@@ -56,6 +56,15 @@ const api: ColdstoreApi = {
     ipcRenderer.on(IPC.vaultStatusChanged, handler);
     return () => ipcRenderer.removeListener(IPC.vaultStatusChanged, handler);
   },
+
+  getEntitlement: () => ipcRenderer.invoke(IPC.entitlementStatus),
+  subscribe: () => ipcRenderer.invoke(IPC.entitlementSubscribe),
+  onEntitlement: (listener) => {
+    const handler = (_e: IpcRendererEvent, status: unknown): void =>
+      (listener as (s: unknown) => void)(status);
+    ipcRenderer.on(IPC.entitlementStatusChanged, handler);
+    return () => ipcRenderer.removeListener(IPC.entitlementStatusChanged, handler);
+  },
   // Resolve a dropped/picked File → absolute path here in the preload (webUtils isn't in the renderer).
   pathForFile: (file: File) => webUtils.getPathForFile(file),
 };

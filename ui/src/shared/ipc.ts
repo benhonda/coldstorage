@@ -71,6 +71,12 @@ export const IPC = {
   vaultAckRecoveryCode: "vault:ackRecoveryCode",
   /** push: the vault status changed, `(status)`. */
   vaultStatusChanged: "vault:statusChanged",
+  /** invoke: current {@link EntitlementStatus}. */
+  entitlementStatus: "entitlement:status",
+  /** invoke: start a subscription checkout (opens the system browser + polls). */
+  entitlementSubscribe: "entitlement:subscribe",
+  /** push: the entitlement status changed, `(status)`. */
+  entitlementStatusChanged: "entitlement:statusChanged",
 } as const;
 
 /** Whether the main process currently holds a live socket to `coldstored`. */
@@ -112,6 +118,19 @@ export interface VaultStatus {
   /** Set ONLY immediately after a fresh signup mint: the one-time recovery code to show the user once.
    * Never persisted, never re-derivable. Cleared as soon as the user acknowledges saving it. */
   recoveryCode: string | null;
+  error: string | null;
+}
+
+/**
+ * Subscription entitlement (PROD.md Phase 5c) — the billing gate on DEPOSITS (browse/restore stay open).
+ * `known` guards against gating before the first check lands (don't paywall on a transient unknown).
+ */
+export interface EntitlementStatus {
+  /** Whether entitlement has been fetched at least once for the signed-in user. */
+  known: boolean;
+  active: boolean;
+  /** A checkout is open in the browser and we're polling for the webhook to flip `active`. */
+  checkingOut: boolean;
   error: string | null;
 }
 
@@ -177,4 +196,11 @@ export interface ColdstoreApi {
   acknowledgeRecoveryCode(): Promise<void>;
   /** Subscribe to vault status changes. */
   onVaultStatus(listener: (status: VaultStatus) => void): () => void;
+  /** Current subscription entitlement — for first paint before any push arrives. */
+  getEntitlement(): Promise<EntitlementStatus>;
+  /** Start a subscription checkout: opens Paddle checkout in the system browser and polls until the
+   * webhook marks the subscription active (watch {@link onEntitlement}). Rejects if checkout can't start. */
+  subscribe(): Promise<void>;
+  /** Subscribe to entitlement changes. */
+  onEntitlement(listener: (status: EntitlementStatus) => void): () => void;
 }

@@ -30,6 +30,8 @@ import { VaultStore } from "./vault/storage.ts";
 import { KeyBlobClient } from "./vault/keyblob-client.ts";
 import { resolveAccountApiBaseUrl } from "./vault/config.ts";
 import { registerVaultIpc } from "./vault/ipc.ts";
+import { EntitlementManager } from "./entitlement/manager.ts";
+import { registerEntitlementIpc } from "./entitlement/ipc.ts";
 
 // Pin the app name BEFORE any `getPath("userData")` call. The client resolves the socket path at module
 // load and the daemon supervisor resolves it in `whenReady`; both derive from userData (= appData + app
@@ -61,14 +63,30 @@ const vault = new VaultManager(
 );
 const disposeVaultIpc = registerVaultIpc(vault);
 
+// Subscription entitlement (billing gate on deposits). Shares the account backend + the signed-in ID
+// token; drives Paddle checkout in the system browser and polls until the webhook flips it active.
+const accountApiBaseUrl = resolveAccountApiBaseUrl();
+const entitlement = new EntitlementManager(accountApiBaseUrl, () => auth.getFreshIdToken());
+const disposeEntitlementIpc = registerEntitlementIpc(entitlement);
+
 // ── Deep links (macOS delivers them as open-url, launch AND while running). Registered before
 //    `ready` because a URL can be what LAUNCHES the app — those arrive pre-ready and are buffered.
 //    (The scheme itself comes from Info.plist CFBundleURLTypes — electron-builder `protocols` — so
 //    this is packaged-only in practice; setAsDefaultProtocolClient just claims default-handler.) ──
 let pendingDeepLink: string | null = null;
+// Route a deep link: the checkout-complete nudge → an entitlement re-check; everything else → the auth
+// callback handler (which ignores non-auth URLs).
+const handleDeepLink = (url: string): void => {
+  if (url.startsWith("coldstorage://checkout-complete")) {
+    entitlement.notifyCheckoutComplete();
+    focusMainWindow();
+    return;
+  }
+  void auth.handleCallbackUrl(url);
+};
 app.on("open-url", (event, url) => {
   event.preventDefault();
-  if (app.isReady()) void auth.handleCallbackUrl(url);
+  if (app.isReady()) handleDeepLink(url);
   else pendingDeepLink = url;
 });
 if (app.isPackaged) app.setAsDefaultProtocolClient("coldstorage");
@@ -81,7 +99,7 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on("second-instance", (_event, argv) => {
     const url = argv.find((a) => a.startsWith("coldstorage://"));
-    if (url) void auth.handleCallbackUrl(url);
+    if (url) handleDeepLink(url);
     focusMainWindow();
   });
 }
@@ -112,6 +130,8 @@ const onProvisionFailure = (e: unknown): void => {
 };
 const offIdToken = auth.onIdToken((idToken) => {
   void provisionDaemon(idToken).catch(onProvisionFailure);
+  // Re-check the subscription on every fresh token (sign-in + refresh) — independent of the daemon.
+  void entitlement.refresh();
 });
 const offClientConnect = client.on("connect", () => {
   void auth
@@ -126,7 +146,10 @@ const offClientConnect = client.on("connect", () => {
 let prevAuthState = auth.status().state;
 const offAuthFocus = auth.onStatus((s) => {
   if (prevAuthState === "signingIn" && s.state === "signedIn") focusMainWindow();
-  if (prevAuthState !== "signedOut" && s.state === "signedOut") void vault.relock();
+  if (prevAuthState !== "signedOut" && s.state === "signedOut") {
+    void vault.relock();
+    entitlement.reset();
+  }
   prevAuthState = s.state;
 });
 
@@ -179,7 +202,7 @@ app.whenReady().then(() => {
   // LAUNCHED the app. Both async; the renderer just sees status pushes whenever they land.
   void auth.restore().then(() => {
     if (pendingDeepLink) {
-      void auth.handleCallbackUrl(pendingDeepLink);
+      handleDeepLink(pendingDeepLink);
       pendingDeepLink = null;
     }
   });
@@ -202,11 +225,13 @@ app.on("will-quit", () => {
   disposeSystem();
   disposeAuthIpc();
   disposeVaultIpc();
+  disposeEntitlementIpc();
   offIdToken();
   offClientConnect();
   offAuthFocus();
   auth.dispose();
   vault.dispose();
+  entitlement.dispose();
   client.close();
   stopDaemon(); // terminate the supervised child (no-op in dev)
 });

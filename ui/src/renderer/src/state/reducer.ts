@@ -11,6 +11,7 @@ import type {
   ConnectionState,
   DaemonEventName,
   DaemonEvents,
+  EntitlementStatus,
   ListedFile,
   Pricing,
   Source,
@@ -65,6 +66,8 @@ export interface AppState {
   /** Zero-knowledge vault status (Phase 5b), pushed from main. Starts locked; only gates the app once
    * the user is signed in (a dogfood install never signs in, so it never matters). */
   vault: VaultStatus;
+  /** Subscription entitlement (Phase 5c), pushed from main. Gates deposits (not browse/restore). */
+  entitlement: EntitlementStatus;
   status: Status | null;
   /** The browsable tree, straight from the daemon's `listFiles` (journal-backed). Raw wire shape —
    * the file-browser maps it to its own model. Empty until the first read lands. */
@@ -90,6 +93,7 @@ export const initialState: AppState = {
   connection: "connecting",
   auth: { configured: false, state: "signedOut", email: null, error: null, emailAvailable: false },
   vault: { state: "locked", recoveryCode: null, error: null },
+  entitlement: { known: false, active: false, checkingOut: false, error: null },
   status: null,
   files: [],
   excludes: [],
@@ -112,6 +116,7 @@ export type Action =
   | { type: "initialized" }
   | { type: "authChanged"; auth: AuthStatus }
   | { type: "vaultChanged"; vault: VaultStatus }
+  | { type: "entitlementChanged"; entitlement: EntitlementStatus }
   | { type: "statusLoaded"; status: Status }
   | { type: "sourcesLoaded"; sources: Source[] }
   | { type: "filesLoaded"; files: ListedFile[] }
@@ -161,6 +166,9 @@ export const reducer = (state: AppState, action: Action): AppState => {
 
     case "vaultChanged":
       return { ...state, vault: action.vault };
+
+    case "entitlementChanged":
+      return { ...state, entitlement: action.entitlement };
 
     case "statusLoaded":
       return { ...state, status: action.status };

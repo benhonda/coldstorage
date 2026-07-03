@@ -4,7 +4,7 @@
  * real store correctly: initial fetch, refetch-on-(re)connect, and sourcesChanged → listSources.
  */
 import { describe, expect, test } from "bun:test";
-import type { AuthStatus, ColdstoreApi, ConnectionState, ListedFile, Source, Status, VaultStatus } from "../../../shared/ipc.ts";
+import type { AuthStatus, ColdstoreApi, ConnectionState, EntitlementStatus, ListedFile, Source, Status, VaultStatus } from "../../../shared/ipc.ts";
 import { connectController } from "./controller.ts";
 import { createStore } from "./store.ts";
 
@@ -29,6 +29,7 @@ const makeApi = (initial: ConnectionState) => {
   let lifeCb: ((s: ConnectionState) => void) | null = null;
   let authCb: ((s: AuthStatus) => void) | null = null;
   let vaultCb: ((s: VaultStatus) => void) | null = null;
+  let entCb: ((s: EntitlementStatus) => void) | null = null;
 
   const api: ColdstoreApi = {
     request: ((method: string) => {
@@ -67,6 +68,12 @@ const makeApi = (initial: ConnectionState) => {
       vaultCb = cb;
       return () => (vaultCb = null);
     },
+    getEntitlement: () => Promise.resolve({ known: false, active: false, checkingOut: false, error: null }),
+    subscribe: () => Promise.resolve(),
+    onEntitlement: (cb) => {
+      entCb = cb;
+      return () => (entCb = null);
+    },
   };
 
   return {
@@ -82,6 +89,7 @@ const makeApi = (initial: ConnectionState) => {
       eventCb?.(name as never, data as never),
     fireAuth: (s: AuthStatus) => authCb?.(s),
     fireVault: (s: VaultStatus) => vaultCb?.(s),
+    fireEntitlement: (s: EntitlementStatus) => entCb?.(s),
   };
 };
 
@@ -216,5 +224,16 @@ describe("controller sync policy", () => {
 
     f.fireVault({ state: "unlocked", recoveryCode: null, error: null });
     expect(store.getState().vault).toEqual({ state: "unlocked", recoveryCode: null, error: null });
+  });
+
+  test("reads the initial entitlement and folds pushed changes", async () => {
+    const f = makeApi("connected");
+    const store = createStore();
+    connectController(f.api, store);
+    await tick();
+    expect(store.getState().entitlement.active).toBe(false); // initial pull landed
+
+    f.fireEntitlement({ known: true, active: true, checkingOut: false, error: null });
+    expect(store.getState().entitlement).toEqual({ known: true, active: true, checkingOut: false, error: null });
   });
 });

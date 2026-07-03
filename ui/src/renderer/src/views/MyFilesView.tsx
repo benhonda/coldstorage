@@ -53,6 +53,10 @@ interface Props {
   /** Live per-file upload progress (store `run.uploadProgress`), keyed by daemon file id — drives the
    * determinate bar on an uploading row. Empty between runs. */
   uploadProgress: Record<string, UploadProgress>;
+  /** Whether NEW deposits are allowed (Phase 5c). False = signed in but no active subscription; a deposit
+   * attempt calls {@link onDepositBlocked} (→ the paywall) instead of uploading. True in dogfood mode. */
+  canDeposit: boolean;
+  onDepositBlocked: () => void;
 }
 
 type ViewMode = "list" | "grid";
@@ -70,6 +74,8 @@ export const MyFilesView = ({
   filesApi,
   pricing,
   uploadProgress,
+  canDeposit,
+  onDepositBlocked,
 }: Props): React.JSX.Element => {
   const [dir, setDir] = useState("");
   const [view, setView] = useState<ViewMode>("list");
@@ -272,6 +278,12 @@ export const MyFilesView = ({
     srcByBase: Map<string, string>; // basename → local srcPath (files only) so a failed upload can retry
     fallback: string[]; // target relativePaths to assume if preview is unavailable
   }): Promise<void> => {
+    // Subscription gate (Phase 5c): backing up NEW files needs an active sub. Bail to the paywall before
+    // any preview/optimistic rows so a blocked drop leaves the tree untouched.
+    if (!canDeposit) {
+      onDepositBlocked();
+      return;
+    }
     let preview: DepositPreviewItem[];
     try {
       preview = await api.request(
@@ -335,6 +347,10 @@ export const MyFilesView = ({
   // No preview/prompt — a retry targets the same path it already owns (overwrite-self is a no-op upsert).
   const retryDeposit = (file: ArchivedFile): void => {
     if (!file.srcPath) return;
+    if (!canDeposit) {
+      onDepositBlocked();
+      return;
+    }
     const srcPath = file.srcPath;
     filesApi.setDepositStatus([file.id], "uploading");
     exec(() =>

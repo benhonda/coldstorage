@@ -177,6 +177,11 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   `keyblob-client.ts` = blind GET/PUT at the account backend; `storage.ts` = per-account MK escrow in
   safeStorage. Renderer sees only `VaultStatus` (never key material, except the one-time code to show).
   Gate UI: `views/RecoveryCodeView.tsx`. The daemon handoff runs `authenticate` THEN vault `provision`.
+- `ui/src/main/entitlement/` — subscription billing (PROD.md Phase 5c): `manager.ts` fetches
+  `GET /entitlement` and drives `subscribe()` (POST `/checkout-session` → open Paddle checkout in the
+  system browser → poll until the webhook flips active). Renderer sees only `EntitlementStatus`. A SOFT
+  gate on DEPOSITS (not browse/restore): `MyFilesView`'s deposit paths bail to `views/SubscribeModal.tsx`
+  when unsubscribed; Settings shows the state. `coldstorage://checkout-complete` is a check-now nudge.
 - `src/renderer/src/styles/tokens/` — the 5 DS token CSS files **vendored verbatim** (SSOT — re-sync,
   don't hand-edit) from the coldstorage Design System (Claude Design `41ebafc1`), ported to native
   React 19 TSX (the DS's UMD/CDN runtime isn't consumable in electron-vite). Primitives in

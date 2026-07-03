@@ -9,7 +9,7 @@
  * plain storage line, a quiet status line only when the background uploader isn't running, and a
  * clickable getting-back indicator that opens the restore queue.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icon, IconButton } from "./ui/primitives.tsx";
 import { Sidebar, type NavItem } from "./ui/layout.tsx";
 import type { Store } from "./state/store.ts";
@@ -26,6 +26,7 @@ import { MyFilesView } from "./views/MyFilesView.tsx";
 import { SettingsView, type SettingsApi } from "./views/SettingsView.tsx";
 import { SignInView } from "./views/SignInView.tsx";
 import { RecoveryCodeShow, RecoveryCodeEnter, VaultGate } from "./views/RecoveryCodeView.tsx";
+import { SubscribeModal } from "./views/SubscribeModal.tsx";
 
 /** Plain status when the background uploader isn't connected — no "daemon" jargon, quiet when healthy. */
 const NOT_RUNNING: Partial<Record<ConnectionState, string>> = {
@@ -56,7 +57,16 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   const [dismissedError, setDismissedError] = useState<string | null>(null);
   const [queueOpen, setQueueOpen] = useState(false);
   const [failuresOpen, setFailuresOpen] = useState(false);
+  const [paywallOpen, setPaywallOpen] = useState(false);
   const { width: sidebarWidth, onResizeStart } = useResizable("cs-sidebar-width", 232, 200, 360);
+
+  // Deposit gate (Phase 5c): only a signed-in (configured) user whose subscription we've CONFIRMED
+  // inactive is gated — dogfood mode and the pre-first-check window stay open (the real enforcement is
+  // the later hard gate; this is the soft app-side one). Close the paywall the moment a sub goes active.
+  const canDeposit = !state.auth.configured || !state.entitlement.known || state.entitlement.active;
+  useEffect(() => {
+    if (state.entitlement.active) setPaywallOpen(false);
+  }, [state.entitlement.active]);
 
   const exec: Exec = (fn) => {
     setCmdError(null);
@@ -231,6 +241,8 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           filesApi={filesApi}
           pricing={state.pricing}
           uploadProgress={state.run?.uploadProgress ?? {}}
+          canDeposit={canDeposit}
+          onDepositBlocked={() => setPaywallOpen(true)}
         />
       )}
       {route === "settings" && (
@@ -245,6 +257,16 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           files={filesApi.files}
           virtualFolders={filesApi.virtualFolders}
           auth={state.auth}
+          entitlement={state.entitlement}
+          onSubscribe={() => setPaywallOpen(true)}
+        />
+      )}
+
+      {paywallOpen && (
+        <SubscribeModal
+          entitlement={state.entitlement}
+          onSubscribe={() => void api.subscribe()}
+          onClose={() => setPaywallOpen(false)}
         />
       )}
 

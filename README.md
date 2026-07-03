@@ -67,10 +67,11 @@ Everything runs through the root [`Taskfile.yml`](./Taskfile.yml) (`task --list`
   Phase 4's production lane is deliberately deferred until Phase 5/6 need it).
 
 **Open (priority order):**
-1. **[`PROD.md`](./PROD.md) Phase 5 — auth + paywall UX, IN PROGRESS (2026-07-02).** 5a (Google
-   sign-in steel thread: system-browser PKCE → `coldstorage://` callback → daemon `authenticate`) is
-   built, tests green; its live gate is Ben's Mac run. Then 5b (email-OTP + recovery code + ZK
-   wiring), 5c (Paddle subscribe flow), and Phase 6 (Developer ID sign + notarize + ship).
+1. **[`PROD.md`](./PROD.md) Phase 5 — auth + paywall UX: BUILT (2026-07-02).** 5a (Google sign-in +
+   per-user S3 isolation) and 5b (ZK vault + recovery code) are gate-proven on Ben's Mac; 5b-3
+   (email-OTP lane) and 5c (Paddle subscribe flow + deposit paywall) are built with tests green,
+   pending Ben's gate runs (5c needs a sandbox `PADDLE_PRICE_ID` + a Paddle default payment link).
+   Then Phase 6 (Developer ID sign + notarize + ship).
 2. **Packaging** — TCC identity (Photos pane still says "coldstored"), background-run UX
    ([`ui/PACKAGING.md`](./ui/PACKAGING.md)).
 3. **UI-lane gaps** — per-file live status, skipped/failed counts, retry depth, polish

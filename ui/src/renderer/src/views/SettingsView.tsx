@@ -6,7 +6,7 @@
  * daemon's pricing rate card).
  */
 import { useState } from "react";
-import type { AuthStatus, Pricing, Source } from "../../../shared/ipc.ts";
+import type { AuthStatus, EntitlementStatus, Pricing, Source } from "../../../shared/ipc.ts";
 import type { ViewProps } from "./types.ts";
 import type { ArchivedFile } from "./files/model.ts";
 import { baseName, formatBytes } from "./files/model.ts";
@@ -45,10 +45,15 @@ export const SettingsView = ({
   files,
   virtualFolders,
   auth,
+  entitlement,
+  onSubscribe,
 }: ViewProps & {
   /** Sign-in status (Phase 5). The account card renders only for a configured (multi-user) install —
    * dogfood mode has no account to show. */
   auth: AuthStatus;
+  /** Subscription status (Phase 5c) + a subscribe entry point (non-deposit path to checkout). */
+  entitlement: EntitlementStatus;
+  onSubscribe: () => void;
   sources: Source[];
   /** A scan is in flight — the LIVE run state (`state.run.active`), folded from runStarted/runFinished.
    * NOT `status.running`, which only updates on a getStatus poll and so never flips during a quick run. */
@@ -265,6 +270,18 @@ export const SettingsView = ({
           }
         >
           <KeyValueRow label="Signed in as" value={auth.email ?? "—"} />
+          <KeyValueRow
+            label="Subscription"
+            value={
+              entitlement.active ? (
+                <Badge tone="success" icon="check">Active</Badge>
+              ) : (
+                <Button size="sm" onClick={onSubscribe}>
+                  {entitlement.checkingOut ? "Finishing…" : "Subscribe"}
+                </Button>
+              )
+            }
+          />
         </Card>
       )}
     </Page>
