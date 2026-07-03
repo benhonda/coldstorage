@@ -14,8 +14,10 @@ TF-owned Vercel env vars, `~>` pins, verify-with-plan / never-apply) — unlike
 - **Vercel project env vars** on `coldstorage-account-backend` (`prj_IhOlkinKj2zIuHQBBTJhdP7s008w`):
   TF-managed (`AWS_ROLE_ARN`, `AWS_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_USER_POOL_CLIENT_ID` —
   the last two read cross-component from `infra/coldstorage/live/production`'s outputs, not
-  hand-copied; `PADDLE_ENVIRONMENT`) and manual secrets (`DATABASE_URL`, `PADDLE_WEBHOOK_SECRET`,
-  `PADDLE_API_KEY` — Terraform declares the keys, values are set by hand in the Vercel dashboard).
+  hand-copied; `PADDLE_ENVIRONMENT`; plus, when set per-stack, the non-secret `PADDLE_PRICE_ID` and
+  `PADDLE_CLIENT_TOKEN` — see `modules/stack/variables.tf`) and manual secrets (`DATABASE_URL`,
+  `PADDLE_WEBHOOK_SECRET`, `PADDLE_API_KEY` — Terraform declares the keys, values are set by hand in
+  the Vercel dashboard; the API key needs Transactions read+write since 5c's `transactions.create`).
 - **A Vercel custom environment** (`staging`, branch-tracked) — gives the sandbox-Paddle
   testing branch a stable URL, isolated env-var scope from production.
 - **An OIDC IAM role** per env (`aws_iam_role.vercel`) — currently dormant (this service makes

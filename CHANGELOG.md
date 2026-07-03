@@ -2,6 +2,7 @@
 
 ## 2026-07-03
 
+- docs: Phase-5-wrap sync — PROD.md clears 5b's stale remainder, re-verifies daemon sign-out as still open; infra README documents `PADDLE_PRICE_ID`/`PADDLE_CLIENT_TOKEN` + the API key's Transactions scope.
 - docs: PROD.md — 5c gate PASSED (Paddle subscribe loop live on staging), Phase 5 steel thread DONE; PADDLE_API_KEY war story (key needs Transactions read+write).
 - feat: backend `GET /checkout` — the Paddle default-payment-link page (Paddle.js + `_ptxn` auto-open); new TF-managed `PADDLE_CLIENT_TOKEN` per-stack, staging's sandbox token + `paddle_price_id` filled in.
 - docs: PROD.md Phase 5c re-scoped DONE → BUILT (steel thread) — single-price proof for dogfooding; multi-plan paywall (`GET /plans` + tier picker) deferred to a pre-launch UI session.

@@ -392,12 +392,7 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      with NO password is first-class for passwordless pools; `ConfirmSignUp`'s `Session` feeds
      `InitiateAuth USER_AUTH` so signup costs the user exactly ONE emailed code; sign-in =
      `InitiateAuth` + `PREFERRED_CHALLENGE: EMAIL_OTP` → `RespondToAuthChallenge` — all callable as
-     plain unauthenticated HTTPS JSON-RPC (`X-Amz-Target`), no AWS SDK in the app. Plus the ZK leg:
-     daemon key-blob mint/unlock commands wiring `UserMasterKeyProvider` (today `coldstored` still
-     uses `LocalFileKEK`), recovery-code capture UI, key-blob GET/PUT against the backend, Keychain
-     MK caching, and a daemon sign-out/deauth command (today the daemon keeps its STS creds + prefix
-     until expiry after an app-side sign-out). *Gate:* fresh email signs up with one code, recovery
-     code shown once, key-blob lands server-side, deposit encrypts under the unlocked MK.
+     plain unauthenticated HTTPS JSON-RPC (`X-Amz-Target`), no AWS SDK in the app.
    - **5c — paywall + subscribe (Paddle): DONE ✅ — steel thread, gate PASSED (built 2026-07-02, backend
      `bun run typecheck`/`bun test` green + `ui:typecheck`/86 ui tests green; gate run 2026-07-03, Ben).** **Scope: single-price proof-of-concept
      for dogfooding.** Real multi-plan picker + pricing page ≠ done (deferred to pre-launch refinement).
@@ -467,7 +462,7 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
   identity_provider=Google` 302s to accounts.google.com with the full client id. (War story: the first
   apply stored client_id `1000` — the creds task had used `read GID`, and GID is a READONLY built-in
   (the unix group id) in go-task's mvdan/sh; renamed vars + shape guards now prevent that class.)
-  Remaining for P5 (app side): system-browser flow + `coldstorage://auth/callback` handling in Electron.
+  The app side (system-browser flow + `coldstorage://auth/callback` handling) landed + gate-passed in 5a.
 - **Free trial / plan tiers / retrieval-fee charging** — product/economics (private `strategy/`) — P4.
 - **[open] Same-email, two sign-in methods = two Cognito accounts.** A Google-federated user and an
   email-OTP user with the SAME address are separate profiles (separate `sub`s → separate key-blobs,
@@ -475,5 +470,8 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
   (`AdminLinkProviderForUser`, which must run BEFORE the federated first sign-in — a pre-signup
   Lambda). Surfaced by the 2026-07-02 research pass. Leaning: ship 5a/5b unlinked with plain copy
   ("sign in the way you signed up"), decide linking before public launch — but this is Ben's call.
-- **[open] Daemon-side sign-out** — app sign-out revokes tokens + drops the session, but the daemon
-  holds its STS creds/prefix until expiry (~1h). A `deauthenticate` control command rides with 5b.
+- **[open] Daemon-side sign-out** — app sign-out revokes tokens, drops the session, AND relocks the
+  vault (5b's `lockVault`, so no crypto happens after sign-out), but the daemon still holds its STS
+  creds + `vaultPrefix` until expiry (~1h). 5b shipped WITHOUT the once-planned `deauthenticate`
+  control command (verified 2026-07-03: no such command in `DaemonService.handle`) — still open,
+  land it whenever the daemon control surface is next touched (pre-launch at the latest).
