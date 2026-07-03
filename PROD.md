@@ -283,7 +283,9 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
    in the staging DB, confirmed by Ben in the Neon console — "webhook flips state" proven with zero
    checkout UI. "Upload blocked when inactive" (the daemon consuming `/entitlement`) rides with
    Phase 5's auth handoff.
-5. **App auth + paywall UX — IN PROGRESS (started 2026-07-02).** Passwordless sign-in/up (Google via
+5. **App auth + paywall UX — DONE ✅ (steel thread; 5a/5b/5c all gate-PASSED, last 2026-07-03).
+   Deferred by design: multi-plan paywall + moving the checkout page off `api.*` (pre-launch, see 5c) and
+   the daemon-side sign-out command (open sub-decision below).** Passwordless sign-in/up (Google via
    Cognito managed login in the SYSTEM browser — Google blocks embedded webviews — code+PKCE to the
    `coldstorage://` callback; email-OTP codes via `ALLOW_USER_AUTH` as the no-Google path) +
    recovery-code capture + subscribe flow in the Electron UI; token handed to the daemon. Cut
@@ -318,7 +320,8 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      dogfood→multi-user is a clean RESET, not a migration (`task daemon:reset:{local,vault}`) — the
      pre-auth archive at `blobs/<hash>` is unreachable from a Cognito identity anyway, so no S3
      re-prefix / journal-rewrite / key-rewrap migration is needed.
-   - **5b — email-OTP lane + signup + recovery code + ZK wiring (IN PROGRESS, started 2026-07-02).**
+   - **5b — email-OTP lane + signup + recovery code + ZK wiring — DONE ✅ (2026-07-02, all three
+     sub-steps gate-passed).**
      Re-sliced hardest-first: the ZK vault spine is the load-bearing part, so it goes first and is
      provable through the *existing* Google sign-in; email-OTP is genuinely independent scope (5b-3).
      **Architecture decision (2026-07-02):** all ZK crypto stays in Swift/libsodium (daemon-side); the
@@ -395,8 +398,8 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      MK caching, and a daemon sign-out/deauth command (today the daemon keeps its STS creds + prefix
      until expiry after an app-side sign-out). *Gate:* fresh email signs up with one code, recovery
      code shown once, key-blob lands server-side, deposit encrypts under the unlocked MK.
-   - **5c — paywall + subscribe (Paddle): BUILT ✅ — steel thread (2026-07-02, backend `bun run
-     typecheck`/`bun test` green + `ui:typecheck`/86 ui tests green).** **Scope: single-price proof-of-concept
+   - **5c — paywall + subscribe (Paddle): DONE ✅ — steel thread, gate PASSED (built 2026-07-02, backend
+     `bun run typecheck`/`bun test` green + `ui:typecheck`/86 ui tests green; gate run 2026-07-03, Ben).** **Scope: single-price proof-of-concept
      for dogfooding.** Real multi-plan picker + pricing page ≠ done (deferred to pre-launch refinement).
      **The hard part (server-side integration) is built correctly:** Backend `POST /checkout-session`
      (requireAuth) creates the Paddle transaction SERVER-SIDE via `@paddle/paddle-node-sdk`
@@ -418,16 +421,21 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      `GET /checkout` serves it (Paddle.js CDN + `Environment.set` from `PADDLE_ENVIRONMENT` +
      `Initialize({token})`; Paddle.js auto-opens on `_ptxn`). Needs `PADDLE_CLIENT_TOKEN` — a client-side
      token, public by design per Paddle docs, so TF-managed per-stack like the price id
-     (`paddle_client_token`). Staging `paddle_price_id` is set (500 GB / 1-yr sandbox price); plan verified
-     surgical (1 to add). **Gate (Ben) — remaining steps:**
-     (1) mint a sandbox **client-side token** (Paddle dashboard → Developer tools → Authentication),
-     paste it into `infra/account-backend/live/staging/terragrunt.hcl` (`paddle_client_token = "test_…"`)
-     and `task tf:account-backend:apply ENV=staging`, then redeploy staging (env vars apply on next deploy);
-     (2) set the **default payment link** in the Paddle sandbox dashboard (Checkout settings) to
-     **`https://api-staging.coldstorage.sh/checkout`**. Then: sign in → try to deposit → paywall → Subscribe →
-     sandbox card `4242 4242 4242 4242` → the webhook flips `subscriptionActive` → the app poll sees it → the
-     deposit gate opens. (`4000 0027 6000 3184` = succeeds-then-declines-on-renewal, to test the revoke path
-     later.) **Future: multi-plan paywall** (get `GET /plans` from Paddle, render a tier/term picker, validate
+     (`paddle_client_token`). Staging `paddle_price_id` (500 GB / 1-yr sandbox price) + client token are set
+     and APPLIED (each plan verified surgical, 1 to add); sandbox **default payment link** set to
+     `https://api-staging.coldstorage.sh/checkout`; deployed page smoke-tested from outside (200, Paddle.js
+     from CDN, `environment: "sandbox"`).
+     **GATE PASSED ✅ (2026-07-03, Ben, Mac, staging lane):** the full loop live — sign in → deposit →
+     paywall → Subscribe → our `/checkout` page → Paddle sandbox checkout (card `4242 4242 4242 4242`) →
+     `subscription.*` webhook flipped `subscriptionActive` → the app poll saw it → subscription shows
+     active in the app. (`4000 0027 6000 3184` = succeeds-then-declines-on-renewal, to test the revoke
+     path later.) **War story (first gate attempt failed):** P4's deliberately zero-permission
+     PADDLE_API_KEY was fine when the backend only HMAC-verified webhooks, but `transactions.create`
+     returns `forbidden: "not authorized to create|read transaction"` with it — surfaced as an opaque
+     http-500 in the app, root-caused by reproducing the exact call locally against pulled staging creds.
+     Fixed: new sandbox API key with Transactions **read + write**, swapped into the staging
+     `PADDLE_API_KEY` in the Vercel dashboard, redeploy. **The production lane's live key must be minted
+     with Transactions read+write from day one.** **Future: multi-plan paywall** (get `GET /plans` from Paddle, render a tier/term picker, validate
      the chosen `priceId` at checkout) is a UX-heavy refinement — design-driven, defer to a dedicated UI
      session + pre-launch. **Also pre-launch: move the default-payment-link page off `api.*`** — customers
      shouldn't pay on an API hostname. The Phase 6 website (the download page forces it to exist) hosts the

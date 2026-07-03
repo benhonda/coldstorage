@@ -61,18 +61,17 @@ Everything runs through the root [`Taskfile.yml`](./Taskfile.yml) (`task --list`
 - **The UI** — My Files (drill-in browser, drop-to-upload, Finder-style collisions, reorganize,
   request-a-copy) + Settings (watched folders w/ mounts + per-source pause, exclude chips, real
   pricing), live progress + error surfacing. Packaged `ColdStorage.app` builds, connects, and uploads.
-- **Going-to-prod Phases 1–4** — Cognito live in prod, the daemon's per-user credential/prefix seam
+- **Going-to-prod Phases 1–5** — Cognito live in prod, the daemon's per-user credential/prefix seam
   fully wired (opt-in via env), ZK master-key primitives built + tested, account-backend staging lane
-  live at `api-staging.coldstorage.sh` with the Paddle-webhook gate proven ([`PROD.md`](./PROD.md);
-  Phase 4's production lane is deliberately deferred until Phase 5/6 need it).
+  live at `api-staging.coldstorage.sh` with the Paddle-webhook gate proven, and the whole Phase 5
+  auth + paywall steel thread gate-passed on real hardware — Google + email-OTP sign-in, ZK vault +
+  recovery code, and the Paddle subscribe→webhook→deposit-gate loop live on staging
+  ([`PROD.md`](./PROD.md); Phase 4's production lane stays deferred until Phase 6 needs it).
 
 **Open (priority order):**
-1. **[`PROD.md`](./PROD.md) Phase 5 — auth + paywall UX: BUILT (2026-07-02).** 5a (Google sign-in +
-   per-user S3 isolation) and 5b (ZK vault + recovery code) are gate-proven on Ben's Mac; 5b-3
-   (email-OTP lane) and 5c (Paddle subscribe flow + deposit paywall + the `GET /checkout`
-   default-payment-link page) are built with tests green, pending Ben's gate runs (5c needs a
-   sandbox `PADDLE_CLIENT_TOKEN` + the Paddle default payment link pointed at staging's `/checkout`).
-   Then Phase 6 (Developer ID sign + notarize + ship).
+1. **[`PROD.md`](./PROD.md) Phase 6 — sign + notarize + ship:** Developer ID signing, notarization,
+   auto-update, download page/website. Deferred-by-design stragglers ride along: multi-plan paywall +
+   moving the checkout page off `api.*` (pre-launch), daemon-side sign-out, the production backend lane.
 2. **Packaging** — TCC identity (Photos pane still says "coldstored"), background-run UX
    ([`ui/PACKAGING.md`](./ui/PACKAGING.md)).
 3. **UI-lane gaps** — per-file live status, skipped/failed counts, retry depth, polish
