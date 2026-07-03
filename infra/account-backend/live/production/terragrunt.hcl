@@ -35,6 +35,10 @@ inputs = {
   cognito_user_pool_id        = dependency.coldstorage.outputs.cognito_user_pool_id
   cognito_user_pool_client_id = dependency.coldstorage.outputs.cognito_user_pool_client_id
 
+  # The Paddle LIVE recurring price (PROD.md Phase 5c). Empty until the production Paddle catalog exists
+  # (prod lane deferred) — set to the live pri_… when it does.
+  paddle_price_id = ""
+
   # target=["production"] only, sensitive=true (has_staging=true above) per terraform.md's
   # env-var-ownership rule — these are REAL Paddle live-mode credentials + the real prod
   # Neon URL, never readable via `vercel env pull`. Set real values in the Vercel dashboard

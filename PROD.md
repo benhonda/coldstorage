@@ -400,8 +400,9 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      the transaction SERVER-SIDE via `@paddle/paddle-node-sdk` (`paddle.transactions.create` with
      `customData: {cognitoSub}` — the only reliable way to carry it; Paddle copies it to the subscription
      so the `subscription.*` webhooks link back) and returns `txn.checkout.url`; `PADDLE_PRICE_ID`
-     (optional env, non-secret) picks the plan, and the route errors clearly if it or the default payment
-     link is unset. App: `EntitlementManager` (`ui/src/main/entitlement/`) does `GET /entitlement` on
+     (non-secret) picks the plan — **TF-managed** per-stack (`paddle_price_id` in
+     `infra/account-backend/live/*/terragrunt.hcl`, folded into `tf_managed` only when set, so empty ⇒ no
+     env var), and the route errors clearly if it or the default payment link is unset. App: `EntitlementManager` (`ui/src/main/entitlement/`) does `GET /entitlement` on
      every fresh ID token, and `subscribe()` POSTs checkout-session → opens the URL in the system browser
      → polls `/entitlement` until the webhook flips active (webhook is the source of truth; a
      `coldstorage://checkout-complete` deep link is a check-now nudge into the same poll). **Deposit
@@ -410,7 +411,8 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      the pre-first-check window are never gated). Settings account card shows subscription state + a
      Subscribe entry. Tests: EntitlementManager refresh/subscribe/error branches (mocked fetch +
      electron shell) + the entitlement fold. **Gate (Ben) — needs two Paddle-dashboard/Vercel steps
-     first:** (1) set `PADDLE_PRICE_ID` (a sandbox recurring price id) in the staging Vercel env;
+     first:** (1) put the sandbox recurring price id in `infra/account-backend/live/staging/terragrunt.hcl`
+     (`paddle_price_id = "pri_…"`) and `task tf:account-backend:apply ENV=staging`;
      (2) set a **default payment link** in the Paddle sandbox dashboard (Checkout settings — else
      `transactions.create` returns no checkout URL). Then: sign in → try to deposit → paywall →
      Subscribe → sandbox card `4242 4242 4242 4242` → the webhook flips `subscriptionActive` → the app

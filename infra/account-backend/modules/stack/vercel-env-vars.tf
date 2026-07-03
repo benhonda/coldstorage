@@ -14,13 +14,16 @@ locals {
   # TF-managed: infra outputs + fully-determined-by-env values, always overwritten, never
   # secret. PADDLE_ENVIRONMENT is here (not a manual secret) because it's not external
   # secret material — it's fully determined by which stack this is.
-  tf_managed = {
+  # PADDLE_PRICE_ID is non-secret (exposed at checkout) but its value isn't TF-derivable — a per-stack
+  # catalog id — so it's a variable folded in here, and only when set (empty ⇒ omit the env var entirely
+  # rather than ship a blank one).
+  tf_managed = merge({
     AWS_ROLE_ARN                = aws_iam_role.vercel.arn
     AWS_REGION                  = var.aws_region
     COGNITO_USER_POOL_ID        = var.cognito_user_pool_id
     COGNITO_USER_POOL_CLIENT_ID = var.cognito_user_pool_client_id
     PADDLE_ENVIRONMENT          = local.is_prod ? "production" : "sandbox"
-  }
+  }, var.paddle_price_id != "" ? { PADDLE_PRICE_ID = var.paddle_price_id } : {})
 
   # terraform.md env-var-ownership, applied verbatim (not the git_branch approach an earlier
   # version of this file used — reverted, see PROD.md Phase 4 for why): prod-only ⇒ all 3
