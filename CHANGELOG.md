@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-03
+
+- chore: `add-and-commit`/`checkpoint` skills re-pinned `claude-haiku-4-5` → `claude-sonnet-5` @ `effort: low`, + both now demand a LIVE `git status`/`git diff` (never a stale in-session result); `.claude/settings.json` disables the AskUserQuestion timeout.
+
 ## 2026-07-02
 
 - docs: consolidate root docs into README + per-project DESIGN files — ROADMAP merged into README (now project entrance: orientation + state + dev gotchas); per-project DESIGN.md replaces root design docs; PROD.md is the active work SSOT.

@@ -1,7 +1,8 @@
 ---
 name: add-and-commit
 description: Add and commit changes, update changelog & readme.
-model: claude-haiku-4-5-20251001
+model: claude-sonnet-5
+effort: low
 ---
 
 Quick add + commit of ALL pending changes (except out of scope below). **No typecheck, no fix, no lint** — this is a stenographer, not a reviewer. Keep it quick. Changes may be ongoing - be aware.
@@ -10,7 +11,7 @@ File locations: @CHANGELOG.md , @README.md
 
 ## What to do
 
-1. `git status` + `git diff` to see what's pending (anywhere in the tree, not just cwd). **Dotfile config dirs count** — `.devcontainer/`, `.claude/`, `.agents/` and the like are in scope; don't skip them as "not code" or mistake them for scratch.
+1. Run `git status` + `git diff` now — a live call, never a memory or an earlier result from this session; the tree may have moved since. Cover the whole tree, not just cwd. **Dotfile config dirs count** — `.devcontainer/`, `.claude/`, `.agents/` and the like are in scope; don't skip them as "not code" or mistake them for scratch.
 2. Group the diff into logical commits. **Break it up if the changes are unrelated** — separate concerns get separate commits. One commit if everything coheres.
 3. For each commit: stage the relevant files by name (no `git add -A`), update the **nearest** CHANGELOG.md with a tight entry (see _Which changelog_ below), commit.
 4. Update README.md only if a pending change makes it factually wrong. Don't polish it.
