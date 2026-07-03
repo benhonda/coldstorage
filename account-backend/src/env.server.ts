@@ -18,6 +18,11 @@ const envSchema = z.object({
    *  (sandbox vs live catalogs differ), NOT a secret. Optional so the rest of the service boots without
    *  it — `POST /checkout-session` returns a clear error if it's unset. */
   PADDLE_PRICE_ID: z.string().optional(),
+  /** Paddle CLIENT-SIDE token (dashboard → Developer tools → Authentication) for the /checkout
+   *  page's Paddle.js. Public by design (Paddle: "safe to expose in frontend code"), NOT the API
+   *  key. Environment-specific like the price id; optional so the service boots without it —
+   *  `GET /checkout` errors clearly if unset. */
+  PADDLE_CLIENT_TOKEN: z.string().optional(),
   /** Cognito User Pool id, e.g. "ca-central-1_XXXXXXXXX" — aws-jwt-verify derives the
    *  region + JWKS URL from this, so no separate region var is needed. */
   COGNITO_USER_POOL_ID: z.string().min(1),

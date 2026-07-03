@@ -39,6 +39,10 @@ inputs = {
   # (prod lane deferred) — set to the live pri_… when it does.
   paddle_price_id = ""
 
+  # Paddle LIVE client-side token for the GET /checkout default-payment-link page (public by design,
+  # like the price id). Empty until the live Paddle account exists — set to the live_… token then.
+  paddle_client_token = ""
+
   # target=["production"] only, sensitive=true (has_staging=true above) per terraform.md's
   # env-var-ownership rule — these are REAL Paddle live-mode credentials + the real prod
   # Neon URL, never readable via `vercel env pull`. Set real values in the Vercel dashboard

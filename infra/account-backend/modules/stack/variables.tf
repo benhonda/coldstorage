@@ -55,3 +55,9 @@ variable "paddle_price_id" {
   default     = ""
   description = "The Paddle recurring price id the checkout sells (PROD.md Phase 5c). NOT a secret (it's exposed at checkout), so it's TF-managed here per-stack rather than dashboard-set — sandbox vs live catalogs differ. Empty ⇒ the env var isn't set (checkout returns a clear 'set PADDLE_PRICE_ID' error until you fill this in)."
 }
+
+variable "paddle_client_token" {
+  type        = string
+  default     = ""
+  description = "Paddle CLIENT-SIDE token (dashboard → Developer tools → Authentication) for the GET /checkout page's Paddle.js — the default-payment-link page the hosted checkout renders on. Public by design (Paddle: 'safe to expose in frontend code'), NOT the API key; per-stack like paddle_price_id (sandbox test_… vs live live_…). Empty ⇒ the env var isn't set (/checkout returns a clear 'set PADDLE_CLIENT_TOKEN' error until you fill this in)."
+}

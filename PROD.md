@@ -412,16 +412,28 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      `SubscribeModal` when `canDeposit` is false — a SOFT gate on NEW deposits only (browse/restore stay open,
      and dogfood + the pre-first-check window are never gated). Settings account card shows subscription state +
      a Subscribe entry. Tests: EntitlementManager refresh/subscribe/error branches (mocked fetch + electron
-     shell) + the entitlement fold. **Gate (Ben) — needs two Paddle-dashboard/Vercel steps first:**
-     (1) put a sandbox recurring price id in `infra/account-backend/live/staging/terragrunt.hcl`
-     (`paddle_price_id = "pri_…"`) and `task tf:account-backend:apply ENV=staging`;
-     (2) set a **default payment link** in the Paddle sandbox dashboard (Checkout settings — else
-     `transactions.create` returns no checkout URL). Then: sign in → try to deposit → paywall → Subscribe →
+     shell) + the entitlement fold. **Default-payment-link page BUILT (2026-07-03):** Paddle Billing has
+     no Paddle-hosted checkout page — `checkout.url` is literally `<default payment link>?_ptxn=<txn_id>`
+     and the checkout renders on OUR page's Paddle.js (verified vs Paddle docs 2026-07-03). New backend
+     `GET /checkout` serves it (Paddle.js CDN + `Environment.set` from `PADDLE_ENVIRONMENT` +
+     `Initialize({token})`; Paddle.js auto-opens on `_ptxn`). Needs `PADDLE_CLIENT_TOKEN` — a client-side
+     token, public by design per Paddle docs, so TF-managed per-stack like the price id
+     (`paddle_client_token`). Staging `paddle_price_id` is set (500 GB / 1-yr sandbox price); plan verified
+     surgical (1 to add). **Gate (Ben) — remaining steps:**
+     (1) mint a sandbox **client-side token** (Paddle dashboard → Developer tools → Authentication),
+     paste it into `infra/account-backend/live/staging/terragrunt.hcl` (`paddle_client_token = "test_…"`)
+     and `task tf:account-backend:apply ENV=staging`, then redeploy staging (env vars apply on next deploy);
+     (2) set the **default payment link** in the Paddle sandbox dashboard (Checkout settings) to
+     **`https://api-staging.coldstorage.sh/checkout`**. Then: sign in → try to deposit → paywall → Subscribe →
      sandbox card `4242 4242 4242 4242` → the webhook flips `subscriptionActive` → the app poll sees it → the
      deposit gate opens. (`4000 0027 6000 3184` = succeeds-then-declines-on-renewal, to test the revoke path
      later.) **Future: multi-plan paywall** (get `GET /plans` from Paddle, render a tier/term picker, validate
      the chosen `priceId` at checkout) is a UX-heavy refinement — design-driven, defer to a dedicated UI
-     session + pre-launch.
+     session + pre-launch. **Also pre-launch: move the default-payment-link page off `api.*`** — customers
+     shouldn't pay on an API hostname. The Phase 6 website (the download page forces it to exist) hosts the
+     same two-script-tag checkout page on `coldstorage.sh`, and the LIVE Paddle account's default payment
+     link points there; sandbox keeps pointing at staging's `/checkout`. Nothing to undo — the setting is
+     per-Paddle-account.
 6. **Sign + notarize + ship** — Developer ID signing + notarization + auto-update + download page. *Gate:*
    a notarized build launches Gatekeeper-clean on a non-dev Mac and self-updates.
 

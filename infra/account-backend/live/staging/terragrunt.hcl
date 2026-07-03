@@ -33,10 +33,15 @@ inputs = {
   cognito_user_pool_id        = dependency.coldstorage.outputs.cognito_user_pool_id
   cognito_user_pool_client_id = dependency.coldstorage.outputs.cognito_user_pool_client_id
 
-  # The Paddle SANDBOX recurring price the checkout sells (PROD.md Phase 5c). Non-secret (it's exposed
-  # at checkout), so it lives here in TF, not the dashboard. TODO: replace "" with the sandbox price id
-  # (pri_…) from the Paddle sandbox catalog, then `task tf:account-backend:apply ENV=staging`.
-  paddle_price_id = ""
+  # The Paddle SANDBOX recurring price the checkout sells (PROD.md Phase 5c): 500 GB, 1-year term.
+  # Non-secret (it's exposed at checkout), so it lives here in TF, not the dashboard.
+  paddle_price_id = "pri_01kwhfexss8b3tfhggthvkwzrt"
+
+  # Paddle SANDBOX client-side token (dashboard → Developer tools → Authentication → client-side
+  # tokens) for the GET /checkout default-payment-link page. Public by design ("safe to expose in
+  # frontend code" — Paddle docs; it can only open checkouts / preview prices), so TF-managed like
+  # the price id.
+  paddle_client_token = "test_36ccedef6021b9f6c385bc5b643"
 
   # target=["preview","development"], scoped further to the `staging` custom environment —
   # must stay non-sensitive (Vercel can't pull sensitive vars for preview/dev). Set the REAL
