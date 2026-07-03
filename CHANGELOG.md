@@ -2,6 +2,7 @@
 
 ## 2026-07-03
 
+- docs: PROD.md Phase 5c re-scoped DONE → BUILT (steel thread) — single-price proof for dogfooding; multi-plan paywall (`GET /plans` + tier picker) deferred to a pre-launch UI session.
 - chore: `add-and-commit`/`checkpoint` skills re-pinned `claude-haiku-4-5` → `claude-sonnet-5` @ `effort: low`, + both now demand a LIVE `git status`/`git diff` (never a stale in-session result); `.claude/settings.json` disables the AskUserQuestion timeout.
 
 ## 2026-07-02
