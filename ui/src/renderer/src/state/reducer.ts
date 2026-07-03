@@ -88,7 +88,7 @@ export interface AppState {
 export const initialState: AppState = {
   initializing: true,
   connection: "connecting",
-  auth: { configured: false, state: "signedOut", email: null, error: null },
+  auth: { configured: false, state: "signedOut", email: null, error: null, emailAvailable: false },
   vault: { state: "locked", recoveryCode: null, error: null },
   status: null,
   files: [],

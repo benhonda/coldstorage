@@ -163,11 +163,14 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   spawn; `daemon.ts`: the packaged-app daemon supervisor — see `PACKAGING.md`); `src/shared/ipc.ts` is
   the typed main↔renderer seam; `src/renderer/src/state/` is reducer (pure fold) → store
   (`useSyncExternalStore`) → controller (layer 2; `task ui:test`).
-- `ui/src/main/auth/` — sign-in (PROD.md Phase 5): Cognito managed-login OAuth (PKCE, system browser,
-  `coldstorage://auth/callback` deep link packaged / loopback in dev), safeStorage-encrypted refresh
-  token, and the daemon handoff (fresh ID token → the `authenticate` command). The renderer sees only
-  `AuthStatus` over IPC (`getAuthStatus`/`signIn`/`signOut`/`onAuthStatus`) — never a token. Gate UI:
-  `views/SignInView.tsx` + the account card in Settings.
+- `ui/src/main/auth/` — sign-in (PROD.md Phase 5), two lanes into ONE token lifecycle: Google via
+  Cognito managed-login OAuth (`oauth.ts` — PKCE, system browser, `coldstorage://auth/callback` deep
+  link packaged / loopback in dev) and email one-time-code via the Cognito API as plain HTTPS JSON-RPC
+  (`cognito-idp.ts` — SignUp/ConfirmSignUp/InitiateAuth/RespondToAuthChallenge, no SDK). `manager.ts`
+  holds tokens (access/ID in memory, refresh token safeStorage-encrypted), is **lane-aware** (each
+  session tagged `oauth`|`email`, refreshed at its own endpoint), and runs the daemon handoff (fresh ID
+  token → `authenticate`). The renderer sees only `AuthStatus` over IPC — never a token. Gate UI:
+  `views/SignInView.tsx` (Google + the email step machine) + the account card in Settings.
 - `ui/src/main/vault/` — the zero-knowledge vault (PROD.md Phase 5b): the encryption-key half of being
   signed in. `manager.ts` decides per-device — cached MK → `unlockVault`; new account → `mintVault` +
   store the key-blob + show the recovery code once; new device → prompt + `unlockVaultWithRecoveryCode`.

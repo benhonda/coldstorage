@@ -55,6 +55,12 @@ export const IPC = {
   authSignIn: "auth:signIn",
   /** invoke: sign out (drops the stored session + revokes it server-side). */
   authSignOut: "auth:signOut",
+  /** invoke: email-code lane — send a one-time code to `(email)`. */
+  authEmailStart: "auth:emailStart",
+  /** invoke: email-code lane — submit the code `(code)` to finish signing in. */
+  authEmailSubmit: "auth:emailSubmit",
+  /** invoke: abandon an in-progress email sign-in. */
+  authEmailCancel: "auth:emailCancel",
   /** push: the auth status changed, `(status)`. */
   authStatusChanged: "auth:statusChanged",
   /** invoke: current {@link VaultStatus} — for first paint before any push arrives. */
@@ -86,6 +92,9 @@ export interface AuthStatus {
   /** The most recent sign-in failure, for the sign-in screen. Null when none (including a plain
    * user-cancelled attempt, which isn't an error worth showing). */
   error: string | null;
+  /** Whether the email-code lane is available (5b-3) — the sign-in screen shows the email option only
+   * when true (it needs the pool region, resolved from the managed-login domain). */
+  emailAvailable: boolean;
 }
 
 /**
@@ -149,6 +158,14 @@ export interface ColdstoreApi {
   signIn(): Promise<void>;
   /** Sign out: drops the stored session and revokes it server-side. */
   signOut(): Promise<void>;
+  /** Email-code lane: send a one-time code to `email` (handles both sign-in and self-service signup).
+   * Resolves when the code is on its way; rejects with a user-facing message on a bad email / error. */
+  startEmailSignIn(email: string): Promise<void>;
+  /** Email-code lane: submit the emailed code to finish signing in. Resolves on success (watch
+   * {@link onAuthStatus} for `signedIn`); rejects with a message on a wrong/expired code. */
+  submitEmailCode(code: string): Promise<void>;
+  /** Abandon an in-progress email sign-in (e.g. the user switched to Google). */
+  cancelEmailSignIn(): Promise<void>;
   /** Subscribe to sign-in status changes. */
   onAuthStatus(listener: (status: AuthStatus) => void): () => void;
   /** Current vault status — for first paint before any {@link onVaultStatus} push arrives. */

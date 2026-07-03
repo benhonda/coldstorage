@@ -152,7 +152,16 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   // — a returning user must not flash past "Continue with Google"). After every hook above, so the hook
   // order is identical across renders.
   if (state.initializing || state.auth.state === "restoring") {
-    return <SignInView auth={state.auth} onSignIn={() => {}} checking />;
+    return (
+      <SignInView
+        auth={state.auth}
+        onSignIn={() => {}}
+        onEmailStart={() => Promise.resolve()}
+        onEmailSubmit={() => Promise.resolve()}
+        onEmailCancel={() => {}}
+        checking
+      />
+    );
   }
 
   // Sign-in + vault gates (Phase 5): a configured (multi-user) install shows the shell only once the
@@ -161,7 +170,15 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   // of this. After every hook above, so the hook order is identical with and without a gate.
   if (state.auth.configured) {
     if (state.auth.state !== "signedIn") {
-      return <SignInView auth={state.auth} onSignIn={() => void api.signIn()} />;
+      return (
+        <SignInView
+          auth={state.auth}
+          onSignIn={() => void api.signIn()}
+          onEmailStart={(email) => api.startEmailSignIn(email)}
+          onEmailSubmit={(code) => api.submitEmailCode(code)}
+          onEmailCancel={() => void api.cancelEmailSignIn()}
+        />
+      );
     }
     const v = state.vault;
     const email = state.auth.email;

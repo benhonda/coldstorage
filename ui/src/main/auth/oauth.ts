@@ -15,7 +15,15 @@ export interface OAuthConfig {
   clientId: string;
   /** Must byte-match a registered callback URL (cognito.tf `app_oauth_callback_urls`). */
   redirectUri: string;
+  /** AWS region of the user pool — for the email-OTP lane's `cognito-idp.{region}.amazonaws.com` calls
+   * (5b-3). Empty if it couldn't be determined, in which case the email lane is unavailable (Google still works). */
+  region: string;
 }
+
+/** Which lane minted a session — they refresh at DIFFERENT endpoints: `oauth` (Google managed login) at
+ * `/oauth2/token`, `email` (Cognito API OTP) at InitiateAuth REFRESH_TOKEN_AUTH. Persisted with the
+ * refresh token so a restored session refreshes the right way. */
+export type AuthLane = "oauth" | "email";
 
 /** Tokens as the app holds them — absolute expiry (ms epoch), not the wire's relative `expires_in`.
  * Access/ID tokens live in main-process memory only; the refresh token alone is persisted (encrypted). */
@@ -25,6 +33,7 @@ export interface TokenSet {
   /** Null only if Cognito ever omits it (refresh without rotation returns none — we keep the old one). */
   refreshToken: string | null;
   expiresAt: number;
+  lane: AuthLane;
 }
 
 /** A parsed sign-in redirect: success carries the code, failure the IdP's error (e.g. the user
@@ -118,6 +127,7 @@ const requestTokens = async (cfg: OAuthConfig, params: Record<string, string>): 
     accessToken: body.access_token,
     refreshToken: body.refresh_token ?? null,
     expiresAt: Date.now() + body.expires_in * 1000,
+    lane: "oauth",
   };
 };
 

@@ -367,8 +367,24 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
        you?") so a wrong-account sign-in is caught before committing, and a `Checking…` startup gate
        (`initializing` + a new auth `restoring` state) so a returning user never flashes past the login
        screen while the saved session refreshes.
-     - **5b-3 — email-OTP sign-in + signup lane:** the independent auth lane (Cognito USER_AUTH via
-       plain HTTPS), a second entry on the sign-in screen; feeds the same token/vault machinery.
+     - **5b-3 — email-OTP sign-in + signup lane: DONE ✅ (2026-07-02, `ui:typecheck` + 80 ui tests
+       green; live Cognito verified: app client has `ALLOW_USER_AUTH`+`ALLOW_REFRESH_TOKEN_AUTH`, pool
+       first-auth factors include `EMAIL_OTP` — no infra change).** App-only (no Swift): new
+       `ui/src/main/auth/cognito-idp.ts` speaks the pool's public-client ops as plain HTTPS JSON-RPC
+       (`X-Amz-Target`, no SDK/SigV4/secret) — `startEmailSignIn` tries `InitiateAuth USER_AUTH`
+       EMAIL_OTP and, on `UserNotFoundException`, falls through to passwordless `SignUp` (so signup and
+       sign-in are one email box for the user); `submitEmailCode` answers the challenge (signin) or
+       `ConfirmSignUp`→`InitiateAuth`-from-session (signup). The tokens feed the SAME adopt/handoff/vault
+       machinery as Google. **Lane-aware token lifecycle** (the load-bearing integration): `TokenSet`
+       gains `lane` (`oauth`|`email`), persisted with the refresh token; refresh uses the matching
+       endpoint — OAuth at `/oauth2/token`, email at `InitiateAuth REFRESH_TOKEN_AUTH` — on live refresh,
+       restore, AND the daemon-reconnect path. UI: the sign-in card gets an "Use an email code instead"
+       step machine (email → code), shown only when `auth.emailAvailable` (region resolved from the
+       managed-login domain). Tests: cognito-idp request shapes / token mapping / new-user fallthrough /
+       wrong-code / refresh-keeps-token (mocked fetch). **Gate (Ben, Mac):** a fresh email signs up with
+       one code and lands in the app (mints a vault); an existing email signs in with a code. NOTE: OTP
+       emails send via the pool's default Cognito sender (Essentials tier, ~50/day) — fine for dogfood;
+       real prod wants SES.
      Verified shapes for 5b-3: `SignUp`
      with NO password is first-class for passwordless pools; `ConfirmSignUp`'s `Session` feeds
      `InitiateAuth USER_AUTH` so signup costs the user exactly ONE emailed code; sign-in =

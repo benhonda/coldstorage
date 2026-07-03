@@ -50,9 +50,12 @@ const makeApi = (initial: ConnectionState) => {
     chooseFolder: () => Promise.resolve(null),
     getDownloadsDir: () => Promise.resolve("/tmp/Downloads"),
     pathForFile: () => "",
-    getAuthStatus: () => Promise.resolve({ configured: false, state: "signedOut", email: null, error: null }),
+    getAuthStatus: () => Promise.resolve({ configured: false, state: "signedOut", email: null, error: null, emailAvailable: false }),
     signIn: () => Promise.resolve(),
     signOut: () => Promise.resolve(),
+    startEmailSignIn: () => Promise.resolve(),
+    submitEmailCode: () => Promise.resolve(),
+    cancelEmailSignIn: () => Promise.resolve(),
     onAuthStatus: (cb) => {
       authCb = cb;
       return () => (authCb = null);
@@ -191,8 +194,8 @@ describe("controller sync policy", () => {
     await tick();
     expect(store.getState().auth.configured).toBe(false); // the initial pull landed
 
-    f.fireAuth({ configured: true, state: "signedIn", email: "ben@example.com", error: null });
-    expect(store.getState().auth).toEqual({ configured: true, state: "signedIn", email: "ben@example.com", error: null });
+    f.fireAuth({ configured: true, state: "signedIn", email: "ben@example.com", error: null, emailAvailable: true });
+    expect(store.getState().auth).toEqual({ configured: true, state: "signedIn", email: "ben@example.com", error: null, emailAvailable: true });
   });
 
   test("starts in 'initializing' and clears it once the first status batch lands (no startup flash)", async () => {

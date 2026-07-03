@@ -21,10 +21,18 @@ import {
   parseCallbackUrl,
   refreshTokens,
   revokeRefreshToken,
+  type AuthLane,
   type OAuthConfig,
   type TokenSet,
 } from "./oauth.ts";
 import { awaitLoopbackCallback, LOOPBACK_PORT } from "./loopback.ts";
+import {
+  refreshEmailTokens,
+  startEmailSignIn as apiStartEmailSignIn,
+  submitEmailCode as apiSubmitEmailCode,
+  type Cognito,
+  type EmailFlow,
+} from "./cognito-idp.ts";
 
 /** Refresh this far before token expiry (tokens live 1h — cognito.tf `id_token_validity`). */
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
@@ -53,6 +61,8 @@ export class AuthManager {
   /** False until {@link restore} finishes checking for a saved session — status reports `restoring`
    * meanwhile so the UI shows "checking…" instead of flashing the login screen at a returning user. */
   private settled = false;
+  /** The in-flight email-OTP flow between {@link startEmailSignIn} and {@link submitEmailCode}. */
+  private emailFlow: EmailFlow | null = null;
   private readonly statusListeners = new Set<(s: AuthStatus) => void>();
   private readonly idTokenListeners = new Set<(idToken: string) => void>();
 
@@ -63,12 +73,13 @@ export class AuthManager {
 
   /** Serializable snapshot for the renderer (pushed on every change; pulled once at first paint). */
   status(): AuthStatus {
-    if (!this.cfg) return { configured: false, state: "signedOut", email: null, error: null };
+    if (!this.cfg) return { configured: false, state: "signedOut", email: null, error: null, emailAvailable: false };
+    const emailAvailable = this.emailAvailable();
     // Still checking a saved session — don't reveal signed-in/out yet (that's the login-flash).
-    if (!this.settled) return { configured: true, state: "restoring", email: null, error: null };
+    if (!this.settled) return { configured: true, state: "restoring", email: null, error: null, emailAvailable };
     const state = this.tokens ? "signedIn" : this.pending ? "signingIn" : "signedOut";
     const email = this.tokens ? decodeJwtClaims(this.tokens.idToken)?.email : null;
-    return { configured: true, state, email: typeof email === "string" ? email : null, error: this.lastError };
+    return { configured: true, state, email: typeof email === "string" ? email : null, error: this.lastError, emailAvailable };
   }
 
   /** Subscribe to status changes. Returns an unsubscribe fn. */
@@ -101,10 +112,18 @@ export class AuthManager {
       }
       try {
         const parsed: unknown = JSON.parse(raw);
-        const b64 = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>).refreshToken : null;
-        if (typeof b64 !== "string") throw new Error("malformed auth.json");
-        const { result: refreshToken } = await safeStorage.decryptStringAsync(Buffer.from(b64, "base64"));
-        await this.adopt(await refreshTokens(this.cfg, refreshToken));
+        const o = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+        if (typeof o.refreshToken !== "string") throw new Error("malformed auth.json");
+        // Refresh via the lane that minted the session. Older sessions (pre-5b-3) have no `lane` → OAuth.
+        const lane: AuthLane = o.lane === "email" ? "email" : "oauth";
+        const { result: refreshToken } = await safeStorage.decryptStringAsync(Buffer.from(o.refreshToken, "base64"));
+        if (lane === "email") {
+          const c = this.cognito();
+          if (!c) throw new Error("email lane not configured");
+          await this.adopt(await refreshEmailTokens(c, refreshToken));
+        } else {
+          await this.adopt(await refreshTokens(this.cfg, refreshToken));
+        }
       } catch (e) {
         console.error("stored sign-in couldn't be restored (starting signed out):", e);
         await rm(this.authFile(), { force: true });
@@ -144,6 +163,36 @@ export class AuthManager {
     this.lastError = null;
     this.emitStatus();
     await shell.openExternal(buildAuthorizeUrl(this.cfg, { state, challenge, identityProvider: "Google" }));
+  }
+
+  /** Whether the email-OTP lane is available (region resolved) — the UI hides the email option if not. */
+  emailAvailable(): boolean {
+    return this.cognito() !== null;
+  }
+
+  /**
+   * Email-OTP lane (5b-3), step 1: email a one-time code. Handles both existing users (sign-in) and new
+   * ones (self-service signup) transparently — the caller just shows a "we emailed you a code" screen.
+   * Rejects (with a user-facing message) on a bad email / server error. The code entry is in-app, so
+   * this doesn't touch the global sign-in status the way the browser (Google) flow does.
+   */
+  async startEmailSignIn(email: string): Promise<void> {
+    const c = this.cognito();
+    if (!c) throw new Error("Email sign-in isn't available.");
+    this.emailFlow = await apiStartEmailSignIn(c, email.trim().toLowerCase());
+  }
+
+  /** Email-OTP lane, step 2: exchange the code for tokens and go live (same machinery as Google — the
+   * daemon handoff + vault provisioning follow from the emitted ID token). Rejects on a wrong/expired code. */
+  async submitEmailCode(code: string): Promise<void> {
+    const c = this.cognito();
+    if (!c || !this.emailFlow) throw new Error("No email sign-in is in progress.");
+    await this.adopt(await apiSubmitEmailCode(c, this.emailFlow, code));
+  }
+
+  /** Abandon an in-progress email flow (the user backed out to pick Google instead). */
+  cancelEmailSignIn(): void {
+    this.emailFlow = null;
   }
 
   /**
@@ -230,12 +279,13 @@ export class AuthManager {
     this.pending = null;
   }
 
-  /** Take a token set live: schedule its refresh, persist the refresh token, tell everyone. */
+  /** Take a token set live: schedule its refresh, persist the refresh token + lane, tell everyone. */
   private async adopt(t: TokenSet): Promise<void> {
     this.tokens = t;
     this.lastError = null;
+    this.emailFlow = null;
     this.scheduleRefresh();
-    await this.persistRefreshToken(t.refreshToken);
+    await this.persistRefreshToken(t.refreshToken, t.lane);
     this.emitStatus();
     for (const l of this.idTokenListeners) l(t.idToken);
   }
@@ -247,14 +297,34 @@ export class AuthManager {
     this.refreshTimer = setTimeout(() => void this.refreshNow(), delay);
   }
 
-  /** Refresh the session. `invalid_grant` means the refresh token is dead (revoked/expired) — that's
-   * a real sign-out; anything else (offline) keeps the session and retries shortly. */
+  /** The email-OTP lane's cognito-idp coordinates (region + client id), or null if the region couldn't
+   * be resolved (non-standard domain) — in which case email sign-in is unavailable. */
+  private cognito(): Cognito | null {
+    if (!this.cfg || !this.cfg.region) return null;
+    return { region: this.cfg.region, clientId: this.cfg.clientId };
+  }
+
+  /** Refresh via the lane that minted the session: OAuth (Google) at `/oauth2/token`, email (Cognito
+   * API OTP) at InitiateAuth REFRESH_TOKEN_AUTH — the two use different endpoints. */
+  private refreshForLane(refreshToken: string): Promise<TokenSet> {
+    if (this.tokens?.lane === "email") {
+      const c = this.cognito();
+      if (!c) throw new Error("email lane not configured");
+      return refreshEmailTokens(c, refreshToken);
+    }
+    // cfg is non-null here (checked by callers); OAuth lane.
+    return refreshTokens(this.cfg as OAuthConfig, refreshToken);
+  }
+
+  /** Refresh the session. A rejected refresh token (`invalid_grant` on OAuth, `NotAuthorized`/expired on
+   * the email lane) means the session is dead → sign out; anything else (offline) keeps it and retries. */
   private async refreshNow(): Promise<void> {
     if (!this.cfg || !this.tokens?.refreshToken) return;
     try {
-      await this.adopt(await refreshTokens(this.cfg, this.tokens.refreshToken));
+      await this.adopt(await this.refreshForLane(this.tokens.refreshToken));
     } catch (e) {
-      if (e instanceof Error && e.message.includes("invalid_grant")) {
+      const dead = e instanceof Error && (e.message.includes("invalid_grant") || e.message.includes("NotAuthorized"));
+      if (dead) {
         console.error("session expired (refresh token rejected) — signing out");
         this.tokens = null;
         await rm(this.authFile(), { force: true });
@@ -267,16 +337,17 @@ export class AuthManager {
     }
   }
 
-  /** Persist the refresh token encrypted-at-rest. If the Keychain-backed encryptor is unavailable we
-   * store NOTHING (the session just won't survive relaunch) — never plaintext. */
-  private async persistRefreshToken(refreshToken: string | null): Promise<void> {
+  /** Persist the refresh token (encrypted-at-rest) + its lane, so a restored session refreshes at the
+   * right endpoint. If the Keychain-backed encryptor is unavailable we store NOTHING (the session just
+   * won't survive relaunch) — never plaintext. */
+  private async persistRefreshToken(refreshToken: string | null, lane: AuthLane): Promise<void> {
     if (!refreshToken) return;
     if (!(await safeStorage.isAsyncEncryptionAvailable())) {
       console.error("safeStorage unavailable — sign-in won't survive a relaunch");
       return;
     }
     const encrypted = await safeStorage.encryptStringAsync(refreshToken);
-    await writeFile(this.authFile(), `${JSON.stringify({ refreshToken: encrypted.toString("base64") })}\n`, { mode: 0o600 });
+    await writeFile(this.authFile(), `${JSON.stringify({ refreshToken: encrypted.toString("base64"), lane })}\n`, { mode: 0o600 });
   }
 
   private emitStatus(): void {
