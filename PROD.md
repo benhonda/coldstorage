@@ -353,11 +353,20 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
        `App.tsx`'s gate. Sign-out relocks the daemon but KEEPS the per-device escrow (`vault.json`,
        re-signin is silent); `task daemon:sim-new-device` deletes just that escrow to force the
        recovery-code path. Tests: `VaultManager` cached/mint/new-device/error/relock branches headless +
-       the vault-status fold. **Gate (Ben, Mac) — the real ZK proof:** fresh Google sign-in → recovery
-       code shown once → a deposit; then `task daemon:sim-new-device` (deletes the MasterKey escrow, no
-       second Mac needed) → relaunch → sign-in prompts for the recovery code → same files decrypt. The
-       deposit's blob must be openable with the MK and NOT with a random key (that crypto is already
-       unit-proven in 5b-1; the app gate is what 5b-2 adds).
+       the vault-status fold. **Gate — PASSED ✅ (2026-07-02, Ben, Mac):** fresh Google sign-in → recovery
+       code shown once → deposit; then `task daemon:sim-new-device` (deletes the MasterKey escrow, no
+       second Mac) → relaunch → sign-in prompted for the recovery code → entered it → the vault unlocked
+       and the files were there. The full zero-knowledge spine is proven on real hardware.
+       **Fixes found during the gate run (all committed):** (1) the installed launchd daemon predated
+       5b-1 — `daemon:install` rebuilds it (obvious in hindsight; ui:live uses the installed binary);
+       (2) `unlockVaultWithRecoveryCode` sent the key-blob's numeric `opsLimit`/`memLimit` as JSON
+       numbers over the `[String:String]` control wire, so the daemon rejected the command and it looked
+       like a wrong code — now sent as strings (like restore's `days`), regression-tested; (3) UX:
+       the vault gate screens got a real DS card surface (the DS filled `Field` was invisible on app-bg,
+       `--surface-input` ≈ `--bg-app`), full-width Field/Button, an account line ("Signed in as … · Not
+       you?") so a wrong-account sign-in is caught before committing, and a `Checking…` startup gate
+       (`initializing` + a new auth `restoring` state) so a returning user never flashes past the login
+       screen while the saved session refreshes.
      - **5b-3 — email-OTP sign-in + signup lane:** the independent auth lane (Cognito USER_AUTH via
        plain HTTPS), a second entry on the sign-in screen; feeds the same token/vault machinery.
      Verified shapes for 5b-3: `SignUp`
