@@ -4,7 +4,7 @@
  * real store correctly: initial fetch, refetch-on-(re)connect, and sourcesChanged → listSources.
  */
 import { describe, expect, test } from "bun:test";
-import type { AuthStatus, ColdstoreApi, ConnectionState, EntitlementStatus, ListedFile, Source, Status, VaultStatus } from "../../../shared/ipc.ts";
+import type { AuthStatus, ColdstoreApi, ConnectionState, EntitlementStatus, ListedFile, Source, Status, UpdateStatus, VaultStatus } from "../../../shared/ipc.ts";
 import { connectController } from "./controller.ts";
 import { createStore } from "./store.ts";
 
@@ -30,6 +30,7 @@ const makeApi = (initial: ConnectionState) => {
   let authCb: ((s: AuthStatus) => void) | null = null;
   let vaultCb: ((s: VaultStatus) => void) | null = null;
   let entCb: ((s: EntitlementStatus) => void) | null = null;
+  let updateCb: ((s: UpdateStatus) => void) | null = null;
 
   const api: ColdstoreApi = {
     request: ((method: string) => {
@@ -74,6 +75,13 @@ const makeApi = (initial: ConnectionState) => {
       entCb = cb;
       return () => (entCb = null);
     },
+    getUpdateStatus: () => Promise.resolve({ state: "idle", version: null, percent: null, error: null }),
+    checkForUpdate: () => Promise.resolve(),
+    restartToUpdate: () => Promise.resolve(),
+    onUpdateStatus: (cb) => {
+      updateCb = cb;
+      return () => (updateCb = null);
+    },
   };
 
   return {
@@ -90,6 +98,7 @@ const makeApi = (initial: ConnectionState) => {
     fireAuth: (s: AuthStatus) => authCb?.(s),
     fireVault: (s: VaultStatus) => vaultCb?.(s),
     fireEntitlement: (s: EntitlementStatus) => entCb?.(s),
+    fireUpdate: (s: UpdateStatus) => updateCb?.(s),
   };
 };
 
@@ -235,5 +244,16 @@ describe("controller sync policy", () => {
 
     f.fireEntitlement({ known: true, active: true, checkingOut: false, error: null });
     expect(store.getState().entitlement).toEqual({ known: true, active: true, checkingOut: false, error: null });
+  });
+
+  test("reads the initial update status and folds pushed changes", async () => {
+    const f = makeApi("connected");
+    const store = createStore();
+    connectController(f.api, store);
+    await tick();
+    expect(store.getState().update.state).toBe("idle"); // initial pull landed
+
+    f.fireUpdate({ state: "ready", version: "0.2.0", percent: 100, error: null });
+    expect(store.getState().update).toEqual({ state: "ready", version: "0.2.0", percent: 100, error: null });
   });
 });

@@ -77,6 +77,14 @@ export const IPC = {
   entitlementSubscribe: "entitlement:subscribe",
   /** push: the entitlement status changed, `(status)`. */
   entitlementStatusChanged: "entitlement:statusChanged",
+  /** invoke: current {@link UpdateStatus} — for first paint before any push arrives. */
+  updateStatus: "update:status",
+  /** invoke: check for an app update now (the app also checks on launch + periodically). */
+  updateCheck: "update:check",
+  /** invoke: quit and install a downloaded update (meaningful only when state === "ready"). */
+  updateRestart: "update:restart",
+  /** push: the update status changed, `(status)`. */
+  updateStatusChanged: "update:statusChanged",
 } as const;
 
 /** Whether the main process currently holds a live socket to `coldstored`. */
@@ -131,6 +139,27 @@ export interface EntitlementStatus {
   active: boolean;
   /** A checkout is open in the browser and we're polling for the webhook to flip `active`. */
   checkingOut: boolean;
+  error: string | null;
+}
+
+/**
+ * Auto-update status (PROD.md Phase 6), pushed from main. The packaged app checks a GitHub Releases feed
+ * on launch + periodically, downloads a newer signed build in the background, and installs it on the next
+ * quit/restart. Auto-update only runs in the packaged, signed app — in dev this stays `idle` forever.
+ *   - `idle`         no update known (startup, or the last check found nothing newer).
+ *   - `checking`     a check is in flight.
+ *   - `available`    a newer version was found and is starting to download (autoDownload is on).
+ *   - `downloading`  the newer build is downloading (`percent` populated).
+ *   - `ready`        a newer build is downloaded and will install on the next quit — or now via `restartToUpdate`.
+ *   - `error`        the last check/download failed. Non-fatal: the app keeps running the current version.
+ */
+export interface UpdateStatus {
+  state: "idle" | "checking" | "available" | "downloading" | "ready" | "error";
+  /** The target version once known (`available`/`downloading`/`ready`); null otherwise. */
+  version: string | null;
+  /** Download progress 0–100 while `downloading`; null otherwise. */
+  percent: number | null;
+  /** The last update error, display-only. Null when none. */
   error: string | null;
 }
 
@@ -203,4 +232,14 @@ export interface ColdstoreApi {
   subscribe(): Promise<void>;
   /** Subscribe to entitlement changes. */
   onEntitlement(listener: (status: EntitlementStatus) => void): () => void;
+  /** Current auto-update status — for first paint before any {@link onUpdateStatus} push arrives.
+   * Always `idle` in dev (auto-update only runs in the packaged, signed app). */
+  getUpdateStatus(): Promise<UpdateStatus>;
+  /** Check for an app update now. The app also checks on launch and periodically; this backs a manual
+   * "Check for updates" affordance. Resolves once the check is kicked off (watch {@link onUpdateStatus}). */
+  checkForUpdate(): Promise<void>;
+  /** Quit and install a downloaded update (state === "ready"); the app relaunches on the new version. */
+  restartToUpdate(): Promise<void>;
+  /** Subscribe to auto-update status changes. */
+  onUpdateStatus(listener: (status: UpdateStatus) => void): () => void;
 }

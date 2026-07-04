@@ -16,6 +16,7 @@ import type {
   Pricing,
   Source,
   Status,
+  UpdateStatus,
   VaultStatus,
 } from "../../../shared/ipc.ts";
 import { FALLBACK_PRICING } from "../views/files/pricing.ts";
@@ -68,6 +69,9 @@ export interface AppState {
   vault: VaultStatus;
   /** Subscription entitlement (Phase 5c), pushed from main. Gates deposits (not browse/restore). */
   entitlement: EntitlementStatus;
+  /** Auto-update status (Phase 6), pushed from main. Packaged app only — stays `idle` in dev. Drives the
+   * quiet "Restart to update" affordance when a newer signed build has downloaded. */
+  update: UpdateStatus;
   status: Status | null;
   /** The browsable tree, straight from the daemon's `listFiles` (journal-backed). Raw wire shape —
    * the file-browser maps it to its own model. Empty until the first read lands. */
@@ -94,6 +98,7 @@ export const initialState: AppState = {
   auth: { configured: false, state: "signedOut", email: null, error: null, emailAvailable: false },
   vault: { state: "locked", recoveryCode: null, error: null },
   entitlement: { known: false, active: false, checkingOut: false, error: null },
+  update: { state: "idle", version: null, percent: null, error: null },
   status: null,
   files: [],
   excludes: [],
@@ -117,6 +122,7 @@ export type Action =
   | { type: "authChanged"; auth: AuthStatus }
   | { type: "vaultChanged"; vault: VaultStatus }
   | { type: "entitlementChanged"; entitlement: EntitlementStatus }
+  | { type: "updateChanged"; update: UpdateStatus }
   | { type: "statusLoaded"; status: Status }
   | { type: "sourcesLoaded"; sources: Source[] }
   | { type: "filesLoaded"; files: ListedFile[] }
@@ -169,6 +175,9 @@ export const reducer = (state: AppState, action: Action): AppState => {
 
     case "entitlementChanged":
       return { ...state, entitlement: action.entitlement };
+
+    case "updateChanged":
+      return { ...state, update: action.update };
 
     case "statusLoaded":
       return { ...state, status: action.status };

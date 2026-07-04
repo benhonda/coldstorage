@@ -18,6 +18,7 @@
  */
 import { join } from "node:path";
 import { app, BrowserWindow, shell } from "electron";
+import electronUpdater from "electron-updater";
 import { DaemonClient } from "../daemon/client.ts";
 import { registerBridge } from "./bridge.ts";
 import { registerSystemHandlers } from "./system.ts";
@@ -32,6 +33,8 @@ import { resolveAccountApiBaseUrl } from "./vault/config.ts";
 import { registerVaultIpc } from "./vault/ipc.ts";
 import { EntitlementManager } from "./entitlement/manager.ts";
 import { registerEntitlementIpc } from "./entitlement/ipc.ts";
+import { UpdateManager, type UpdaterPort } from "./updater/manager.ts";
+import { registerUpdateIpc } from "./updater/ipc.ts";
 
 // Pin the app name BEFORE any `getPath("userData")` call. The client resolves the socket path at module
 // load and the daemon supervisor resolves it in `whenReady`; both derive from userData (= appData + app
@@ -68,6 +71,38 @@ const disposeVaultIpc = registerVaultIpc(vault);
 const accountApiBaseUrl = resolveAccountApiBaseUrl();
 const entitlement = new EntitlementManager(accountApiBaseUrl, () => auth.getFreshIdToken());
 const disposeEntitlementIpc = registerEntitlementIpc(entitlement);
+
+// ── Auto-update (PROD.md Phase 6) — packaged app only. electron-updater checks the GitHub Releases feed
+//    (electron-builder.yml `publish`), background-downloads a newer SIGNED + notarized build, and installs
+//    it on the next quit (or on demand via the "Restart to update" affordance). In dev we hand the manager
+//    an inert no-op port so the IPC + renderer path is identical but does nothing — auto-update can't run
+//    on an unpackaged/unsigned app. electron-updater is CommonJS; destructure the default export (the
+//    documented ESM interop). ──
+const { autoUpdater } = electronUpdater;
+const updaterPort: UpdaterPort = app.isPackaged
+  ? {
+      get autoDownload(): boolean {
+        return autoUpdater.autoDownload;
+      },
+      set autoDownload(v: boolean) {
+        autoUpdater.autoDownload = v;
+      },
+      // autoUpdater is a NodeJS.EventEmitter with stringly-typed events; adapt it to the narrow port with
+      // one safe upcast at this boundary. The manager's listeners take `unknown` and read defensively.
+      on: (event, listener) => {
+        (autoUpdater as NodeJS.EventEmitter).on(event, listener);
+      },
+      checkForUpdates: () => autoUpdater.checkForUpdates(),
+      quitAndInstall: () => autoUpdater.quitAndInstall(),
+    }
+  : {
+      autoDownload: false,
+      on: () => {},
+      checkForUpdates: () => Promise.resolve(),
+      quitAndInstall: () => {},
+    };
+const updater = new UpdateManager(updaterPort);
+const disposeUpdateIpc = registerUpdateIpc(updater);
 
 // ── Deep links (macOS delivers them as open-url, launch AND while running). Registered before
 //    `ready` because a URL can be what LAUNCHES the app — those arrive pre-ready and are buffered.
@@ -190,6 +225,9 @@ app.whenReady().then(() => {
   if (app.isPackaged) {
     stopDaemon = startDaemon();
     app.setLoginItemSettings({ openAtLogin: true });
+    // Begin auto-update: an immediate check + a periodic one. Background-downloads a newer signed build;
+    // the renderer shows a quiet "Restart to update" affordance when one is ready (update-downloaded).
+    updater.start();
   }
 
   // Dial the daemon. If it's not up yet (the child is still binding its socket), autoReconnect keeps
@@ -226,12 +264,14 @@ app.on("will-quit", () => {
   disposeAuthIpc();
   disposeVaultIpc();
   disposeEntitlementIpc();
+  disposeUpdateIpc();
   offIdToken();
   offClientConnect();
   offAuthFocus();
   auth.dispose();
   vault.dispose();
   entitlement.dispose();
+  updater.dispose();
   client.close();
   stopDaemon(); // terminate the supervised child (no-op in dev)
 });

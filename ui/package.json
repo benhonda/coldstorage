@@ -1,6 +1,6 @@
 {
   "name": "coldstorage-ui",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "//trustedDependencies": "Bun blocks postinstall scripts by default; Electron downloads its binary in one — without this, `task ui:dev` fails with 'Electron uninstall'. Only the GUI launch needs the binary (build/typecheck/test don't).",
@@ -14,7 +14,7 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "bun run typecheck:node && bun run typecheck:web",
-    "test": "bun test src/renderer/src src/main/auth src/main/vault src/main/entitlement",
+    "test": "bun test src/renderer/src src/main/auth src/main/vault src/main/entitlement src/main/updater",
     "prove": "bun run src/daemon/prove.ts"
   },
   "devDependencies": {
@@ -31,6 +31,7 @@
   "dependencies": {
     "@fontsource/hanken-grotesk": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
+    "electron-updater": "^6.8.9",
     "material-symbols": "^0.45.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"

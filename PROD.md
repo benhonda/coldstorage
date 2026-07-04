@@ -76,6 +76,19 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
   old password-change path had.
 - **Recovery code** = shown once at signup. Lose the code AND all signed-in devices = data is
   unrecoverable *by design* (honest ZK; we never claim we can recover it).
+- **Known gap — new-device onboarding is conflated with lockout recovery; device-to-device trust not
+  built (flagged 2026-07-04).** Today a *new device* takes the same path as true recovery: it forces the
+  user to re-enter the one-time recovery code (`App.tsx:208` `needsRecoveryCode` → `RecoveryCodeEnter`,
+  copy: "This is a new computer. Enter the recovery code…"). The precedent splits these two events: routine
+  new-device setup is handled by **device-to-device trust** — an already-signed-in device vouches for the
+  new one and passes the key over an encrypted channel (Apple ADP "approve from another device"; 1Password's
+  Secret-Key QR / setup code from an existing device) — and the recovery code/kit is reserved for the
+  *no-device-left* lockout case only. We have no such handshake, so we push a break-glass action onto an
+  everyday event. **Fix = build device-to-device trust**; the recovery code then drops back to lockout-only,
+  matching Apple/1Password. This is the *same primitive* as the trusted/recovery-contacts safety net
+  (roadmap in `strategy/SPEC.md`) — and Apple's ADP *requires* a second recovery method (recovery contact
+  **or** recovery key) before ZK can even be enabled — so one build closes both gaps. Not yet scheduled;
+  sits alongside the R2/portability piece in the ZK-hardening line (below).
 - New `KeyProvider` impl: **`UserMasterKeyProvider`** — **built** (Phase 3; Argon2id via swift-sodium,
   decided 2026-07-01). Its primitives support BOTH a password path and a recovery-code path (both tested);
   passwordless simply leaves the pw path unused — no rework, the `wrappedMK_pw` slot just stays empty.
@@ -437,8 +450,45 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      same two-script-tag checkout page on `coldstorage.sh`, and the LIVE Paddle account's default payment
      link points there; sandbox keeps pointing at staging's `/checkout`. Nothing to undo — the setting is
      per-Paddle-account.
-6. **Sign + notarize + ship** — Developer ID signing + notarization + auto-update + download page. *Gate:*
-   a notarized build launches Gatekeeper-clean on a non-dev Mac and self-updates.
+6. **Sign + notarize + ship — IN PROGRESS.** Developer ID signing + notarization + auto-update + download
+   page. *Gate:* a notarized build launches Gatekeeper-clean on a non-dev Mac and self-updates. Scoped
+   hardest-first into 6a/6b/6c (2026-07-04):
+   - **6a — Developer ID signing + notarization + nested-binary signing + the TCC identity fix:
+     CONFIG-READY ⏳ (2026-07-04) — needs Ben's Mac + certs to execute (this IS the phase gate).**
+     electron-builder is wired for a real signed + notarized build: `mac.binaries` now signs the three
+     bundled Swift Mach-Os (`coldstored` + photo-picker + restore) inside-out with the app's Developer ID
+     — notarization *rejects* any unsigned nested binary, and TCC keys the Photos grant to `coldstored`'s
+     signature. `task ui:release` drives build → sign → notarize → publish, reading the creds from the env
+     or the gitignored `.env` (APPLE_ID, APPLE_TEAM_ID, APPLE_APP_SPECIFIC_PASSWORD); the yml default stays
+     `notarize: false` so plain `task ui:package` still builds unsigned with no cert. **Ben to run on his
+     Mac** (Developer ID Application cert in the login keychain) and judge the three unknowns only a signed
+     build can settle: (a) does it notarize + staple clean; (b) does System Settings ▸ Photos now show
+     **"ColdStorage"** not **"coldstored"** — the original screenshot problem (PACKAGING.md lists the
+     fallbacks if a plain signed child still mis-labels: disclaim-responsibility launcher / embedded
+     Info.plist / SMAppService); (c) launch Gatekeeper-clean on a NON-dev Mac. Still needs `build/icon.icns`
+     (1024px, from the DS — a UX-session asset; without it electron-builder uses the stock Electron icon).
+   - **6b — auto-update via GitHub Releases: BUILT ✅ (2026-07-04; `ui:typecheck` + 95 ui tests green) —
+     pending a signed build to exercise end-to-end.** Decision (Ben, 2026-07-04): **GitHub Releases** as the
+     update feed — the repo is public → free, CDN-backed release assets, zero new infra, and it's
+     electron-updater's best-supported provider (chosen over S3+CloudFront and serving-from-the-site).
+     electron-updater@6 is wired into the packaged main process (`ui/src/main/updater/` — `manager.ts` +
+     `ipc.ts`): checks the feed on launch + every 6h, background-downloads a newer *signed* build, folds
+     electron-updater's event stream into an `UpdateStatus` pushed to the renderer over the SAME
+     manager→ipc→controller→store→reducer seam as auth/vault/entitlement, and a quiet accent-toned top
+     banner offers **"Restart to update"** (`quitAndInstall`, whose app-quit cleanly SIGTERMs the supervised
+     `coldstored` child via the existing `will-quit`). Dev is inert (a no-op port — auto-update can't run
+     unpackaged/unsigned). `electron-builder.yml` gained `publish: github benhonda/coldstorage` + keeps the
+     `zip` target (electron-updater applies mac updates from the .zip); version bumped `0.0.0 → 0.1.0`
+     (semver is the update comparison). The state machine is unit-tested headless (`manager.test.ts`, fake
+     port). **Can't fully prove until 6a signs a build** — macOS refuses to apply an update to an
+     unsigned/ad-hoc app. Final update UX (manual "check now", a downloading indicator, banner copy/placement)
+     is a UX-session refinement.
+   - **6c — download page on `coldstorage.sh` (+ move the Paddle default-payment-link/checkout off `api.*`):
+     DEFERRED** to a dedicated session (Ben, 2026-07-04). Cleanly decoupled from 6b — GitHub Releases hosts
+     the binaries, so the auto-updater needs no website. Stack not locked; leaning **RR7 on Vercel,
+     Terraform-managed** (mirrors the account-backend Vercel/TF pattern + the adpharm stack, grows into
+     pricing/account pages, and hosts the moved checkout) over static-on-S3 or folding into the
+     account-backend Hono app. The `api.*`→website checkout move (§5c) rides along with this.
 
 ## Open sub-decisions (don't block P1; flagged for when their phase lands)
 - ~~**Encryption password vs auth credential** — with a federated login there is no password to derive

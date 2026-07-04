@@ -702,6 +702,65 @@ tasks:
       - bun run build # electron-vite → out/{main,preload,renderer}
       - bunx electron-builder --mac # node CLI (not --bun); reads electron-builder.yml → ui/dist/ColdStorage.app + dmg/zip
 
+  ui:_require-apple-creds:
+    # Shared preflight for ui:release + ui:release:dryrun. `${VAR:?msg}` errors + exits non-zero when the
+    # var is unset/empty (dotenv-loaded .env counts). The signing identity itself is auto-discovered from
+    # the login keychain ('Developer ID Application'), or set via CSC_LINK/CSC_KEY_PASSWORD — not checked here.
+    internal: true
+    cmds:
+      - |
+        : "${APPLE_ID:?missing — your Apple ID email; set it in the env or the gitignored .env (see ui/PACKAGING.md)}"
+        : "${APPLE_TEAM_ID:?missing — your 10-char Apple Developer Team ID (see ui/PACKAGING.md)}"
+        : "${APPLE_APP_SPECIFIC_PASSWORD:?missing — an app-specific password from appleid.apple.com (see ui/PACKAGING.md)}"
+
+  ui:release:
+    desc: "[Mode 3: packaged app] [macOS] Build + SIGN + NOTARIZE ColdStorage.app, then PUBLISH the .dmg/.zip + `latest-mac.yml` update feed to a GitHub Release (PROD.md Phase 6 — the auto-updater reads this feed). Bump `ui/package.json` version first. REFUSES unless you're on a clean, pushed `main`: GitHub tags main's latest REMOTE commit, so a dirty / wrong-branch / unpushed tree would ship a binary no tag reproduces (bypass with RELEASE_FORCE=1). For a signed build WITHOUT publishing, use ui:release:dryrun. Needs the Developer ID cert + notary creds + GH_TOKEN (env or .env). See ui/PACKAGING.md."
+    dir: ui
+    deps: [ui:_ensure-electron, ui:_require-apple-creds]
+    vars:
+      RELEASE_BRANCH: main
+    cmds:
+      # Provenance guard: when the draft release is published, GitHub tags {{.RELEASE_BRANCH}}'s latest REMOTE
+      # commit — NOT your working tree. So the only state where the `v<version>` tag reproduces the built
+      # binary is a clean {{.RELEASE_BRANCH}} in sync with origin. RELEASE_FORCE=1 bypasses (you accept the risk).
+      - |
+        if [ -z "${RELEASE_FORCE:-}" ]; then
+          branch=$(git -C "{{.ROOT_DIR}}" rev-parse --abbrev-ref HEAD)
+          if [ "$branch" != "{{.RELEASE_BRANCH}}" ]; then
+            echo "Refusing to release from '$branch': GitHub attaches the tag to '{{.RELEASE_BRANCH}}', so the binary wouldn't match the tag. Switch to {{.RELEASE_BRANCH}} (or set RELEASE_FORCE=1)."
+            exit 1
+          fi
+          if [ -n "$(git -C "{{.ROOT_DIR}}" status --porcelain)" ]; then
+            echo "Refusing to release with a dirty tree — uncommitted changes go into the binary but not the tag. Commit them first (or set RELEASE_FORCE=1):"
+            git -C "{{.ROOT_DIR}}" status --short
+            exit 1
+          fi
+          git -C "{{.ROOT_DIR}}" fetch --quiet origin "{{.RELEASE_BRANCH}}" || { echo "Couldn't fetch origin/{{.RELEASE_BRANCH}} — are you online? (A release needs to reach GitHub.)"; exit 1; }
+          if [ "$(git -C "{{.ROOT_DIR}}" rev-parse HEAD)" != "$(git -C "{{.ROOT_DIR}}" rev-parse "origin/{{.RELEASE_BRANCH}}")" ]; then
+            echo "Refusing to release — local {{.RELEASE_BRANCH}} isn't in sync with origin/{{.RELEASE_BRANCH}}. Push (or pull) so the tag matches the built source (or set RELEASE_FORCE=1)."
+            exit 1
+          fi
+        fi
+      - |
+        : "${GH_TOKEN:?missing — a GitHub token with 'repo' scope to publish the release; see ui/PACKAGING.md}"
+        echo "Building a signed + notarized ColdStorage and publishing to GitHub Releases (benhonda/coldstorage)…"
+      - swift build -c release --package-path "{{.ROOT_DIR}}/coldstorage"
+      - bun run build # electron-vite → out/{main,preload,renderer}
+      # --publish always → upload the .dmg/.zip + latest-mac.yml. -c.mac.notarize=true → notarize THIS build
+      # (the yml default is false so plain `ui:package` stays cert-free).
+      - bunx electron-builder --mac --publish always -c.mac.notarize=true
+
+  ui:release:dryrun:
+    desc: "[Mode 3: packaged app] [macOS] Full signed-artifact rehearsal of ui:release: build + SIGN + NOTARIZE ColdStorage.app locally but DON'T publish (no GitHub release, no git tag, no GH_TOKEN — hence no provenance guard, run it dirty/any-branch freely). Output: ui/dist/. Needs the Developer ID cert + notary creds (APPLE_ID/APPLE_TEAM_ID/APPLE_APP_SPECIFIC_PASSWORD). See ui/PACKAGING.md."
+    dir: ui
+    deps: [ui:_ensure-electron, ui:_require-apple-creds]
+    cmds:
+      - echo "Building a signed + notarized ColdStorage (no publish)…"
+      - swift build -c release --package-path "{{.ROOT_DIR}}/coldstorage"
+      - bun run build # electron-vite → out/{main,preload,renderer}
+      # --publish never → build + sign + notarize only; nothing is uploaded or tagged.
+      - bunx electron-builder --mac --publish never -c.mac.notarize=true
+
   ui:package:verify:
     desc: "[macOS] Sanity-check the packaged app: bundled Swift binaries present + their code-signing status (the bits that can't be checked off-Mac)."
     dir: ui

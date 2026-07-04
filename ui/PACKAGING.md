@@ -44,12 +44,44 @@ These genuinely need on-device iteration (can't be done/verified off a Mac):
 
 1. **Icon** — add `build/icon.icns` (1024px, from the Design System). Without it electron-builder uses its
    stock Electron icon. *This is also the icon users will see in the Photos privacy list.*
-2. **Signing + notarization** — set `mac.notarize: true` and provide a **Developer ID Application** cert +
-   notary creds (`APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, or an API key). Use a STABLE
-   identity — the Photos TCC grant is keyed to it (same constraint `daemon:install` already documents).
-3. **Verify nested-binary signing** — confirm electron-builder signs the bundled Swift binaries under
-   `Contents/Resources/bin` with hardened runtime. `coldstored` already carries its `-sectcreate` Info.plist
-   (Photos usage string); confirm that survives the re-sign.
+2. **Signing + notarization — WIRED ✅ (2026-07-04), pending Ben's Mac + certs to run.** `task ui:release`
+   drives build → sign → notarize → publish. It needs a **Developer ID Application** cert in your login
+   keychain (electron-builder auto-discovers it; or set `CSC_LINK`/`CSC_KEY_PASSWORD`) + notary creds in the
+   env or the gitignored `.env`: `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_SPECIFIC_PASSWORD` (an app-specific
+   password from appleid.apple.com). The task overrides the yml's `notarize: false` default to true on the
+   CLI, so plain `task ui:package` stays cert-free for local smoke tests. Use a STABLE identity — the Photos
+   TCC grant is keyed to it (same constraint `daemon:install` documents).
+3. **Nested-binary signing — WIRED ✅ (2026-07-04).** `electron-builder.yml` `mac.binaries` now lists the
+   three bundled Swift Mach-Os so electron-builder signs them inside-out with the app's Developer ID +
+   hardened runtime (notarization rejects any unsigned nested binary). `coldstored` carries its
+   `-sectcreate` Info.plist (Photos usage string); **confirm on the signed build that it survives the
+   re-sign** — `task ui:package:verify` prints each binary's signature/authority.
+
+## Auto-update (Phase 6b) — GitHub Releases
+
+The packaged app self-updates from **GitHub Releases** (the repo is public → free, CDN-backed assets, no new
+infra). electron-updater lives in `src/main/updater/` (`manager.ts` = the state machine, `ipc.ts` = the seam),
+wired into `main/index.ts` packaged-only:
+
+- **Feed:** `electron-builder.yml` `publish: github benhonda/coldstorage`. `task ui:release` uploads the
+  `.dmg` + `.zip` + `latest-mac.yml` metadata to a release tagged `v<version>`; the app reads that same feed.
+  (The `zip` target is required — electron-updater applies macOS updates from the `.zip`, not the `.dmg`.)
+- **Flow:** on launch + every 6h it checks, background-downloads a newer *signed* build, and surfaces a quiet
+  "Restart to update" banner on `update-downloaded`. Restart = `autoUpdater.quitAndInstall()`, whose app-quit
+  SIGTERMs the supervised `coldstored` child via the existing `will-quit`. Ignored → installs on the next quit.
+- **Renderer:** an `UpdateStatus` is pushed over the SAME manager→ipc→controller→store seam as
+  auth/vault/entitlement; the banner shows only in the `ready` state (calm, non-urgent voice). Dev is inert
+  (a no-op port — auto-update can't run unpackaged/unsigned).
+- **Cutting a release:** bump `ui/package.json` `version` (semver — the update comparison), commit + push,
+  then `task ui:release`. **macOS refuses to apply an update to an unsigned/ad-hoc app**, so end-to-end
+  self-update only works once 6a's Developer ID signing is in place — an `ui:package:sign-adhoc` build can't
+  self-update.
+- **Provenance guard:** `ui:release` refuses unless you're on a **clean, pushed `main`**. Why: electron-builder
+  uploads to a *draft* release, and when that draft is published GitHub creates the `v<version>` tag on
+  **main's latest remote commit** — not your working tree. So a dirty tree, a feature branch, or unpushed
+  commits would ship a binary that no tag reproduces (bad for a feed users auto-pull). Bypass with
+  `RELEASE_FORCE=1` if you truly mean to. To rehearse a signed + notarized build **without** publishing (no
+  release, no tag, no `GH_TOKEN`, no guard), use **`task ui:release:dryrun`** → `ui/dist/`.
 
 ## Step #2 — app owns its daemon (approach **B**): CONNECT ✅, IDENTITY ❌
 

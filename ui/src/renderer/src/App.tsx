@@ -27,6 +27,7 @@ import { SettingsView, type SettingsApi } from "./views/SettingsView.tsx";
 import { SignInView } from "./views/SignInView.tsx";
 import { RecoveryCodeShow, RecoveryCodeEnter, VaultGate } from "./views/RecoveryCodeView.tsx";
 import { SubscribeModal } from "./views/SubscribeModal.tsx";
+import { UpdateBanner } from "./views/UpdateBanner.tsx";
 
 /** Plain status when the background uploader isn't connected — no "daemon" jargon, quiet when healthy. */
 const NOT_RUNNING: Partial<Record<ConnectionState, string>> = {
@@ -269,6 +270,8 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           onClose={() => setPaywallOpen(false)}
         />
       )}
+
+      <UpdateBanner update={state.update} onRestart={() => void api.restartToUpdate()} />
 
       {toast && (
         <div className="cs-toast" role="alert">

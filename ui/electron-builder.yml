@@ -45,16 +45,33 @@ mac:
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  # The bundled Swift Mach-O binaries — sign them explicitly (hardened runtime + inherited entitlements),
+  # inside-out, with the same Developer ID as the app. Notarization REJECTS any unsigned binary in the
+  # bundle, and TCC keys the Photos grant to `coldstored`'s signature, so this must happen on every build
+  # (paths are relative to the .app bundle root). The credential-process .sh is not Mach-O → not listed.
+  binaries:
+    - Contents/Resources/bin/coldstored
+    - Contents/Resources/bin/coldstore-photo-picker
+    - Contents/Resources/bin/coldstore-restore
   # The app's own Photos usage string — surfaced when the bundled daemon's grant is requested under the app
   # identity (#2). Harmless before then. (NSPhotoLibraryUsageDescription is Info.plist, not an entitlement.)
   extendInfo:
     NSPhotoLibraryUsageDescription: "ColdStorage uploads the photos you choose to your private cold storage."
-  # Flip to true once an Apple Developer ID cert + notary credentials are configured (APPLE_ID / APPLE_TEAM_ID
-  # / APPLE_APP_SPECIFIC_PASSWORD, or an API key). See PACKAGING.md. Left false so a local unsigned build runs.
+  # Left false so a plain local `task ui:package` runs unsigned without certs. `task ui:release` overrides
+  # this to true on the CLI (`-c.mac.notarize=true`) with the Developer ID + notary creds (APPLE_ID /
+  # APPLE_TEAM_ID / APPLE_APP_SPECIFIC_PASSWORD) in the env. See ui/PACKAGING.md.
   notarize: false
   target:
-    - dmg
-    - zip                        # zip = the auto-update artifact when we wire updates later
+    - dmg                        # the human download (from the release page)
+    - zip                        # REQUIRED by electron-updater on macOS — it applies updates from the .zip
 
 dmg:
   title: ColdStorage
+
+# Auto-update feed (PROD.md Phase 6). electron-builder uploads the .dmg/.zip + the `latest-mac.yml` metadata
+# to a GitHub Release when built with `--publish always` (see `task ui:release`); the packaged app's
+# electron-updater reads that same feed. Repo is public → the release assets are free, CDN-backed downloads.
+publish:
+  provider: github
+  owner: benhonda
+  repo: coldstorage

@@ -403,6 +403,40 @@ button.cs-kv:hover { background: var(--surface-hover); }
 }
 .cs-toast-action:hover { background: color-mix(in srgb, var(--negative) 12%, transparent); }
 
+/* Auto-update ready (Phase 6): a calm top banner. The update also installs on next quit, so this is an
+   offer to apply it now — accent-tinted, never urgent (mirrors the toast, top-anchored + positive tone). */
+.cs-update {
+  position: fixed;
+  top: var(--space-5);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: min(560px, calc(100vw - var(--space-8)));
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-5);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-raised));
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border-subtle));
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-toast);
+  font: var(--type-body);
+  z-index: 20;
+}
+.cs-update .csf-icon { flex: none; color: var(--accent); }
+.cs-update-msg { flex: 1; min-width: 0; line-height: 1.4; overflow-wrap: anywhere; }
+.cs-update-action {
+  flex: none;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border-subtle));
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-primary);
+  font: var(--type-label);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cs-update-action:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
 /* ── helpers ────────────────────────────────────────────────────── */
 .cs-mono { font: var(--type-mono); letter-spacing: var(--tracking-mono); font-feature-settings: "tnum" 1; }
 .cs-muted { color: var(--text-secondary); }
