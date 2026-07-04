@@ -697,6 +697,10 @@ tasks:
     dir: ui
     deps: [ui:_ensure-electron]
     cmds:
+      # Sync node_modules to the lockfile first: electron-builder collects the app's PRODUCTION deps (e.g.
+      # electron-updater) from node_modules, so a stale tree (fresh pull, lockfile advanced) fails its
+      # collection with "production dependency not found". Idempotent when already in sync.
+      - bun install
       # The bundled binaries must exist before electron-builder copies them (electron-builder.yml extraResources).
       - swift build -c release --package-path "{{.ROOT_DIR}}/coldstorage"
       - bun run build # electron-vite → out/{main,preload,renderer}
@@ -744,6 +748,9 @@ tasks:
       - |
         : "${GH_TOKEN:?missing — a GitHub token with 'repo' scope to publish the release; see ui/PACKAGING.md}"
         echo "Building a signed + notarized ColdStorage and publishing to GitHub Releases (benhonda/coldstorage)…"
+      # Sync node_modules to the lockfile — electron-builder collects the app's production deps (electron-updater)
+      # from node_modules, so a stale tree fails with "production dependency not found". Idempotent when in sync.
+      - bun install
       - swift build -c release --package-path "{{.ROOT_DIR}}/coldstorage"
       - bun run build # electron-vite → out/{main,preload,renderer}
       # --publish always → upload the .dmg/.zip + latest-mac.yml. -c.mac.notarize=true → notarize THIS build
@@ -756,6 +763,9 @@ tasks:
     deps: [ui:_ensure-electron, ui:_require-apple-creds]
     cmds:
       - echo "Building a signed + notarized ColdStorage (no publish)…"
+      # Sync node_modules to the lockfile — electron-builder collects the app's production deps (electron-updater)
+      # from node_modules, so a stale tree fails with "production dependency not found". Idempotent when in sync.
+      - bun install
       - swift build -c release --package-path "{{.ROOT_DIR}}/coldstorage"
       - bun run build # electron-vite → out/{main,preload,renderer}
       # --publish never → build + sign + notarize only; nothing is uploaded or tagged.
