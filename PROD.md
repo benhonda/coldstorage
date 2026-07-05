@@ -454,21 +454,35 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
    page. *Gate:* a notarized build launches Gatekeeper-clean on a non-dev Mac and self-updates. Scoped
    hardest-first into 6a/6b/6c (2026-07-04):
    - **6a — Developer ID signing + notarization + nested-binary signing + the TCC identity fix:
-     CONFIG-READY ⏳ (2026-07-04) — needs Ben's Mac + certs to execute (this IS the phase gate).**
-     electron-builder is wired for a real signed + notarized build: `mac.binaries` now signs the three
-     bundled Swift Mach-Os (`coldstored` + photo-picker + restore) inside-out with the app's Developer ID
-     — notarization *rejects* any unsigned nested binary, and TCC keys the Photos grant to `coldstored`'s
-     signature. `task ui:release` drives build → sign → notarize → publish, reading the creds from the env
-     or the gitignored `.env` (APPLE_ID, APPLE_TEAM_ID, APPLE_APP_SPECIFIC_PASSWORD); the yml default stays
-     `notarize: false` so plain `task ui:package` still builds unsigned with no cert. **Ben to run on his
-     Mac** (Developer ID Application cert in the login keychain) and judge the three unknowns only a signed
-     build can settle: (a) does it notarize + staple clean; (b) does System Settings ▸ Photos now show
-     **"ColdStorage"** not **"coldstored"** — the original screenshot problem (PACKAGING.md lists the
-     fallbacks if a plain signed child still mis-labels: disclaim-responsibility launcher / embedded
-     Info.plist / SMAppService); (c) launch Gatekeeper-clean on a NON-dev Mac. Still needs `build/icon.icns`
-     (1024px, from the DS — a UX-session asset; without it electron-builder uses the stock Electron icon).
-   - **6b — auto-update via GitHub Releases: BUILT ✅ (2026-07-04; `ui:typecheck` + 95 ui tests green) —
-     pending a signed build to exercise end-to-end.** Decision (Ben, 2026-07-04): **GitHub Releases** as the
+     SIGNED + NOTARIZED + PUBLISHED ✅ (2026-07-05, Ben's Mac).** `task ui:release` completed clean
+     end-to-end: built → Developer-ID-signed → Apple-notarized (all nested binaries + frameworks) →
+     published a draft GitHub Release with the `.dmg`/`.zip`/`latest-mac.yml`. `mac.binaries` signs the three
+     bundled Swift Mach-Os (`coldstored` + photo-picker + restore) inside-out with the app's Developer ID —
+     notarization *rejects* any unsigned nested binary, and TCC keys the Photos grant to `coldstored`'s
+     signature. `task ui:release` drives build → sign → notarize → publish, reading creds from the env or the
+     gitignored `.env` (APPLE_ID/APPLE_TEAM_ID/APPLE_APP_SPECIFIC_PASSWORD + GH_TOKEN); the yml default stays
+     `notarize: false` so plain `task ui:package` still builds unsigned with no cert.
+     **War stories getting the first release out (2026-07-05):** (1) electron-builder's production-dep
+     collection failed on a stale `node_modules` after the pull (`electron-updater not found`) → the
+     packaging tasks now `bun install` first; (2) notary **401** — the `.env` value wasn't a valid
+     app-specific password (new **`ui:notarize:doctor`** probes creds against Apple's notarytool directly);
+     (3) notarization rejected **every** binary as "not signed with a valid Developer ID certificate" — Ben
+     had an *Apple Development* cert, not a *Developer ID Application* one (the only type valid for notarized
+     distribution); created the Developer ID cert → clean pass (new **`ui:sign:doctor`** lists identities +
+     checks for it). **Remaining to fully close the phase gate (on-Mac, Ben):** (a) **publish the draft**
+     v0.1.0 release on GitHub (electron-builder's default `releaseType` is *draft* — the feed isn't live and
+     no `v0.1.0` tag exists until it's published); (b) install the `.dmg` + launch **Gatekeeper-clean on a
+     NON-dev Mac**; (c) confirm System Settings ▸ Photos now shows **"ColdStorage"** not **"coldstored"** —
+     the original screenshot problem (PACKAGING.md lists the fallbacks if a signed child still mis-labels:
+     disclaim-responsibility launcher / embedded Info.plist / SMAppService); (d) prove the **self-update
+     round trip** (see 6b). Still needs `build/icon.icns` (1024px, from the DS — else the stock Electron
+     icon, which is also the Photos-pane icon).
+   - **6b — auto-update via GitHub Releases: BUILT ✅ (2026-07-04) + FEED PUBLISHED ✅ (2026-07-05) — the
+     self-update *apply* round trip is the last unproven step.** The first signed + notarized build published
+     its `.dmg`/`.zip`/`latest-mac.yml` to the GitHub feed (6a), so the feed is real; what's left is to prove
+     a running app actually updates itself: install v0.1.0, bump `ui/package.json` → 0.1.1, `task ui:release`
+     + publish, and confirm the running app surfaces **"Restart to update"** and relaunches on 0.1.1.
+     Decision (Ben, 2026-07-04): **GitHub Releases** as the
      update feed — the repo is public → free, CDN-backed release assets, zero new infra, and it's
      electron-updater's best-supported provider (chosen over S3+CloudFront and serving-from-the-site).
      electron-updater@6 is wired into the packaged main process (`ui/src/main/updater/` — `manager.ts` +
