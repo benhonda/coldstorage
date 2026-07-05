@@ -225,12 +225,12 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
    which deliberately opted OUT of the Vercel convention — this IS the Vercel app, so it gets the OIDC
    role + TF-managed env vars in full. The Cognito user-pool id/client-id are read via a cross-component
    Terragrunt `dependency` on `infra/coldstorage/live/production` (SSOT — no hand-copying `terragrunt
-   output` values). Vercel project **created — `coldstorage-account-backend`** (`prj_IhOlkinKj2zIuHQ
-   BBTJhdP7s008w`, verified via the Vercel API to confirm the name matches exactly what the OIDC trust
+   output` values). Vercel project **created — `coldstorage-account-backend`** (project id
+   redacted, verified via the Vercel API to confirm the name matches exactly what the OIDC trust
    condition expects), wired into `live/production/terragrunt.hcl`. **`terragrunt plan` is clean against
    real AWS + Vercel providers for BOTH stacks** (production `9 to add`; staging `10 to add`) — also
-   confirmed the account's `oidc.vercel.com/adpharm` OIDC provider and the `/adpharm/vercel-api-token-
-   benhonda` SSM param already exist (an open question going in; now resolved). Custom domains DECIDED
+   confirmed the account's Vercel OIDC provider and the Vercel-API-token SSM param
+   already exist (an open question going in; now resolved). Custom domains DECIDED
    (2026-07-02): **`api.coldstorage.sh`** (production) / **`api-staging.coldstorage.sh`** (staging
    custom environment). `coldstorage.sh` is registered with its nameservers delegated to Vercel DNS
    (`ns1/ns2.vercel-dns.com`). **Deliberately NOT Terraform-managed** — Ben manages the domains by
@@ -522,7 +522,7 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
   sign-in is LIVE at the Cognito layer.** OAuth client created (Web application; redirect URI =
   the Cognito domain's `/oauth2/idpresponse`), creds in SSM via `task tf:coldstorage:google-creds`,
   `enable_google_idp = true` applied (Google IdP + hosted-UI domain
-  `coldstorage-production-731520377763` + OAuth client config). Smoke-tested: `/oauth2/authorize?...
+  `coldstorage-production-<acct-id>` + OAuth client config). Smoke-tested: `/oauth2/authorize?...
   identity_provider=Google` 302s to accounts.google.com with the full client id. (War story: the first
   apply stored client_id `1000` — the creds task had used `read GID`, and GID is a READONLY built-in
   (the unix group id) in go-task's mvdan/sh; renamed vars + shape guards now prevent that class.)
