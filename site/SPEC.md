@@ -154,8 +154,14 @@ per `uploads/BRAND-VOICE.md`) — ported faithfully, voice untouched.
   with DS tokens (their data already lives in `site-common.jsx` — nav links, `CS_FOOTER`), extracting
   exact look from the bundle. Cleaner than reverse-engineering minified JS, and they're the
   "marketing-specific components" the site is meant to own anyway.
-- **"Download for Mac" CTA target** — placeholder (existing release feed) until Ben confirms the
-  canonical URL.
+- **"Download for Mac" CTA target** — _RESOLVED 2026-07-05:_ all three CTAs (nav + hero + closing)
+  link to a single `DOWNLOAD_PATH` (`app/lib/marketing/download.ts`) → the `/download` resource
+  route (`app/routes/download.tsx`), which resolves the *latest* GitHub Releases build and 302s to
+  its `.dmg` (edge-cached hourly; falls back to the releases page on failure). No version is
+  hardcoded, so release bumps need no site edit. Current build is **arm64-only** (v0.1.0) — the
+  clean cross-arch fix is a **universal `.dmg`** (build-side, `ui/electron-builder.yml`), _not_ an
+  arch-picker downloads page; deferred until Intel matters (all new Macs are Apple Silicon; macOS 27
+  drops Intel). The `/download` route already supports a multi-platform future without touching the buttons.
 - **Fonts loading strategy** — Phase 2 (see Upstream projects → Fonts).
 
 ## Non-goals (for now)

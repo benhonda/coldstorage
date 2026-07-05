@@ -13,7 +13,7 @@ type NavLink = { label: string; href: string };
 
 export type MarketingNavProps = {
   links: NavLink[];
-  cta: { label: string };
+  cta: { label: string; href: string };
   solid: boolean;
 };
 
@@ -52,7 +52,7 @@ export function MarketingNav({ links, cta, solid }: MarketingNavProps) {
           ))}
         </nav>
         <div className="csf-mktnav__cta">
-          <Button variant="primary" size="sm" icon="download">
+          <Button variant="primary" size="sm" icon="download" href={cta.href}>
             {cta.label}
           </Button>
         </div>

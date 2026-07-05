@@ -11,6 +11,7 @@ export const routePaths = [
   "/:lang",
   "/:lang/checkout",
   "/checkout",
+  "/download",
 ] as const;
 export type Path = (typeof routePaths)[number];
 

@@ -503,6 +503,10 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      Terraform-managed** (mirrors the account-backend Vercel/TF pattern + the adpharm stack, grows into
      pricing/account pages, and hosts the moved checkout) over static-on-S3 or folding into the
      account-backend Hono app. The `api.*`→website checkout move (§5c) rides along with this.
+     **Update 2026-07-05:** the live site's "Download for Mac" CTAs are now wired — a `/download`
+     resource route (`site/app/routes/download.tsx`) 302s to the latest GitHub Releases `.dmg`, so
+     the direct-download half of 6c is done. The standalone download *page* + the `api.*`→site
+     checkout move remain deferred.
 
 ## Open sub-decisions (don't block P1; flagged for when their phase lands)
 - ~~**Encryption password vs auth credential** — with a federated login there is no password to derive

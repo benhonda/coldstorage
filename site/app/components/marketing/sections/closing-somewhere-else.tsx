@@ -4,6 +4,7 @@
  * named export, DS-bundle CtaPanel/Button → ours. Copy kept verbatim from the mirror.
  */
 import { Reveal } from "~/lib/marketing/motion";
+import { DOWNLOAD_PATH } from "~/lib/marketing/download";
 import { CtaPanel } from "~/components/ds/cta-panel";
 import { Button } from "~/components/ds/button";
 
@@ -18,7 +19,7 @@ export function SectionClosingSomewhereElse() {
             lead="Download the app, point it at what matters, and walk away. We'll take it from here."
             note="Free app · macOS 14 or later · storage from $9.99 a year"
           >
-            <Button variant="primary" size="lg" icon="download">
+            <Button variant="primary" size="lg" icon="download" href={DOWNLOAD_PATH}>
               Download for Mac
             </Button>
           </CtaPanel>

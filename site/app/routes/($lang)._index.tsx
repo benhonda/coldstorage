@@ -1,6 +1,7 @@
 import type { Route } from "./+types/($lang)._index";
 import { langUtils } from "~/lib/i18n/i18n-utils.server";
 import { useSolidNav } from "~/lib/marketing/site";
+import { DOWNLOAD_PATH } from "~/lib/marketing/download";
 import { FOOTER } from "~/lib/marketing/content";
 import { MarketingNav } from "~/components/marketing/marketing-nav";
 import { MarketingFooter } from "~/components/marketing/marketing-footer";
@@ -48,7 +49,7 @@ export default function Home() {
   return (
     <div style={{ background: "var(--bg-app)" }}>
       <div style={{ background: "var(--bg-glow)" }}>
-        <MarketingNav links={NAV_LINKS} cta={{ label: "Download for Mac" }} solid={solid} />
+        <MarketingNav links={NAV_LINKS} cta={{ label: "Download for Mac", href: DOWNLOAD_PATH }} solid={solid} />
         <main>
           <SectionHeroAppMock />
           <SectionHowList />

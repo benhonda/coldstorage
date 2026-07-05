@@ -5,6 +5,7 @@
  */
 import { Reveal } from "~/lib/marketing/motion";
 import { csScrollTo } from "~/lib/marketing/site";
+import { DOWNLOAD_PATH } from "~/lib/marketing/download";
 import { Button } from "~/components/ds/button";
 import { MacMock } from "~/components/marketing/shared/vault-mock";
 
@@ -42,7 +43,7 @@ export function SectionHeroAppMock() {
               marginTop: 32,
             }}
           >
-            <Button variant="primary" size="lg" icon="download">
+            <Button variant="primary" size="lg" icon="download" href={DOWNLOAD_PATH}>
               Download for Mac
             </Button>
             <Button variant="ghost" size="lg" onClick={() => csScrollTo("how")}>
