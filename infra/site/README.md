@@ -20,11 +20,16 @@ values the `/checkout` page needs.
 
 ## Status (2026-07-05)
 
-- **Vercel project:** created — `prj_QkTYTMBTzLCHXCsRncrrAThMSlv7`, wired into both live stacks.
-  (Confirm the project slug is `coldstorage-site` — it's baked into the OIDC trust in `oidc.tf`.)
-- **Plans:** both **clean** — `ENV=production` → 2 to add (OIDC role + `PUBLIC_PADDLE_ENVIRONMENT`);
-  `ENV=staging` → 4 to add (OIDC role + the `staging` custom environment + both `PUBLIC_PADDLE_*`,
-  scoped to it). Not yet applied.
+- **Live** — the site is deployed + serving at `coldstorage.sh`, and both stacks are **applied** to
+  real AWS/Vercel.
+- **Vercel project:** `prj_QkTYTMBTzLCHXCsRncrrAThMSlv7`, slug **`coldstorage-web`**. Note this differs
+  from `project_name` (`coldstorage-site`), which is only this component's TF/state label + IAM role name.
+- **Pending re-apply:** `vercel_project_name` was corrected `coldstorage-site` → `coldstorage-web` (it's
+  baked into the OIDC trust — `oidc.tf`); it's uncommitted in `live/*/terragrunt.hcl`. Run `task
+  tf:site:apply ENV=production` + `ENV=staging` to land it. Dormant (the site makes no AWS calls) → low-urgency.
+- **Paddle:** staging carries the real sandbox client token; **production** carries the
+  `TODO_PASTE_LIVE_PADDLE_CLIENT_TOKEN_HERE` placeholder until the live account exists. The default
+  payment link has been **repointed to `coldstorage.sh/checkout`**.
 - **DNS:** `coldstorage.sh` is managed **entirely in Vercel** (not TF/Route53) — nothing to do here.
 
 ## Deploy

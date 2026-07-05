@@ -14,14 +14,16 @@ Currently **dogfooding V1**; the multi-user/paid layer is in build — see [`PRO
 | [`coldstorage/`](./coldstorage/) | The Swift package: portable `ColdStorageCore` (engine, journal, crypto, control plane) + `ColdStorageMac` adapter (PhotoKit, FSEvents) + executables (`coldstored`, `coldstorectl`, `coldstore-cli`, `coldstore-restore`, `coldstore-photo-picker`). Docs: [`README.md`](./coldstorage/README.md) (run it) · [`DESIGN.md`](./coldstorage/DESIGN.md) (how/why it's built). |
 | [`ui/`](./ui/) | Electron/React control panel — a thin client over the daemon's control socket. Docs: [`README.md`](./ui/README.md) · [`DESIGN.md`](./ui/DESIGN.md) (UX + contract) · [`PACKAGING.md`](./ui/PACKAGING.md) (the `.app`). |
 | [`account-backend/`](./account-backend/) | Hono API on Vercel + Neon/Drizzle: Cognito ↔ Paddle ↔ zero-knowledge key-blob backend for the paid layer ([`PROD.md`](./PROD.md) Phase 4). |
+| [`site/`](./site/) | Marketing site + checkout page — RR7/adpharm-stack on Vercel, **live at [coldstorage.sh](https://coldstorage.sh)**. Sections designed upstream in Claude cloud design, synced to `site/design-mirror/`. Docs: [`SPEC.md`](./site/SPEC.md) (build + design-sync architecture). |
 | [`infra/coldstorage/`](./infra/coldstorage/) | Terraform/Terragrunt: S3 Deep Archive vault + lifecycle + least-priv daemon IAM + Cognito. |
 | [`infra/account-backend/`](./infra/account-backend/) | Terraform/Terragrunt for the backend's Vercel project (production + staging). |
+| [`infra/site/`](./infra/site/) | Terraform/Terragrunt for the marketing site's Vercel project (production + staging; DNS is Vercel-managed). |
 | `phase0-*-spike/` | De-risking spikes (both run + proven; seeds of the core). |
 | [`PROD.md`](./PROD.md) | The going-to-prod plan (identity, per-user isolation, ZK keys, billing, distribution) — the active work's SSOT. |
 | [`CHANGELOG.md`](./CHANGELOG.md) | The build history. |
 
 Everything runs through the root [`Taskfile.yml`](./Taskfile.yml) (`task --list`): `daemon:*`, `ui:*`,
-`backend:*`, `tf:*`, plus interactive pickers (`tf:plan`, `link`, `pull`).
+`backend:*`, the site's `dev:site`/`typecheck:site`, `tf:*`, plus interactive pickers (`start`/`dev`, `tf:plan`, `link`, `pull`).
 
 ## Architecture decisions (don't re-litigate)
 - **Stack:** Electron/React control panel + a **standalone Swift upload daemon** (launchd LaunchAgent).

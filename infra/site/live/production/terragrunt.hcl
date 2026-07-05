@@ -18,10 +18,10 @@ inputs = {
   env         = "production"
   has_staging = true
 
-  # vercel_project_name MUST match the real Vercel slug exactly (it's baked into the OIDC
-  # trust — oidc.tf). Confirm the project's slug is "coldstorage-site" (adjust if it differs).
+  # vercel_project_name = the real Vercel slug (baked into the OIDC trust — oidc.tf). NOTE it
+  # differs from project_name ("coldstorage-site", this component's TF/state label + IAM role name).
   vercel_project_id   = "prj_QkTYTMBTzLCHXCsRncrrAThMSlv7"
-  vercel_project_name = "coldstorage-site"
+  vercel_project_name = "coldstorage-web"
   vercel_team_slug    = "adpharm"
 
   # 👉 Paste the Paddle LIVE client-side token (live_…) here once the live Paddle account

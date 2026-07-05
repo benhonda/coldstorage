@@ -1,8 +1,10 @@
 # ColdStorage Marketing Site — Build & Sync Spec
 
-> **Status:** provisional · Phase 1 in progress · last touched 2026-07-05
-> This spec is a living document, not scripture. If the code and this file disagree,
-> the code wins — fix the file. Re-read the **Drift check** before executing any phase.
+> **Status:** ✅ LIVE at [coldstorage.sh](https://coldstorage.sh) (2026-07-05) · Phases 1–4 done.
+> Pending: OIDC-trust re-apply (`coldstorage-web` slug), live Paddle token for prod checkout, brand
+> polish on two reconstructed components — see **Phases** below.
+> This spec is a living document, not scripture. If the code and this file disagree, the code wins
+> — fix the file.
 
 ## Goal
 
@@ -16,7 +18,8 @@ that keeps upstream design and repo code aligned **without hand-maintained dupli
 
 - **Location:** `site/` (monorepo subdir — `ui/` and `account-backend/` already exist). The
   root `Taskfile.yml` stays the one command surface; `site` gets dir-scoped tasks
-  (`start:site` / `link:site` / `pull:site` + a custom `site:design:pull`), and the bare
+  (`start:site` / `link:site` / `pull:site`; the design-mirror pull is an **agent action**, not a
+  task — DesignSync is session-only, see the sync loop below), and the bare
   `start`/`link`/`pull` become app pickers over `ui` / `backend` / `site`.
 - **Stack:** RR7 (SSR) on Vercel, `~/*`→`app/*`, Tailwind v4, zod fail-fast env, its **own
   Vercel project** + **`infra/site/`** Terraform (prod + staging), package/state name
@@ -126,18 +129,22 @@ per `uploads/BRAND-VOICE.md`) — ported faithfully, voice untouched.
   build green. _Ben's action:_ repoint Paddle's default-payment-link → `coldstorage.sh/checkout`
   (+ staging). _After repoint:_ the account-backend `src/routes/checkout.ts` HTML page is redundant
   and can be removed (leave it until the link is moved — it's still the live target).
-- **Phase 4 — infra / deploy. 🟡 SCAFFOLDED (prep, not applied).** `infra/site/` written mirroring
-  `infra/account-backend` (Terragrunt root + modules/{shared,stack} + live/{shared,production,staging}),
-  `tf:site:*` tasks + pickers wired, `terraform fmt` clean. Simpler than account-backend: dormant OIDC
-  role + the two `PUBLIC_PADDLE_*` env vars only (no Cognito/DB/secrets). **DNS deferred** (apex
-  `coldstorage.sh` record needs the post-domain-add CNAME target). Nothing applied; no Vercel project
-  created. **Go-live is Ben's manual steps** — see `infra/site/README.md`:
-  1. Create the Vercel project (`task link:site`) → fill `vercel_project_id` in both `live/*/terragrunt.hcl`.
-  2. Decide DNS (is `coldstorage.sh` a Route53 zone in `pharmer`? apex/www? staging subdomain), add the
-     domain in the Vercel dashboard → wire `modules/shared` zone + `modules/stack` record.
-  3. `task tf:site:plan ENV=production` (+ `staging`) → review → `apply`.
-  4. Repoint Paddle's default-payment-link → `coldstorage.sh/checkout` (+ staging); then the old
-     `account-backend/src/routes/checkout.ts` page can be removed.
+- **Phase 4 — infra / deploy. ✅ APPLIED + LIVE.** `infra/site/` (Terragrunt root + modules/{shared,stack}
+  + live/{shared,production,staging}), `tf:site:*` tasks + pickers, `fmt` clean — applied to real
+  AWS/Vercel. Dormant OIDC role + the two `PUBLIC_PADDLE_*` env vars (no Cognito/DB/secrets). DNS for
+  `coldstorage.sh` is Vercel-managed (not TF/Route53). Vercel project `prj_QkTYTMBTzLCHXCsRncrrAThMSlv7`,
+  slug **`coldstorage-web`** (`project_name`/state label is `coldstorage-site`). Site deployed + serving.
+
+### Still pending (2026-07-05)
+  - **OIDC-trust re-apply** — `vercel_project_name` corrected `coldstorage-site` → `coldstorage-web`
+    (uncommitted in `infra/site/live/*/terragrunt.hcl`); `task tf:site:apply ENV=production` + `ENV=staging`
+    to land it. Dormant (site makes no AWS calls) → low-urgency.
+  - **Live Paddle token** — prod checkout needs it; `TODO_PASTE_LIVE_PADDLE_CLIENT_TOKEN_HERE` placeholder
+    in `infra/site/live/production/terragrunt.hcl` (staging already has the real sandbox token).
+  - **Paddle default-payment-link** → `coldstorage.sh/checkout`: **repointed by Ben.** After it, the old
+    `account-backend/src/routes/checkout.ts` HTML page is redundant → remove.
+  - **Brand polish** — the reconstructed nav logo (snowflake `ac_unit`) + "Most picked" pricing badge
+    (Ben okayed "for now"). Real treatment TBD.
 
 ## Open decisions · flags
 
