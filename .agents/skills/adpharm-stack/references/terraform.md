@@ -1,9 +1,12 @@
 # Infrastructure — Terraform + Terragrunt (Vercel project scaffolding)
 
-Scaffolds a project's infra: centralized Terragrunt **remote state**, a **Vercel project**
-with **OIDC** AWS access, TF-**owned Vercel env vars**, and **Route53 DNS** — across one
+Scaffolds infra for an **already-existing, manually-created Vercel project**: centralized
+Terragrunt **remote state**, **OIDC** AWS access, TF-**owned Vercel env vars**, and a
+**Route53 DNS** record for a domain added manually in the Vercel dashboard — across one
 environment or two (production ± staging), the end user's choice. Owns the env-var
-ownership split that `env.md` links to.
+ownership split that `env.md` links to. **TF never creates the Vercel project or binds
+the domain to it** — both are manual, dashboard-side steps; TF only references
+`vercel_project_id` and points a Route53 record at the CNAME target Vercel shows you.
 
 **Scope:** Vercel-project setup only — state, env vars, OIDC, DNS. **Not** Lambda / ECS /
 RDS / Step Functions / BunnyNet / shared VPCs — add a sibling root for those only when a
@@ -29,12 +32,13 @@ Vercel env vars / OIDC / DNS.
 | --- | --- | --- |
 | env-tiers-default | **production + staging is the default — provision both unless the user explicitly opts into production-only.** staging is `infra/<component>/live/staging/` (a copy of `production` with `env="staging"`); both run via `task tf:<component>:* ENV=production\|staging` | don't make the user re-ask for staging every time; prod-only is the deliberate exception, not the baseline |
 | layout | the `tf:<component>:*` tasks (below) **and** this layout are owned **here**: `infra/` is a pure container → each component root is `infra/<component>/{root.hcl,live/{shared,<env>},modules/{shared,stack}}`, `ENV=production\|staging`, shared planned first. **Always keep a `live/shared`** (the tasks plan it first) even if it only holds the Route53 zone | tasks + layout in one file → they can't drift |
-| shared-vs-stack | **shared** = multi-tenant (Route53 hosted zones); **stack** (per-env) = the OIDC role, Vercel env vars, Vercel domain, and the env's DNS records | DNS zones are shared; everything env-specific is isolated per env |
+| picker-when-multi | with **more than one component**, add bare `tf:plan`/`tf:apply` tasks that `select`-pick across component **and** env, dispatching to `tf:<component>:{plan,apply} ENV=…` — same `select`-picker idiom as `per-app-picker` in `references/taskfile.md`, not a second one — Shape below | one component → the per-component command is already short enough; >1 component → don't make the user memorize every `tf:<component>:*` name; one picker idiom everywhere (DRY) instead of a bespoke menu per domain |
+| shared-vs-stack | **shared** = multi-tenant (Route53 hosted zones); **stack** (per-env) = the OIDC role, Vercel env vars, and the env's Route53 record | DNS zones are shared; everything env-specific is isolated per env |
 | state-sensitive | state in S3 `terraform-state-sensitive` (encrypted), profile `pharmer`, region `ca-central-1`; Terragrunt generates `backend.tf`/`provider.tf` | shared, isolated team state |
 | dependency-mock | env stacks read shared via a `dependency "shared"` block with `mock_outputs` | env `plan` runs before shared is applied |
-| env-var-ownership | **TF-managed** = infra outputs (role ARN, region, bucket…), `sensitive = false`, overwritten each apply; **manual secrets** = placeholders with `lifecycle { ignore_changes = [value] }` (humans set the value in the dashboard). Mark them `sensitive = true` **only on a prod-with-staging stack** (`target = ["production"]`); any stack whose targets include `preview`/`development` must stay `sensitive = false`, because **Vercel can't `vercel env pull` sensitive vars** (→ would force a separate dev copy). So **prod-only → secrets are non-sensitive; flag the user** their values are readable/pullable (acceptable, not a deal-breaker). Production stack → `target = ["production"]` **when staging exists**, else (prod-only) all three `["production","preview","development"]` (= Vercel's **"All Environments"**); staging stack → a `vercel_custom_environment` (branch-tracked) + `target = ["preview","development"]` | one owner for deployed env vars; devs `vercel env pull` the development target for local dev and sensitive vars don't come down. Prod-only must still feed preview/dev deploys, so it covers all targets. Every new key must also land in the app's zod schema — `deployed-vars-tf` in `references/env.md` |
+| env-var-ownership | **TF-managed** = infra outputs (role ARN, region, bucket…), `sensitive = false`, overwritten each apply, `comment` = a static "TF-managed, do not edit" note; **manual secrets** = placeholders with `lifecycle { ignore_changes = [value, comment] }` (humans set the value in the dashboard, and may annotate the comment there too) — `comment` is sourced from `manual_secrets`'s map value (the var's purpose), since the resource never reads that value for anything else. Mark them `sensitive = true` **only on a prod-with-staging stack** (`target = ["production"]`); any stack whose targets include `preview`/`development` must stay `sensitive = false`, because **Vercel can't `vercel env pull` sensitive vars** (→ would force a separate dev copy). So **prod-only → secrets are non-sensitive; flag the user** their values are readable/pullable (acceptable, not a deal-breaker). Production stack → `target = ["production"]` **when staging exists**, else (prod-only) all three `["production","preview","development"]` (= Vercel's **"All Environments"**); staging stack → a `vercel_custom_environment` (branch-tracked) + `target = ["preview","development"]` | one owner for deployed env vars; devs `vercel env pull` the development target for local dev and sensitive vars don't come down. Prod-only must still feed preview/dev deploys, so it covers all targets. Every new key must also land in the app's zod schema — `deployed-vars-tf` in `references/env.md`. Comments matter most for manual secrets: whoever fills the value in blind, in the dashboard, needs to know what it is — ignore-changes keeps TF from clobbering it every apply |
 | oidc-not-keys | Vercel→AWS via an OIDC role (`oidc.vercel.com/<team>` trust, env-scoped `sub`); expose `aws_iam_role.vercel.arn` as the TF-managed `AWS_ROLE_ARN` | no long-lived AWS keys |
-| dns-zones-vs-records | the **root domain is the hosted zone** (usually pre-existing → import via `data`, in shared); subdomains are **records** (per-env, in stack); bind with `vercel_project_domain`. The CNAME target is **per-project** — Vercel shows it when you add the domain in the dashboard. **Ask the user for it**, don't default to `cname.vercel-dns.com` (Vercel routes regional projects to a project-specific target and warns against the generic one) | don't make a zone per subdomain; wrong CNAME target = broken/slow routing |
+| dns-zones-vs-records | the **root domain is the hosted zone** (usually pre-existing → import via `data`, in shared); subdomains are **records** (per-env, in stack) — a plain `aws_route53_record`, **no `vercel_project_domain`**: the domain is added to the Vercel project manually, in the dashboard, not by TF. The CNAME target is **per-project** — Vercel shows it once you add the domain there. **Ask the user for it**, don't default to `cname.vercel-dns.com` (Vercel routes regional projects to a project-specific target and warns against the generic one) | don't make a zone per subdomain; wrong CNAME target = broken/slow routing; domains/projects are manual, dashboard-owned, not TF-owned |
 | never-apply | verify with `task tf:<component>:plan ENV=…` (a clean plan is "done"); the **never-`apply`** rule is a global guardrail → SKILL.md, and IAM ALLOW-only → `references/aws-oidc.md` | this row owns only the terraform-local verify command; both prohibitions live once, elsewhere |
 | team-constants | `pharmer` / `ca-central-1` / `terraform-state-sensitive` are fixed; Vercel API token = SSM Parameter Store **`/adpharm/vercel-api-token-benhonda`**. Team slug is a per-project input | team facts, not guessable |
 
@@ -49,7 +53,7 @@ infra/                              # pure container — NO root config; one sib
     │   └── staging/terragrunt.hcl      # second env (env="staging") — default; omit only for prod-only projects
     └── modules/
         ├── shared/                 # hosted zones + outputs (zone ids)
-        └── stack/                  # OIDC role, Vercel env vars, Vercel domain, DNS records
+        └── stack/                  # OIDC role, Vercel env vars, Route53 record (domain added to Vercel manually)
 # a root with >1 Vercel project nests them: live/projects/<name>/<env> + modules/<name>
 ```
 
@@ -77,7 +81,8 @@ inputs = {
   env = "production"; vercel_project_id = "prj_…"; vercel_team_slug = "adpharm"
   root_zone_id = dependency.shared.outputs.root_zone_id; subdomain = "app"
   has_staging = true   # default; set false for a prod-only project → prod env vars also target preview+development
-  manual_secrets = { DATABASE_URL = "…", SESSION_SECRET = "…" }
+  # key = env var name; value = human-readable purpose → becomes the Vercel dashboard "comment"
+  manual_secrets = { DATABASE_URL = "Postgres connection string (RDS)", SESSION_SECRET = "NextAuth session signing secret" }
 }
 # staging (default): copy this dir, set env="staging", subdomain="app-staging"
 ```
@@ -103,18 +108,19 @@ resource "vercel_custom_environment" "env" {           # only for non-production
 resource "vercel_project_environment_variable" "managed" {
   for_each = local.tf_managed
   project_id = var.vercel_project_id; key = each.key; value = each.value; sensitive = false
+  comment                 = "TF-managed — do not edit; value is overwritten on every apply"
   target                 = local.targets
   custom_environment_ids = local.is_prod ? null : [vercel_custom_environment.env[0].id]
 }
 resource "vercel_project_environment_variable" "manual" {
-  for_each = var.manual_secrets
-  project_id = var.vercel_project_id; key = each.key; value = "SET_IN_VERCEL_DASHBOARD"
+  for_each = var.manual_secrets   # key = env var name; value = purpose, becomes the dashboard comment
+  project_id = var.vercel_project_id; key = each.key; value = "SET_IN_VERCEL_DASHBOARD"; comment = each.value
   # sensitive ONLY when targets are exactly ["production"] (prod + staging); preview/development must stay
   # non-sensitive — `vercel env pull` can't fetch sensitive vars. Prod-only ⇒ false (flag the user).
   sensitive              = local.is_prod && var.has_staging
   target                 = local.targets
   custom_environment_ids = local.is_prod ? null : [vercel_custom_environment.env[0].id]
-  lifecycle { ignore_changes = [value] }              # never clobber the human-set value
+  lifecycle { ignore_changes = [value, comment] }     # never clobber the human-set value or dashboard comment
 }
 ```
 ```hcl
@@ -128,10 +134,12 @@ resource "aws_iam_role" "vercel" {
     Condition = { StringLike = { "oidc.vercel.com/${var.vercel_team_slug}:sub" =
       "owner:${var.vercel_team_slug}:project:${var.vercel_project_name}:environment:${var.env}" } } }] })
 }
-# modules/stack/route53.tf — subdomain record in the shared zone, bound to Vercel
-resource "vercel_project_domain" "app" { project_id = var.vercel_project_id; domain = "${var.subdomain}.${var.root_domain}" }
+# modules/stack/route53.tf — subdomain record in the shared zone
+# The domain itself is added to the Vercel project manually, in the dashboard (not TF) —
+# that step is what produces var.vercel_cname_target below.
 resource "aws_route53_record" "app" {
-  # var.vercel_cname_target = the per-project CNAME Vercel shows when you add the domain — ASK THE USER, don't hardcode cname.vercel-dns.com
+  # var.vercel_cname_target = the per-project CNAME Vercel showed when the domain was added
+  # manually in the dashboard — ASK THE USER, don't hardcode cname.vercel-dns.com
   zone_id = var.root_zone_id; name = var.subdomain; type = "CNAME"; ttl = 300; records = [var.vercel_cname_target]
 }
 ```
@@ -196,8 +204,43 @@ tf:fmt:                          # repo-wide, no component/ENV
     - terraform fmt -recursive infra/
 # tf:<component>:{destroy,import,list,refresh,output} follow the same ENV-scoped pattern.
 ```
+With **more than one component**, add bare pickers (`picker-when-multi` above) — one `select`
+per component+env pair, same idiom as `link`/`pull` in `references/taskfile.md`:
+```yaml
+tf:plan:
+  desc: Plan infra (interactive picker across components + envs)
+  interactive: true
+  silent: true
+  cmds:
+    - |
+      echo "Plan which infra?"
+      select target in "coldstorage:production" "account-backend:production" "account-backend:staging" quit; do
+        case "$target" in
+          coldstorage:production)     exec task tf:coldstorage:plan ENV=production ;;
+          account-backend:production) exec task tf:account-backend:plan ENV=production ;;
+          account-backend:staging)    exec task tf:account-backend:plan ENV=staging ;;
+          quit) break ;;
+        esac
+      done
+
+tf:apply:                        # never run without a reviewed plan — each target still confirms separately
+  desc: Apply infra (interactive picker across components + envs)
+  interactive: true
+  silent: true
+  cmds:
+    - |
+      echo "Apply which infra?"
+      select target in "coldstorage:production" "account-backend:production" "account-backend:staging" quit; do
+        case "$target" in
+          coldstorage:production)     exec task tf:coldstorage:apply ENV=production ;;
+          account-backend:production) exec task tf:account-backend:apply ENV=production ;;
+          account-backend:staging)    exec task tf:account-backend:apply ENV=staging ;;
+          quit) break ;;
+        esac
+      done
+```
 
 ## Verify at latest
 - **Terraform, Terragrunt, AWS + Vercel providers** — current versions on the Registry; use
   `~>`; confirm current schemas (`vercel_project_environment_variable`,
-  `vercel_custom_environment`, `vercel_project_domain`, `aws_iam_openid_connect_provider`).
+  `vercel_custom_environment`, `aws_iam_openid_connect_provider`).

@@ -23,6 +23,8 @@ pipeline + the cross-cutting tasks**; domain operational tasks live with their d
 | aws-identity-gate | `check-aws-identity` + `login` live here; AWS/TF tasks `deps: [check-aws-identity]` | fail early with a clear message (AWS identity owned by `references/aws-oidc.md`) |
 | prompt-on-destructive | destructive tasks are `interactive` with a `prompt:` (e.g. `db-push`, in db.md) | a human confirms before damage |
 | alias-convention | tasks carry `desc` + both kebab and `colon:` aliases; helpers `internal: true` | discoverable via `task --list-all`, consistent surface |
+| per-app-picker | `start` (`bunx --bun react-router dev`), `link` (`bunx vercel link`), `pull` (`bunx vercel env pull .env.vercel`) are dir-scoped per app (`start:<app>`/`link:<app>`/`pull:<app>`) from the **first** app in a monorepo — never deferred until a 2nd app appears; the bare `start`/`link`/`pull` are always interactive `select` pickers over whatever apps exist (`pull`'s picker also gets an `all` case) — Shape below | one namespacing style everywhere: domain first, app second, same as `tf:<component>:*`; shipping the picker shape from app #1 means adding app #2 is a pure addition, never a rename/refactor of tasks already in use |
+| per-app-dotenv | in a monorepo, every dir-scoped per-app task (`start:<app>`, `link:<app>`, `pull:<app>`, `typecheck:<app>`, …) also carries its own `dotenv:` list, not just the root-level one; define it once as a YAML anchor on that app's first task (`dotenv: &<app>-dotenv [...]`) and reuse via `dotenv: *<app>-dotenv` on the rest — Shape below | go-task resolves a task-level `dotenv:` relative to that task's own `dir:` (confirmed in go-task source, not just its docs); the root-level `dotenv:` only ever sees root-level files, so `pull:<app>`'s own `.env.vercel` (written into that app's subdir) would silently never load into that app's tasks otherwise |
 | one-offs-are-tasks | a throwaway/one-off script is **still** a `task` — never hand the user a bare `bun run …`/`terragrunt …`; add a dated `tmp-<slug>` block (script in gitignored `scripts/tmp/`), then delete block+script after it runs | one-offs need the same env/AWS/dotenv loading; quarantining + dating them stops scratch code rotting in the tree |
 
 ## Engine — copy faithfully (`assets/Taskfile.yml` → project root)
@@ -41,6 +43,76 @@ backfill:
     - bun run scripts/backfill.ts {{.CLI_ARGS}}
 ```
 
+`start`/`link`/`pull` in a monorepo (`per-app-picker` row) — one dir-scoped task per app
+from app #1, bare task = picker. The first per-app task (`typecheck:web` here) defines
+the `dotenv` anchor (`per-app-dotenv` row); every other `web` task reuses it via `*web-dotenv`:
+```yaml
+typecheck:web:
+  desc: Type check the web app
+  dir: web
+  dotenv: &web-dotenv        # anchor once, per app — paths resolve relative to this dir:
+    - .env
+    - .env.vercel
+  cmds:
+    - bun run typecheck
+
+start:web:
+  desc: Start the web app dev server
+  dir: web
+  dotenv: *web-dotenv
+  interactive: true
+  cmds:
+    - bunx --bun react-router dev
+
+link:web:
+  desc: Link the web app to its Vercel project
+  dir: web
+  dotenv: *web-dotenv
+  interactive: true
+  cmds:
+    - bunx vercel link
+
+pull:web:
+  desc: Pull web app env vars from Vercel into .env.vercel
+  dir: web
+  dotenv: *web-dotenv
+  interactive: true
+  cmds:
+    - bunx vercel env pull .env.vercel
+
+start:   # no `all` case — dev servers run in the foreground, one at a time
+  desc: Start an app's dev server (interactive app picker)
+  interactive: true
+  silent: true
+  cmds:
+    - |
+      echo "Start which app?"
+      select app in web api quit; do
+        case "$app" in
+          web) exec task start:web ;;
+          api) exec task start:api ;;
+          quit) break ;;
+          *) echo "invalid" ;;
+        esac
+      done
+
+link:   # pull: is identical, plus an `all` case → `exec task pull:web pull:api`
+  desc: Link an app to its Vercel project (interactive app picker)
+  interactive: true
+  silent: true
+  cmds:
+    - |
+      echo "Link which app?"
+      select app in web api quit; do
+        case "$app" in
+          web) exec task link:web ;;
+          api) exec task link:api ;;
+          quit) break ;;
+          *) echo "invalid" ;;
+        esac
+      done
+```
+
 ## One-offs (temp tasks) — the convention
 Agents reach for bare `bun run scratch.ts` / `terragrunt …` on throwaways because a full
 task block feels heavy. It isn't optional: a one-off is **still** a task, just a *quarantined,
@@ -57,13 +129,8 @@ dated, short-lived* one. The `tmp-sweep` task + commented template ship in `asse
    `tmp-*` block + `scripts/tmp/` file (read-only radar) so nothing rots — a non-empty sweep
    is a TODO, not a steady state.
 
-```yaml
-tmp-backfill-foo:        # added 2026-01-01 — DELETE AFTER RUN
-  desc: '[ONE-OFF 2026-01-01] backfill foo, then remove this task + its script'
-  aliases: [tmp:backfill-foo]
-  cmds:
-    - bun run scripts/tmp/backfill-foo.ts {{.CLI_ARGS}}
-```
+Template (`tmp-backfill-foo`, a placeholder name — swap for the real slug): see the
+commented block in `assets/Taskfile.yml`.
 
 ## Verify at latest
 - **go-task v3** — confirm current schema for `requires`/`prompt`/`dir`/`dotenv`/aliases.

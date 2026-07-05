@@ -36,7 +36,9 @@ setup-you-verify (plugin APIs drift — see below); keep the `auto-generators` p
 Two upfront choices — these genuinely vary, so **ask, don't assume**:
 1. **App at the repo root, or in a subdirectory?** Standalone RR7 app → root; a monorepo
    (RR7 app alongside other packages) → a subdir (e.g. `web/`). Put the whole shell there:
-   `app/`, the three config files, `Taskfile.yml`, `infra/`.
+   `app/`, the three config files, `infra/`, and this app's own `.env`/`.env.vercel` — the
+   Taskfile stays one root file (`references/taskfile.md`'s `assembled-one-file`), with this
+   app's tasks dir- and `dotenv`-scoped to the subdir (`per-app-dotenv`).
 2. **Project name** — if `.devcontainer/devcontainer.json` exists, recommend its `name`
    (used for the package name + the terragrunt state key); confirm with the user.
 

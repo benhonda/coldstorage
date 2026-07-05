@@ -1,15 +1,17 @@
 ---
 name: adpharm-stack
 description: >-
-  Build and extend Adpharm's React Router 7 + Vercel + AWS web-app stack the way
-  Adpharm builds it. Use this skill WHENEVER working in (or bootstrapping) an
-  Adpharm / RR7-stack app — anything touching server actions, type-safe routing or
-  search params, inline en/fr i18n, the Drizzle DB layer, Google OAuth, AWS access
+  Build and extend Adpharm's app stack the way Adpharm builds it — a React Router 7
+  web app or a Hono API, both on Vercel, sharing one foundation (Drizzle + Postgres,
+  AWS via OIDC, Terraform, the Taskfile). Use this skill WHENEVER working in (or
+  bootstrapping) an Adpharm app — anything touching server actions, type-safe routing
+  or search params, inline en/fr i18n, the Drizzle DB layer, Google OAuth, AWS access
   (S3 / OIDC), AI/LLM calls via Vercel AI Gateway, env-var validation, dark/light
-  theming or tweakcn themes, the Taskfile, or Terraform/Terragrunt infra. Reach for it even when the
-  user doesn't name the stack: "add a login", "set up infra", "make a new action",
-  "add a French version", "add a table", "wire up S3", "fix the theme flash", or
-  "scaffold a new app" should all trigger it. It encodes the conventions to follow
+  theming or tweakcn themes, the Taskfile, Terraform/Terragrunt infra, or a Hono
+  backend (JSON API / webhook / cron worker). Reach for it even when the user doesn't
+  name the stack: "add a login", "set up infra", "make a new action", "add a French
+  version", "add a table", "wire up S3", "fix the theme flash", "scaffold a new app",
+  or "spin up a Hono API" should all trigger it. It encodes the conventions to follow
   and the dead patterns to avoid. For analytics/event instrumentation, defer to the
   silo-analytics skill (HOW to fire events with @adpharm/silo-analytics) and the
   product-tracking skill (WHAT to track and why) — this skill does not cover tracking.
@@ -23,8 +25,19 @@ change — a maintenance nightmare. This skill exists to escape that, so **keepi
 skill itself low-maintenance is the point**: lean files, one fact in one place, and
 edits that replace a unit rather than pile on top of it.
 
-The stack: **React Router 7 (SSR) on Vercel, Drizzle + Postgres, AWS for
-storage/compute, Terraform/Terragrunt for infra, Silo for analytics.**
+Adpharm apps share **one foundation** and come in a couple of **archetypes**. The
+foundation (every app): **Vercel deploy, Drizzle + Postgres (Neon), zod fail-fast env, a
+root Taskfile, Terraform/Terragrunt infra with AWS via OIDC, Bun, latest-deps**, and the
+engine-vs-shape doctrine below. Two archetypes sit on it:
+
+- **RR7 web app** — React Router 7 (SSR) UI on Vercel. The bulk of these references; it
+  owns the `app/` + `~/` alias + client/server-split + codegen layout.
+- **Hono API on Vercel** — a server/JSON backend (event ingest, sender, webhook, cron
+  worker): all-server, `src/`-based, no UI shell. See `references/hono-api.md`.
+
+The foundation references (env, db, aws-oidc, terraform, taskfile) apply to **both**; the
+UI references (routing, i18n, theming, components, actions, data-fetching, project-setup)
+are RR7-web-only. Analytics is Silo (separate skills, below).
 
 ## Doctrine: structured flexibility, in two tiers
 
@@ -73,7 +86,8 @@ its docs rather than assuming the shape you remember.
 
 ## Using the engines (`assets/`)
 
-`assets/` mirrors a consuming app where the `~/` alias means `app/`:
+`assets/` holds the **RR7 web app** engines (a Hono API copies none — it's all Shape,
+`references/hono-api.md`). It mirrors a consuming RR7 app where the `~/` alias means `app/`:
 
 - `assets/lib/**` → `app/lib/**`, `assets/hooks/**` → `app/hooks/**`
 - `assets/{Taskfile.yml, drizzle.config.ts, vite.config.ts, tsconfig.json,
@@ -104,30 +118,38 @@ SKILL.md). Never restate a fact in two files — that's how the registry rotted.
 
 ## Routing map — read only what you're touching
 
+Rows are marked **[F]** foundation (both archetypes) or **[UI]** RR7-web-only. Building a
+Hono API? Start at `references/hono-api.md`; it reuses the **[F]** rows with all-server deltas.
+
 | Working on… | Read | Engine in `assets/`? |
 | --- | --- | --- |
-| Bootstrapping / build config — vite, tsconfig, the `~/*` alias, auto-generators | `references/project-setup.md` | ✓ (configs) |
-| Writing data — server actions (typed mutations) | `references/actions.md` | ✓ |
-| Reading data — loaders vs useSWR + resource routes | `references/data-fetching.md` | — (shape) |
-| AI / LLM calls — Vercel AI Gateway (keyless, no provider keys) | `references/ai.md` | — (shape) |
-| Type-safe routing (generouted) + type-safe search params | `references/routing.md` | ✓ |
-| Bilingual UI, the `/fr` URL convention, inline en/fr content | `references/i18n.md` | ✓ |
-| Env-var validation / fail-fast config | `references/env.md` | ✓ (generator) |
-| Drizzle DB — client, schemas, the generate/push flow | `references/db.md` | ✓ |
-| Google sign-in | `references/auth-google-oauth.md` | — (shape) |
-| AWS access — S3 client, local-SSO-vs-Vercel-OIDC credentials | `references/aws-oidc.md` | — (shape) |
+| **Hono API on Vercel** — entry, routers, in-handler validation, header auth, cron/`vercel.json` | `references/hono-api.md` | — (shape) |
+| [UI] Bootstrapping / build config — vite, tsconfig, the `~/*` alias, auto-generators | `references/project-setup.md` | ✓ (configs) |
+| [UI] Writing data — server actions (typed mutations) | `references/actions.md` | ✓ |
+| [UI] Reading data — loaders vs useSWR + resource routes | `references/data-fetching.md` | — (shape) |
+| [F] AI / LLM calls — Vercel AI Gateway (keyless, no provider keys) | `references/ai.md` | — (shape) |
+| [UI] Type-safe routing (generouted) + type-safe search params | `references/routing.md` | ✓ |
+| [UI] Bilingual UI, the `/fr` URL convention, inline en/fr content | `references/i18n.md` | ✓ |
+| [F] Env-var validation / fail-fast config | `references/env.md` | ✓ (generator) |
+| [F] Drizzle DB — client, schemas, the generate/push flow | `references/db.md` | ✓ |
+| [UI] Google sign-in | `references/auth-google-oauth.md` | — (shape) |
+| [F] AWS access — S3 client, local-SSO-vs-Vercel-OIDC credentials | `references/aws-oidc.md` | — (shape) |
 | Event tracking, Silo, identify/page/track | not here → `silo-analytics` skill (HOW) + `product-tracking` skill (WHAT) | — |
-| Dark/light theme, no-flash blocking script, tweakcn themes | `references/theming.md` | ✓ |
-| Adding UI components / shadcn init (Base UI) | `references/components.md` | ✓ (components.json) |
-| The Taskfile — `task generate`, guardrails, adding tasks | `references/taskfile.md` | ✓ (Taskfile) |
-| Provisioning infra, Vercel + AWS, env-var ownership | `references/terraform.md` | — (shape) |
+| [UI] Dark/light theme, no-flash blocking script, tweakcn themes | `references/theming.md` | ✓ |
+| [UI] Adding UI components / shadcn init (Base UI) | `references/components.md` | ✓ (components.json) |
+| [F] The Taskfile — `task generate`, guardrails, adding tasks | `references/taskfile.md` | ✓ (Taskfile) |
+| [F] Provisioning infra, Vercel + AWS, env-var ownership | `references/terraform.md` | — (shape) |
 
 The analytics row points to **separate skills, not files here**: `silo-analytics` and
 `product-tracking` are sibling skills in the same adpharm-skills registry — invoke them with
 the Skill tool, don't look for a `references/` file. If they're not installed, add them with
 `npx skills add` (its picker lists every `skills/<category>/<name>`).
 
-**Bootstrapping a new app?** First settle two things (`references/project-setup.md`): app at
+**Bootstrapping a new app?** First pick the archetype. A **Hono API** is the lighter path —
+follow `references/hono-api.md` (`env` + `db` + `aws-oidc` as needed, `taskfile`, `terraform`
+to deploy); there's no vite/routing/i18n/theming shell.
+
+For an **RR7 web app**, first settle two things (`references/project-setup.md`): app at
 the repo root vs a subdir, and the project name (recommend `.devcontainer/devcontainer.json`'s
 `name`). Then scaffold only the pieces it needs, roughly: `project-setup` +
 `taskfile` + `env` → `routing` → `db` → `theming` → (auth + `aws-oidc` if accounts/uploads) →

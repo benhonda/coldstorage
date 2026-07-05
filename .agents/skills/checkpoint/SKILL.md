@@ -52,7 +52,7 @@ When you fix one, fix it at the source of truth and let derived/generated docs r
 
 ## Write honest, verifiable notes
 
-- **Smallest footprint that stays true.** A checkpoint edits in place and deletes stale — it doesn't accrete. If a surface is already honest, leave it untouched; net doc length should fall as often as it rises. Never paste walls of status prose a `git log` already carries.
+- **Smallest footprint that stays true, at a glance.** A checkpoint is a marker, not a task-by-task ledger — it doesn't accrete. If a surface is already honest, leave it untouched; net doc length should fall as often as it rises. Track workstreams, not every sub-task inside them: don't itemize each small step as done/pending unless the user explicitly asked you to track it that granularly — that's exactly the level of detail that goes stale first and turns a checkpoint into noise. Never paste walls of status prose a `git log` already carries.
 - **State true status, including ugly.** Half-done is "half-done, blocked on X at file:line" — never rounded up to done. Fabricated completeness is the one thing that makes a checkpoint actively harmful.
 - **Point, don't restate.** Anchor claims to `file:line`, a commit SHA, a test name. Prose drifts; references can be checked.
 - **Flag your own uncertainty.** "I believe X but didn't confirm" tells the next agent exactly where to start digging. That's a feature.

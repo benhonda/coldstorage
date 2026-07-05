@@ -38,12 +38,36 @@ tasks:
         fi
 
   # ---------------------------------------------------------------- Dev / build
-  start:
-    aliases: [dev]
-    desc: Start development server
+  # Dir-scoped per app from app #1 (`web` — rename to the app's real dir) + a bare
+  # interactive picker — pattern in references/taskfile.md (`per-app-picker` row). Only
+  # flatten to a single bare `start` (drop `dir:`/the `dotenv` anchor, delete the picker)
+  # if bootstrap-prompts' root choice is a genuinely standalone repo (no subdir, ever).
+  start:web:
+    aliases: [dev:web]
+    desc: Start the web app dev server
+    dir: web
+    dotenv: &web-dotenv        # anchor once, per app — paths resolve relative to this dir:
+      - .env
+      - .env.vercel
     interactive: true
     cmds:
       - bunx --bun react-router dev
+
+  start:
+    aliases: [dev]
+    desc: Start an app's dev server (interactive app picker)
+    interactive: true
+    silent: true
+    cmds:
+      - |
+        echo "Start which app?"
+        select app in web quit; do
+          case "$app" in
+            web) exec task start:web ;;
+            quit) break ;;
+            *) echo "invalid" ;;
+          esac
+        done
 
   install:
     desc: Install dependencies with Bun
@@ -127,18 +151,55 @@ tasks:
         [ -f "$f" ] && bun run "$f" || echo "⚠️  skip generate-db ($f not found)"
 
   # ---------------------------------------------------------------- Vercel
-  env:
-    desc: Pull dev env vars from Vercel into .env.vercel
-    aliases: [pull-env, pull]
+  # Same default as Dev/build above — dir-scoped per app from app #1 + bare pickers
+  # (`per-app-picker` row, references/taskfile.md); flatten only for a genuinely
+  # standalone (no-subdir) repo.
+  pull:web:
+    desc: Pull web app env vars from Vercel into .env.vercel
+    dir: web
+    dotenv: *web-dotenv
     interactive: true
     cmds:
       - bunx vercel env pull .env.vercel
 
-  link:
-    desc: Link to a Vercel project
+  pull:
+    desc: Pull dev env vars from Vercel (interactive app picker)
+    interactive: true
+    silent: true
+    cmds:
+      - |
+        echo "Pull which app? (all = every app)"
+        select app in web all quit; do
+          case "$app" in
+            web) exec task pull:web ;;
+            all) exec task pull:web ;;
+            quit) break ;;
+            *) echo "invalid" ;;
+          esac
+        done
+
+  link:web:
+    desc: Link the web app to its Vercel project
+    dir: web
+    dotenv: *web-dotenv
     interactive: true
     cmds:
       - bunx vercel link
+
+  link:
+    desc: Link an app to its Vercel project (interactive app picker)
+    interactive: true
+    silent: true
+    cmds:
+      - |
+        echo "Link which app?"
+        select app in web quit; do
+          case "$app" in
+            web) exec task link:web ;;
+            quit) break ;;
+            *) echo "invalid" ;;
+          esac
+        done
 
   # ---------------------------------------------------------------- One-offs (temp)
   # Throwaway scripts STILL run through `task` (so .env/.env.vercel/AWS_PROFILE load the
