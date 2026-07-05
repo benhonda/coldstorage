@@ -38,7 +38,7 @@ variable "vercel_team_slug" {
 variable "paddle_client_token" {
   type        = string
   default     = ""
-  description = "Paddle CLIENT-SIDE token (dashboard → Developer tools → Authentication) for the /checkout page's Paddle.js. Public by design ('safe to expose in frontend code'), NOT the API key — so it's TF-managed here per-stack (sandbox test_… vs live live_…), exposed to the app as PUBLIC_PADDLE_CLIENT_TOKEN. Empty ⇒ the env var isn't set (/checkout shows its 'not set up yet' state until you fill this in)."
+  description = "Paddle CLIENT-SIDE token for the /checkout page's Paddle.js (public by design — 'safe to expose in frontend code', NOT the API key). Per-stack (sandbox test_… vs live live_…), exposed to the app as PUBLIC_PADDLE_CLIENT_TOKEN. Always set — production carries a self-naming placeholder until the live token exists."
 }
 
 variable "manual_secrets" {

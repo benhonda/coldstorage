@@ -24,9 +24,7 @@ inputs = {
   vercel_project_name = "coldstorage-site"
   vercel_team_slug    = "adpharm"
 
-  # Paddle LIVE client-side token for the /checkout default-payment-link page (public by
-  # design, like account-backend's). Empty until the live Paddle account/catalog exists (prod
-  # Paddle lane deferred) — set to the live_… token then. Empty ⇒ PUBLIC_PADDLE_CLIENT_TOKEN
-  # is not set and /checkout shows its 'not set up yet' state.
-  paddle_client_token = ""
+  # 👉 Paste the Paddle LIVE client-side token (live_…) here once the live Paddle account
+  # exists — that's the only change needed to turn on production checkout.
+  paddle_client_token = "TODO_PASTE_LIVE_PADDLE_CLIENT_TOKEN_HERE"
 }
