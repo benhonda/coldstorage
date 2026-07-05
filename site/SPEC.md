@@ -126,9 +126,18 @@ per `uploads/BRAND-VOICE.md`) — ported faithfully, voice untouched.
   build green. _Ben's action:_ repoint Paddle's default-payment-link → `coldstorage.sh/checkout`
   (+ staging). _After repoint:_ the account-backend `src/routes/checkout.ts` HTML page is redundant
   and can be removed (leave it until the link is moved — it's still the live target).
-- **Phase 4 — infra / deploy.** `infra/site/` prod + staging, domain, TF-managed env (incl. the
-  Paddle vars). **External-facing — I'll prep the Terraform but not create the Vercel project, wire
-  the domain, or provision without a heads-up to Ben.**
+- **Phase 4 — infra / deploy. 🟡 SCAFFOLDED (prep, not applied).** `infra/site/` written mirroring
+  `infra/account-backend` (Terragrunt root + modules/{shared,stack} + live/{shared,production,staging}),
+  `tf:site:*` tasks + pickers wired, `terraform fmt` clean. Simpler than account-backend: dormant OIDC
+  role + the two `PUBLIC_PADDLE_*` env vars only (no Cognito/DB/secrets). **DNS deferred** (apex
+  `coldstorage.sh` record needs the post-domain-add CNAME target). Nothing applied; no Vercel project
+  created. **Go-live is Ben's manual steps** — see `infra/site/README.md`:
+  1. Create the Vercel project (`task link:site`) → fill `vercel_project_id` in both `live/*/terragrunt.hcl`.
+  2. Decide DNS (is `coldstorage.sh` a Route53 zone in `pharmer`? apex/www? staging subdomain), add the
+     domain in the Vercel dashboard → wire `modules/shared` zone + `modules/stack` record.
+  3. `task tf:site:plan ENV=production` (+ `staging`) → review → `apply`.
+  4. Repoint Paddle's default-payment-link → `coldstorage.sh/checkout` (+ staging); then the old
+     `account-backend/src/routes/checkout.ts` page can be removed.
 
 ## Open decisions · flags
 

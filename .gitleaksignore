@@ -2,3 +2,4 @@
 # in the GET /checkout page and can only open checkouts / preview prices (Paddle docs: "safe
 # to expose in frontend code"). NOT the Paddle API key, which stays a dashboard-set secret.
 infra/account-backend/live/staging/terragrunt.hcl:generic-api-key:44
+infra/site/live/staging/terragrunt.hcl:generic-api-key:26
