@@ -2,6 +2,7 @@
 
 ## 2026-07-05
 
+- feat(build): `ui:release` pre-creates the draft GitHub Release (via `gh`) before `electron-builder --publish`, so concurrent asset uploads land on ONE draft instead of spawning duplicate `v<version>` drafts (electron-builder #6676); idempotent, warns + continues if `gh` is absent.
 - feat(build): `task ui:sign:doctor` — diagnoses the "not signed with a valid Developer ID certificate" notarization rejection by listing keychain code-signing identities and checking for a `Developer ID Application` cert (the only kind valid for notarized distribution; `Apple Development`/`Mac Developer` certs used by `daemon:install` are not), with fix steps when it's missing.
 
 ## 2026-07-04

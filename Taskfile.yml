@@ -753,6 +753,23 @@ tasks:
       - bun install
       - swift build -c release --package-path "{{.ROOT_DIR}}/coldstorage"
       - bun run build # electron-vite → out/{main,preload,renderer}
+      # Pre-create the draft release so electron-builder finds ONE release to upload to. A draft has no git
+      # tag, so electron-builder's find-by-tag misses it and its CONCURRENT asset uploads each create a fresh
+      # draft (electron-builder #6676) — you get duplicate v<version> drafts with the assets split across them.
+      # Idempotent: skipped if the draft already exists. Needs gh (authed via GH_TOKEN, required above); if gh
+      # is absent we warn + continue (electron-builder still publishes, just with the duplicate-draft risk).
+      - |
+        ver="$(node -p "require('./package.json').version")"   # bare semver, e.g. 0.1.0
+        tag="v${ver}"                                          # git tag, e.g. v0.1.0 (electron-builder's default)
+        if ! command -v gh >/dev/null 2>&1; then
+          echo "⚠ gh not found — skipping draft pre-create; electron-builder may create duplicate $tag drafts (#6676). Install gh to prevent it."
+        elif gh release view "$tag" --repo benhonda/coldstorage >/dev/null 2>&1; then
+          echo "release $tag already exists — electron-builder will upload to it"
+        else
+          # tag = v<semver>, title = bare <semver> — matches how electron-builder names them (no mixed v0.1.0 / 0.1.0).
+          gh release create "$tag" --repo benhonda/coldstorage --draft --title "$ver" \
+            --notes "Draft — assets uploaded by electron-builder; review, then Publish." && echo "pre-created draft $tag"
+        fi
       # --publish always → upload the .dmg/.zip + latest-mac.yml. -c.mac.notarize=true → notarize THIS build
       # (the yml default is false so plain `ui:package` stays cert-free).
       - bunx electron-builder --mac --publish always -c.mac.notarize=true
