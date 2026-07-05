@@ -771,6 +771,30 @@ tasks:
       # --publish never → build + sign + notarize only; nothing is uploaded or tagged.
       - bunx electron-builder --mac --publish never -c.mac.notarize=true
 
+  ui:notarize:doctor:
+    desc: "[macOS] Diagnose a notarization 401 from ui:release: probe the Apple notary creds (APPLE_ID/APPLE_TEAM_ID/APPLE_APP_SPECIFIC_PASSWORD — the SAME env/.env values ui:release uses) directly against Apple via `notarytool history`. Prints a non-secret shape check, then a clean auth probe (passes with valid creds, 401 with bad ones) so you can fix creds WITHOUT rebuilding the app each time."
+    dir: ui
+    deps: [ui:_require-apple-creds]
+    cmds:
+      - |
+        pw="${APPLE_APP_SPECIFIC_PASSWORD}"
+        echo "APPLE_ID       = ${APPLE_ID}"
+        echo "APPLE_TEAM_ID  = ${APPLE_TEAM_ID}   (expect 10 chars — got ${#APPLE_TEAM_ID})"
+        echo "APP_PASSWORD   = ${#pw} chars   (expect 19, i.e. xxxx-xxxx-xxxx-xxxx; a different length usually means a stray quote/space/newline in .env)"
+        echo
+        echo "Probing Apple's notary service (notarytool history)…"
+        if xcrun notarytool history --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$pw" >/dev/null 2>/tmp/notary-err; then
+          echo "✓ Apple ACCEPTED the creds — notary auth is fine; re-run 'task ui:release'."
+        else
+          echo "✗ Apple REJECTED the creds (the same 401 the release hit). It's one of:"
+          echo "  • APPLE_APP_SPECIFIC_PASSWORD must be an APP-SPECIFIC password (NOT your normal Apple ID password) —"
+          echo "    make one at appleid.apple.com ▸ Sign-In & Security ▸ App-Specific Passwords; paste it UNQUOTED into .env."
+          echo "  • APPLE_ID must be the exact email that generated that app-specific password."
+          echo "  • APPLE_TEAM_ID must be that account's 10-char Team ID (developer.apple.com ▸ Membership)."
+          echo "  --- notarytool said: ---"; cat /tmp/notary-err
+          exit 1
+        fi
+
   ui:package:verify:
     desc: "[macOS] Sanity-check the packaged app: bundled Swift binaries present + their code-signing status (the bits that can't be checked off-Mac)."
     dir: ui
