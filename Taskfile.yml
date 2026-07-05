@@ -1052,6 +1052,70 @@ tasks:
     cmds:
       - bunx vercel env pull .env.vercel
 
+  # ------------------------------------------------------------------ site (RR7 web app, dir: site)
+  generate:site:
+    desc: Run the site's code generators (routes + env; guarded — safe no-op if a script is absent)
+    dir: site
+    dotenv: &site-dotenv        # anchor once, per app — paths resolve relative to dir: site
+      - .env
+      - .env.vercel
+    cmds:
+      - |
+        f=app/lib/router/generouted-generate-routes.ts
+        [ -f "$f" ] && bun run "$f" || echo "⚠️  skip generate-routes ($f not found)"
+      - |
+        f=app/lib/env/_core/env-map.generate.ts
+        [ -f "$f" ] && bun run "$f" || echo "⚠️  skip generate-env ($f not found)"
+
+  typecheck:site:
+    desc: Type check the site (generates first so types reflect fresh codegen)
+    dir: site
+    dotenv: *site-dotenv
+    deps: [generate:site]
+    cmds:
+      - bun run typecheck
+
+  start:site:
+    aliases: [dev:site]
+    desc: Start the site (marketing) dev server
+    dir: site
+    dotenv: *site-dotenv
+    interactive: true
+    cmds:
+      - bunx --bun react-router dev
+
+  link:site:
+    desc: Link the site to its Vercel project
+    dir: site
+    dotenv: *site-dotenv
+    interactive: true
+    cmds:
+      - bunx vercel link
+
+  pull:site:
+    desc: Pull the site's env vars from Vercel into .env.vercel
+    dir: site
+    dotenv: *site-dotenv
+    interactive: true
+    cmds:
+      - bunx vercel env pull .env.vercel
+
+  start:
+    aliases: [dev]
+    desc: Start an app's dev server (interactive app picker)
+    interactive: true
+    silent: true
+    cmds:
+      - |
+        echo "Start which app?"
+        select app in site quit; do
+          case "$app" in
+            site) exec task start:site ;;
+            quit) break ;;
+            *) echo "invalid" ;;
+          esac
+        done
+
   link:
     desc: Link an app to its Vercel project (interactive app picker)
     interactive: true
@@ -1059,9 +1123,10 @@ tasks:
     cmds:
       - |
         echo "Link which app?"
-        select app in account-backend quit; do
+        select app in account-backend site quit; do
           case "$app" in
             account-backend) exec task link:account-backend ;;
+            site) exec task link:site ;;
             quit) break ;;
             *) echo "invalid" ;;
           esac
@@ -1074,10 +1139,11 @@ tasks:
     cmds:
       - |
         echo "Pull env for which app?"
-        select app in account-backend all quit; do
+        select app in account-backend site all quit; do
           case "$app" in
             account-backend) exec task pull:account-backend ;;
-            all) exec task pull:account-backend ;;
+            site) exec task pull:site ;;
+            all) exec task pull:account-backend pull:site ;;
             quit) break ;;
             *) echo "invalid" ;;
           esac
@@ -1251,6 +1317,63 @@ tasks:
       - task: tf:account-backend:_validate-env
       - terragrunt init {{.CLI_ARGS}}
 
+  # ------------------------------------------------------------------ infra — tf:site:* (domain: infra/site)
+  # The marketing site's Vercel project — dormant OIDC role + TF-managed PUBLIC_PADDLE_* env
+  # vars. Simplest of the three components: no Cognito, no DB, no manual secrets. ENV=production|
+  # staging (staging = the Paddle SANDBOX /checkout target, a branch-tracked custom environment
+  # within the one Vercel project). DNS deferred until the domain is added (infra/site/README.md).
+  # ⚠️ Placeholders until the Vercel project is created manually (`task link:site`) — see README.
+  tf:site:_validate-env:
+    internal: true
+    requires:
+      vars: [ENV]
+    cmds:
+      - 'case "{{.ENV}}" in production|staging) ;; *) echo "ENV must be production|staging"; exit 1 ;; esac'
+
+  tf:site:plan:
+    desc: Terragrunt plan (ENV=production|staging) — plans shared first
+    requires:
+      vars: [ENV]
+    deps: [check-aws-identity]
+    dir: infra/site/live/{{.ENV}}
+    cmds:
+      - task: tf:site:_validate-env
+      - task: tf:site:plan:shared
+      - terragrunt plan {{.CLI_ARGS}}
+  tf:site:plan:shared:
+    deps: [check-aws-identity]
+    dir: infra/site/live/shared
+    cmds:
+      - terragrunt plan {{.CLI_ARGS}}
+
+  tf:site:apply:
+    desc: Terragrunt apply (ENV=production|staging) — applies shared then env. Never run without a reviewed plan.
+    interactive: true
+    prompt: "Apply site infra to {{.ENV}}?"
+    requires:
+      vars: [ENV]
+    deps: [check-aws-identity]
+    dir: infra/site/live/{{.ENV}}
+    cmds:
+      - task: tf:site:_validate-env
+      - task: tf:site:apply:shared
+      - terragrunt apply {{.CLI_ARGS}}
+  tf:site:apply:shared:
+    internal: true
+    interactive: true
+    dir: infra/site/live/shared
+    cmds:
+      - terragrunt apply {{.CLI_ARGS}}
+
+  tf:site:init:
+    requires:
+      vars: [ENV]
+    deps: [check-aws-identity]
+    dir: infra/site/live/{{.ENV}}
+    cmds:
+      - task: tf:site:_validate-env
+      - terragrunt init {{.CLI_ARGS}}
+
   # ------------------------------------------------------------------ infra — pick a target (one cli step, like the app `dev` picker)
   # `task tf:plan` / `tf:apply` / `tf:init` with no args — prompts for which component + env,
   # then dispatches to the per-component tf:<service>:* tasks above (those stay the SSOT for
@@ -1268,6 +1391,8 @@ tasks:
         echo "  1) coldstorage      — production"
         echo "  2) account-backend  — production"
         echo "  3) account-backend  — staging"
+        echo "  4) site             — production"
+        echo "  5) site             — staging"
         echo "  q) quit"
         echo
         printf "Choice [1]: "
@@ -1277,6 +1402,8 @@ tasks:
           1|coldstorage)                        task tf:coldstorage:plan ENV=production ;;
           2|account-backend|ab)                 task tf:account-backend:plan ENV=production ;;
           3|account-backend:staging|ab:staging)  task tf:account-backend:plan ENV=staging ;;
+          4|site)                                task tf:site:plan ENV=production ;;
+          5|site:staging)                        task tf:site:plan ENV=staging ;;
           q|Q|quit) ;;
           *) echo "Invalid choice: $choice"; exit 1 ;;
         esac
@@ -1291,6 +1418,8 @@ tasks:
         echo "  1) coldstorage      — production"
         echo "  2) account-backend  — production"
         echo "  3) account-backend  — staging"
+        echo "  4) site             — production"
+        echo "  5) site             — staging"
         echo "  q) quit"
         echo
         printf "Choice [1]: "
@@ -1300,6 +1429,8 @@ tasks:
           1|coldstorage)                        task tf:coldstorage:apply ENV=production ;;
           2|account-backend|ab)                 task tf:account-backend:apply ENV=production ;;
           3|account-backend:staging|ab:staging)  task tf:account-backend:apply ENV=staging ;;
+          4|site)                                task tf:site:apply ENV=production ;;
+          5|site:staging)                        task tf:site:apply ENV=staging ;;
           q|Q|quit) ;;
           *) echo "Invalid choice: $choice"; exit 1 ;;
         esac
@@ -1314,6 +1445,8 @@ tasks:
         echo "  1) coldstorage      — production"
         echo "  2) account-backend  — production"
         echo "  3) account-backend  — staging"
+        echo "  4) site             — production"
+        echo "  5) site             — staging"
         echo "  q) quit"
         echo
         printf "Choice [1]: "
@@ -1323,6 +1456,8 @@ tasks:
           1|coldstorage)                        task tf:coldstorage:init ENV=production ;;
           2|account-backend|ab)                 task tf:account-backend:init ENV=production ;;
           3|account-backend:staging|ab:staging)  task tf:account-backend:init ENV=staging ;;
+          4|site)                                task tf:site:init ENV=production ;;
+          5|site:staging)                        task tf:site:init ENV=staging ;;
           q|Q|quit) ;;
           *) echo "Invalid choice: $choice"; exit 1 ;;
         esac
