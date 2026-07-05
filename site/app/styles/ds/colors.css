@@ -1,0 +1,102 @@
+/* coldstoragefiles — color tokens. Light-only. Iceberg-blue primary on a cool frost neutral base. */
+:root {
+  color-scheme: light;
+
+  /* ── base: frost (cool blue-gray neutrals) ────────────────────── */
+  --frost-50: #F4F8FB;
+  --frost-100: #EAF1F7;
+  --frost-200: #DBE5EE;
+  --frost-300: #C5D2DF;
+  --frost-400: #9BAAB9;
+  --frost-500: #748494;
+  --frost-600: #586573;
+  --frost-700: #3D4854;
+  --frost-800: #28303A;
+  --frost-900: #141C24;
+
+  /* ── base: iceberg (coldstoragefiles primary — frost-periwinkle ice cube) ─ */
+  --iceberg-50: #ECF5FD;
+  --iceberg-100: #D7EBF9;
+  --iceberg-200: #AFD6F1;
+  --iceberg-300: #84C0E9;
+  --iceberg-400: #65B1E3;
+  --iceberg-500: #4AA8E0;
+  --iceberg-600: #2E8DCC;
+  --iceberg-700: #2173A8;
+
+  /* ── status hues (success / warning / danger) ─────────────────── */
+  --green-400: #34B883;
+  --green-500: #1F9D6B;
+  --green-600: #17855A;
+  --red-400: #F0705F;
+  --red-500: #DE4D3B;
+  --red-600: #C53B2A;
+  --amber-500: #E0922A;
+
+  /* ── CORE ACCENT PALETTE ───────────────────────────────────────
+     One categorical set of distinct, harmonized hues for a light UI.
+     Storage tiers, chart series, tags and avatars ALL draw from here —
+     it is the single source of "a color that isn't ink, frost or status".
+     Blue is shared with the brand primary; the rest add range. */
+  --hue-blue:   #4AA8E0;
+  --hue-cyan:   #17A2B0;
+  --hue-green:  #2BA46B;
+  --hue-amber:  #E0922A;
+  --hue-violet: #6E5FC0;
+  --hue-rose:   #DE5D77;
+
+  /* storage tiers = an ordered temperature subset of the palette */
+  --tier-hot: var(--hue-amber);     /* hot / live   — warm  */
+  --tier-cool: var(--hue-cyan);     /* cool         — cyan  */
+  --tier-cold: var(--hue-blue);     /* cold         — blue  */
+  --tier-archive: var(--hue-violet);/* deep archive — violet */
+
+  /* chart series = the palette, ordered for adjacent contrast */
+  --chart-1: var(--hue-blue);
+  --chart-2: var(--hue-amber);
+  --chart-3: var(--hue-cyan);
+  --chart-4: var(--hue-violet);
+  --chart-5: var(--hue-green);
+  --chart-6: var(--hue-rose);
+
+  /* ── semantic aliases (light) ─────────────────────────────────── */
+  --bg-app: #EDF3F8;
+  --secondary: var(--hue-cyan);
+  --bg-glow: radial-gradient(1100px 850px at -6% -10%, rgba(101, 177, 227, 0.40), rgba(175, 214, 241, 0.22) 42%, transparent 72%);
+
+  --surface-card: #FFFFFF;
+  --surface-raised: #F5F9FC;
+  --surface-input: #EEF4F9;
+  --surface-input-hover: #E5EEF5;
+  --surface-hover: rgba(18, 52, 82, 0.045);
+  --surface-active: rgba(18, 52, 82, 0.08);
+  --border-subtle: rgba(20, 55, 88, 0.10);
+  --border-card: rgba(20, 55, 88, 0.08);
+
+  --text-primary: #14202B;
+  --text-secondary: #566573;
+  --text-tertiary: #8593A1;
+  --text-inverse: #FFFFFF;
+
+  /* iceberg is both brand accent AND primary CTA fill in this light, blue-forward brand.
+     The fill (#4AA8E0) is the chosen brand color; --accent-text is one step deeper
+     so small links/values stay legible on white (the fill is too light for body text). */
+  --accent: var(--iceberg-500);
+  --accent-hover: var(--iceberg-600);
+  --accent-text: var(--iceberg-600);
+  --accent-subtle: rgba(74, 168, 224, 0.15);
+  --accent-on: #FFFFFF;
+
+  --positive: var(--green-500);
+  --negative: var(--red-500);
+
+  --btn-primary-bg: var(--iceberg-500);
+  --btn-primary-bg-hover: var(--iceberg-600);
+  --btn-primary-text: #FFFFFF;
+  --btn-secondary-bg: rgba(18, 52, 82, 0.06);
+  --btn-secondary-bg-hover: rgba(18, 52, 82, 0.11);
+  --btn-secondary-text: var(--text-primary);
+
+  --focus-ring: 0 0 0 3px rgba(74, 168, 224, 0.38);
+  --scrim: rgba(16, 34, 52, 0.42);
+}

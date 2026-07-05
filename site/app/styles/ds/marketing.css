@@ -1,0 +1,58 @@
+/* coldstoragefiles — marketing layout primitives (Section / Split / Eyebrow).
+
+   These are LAYOUT-ONLY utility classes for the marketing surface. They are the
+   counterpart to the app's component CSS: where the product UI is built from React
+   components, marketing PAGES are built by composing these utilities around the
+   marketing components (MarketingNav, CtaPanel, PricingTable, …).
+
+   They consume the BLESSED marketing tokens — officially supported for the
+   marketing surface (the component library now references them here):
+     type    --type-hero / -headline / -title / -subhead / -lead / -eyebrow
+     rhythm  --section-y / -y-lg · --block-gap · --gutter
+     measure --content-wide / -text / -narrow / -max
+   Reach for these on the page; reach for the raw --space-* scale inside components. */
+
+/* ── page-width container ─────────────────────────────────────── */
+.csf-container        { width:100%; max-width:var(--content-wide); margin-inline:auto; padding-inline:var(--gutter); }
+.csf-container--text  { max-width:var(--content-text); }
+.csf-container--narrow{ max-width:var(--content-narrow); }
+.csf-container--max   { max-width:var(--content-max); }
+
+/* ── section vertical rhythm (the "band") ─────────────────────── */
+.csf-band             { padding-block:var(--section-y); }
+.csf-band--lg         { padding-block:var(--section-y-lg); }
+.csf-band--flush-top  { padding-top:0; }
+.csf-band--flush-bot  { padding-bottom:0; }
+
+/* ── eyebrow / kicker — small uppercase accent label above a headline ── */
+.csf-eyebrow{
+  display:inline-block; margin:0 0 14px;
+  font:var(--type-eyebrow); letter-spacing:.09em; text-transform:uppercase;
+  color:var(--accent-text);
+}
+
+/* ── two-column split: header-left / content-right ─────────────
+   Fixes the lopsided single-column problem — a narrow leading column for the
+   section title/intro, a wider trailing column for the content. */
+.csf-split{
+  display:grid; grid-template-columns:minmax(0,5fr) minmax(0,7fr);
+  gap:var(--block-gap); align-items:start;
+}
+.csf-split--even { grid-template-columns:1fr 1fr; }
+.csf-split--wide-lead { grid-template-columns:minmax(0,7fr) minmax(0,5fr); }
+
+/* ── split-head: title-left / intro-right, sitting above content ── */
+.csf-split-head{
+  display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  gap:var(--block-gap); align-items:end; margin-bottom:var(--block-gap);
+}
+
+/* ── marketing prose helpers (headline scale + lead paragraph) ── */
+.csf-headline{ margin:0; font:var(--type-headline); letter-spacing:var(--tracking-tighter); color:var(--text-primary); text-wrap:balance; }
+.csf-title   { margin:0; font:var(--type-title);    letter-spacing:var(--tracking-tighter); color:var(--text-primary); text-wrap:balance; }
+.csf-lead    { margin:0; font:var(--type-lead);     color:var(--text-secondary); text-wrap:pretty; }
+
+@media (max-width:880px){
+  .csf-split, .csf-split--even, .csf-split--wide-lead { grid-template-columns:1fr; }
+  .csf-split-head { grid-template-columns:1fr; gap:16px; align-items:start; margin-bottom:32px; }
+}

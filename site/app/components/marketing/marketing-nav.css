@@ -1,0 +1,61 @@
+/* MarketingNav — sticky, transparent → frosted-solid on scroll. */
+.csf-mktnav {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  border-bottom: 1px solid transparent;
+  transition:
+    background var(--duration-base) var(--ease-out),
+    border-color var(--duration-base) var(--ease-out);
+}
+.csf-mktnav.is-solid {
+  background: rgba(237, 243, 248, 0.72);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom-color: var(--border-subtle);
+}
+.csf-mktnav__inner {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  height: var(--topbar-height);
+}
+.csf-mktnav__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font: 600 var(--text-md) / 1 var(--font-ui);
+  letter-spacing: var(--tracking-tight);
+}
+.csf-mktnav__brand .csf-icon {
+  font-size: 24px;
+  color: var(--accent);
+}
+.csf-mktnav__links {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+.csf-mktnav__link {
+  padding: 8px 14px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font: 500 var(--text-base) / 1 var(--font-ui);
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+.csf-mktnav__link:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.csf-mktnav__cta {
+  margin-left: 12px;
+}
+@media (max-width: 720px) {
+  .csf-mktnav__links {
+    display: none;
+  }
+}

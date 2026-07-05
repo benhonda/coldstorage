@@ -1,0 +1,23 @@
+/* DS · Badge — compact status pill. */
+.csf-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 11px;
+  border-radius: var(--radius-pill);
+  font: 600 var(--text-xs) / 1 var(--font-ui);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.csf-badge__icon {
+  font-size: 15px;
+}
+.csf-badge--accent {
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+}
+.csf-badge--success {
+  background: rgba(31, 157, 107, 0.15);
+  color: var(--green-600);
+}

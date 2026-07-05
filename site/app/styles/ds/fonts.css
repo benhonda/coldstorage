@@ -1,0 +1,8 @@
+/* coldstoragefiles — webfonts.
+   UI face: Hanken Grotesk (Google Fonts) — a clean, slightly humanist grotesque
+   with sturdy number forms; the brand's neutral workhorse.
+   Mono face: JetBrains Mono — for object IDs, file sizes, checksums and paths.
+   Icon face: Material Symbols Rounded — filled, rounded glyph style. */
+@import url("https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,300..600,0..1,0");

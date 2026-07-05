@@ -1,0 +1,53 @@
+/* DS · Button — pill control, primary (iceberg fill) + ghost (frost hover). */
+.csf-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  font: var(--type-button);
+  letter-spacing: var(--tracking-tight);
+  white-space: nowrap;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+.csf-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.csf-btn:active {
+  transform: translateY(1px);
+}
+.csf-btn--lg {
+  height: var(--control-lg);
+  padding: 0 26px;
+  font-size: var(--text-md);
+}
+.csf-btn--sm {
+  height: var(--control-sm);
+  padding: 0 16px;
+  font-size: var(--text-sm);
+}
+.csf-btn__icon {
+  font-size: 20px;
+}
+.csf-btn--sm .csf-btn__icon {
+  font-size: 18px;
+}
+.csf-btn--primary {
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-text);
+}
+.csf-btn--primary:hover {
+  background: var(--btn-primary-bg-hover);
+}
+.csf-btn--ghost {
+  background: transparent;
+  color: var(--btn-secondary-text);
+}
+.csf-btn--ghost:hover {
+  background: var(--btn-secondary-bg-hover);
+}

@@ -1,0 +1,70 @@
+@import "tailwindcss";
+
+/*
+ * ColdStorage Design System tokens — pulled VERBATIM from the pinned DS snapshot
+ * (`_ds/…41ebafc1`) via `task site:design:pull`. Pull-managed: DO NOT hand-edit the
+ * files under app/styles/ds/ — edit upstream and re-pull. See site/SPEC.md.
+ *
+ * LIGHT-ONLY. The DS defines no dark tokens; we do not invent them. The no-flash
+ * blocking theme script + cookie infra stay wired (app/lib/theme + app/lib/preferences)
+ * so a future upstream dark palette is a pure content swap.
+ *
+ * Imported AFTER `tailwindcss` on purpose: DS values then win the :root cascade for the
+ * token names that collide with Tailwind v4's default namespace (--text-*, --radius-*,
+ * --font-*). The marketing surface is authored against the DS scale, and shadcn
+ * components inherit the DS's soft radii — both intended. Fonts load via <link> in
+ * app/root.tsx <head> (the remote @import in fonts.css can't be bundled safely), so
+ * fonts.css is kept as the design-of-record but not imported here.
+ */
+@import "./styles/ds/colors.css";
+@import "./styles/ds/typography.css";
+@import "./styles/ds/spacing.css";
+@import "./styles/ds/effects.css";
+@import "./styles/ds/base.css";
+@import "./styles/ds/marketing.css";
+
+/* Marketing site base — smooth scroll, anchor offsets, hero title role. Imported
+   after the DS token layer so it can reference the marketing type/tracking tokens. */
+@import "./styles/site-base.css";
+
+/*
+ * shadcn / Tailwind semantic layer → mapped onto DS tokens (light-only).
+ * `inline` so `bg-primary` etc. resolve straight through to the DS variable.
+ * Note the deliberate divergence: shadcn's `--color-accent` is a *subtle hover
+ * surface*, so it maps to the DS hover surface — NOT the DS brand `--accent`
+ * (iceberg blue), which is the shadcn *primary*.
+ */
+@theme inline {
+  --color-background: var(--bg-app);
+  --color-foreground: var(--text-primary);
+
+  --color-card: var(--surface-card);
+  --color-card-foreground: var(--text-primary);
+  --color-popover: var(--surface-card);
+  --color-popover-foreground: var(--text-primary);
+
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--accent-on);
+  --color-secondary: var(--btn-secondary-bg);
+  --color-secondary-foreground: var(--btn-secondary-text);
+
+  --color-muted: var(--surface-raised);
+  --color-muted-foreground: var(--text-secondary);
+  --color-accent: var(--surface-hover);
+  --color-accent-foreground: var(--text-primary);
+
+  --color-destructive: var(--negative);
+  --color-destructive-foreground: var(--text-inverse);
+
+  --color-border: var(--border-subtle);
+  --color-input: var(--surface-input);
+  --color-ring: var(--accent);
+}
+
+@layer base {
+  /* shadcn default border/ring reset. Body background/color/font come from the DS
+     base.css above (unlayered, so it wins over this layer). */
+  * {
+    @apply border-border outline-ring/50;
+  }
+}

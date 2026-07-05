@@ -1,0 +1,7 @@
+/* Base site styles — shared by the master page and every per-section preview
+   page. Per-variant CSS lives inside each section file (injected at load). */
+
+html { scroll-behavior: smooth; }
+section[id] { scroll-margin-top: 96px; }
+.csf-mktnav__link { white-space: nowrap; }
+.cs-hero-title { margin: 0; font: var(--type-hero); letter-spacing: var(--tracking-tighter); color: var(--text-primary); text-wrap: balance; }

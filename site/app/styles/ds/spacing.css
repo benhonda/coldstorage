@@ -1,0 +1,54 @@
+/* coldstoragefiles — spacing, radii, fixed sizes & responsive layout rhythm.
+
+   RESPONSIVE RHYTHM
+   -----------------
+   • The raw 4px scale (space-1…space-32) is FIXED — it is the app's component grid
+     and must be exact at every viewport (a 12px gap is 12px on a phone and a desktop).
+   • The SEMANTIC LAYOUT tokens (--gutter, --section-y, --block-gap) are FLUID —
+     clamp(min, vw, max) over the same 375→1440 window as the type scale, so page
+     gutters and section rhythm shrink on mobile and open up on desktop. Reach for
+     these for marketing page structure; reach for the raw scale inside components. */
+:root {
+  /* ── raw spacing scale (4px base) — FIXED ─────────────────────── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;    /* large block padding */
+  --space-24: 96px;    /* section padding (fixed reference) */
+  --space-32: 128px;   /* hero / major section padding */
+
+  /* ── responsive layout rhythm — FLUID (min @375px → max @1440px) ── */
+  --gutter: clamp(20px, calc(10.14px + 2.629vw), 48px); /* @kind spacing */       /* page side padding 20 → 48 */
+  --block-gap: clamp(32px, calc(20.73px + 3.005vw), 64px); /* @kind spacing */    /* gap between stacked blocks 32 → 64 */
+  --section-y: clamp(56px, calc(30.65px + 6.761vw), 128px); /* @kind spacing */   /* section vertical padding 56 → 128 */
+  --section-y-lg: clamp(72px, calc(41.01px + 8.263vw), 160px); /* @kind spacing */ /* hero / major section 72 → 160 */
+
+  /* radii — large and soft; pills everywhere interactive */
+  --radius-sm: 10px;   /* tags, mini chips */
+  --radius-md: 16px;   /* inputs, nested cards, nav pills */
+  --radius-lg: 20px;   /* popovers, widgets */
+  --radius-xl: 24px;   /* top-level cards / panels */
+  --radius-pill: 999px;
+
+  /* control sizes */
+  --control-sm: 36px;  /* compact buttons, tabs */
+  --control-md: 44px;  /* default buttons */
+  --control-lg: 56px;  /* hero CTAs, full-width form buttons */
+  --input-height: 64px; /* floating-label field */
+
+  /* layout */
+  --sidebar-width: 284px;
+  --topbar-height: 76px;
+  --content-max: 1440px;     /* app shell / full marketing width */
+  --content-wide: 1200px;    /* marketing feature sections */
+  --content-text: 680px;     /* reading measure — long-form prose */
+  --content-narrow: 560px;   /* centered hero copy, forms */
+  --row-height: 72px;  /* table rows */
+}

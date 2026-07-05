@@ -1,0 +1,16 @@
+node_modules
+
+# React Router
+/.react-router/
+/build/
+
+# Vercel
+.vercel
+
+# Env / secrets (pulled per-app; never committed)
+.env
+.env.vercel
+.env.example
+
+# One-off scratch scripts (see Taskfile "one-offs" convention)
+scripts/tmp/

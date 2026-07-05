@@ -1,0 +1,8 @@
+/* DS · Card — top-level rounded surface. */
+.csf-card {
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+  padding: 24px;
+}

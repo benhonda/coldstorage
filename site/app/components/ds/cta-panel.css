@@ -1,0 +1,44 @@
+/* DS · CtaPanel — big centered closing card on a tinted raised surface. */
+.csf-cta {
+  position: relative;
+  text-align: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  padding: clamp(44px, 6vw, 76px) var(--gutter);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+/* soft iceberg glow behind the copy */
+.csf-cta::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--bg-glow);
+  opacity: 0.6;
+  pointer-events: none;
+}
+.csf-cta > * {
+  position: relative;
+}
+.csf-cta__title {
+  max-width: 18ch;
+  margin: 0 auto;
+}
+.csf-cta__lead {
+  margin: 18px auto 0;
+  max-width: 50ch;
+}
+.csf-cta__actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 30px;
+}
+.csf-cta__note {
+  margin: 16px 0 0;
+  font: 400 14px / 1.5 var(--font-ui);
+  color: var(--text-tertiary);
+}
