@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-05
+
+- feat(build): `task ui:sign:doctor` — diagnoses the "not signed with a valid Developer ID certificate" notarization rejection by listing keychain code-signing identities and checking for a `Developer ID Application` cert (the only kind valid for notarized distribution; `Apple Development`/`Mac Developer` certs used by `daemon:install` are not), with fix steps when it's missing.
+
 ## 2026-07-04
 
 - fix(build): `ui:package`/`ui:release`/`ui:release:dryrun` run `bun install` before the Swift/vite build so electron-builder's production-dep collection (electron-updater) doesn't fail on a stale `node_modules` (fresh pull, lockfile advanced); idempotent when in sync.

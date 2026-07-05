@@ -795,6 +795,28 @@ tasks:
           exit 1
         fi
 
+  ui:sign:doctor:
+    desc: "[macOS] Diagnose a 'not signed with a valid Developer ID certificate' notarization rejection: list your keychain's code-signing identities and check for a 'Developer ID Application' cert — the ONLY kind valid for notarized distribution. An 'Apple Development'/'Mac Developer' cert (what daemon:install uses for local runs) is NOT valid for notarization; Apple rejects it."
+    dir: ui
+    cmds:
+      - |
+        echo "Code-signing identities in your keychain:"
+        security find-identity -v -p codesigning || true
+        echo
+        if security find-identity -v -p codesigning | grep -q "Developer ID Application"; then
+          echo "✓ A 'Developer ID Application' cert IS present — electron-builder should auto-pick it. If notarization"
+          echo "  still rejects, an 'Apple Development' cert may be getting chosen instead — pin the right one by setting"
+          echo "  mac.identity in electron-builder.yml (or CSC_NAME in .env) to the exact 'Developer ID Application: …' name above."
+        else
+          echo "✗ NO 'Developer ID Application' cert found — THIS is the notarization rejection."
+          echo "  Notarized distribution REQUIRES a 'Developer ID Application' certificate. The 'Apple Development' cert"
+          echo "  (what daemon:install uses for local runs) is NOT valid for notarization."
+          echo "  Create one: Xcode ▸ Settings ▸ Accounts ▸ (your team) ▸ Manage Certificates ▸ + ▸ 'Developer ID Application',"
+          echo "  or developer.apple.com ▸ Certificates ▸ + ▸ 'Developer ID Application' (needs Account Holder/Admin role)."
+          echo "  Install it into the login keychain, then re-run 'task ui:release'."
+          exit 1
+        fi
+
   ui:package:verify:
     desc: "[macOS] Sanity-check the packaged app: bundled Swift binaries present + their code-signing status (the bits that can't be checked off-Mac)."
     dir: ui
