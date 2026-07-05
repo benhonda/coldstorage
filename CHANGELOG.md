@@ -3,6 +3,7 @@
 ## 2026-07-05
 
 - docs: PROD.md Phase 6 — 6a flipped to **SIGNED + NOTARIZED + PUBLISHED** (2026-07-05, Ben's Mac): first `ui:release` completed clean end-to-end with war stories (stale-`node_modules` dep collection, notary 401 → `ui:notarize:doctor`, Apple-Development-vs-Developer-ID cert → `ui:sign:doctor`); 6b feed now published, self-update *apply* round trip the last unproven step.
+- feat(build): `ui:release` bump guard — refuses to build unless `ui/package.json`'s version is strictly ahead of the latest *published* GitHub release (`releases/latest`, drafts/prereleases ignored), failing fast before the minutes-long build/sign/notarize; warns + continues if GitHub can't be read.
 - feat(build): `ui:release` pre-creates the draft GitHub Release (via `gh`) before `electron-builder --publish`, so concurrent asset uploads land on ONE draft instead of spawning duplicate `v<version>` drafts (electron-builder #6676); idempotent, warns + continues if `gh` is absent.
 - feat(build): `task ui:sign:doctor` — diagnoses the "not signed with a valid Developer ID certificate" notarization rejection by listing keychain code-signing identities and checking for a `Developer ID Application` cert (the only kind valid for notarized distribution; `Apple Development`/`Mac Developer` certs used by `daemon:install` are not), with fix steps when it's missing.
 

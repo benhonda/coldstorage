@@ -747,7 +747,25 @@ tasks:
         fi
       - |
         : "${GH_TOKEN:?missing — a GitHub token with 'repo' scope to publish the release; see ui/PACKAGING.md}"
-        echo "Building a signed + notarized ColdStorage and publishing to GitHub Releases (benhonda/coldstorage)…"
+      # Bump guard (dummy-proofing): refuse unless ui/package.json's version is strictly AHEAD of the latest
+      # PUBLISHED GitHub release, so re-running ui:release WITHOUT bumping can't republish / no-op the same
+      # version. `releases/latest` ignores drafts + prereleases. Fails fast — before the minutes-long
+      # build/sign/notarize. If GitHub can't be read (no gh / none published yet / offline), it warns +
+      # continues rather than block (the common footgun — "forgot to bump" — needs a successful read anyway).
+      - |
+        pkg="$(node -p "require('./package.json').version")"
+        latest=""
+        command -v gh >/dev/null 2>&1 && latest="$(gh api repos/benhonda/coldstorage/releases/latest --jq '.tag_name' 2>/dev/null | sed 's/^v//')"
+        if [ -z "$latest" ]; then
+          echo "⚠ couldn't read the latest published release from GitHub (no gh / none published / offline) — skipping the bump guard for $pkg."
+        elif node -e 'const p=process.argv[1].split(".").map(Number),l=process.argv[2].split(".").map(Number);process.exit((p[0]!==l[0]?p[0]>l[0]:p[1]!==l[1]?p[1]>l[1]:p[2]>l[2])?0:1)' "$pkg" "$latest"; then
+          echo "version $pkg is ahead of the latest release ($latest) — ok to release."
+        else
+          echo "✋ Refusing to release: ui/package.json version ($pkg) is NOT ahead of the latest published release ($latest)."
+          echo "   Bump \"version\" in ui/package.json to a higher patch/minor/major, commit + push, then re-run 'task ui:release'."
+          exit 1
+        fi
+      - echo "Building a signed + notarized ColdStorage and publishing to GitHub Releases (benhonda/coldstorage)…"
       # Sync node_modules to the lockfile — electron-builder collects the app's production deps (electron-updater)
       # from node_modules, so a stale tree fails with "production dependency not found". Idempotent when in sync.
       - bun install
