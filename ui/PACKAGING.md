@@ -135,6 +135,27 @@ build — defer it to the signing milestone. Prioritize the two things that bloc
   **`task ui:config`** (from the infra-outputs handoff SSOT) or **`task ui:bootstrap`** (`daemon:creds` +
   `ui:config`, the .app analogue of `daemon:bootstrap`). Reading is best-effort — a missing/malformed file
   logs + the daemon still starts (graceful "connected but can't upload" degrade).
+- **Self-configuring customer build (baked public config)** — **BUILT ✅ (2026-07-05), PENDING Ben's Mac
+  verify (PROD.md Phase 6d).** `config.json` above is the *dogfood/dev* seam — a stranger's download has no
+  such file, so it can't sign in or upload. The fix: `main/config.ts` now resolves config as **baked base ←
+  user override**. The baked base is **`Contents/Resources/app-config.json`**, written at package time by
+  **`task ui:config:bake ENV=production|staging`** (run automatically inside the packaging tasks) from the
+  **same infra-outputs handoff** as `ui:config` — so it's SSOT-generated, never hand-maintained, and
+  gitignored (`ui/build/app-config.json`). It carries only PUBLIC config (bucket, region, Cognito ids,
+  sign-in domain/client, account-API URL) — **`awsProfile` is deliberately omitted**: a customer has no local
+  profile, they sign in and get scoped short-lived STS creds via Cognito (`coldstored/main.swift`). The
+  user's `config.json` (when present) still overrides per-key, so dogfood/dev/MinIO testing is unchanged. Net
+  effect: **sign-in is the only customer setup.**
+  - **Two lanes, explicit (no silent default):** the account-backend URL is the ONLY thing that differs
+    between a customer and a dogfood build (Cognito + the vault bucket are shared) — and the key-blob lives in
+    whichever lane's DB, so they must never cross. **`ui:release`/`ui:release:dryrun` bake `production`**
+    (`api.coldstorage.sh` — the published customer build; requires the prod account-backend lane up first);
+    **`ui:package` bakes `staging`** (`api-staging.coldstorage.sh` — Ben's local dogfood build, sandbox
+    Paddle, never published). `ENV` is required, so a customer build can't accidentally ship staging-wired.
+  - When the handoff is absent at package time, bake writes just `accountApiBaseUrl` (a cert-less dogfood
+    build with no bucket/Cognito — the runtime falls back to `config.json`, exactly as before).
+  **Ben to verify on Mac:** a fresh customer `.dmg` on a machine with NO `config.json` → launch → sign in →
+  subscribe → deposit, end-to-end.
   `task ui:package:doctor` now reports config.json + runs `aws sts get-caller-identity` on its profile —
   **but note it auto-discovers by data dir, which the packaged app SHARES with the launchd daemon (see the
   NOTE just below), so a `daemon:install`ed launchd daemon still running will make `doctor` report on

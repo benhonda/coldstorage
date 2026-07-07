@@ -37,6 +37,13 @@ extraResources:
     to: bin/coldstore-restore
   - from: ../coldstorage/launchd/coldstore-aws-credential-process.sh
     to: bin/coldstore-aws-credential-process.sh
+  # Baked PUBLIC config (bucket/region/Cognito ids/sign-in domain+client/account-API) — written at package
+  # time by `task ui:config:bake` from the infra-outputs handoff (PROD.md Phase 6d), so a config-less
+  # customer download self-configures and sign-in is the only setup. NO secret (creds come via Cognito STS).
+  # The bake task always writes this file (real values, or `{}` when the handoff is absent for a dogfood
+  # build), so electron-builder always finds it here. Read at runtime from Contents/Resources/app-config.json.
+  - from: build/app-config.json
+    to: app-config.json
 
 mac:
   category: public.app-category.utilities

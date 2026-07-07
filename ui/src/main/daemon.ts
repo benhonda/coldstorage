@@ -11,8 +11,11 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
-import { mkdirSync, openSync, readFileSync } from "node:fs";
+import { mkdirSync, openSync } from "node:fs";
 import { app } from "electron";
+import { type AppConfig, mergeAppConfig, readConfigFile } from "./config.ts";
+
+export type { AppConfig } from "./config.ts";
 
 /** Per-user data dir — the SSOT for everything the daemon persists. `userData` resolves to
  * `~/Library/Application Support/ColdStorage` (the productName), which is ALSO the `DATA_DIR` that
@@ -27,57 +30,25 @@ export const daemonSocketPath = (): string => join(dataDir(), "coldstored.sock")
 /** Absolute path to the bundled daemon binary (Contents/Resources/bin — see electron-builder.yml). */
 const coldstoredPath = (): string => join(process.resourcesPath, "bin", "coldstored");
 
-/** The packaged app's per-user AWS config — the bucket/region/profile a Finder-launched app can't get
- * from a shell env. Written by `task ui:config` (from the infra-outputs handoff, the same SSOT the launchd
- * plist uses). NO secret lives here: creds resolve via the `awsProfile`'s `credential_process → Keychain`
- * (set up once by `task daemon:creds`), exactly like the launchd daemon. `cognitoIdentityPoolId`/
- * `cognitoUserPoolProvider` are the daemon's multi-user seam (PROD.md Phase 2); `cognitoDomain`/
- * `cognitoClientId` are the APP's sign-in config (Phase 5 — managed-login host + public client id,
- * consumed by auth/config.ts, never passed to the daemon). */
-export type AppConfig = {
-  bucket?: string | undefined;
-  region?: string | undefined;
-  awsProfile?: string | undefined;
-  cognitoIdentityPoolId?: string | undefined;
-  cognitoUserPoolProvider?: string | undefined;
-  cognitoDomain?: string | undefined;
-  cognitoClientId?: string | undefined;
-  /** Account-backend base URL (Phase 5b) — where the app fetches/stores the zero-knowledge key-blob and
-   * checks entitlement. Absent ⇒ the staging default (which accepts production Cognito tokens). */
-  accountApiBaseUrl?: string | undefined;
-};
+/** Absolute path to the BAKED config bundled into the app (Contents/Resources/app-config.json — written
+ * at package time by `task ui:config:bake`, see electron-builder.yml extraResources). This carries the
+ * public prod defaults (bucket/region/Cognito/sign-in/account-API) so a stranger's download self-configures
+ * — sign-in is the only setup left (PROD.md Phase 6d). Only present in a packaged build. */
+const bakedConfigPath = (): string => join(process.resourcesPath, "app-config.json");
 
-/** Read `<dataDir>/config.json` best-effort. A missing/malformed file logs and returns `{}` so the daemon
- * still starts + serves the control socket (the UI connects; only uploads need this) — the graceful
- * "connected but can't upload" degrade, not a hard failure. */
+/** The packaged app's per-user config, resolved as **baked base ← user override**:
+ *   - baked  = `Contents/Resources/app-config.json` (the public prod config, packaged builds only) — the
+ *     SSOT that makes a config-less customer download work; NO secret (creds come via Cognito STS).
+ *   - user   = `<dataDir>/config.json` (written by `task ui:config`) — dev/dogfood overrides on top, e.g.
+ *     `awsProfile` for the credential_process path, or a MinIO/staging bucket for testing.
+ * A missing file on either side is normal (a customer has no user file; dev has no baked file), so this
+ * silently degrades: uploads just fail clean until something supplies bucket + Cognito, the daemon still
+ * serves its control socket. `cognitoIdentityPoolId`/`cognitoUserPoolProvider` are the daemon's multi-user
+ * seam (Phase 2); `cognitoDomain`/`cognitoClientId` are the APP's sign-in config (Phase 5, auth/config.ts). */
 export const readAppConfig = (dir: string): AppConfig => {
-  const path = join(dir, "config.json");
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    console.error(`no ${path} — daemon will start but can't upload. Run \`task ui:config\` on your Mac (see ui/PACKAGING.md).`);
-    return {};
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) throw new Error("not a JSON object");
-    const o = parsed as Record<string, unknown>;
-    const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined);
-    return {
-      bucket: str(o.bucket),
-      region: str(o.region),
-      awsProfile: str(o.awsProfile),
-      cognitoIdentityPoolId: str(o.cognitoIdentityPoolId),
-      cognitoUserPoolProvider: str(o.cognitoUserPoolProvider),
-      cognitoDomain: str(o.cognitoDomain),
-      cognitoClientId: str(o.cognitoClientId),
-      accountApiBaseUrl: str(o.accountApiBaseUrl),
-    };
-  } catch (e) {
-    console.error(`ignoring malformed ${path}: ${String(e)}`);
-    return {};
-  }
+  const baked = app.isPackaged ? readConfigFile(bakedConfigPath()) : {};
+  const user = readConfigFile(join(dir, "config.json"));
+  return mergeAppConfig(baked, user);
 };
 
 /** The env `coldstored` reads (see coldstored/main.swift) — per-user paths under {@link dataDir}, plus the

@@ -11,6 +11,10 @@ out/
 build/Release/
 *.tgz
 
+# Baked-at-package-time public app config (generated from the infra handoff by `task ui:config:bake`;
+# PROD.md Phase 6d) — regenerated on every package, not source.
+ui/build/app-config.json
+
 # TypeScript / tool caches
 *.tsbuildinfo
 .cache

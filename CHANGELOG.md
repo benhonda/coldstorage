@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-07
+
+- feat(ui): **Phase 6d — self-configuring customer build, BUILT** (103 ui tests green; pending Ben's Mac verify). New pure `main/config.ts` resolves the packaged app's config as **baked base ← user override**; the baked base is `Contents/Resources/app-config.json`, written at package time by `task ui:config:bake ENV=production|staging` from the same infra-outputs handoff as `ui:config` (gitignored `ui/build/app-config.json`, PUBLIC values only — `awsProfile` omitted, customers get scoped STS via Cognito). Wired into `ui:package` (bakes staging/dogfood) + `ui:release`/`:dryrun` (bakes production/customer) via `electron-builder.yml` extraResources; `daemon.ts` consumes the merged result; new `config.test.ts`. Net: **sign-in is the only customer setup.** Docs: PROD.md 6d flipped BUILT + `ui/PACKAGING.md`.
+
 ## 2026-07-05
 
 - feat(infra): scaffold `infra/site/` — Terraform/Terragrunt for the marketing site's Vercel project (mirrors `infra/account-backend`: root + `modules/{shared,stack}` + `live/{shared,production,staging}`); dormant OIDC role + the two `PUBLIC_PADDLE_*` env vars only, no Cognito/DB/secrets, DNS deferred; `terraform fmt` clean, nothing applied. `site/SPEC.md` Phase 4 flipped to 🟡 scaffolded with Ben's manual go-live steps (see `infra/site/README.md`).

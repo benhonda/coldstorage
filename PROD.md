@@ -507,22 +507,37 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      resource route (`site/app/routes/download.tsx`) 302s to the latest GitHub Releases `.dmg`, so
      the direct-download half of 6c is done. The standalone download *page* + the `api.*`→site
      checkout move remain deferred.
-   - **6d — self-configuring customer build — NOT STARTED (surfaced 2026-07-05). This is the gate
+   - **6d — self-configuring customer build — BUILT ✅ (2026-07-05, `ui:typecheck` + 103 ui tests
+     green, bake task emits valid JSON verified); PENDING Ben's Mac verify. This is the gate
      between "works for the operator who set it up" and "a stranger can download + use it," so it's
      the true blocker on pointing the live `coldstorage.sh` download button at real customers.**
-     Today's shipped `.dmg` is still the **dogfood build**: the daemon's non-secret config (bucket,
-     region, Cognito pool ids) reaches it *only* via `~/Library/Application Support/ColdStorage/
-     config.json`, written by the dev-only **`task ui:config`** (`ui/src/main/daemon.ts:53-101`;
-     `ui/PACKAGING.md`), and `ui/electron-builder.yml` bundles **no** default daemon config (only
-     `ui/src/main/vault/config.ts:10`'s account-API URL has a baked-in default). So a cold customer
-     download launches, shows "connected", and has nowhere to store to — with no in-app way to fix
-     it. The customer *credential* path itself is already built (`coldstored/main.swift:29-39` signs
-     S3 as the signed-in Cognito user → scoped short-lived STS creds; sign-in/vault/entitlement =
-     Phase 5, gates met). **Remaining:** bake the public bucket/region/Cognito config into the build
-     so **sign-in is the only customer setup**, then verify a config-less download can sign in →
-     subscribe → deposit end-to-end. Rides with the other customer-facing last-mile items already
-     marked deferred elsewhere: prod account-backend lane (Phase 4), live Paddle prod token +
-     multi-plan picker/pricing (Phase 5, §5c), and the download page + checkout move (6c above).
+     Was: the shipped `.dmg` was a **dogfood build** — the daemon's non-secret config (bucket, region,
+     Cognito pool ids) reached it *only* via `~/Library/Application Support/ColdStorage/config.json`,
+     written by the dev-only `task ui:config`, so a cold customer download launched, showed "connected",
+     and had nowhere to store. **Fix (SSOT-driven):** `ui/src/main/config.ts` (new, pure/testable) resolves
+     config as **baked base ← user override**. The baked base is `Contents/Resources/app-config.json`,
+     written at package time by **`task ui:config:bake`** (wired into `ui:package`/`ui:release`/
+     `ui:release:dryrun` before electron-builder bundles it, `electron-builder.yml` extraResources) from the
+     **same infra-outputs handoff** as `ui:config` — SSOT-generated, gitignored (`ui/build/app-config.json`),
+     PUBLIC values only (bucket/region/Cognito ids/sign-in domain+client/account-API). **`awsProfile` is
+     deliberately omitted** — customers get scoped STS creds via Cognito (`coldstored/main.swift`), not a
+     local profile. The user's `config.json` still overrides per-key, so dogfood/dev/MinIO is byte-for-byte
+     unchanged; a handoff-less build bakes `{}` (falls back to `config.json`, the old behavior). All three
+     config readers (`daemon.ts` env, `auth/config.ts` sign-in, `vault/config.ts` account-API) consume the
+     merged result transparently — **net effect: sign-in is the only customer setup.** The customer
+     *credential* path itself was already built (`coldstored/main.swift` signs S3 as the signed-in Cognito
+     user; Phase 5 gates met). **Remaining (Ben, Mac):** verify a config-less `.dmg` can sign in → subscribe →
+     deposit end-to-end. **Two build lanes (`ui:config:bake ENV=production|staging`):** the account-backend
+     URL is the ONLY thing that differs between a customer build and a dogfood build (Cognito + the vault
+     bucket are shared across lanes — cognito.tf), and the key-blob lives in whichever lane's DB, so the two
+     must never cross (onboarding on staging would strand a user's encrypted MK in the test DB). ENV is
+     REQUIRED — no silent default — so a customer build can't accidentally ship staging-wired: **`ui:release`
+     (+ `ui:release:dryrun`) bake `production` → `api.coldstorage.sh`** (the published customer build);
+     **`ui:package` bakes `staging` → `api-staging.coldstorage.sh`** (Ben's local dogfood build — sandbox
+     Paddle, never published to the public feed). A working `ui:release` therefore *requires the prod
+     account-backend lane to be up first* (Phase 4) — the correct gate. Rides with the other customer-facing
+     last-mile items still deferred: prod account-backend lane (Phase 4), live Paddle prod token + multi-plan
+     picker/pricing (Phase 5, §5c), and the download page + checkout move (6c above).
 
 ## Open sub-decisions (don't block P1; flagged for when their phase lands)
 - ~~**Encryption password vs auth credential** — with a federated login there is no password to derive

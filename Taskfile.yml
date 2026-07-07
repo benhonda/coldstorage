@@ -704,6 +704,12 @@ tasks:
       # The bundled binaries must exist before electron-builder copies them (electron-builder.yml extraResources).
       - swift build -c release --package-path "{{.ROOT_DIR}}/coldstorage"
       - bun run build # electron-vite → out/{main,preload,renderer}
+      # Bake the public config before electron-builder bundles it (Phase 6d). ENV=staging: a local
+      # `ui:package` is Ben's DOGFOOD build (sandbox Paddle + the staging key-blob DB, safe to test money);
+      # the customer build comes from `ui:release` (ENV=production). Never publish a staging build.
+      - task: ui:config:bake
+        vars:
+          ENV: staging
       - bunx electron-builder --mac # node CLI (not --bun); reads electron-builder.yml → ui/dist/ColdStorage.app + dmg/zip
 
   ui:_require-apple-creds:
@@ -788,6 +794,12 @@ tasks:
           gh release create "$tag" --repo benhonda/coldstorage --draft --title "$ver" \
             --notes "Draft — assets uploaded by electron-builder; review, then Publish." && echo "pre-created draft $tag"
         fi
+      # Bake the public config before electron-builder bundles it (Phase 6d). ENV=production: this is the
+      # CUSTOMER build published to the public feed, so it must point at the prod account-backend lane
+      # (api.coldstorage.sh) — which must be stood up first (PROD.md Phase 4), else sign-in/checkout 404s.
+      - task: ui:config:bake
+        vars:
+          ENV: production
       # --publish always → upload the .dmg/.zip + latest-mac.yml. -c.mac.notarize=true → notarize THIS build
       # (the yml default is false so plain `ui:package` stays cert-free).
       - bunx electron-builder --mac --publish always -c.mac.notarize=true
@@ -803,6 +815,11 @@ tasks:
       - bun install
       - swift build -c release --package-path "{{.ROOT_DIR}}/coldstorage"
       - bun run build # electron-vite → out/{main,preload,renderer}
+      # Bake the public config before electron-builder bundles it (Phase 6d). ENV=production: dryrun is a
+      # faithful signing/notarization rehearsal of the CUSTOMER build, so it bakes the same prod lane.
+      - task: ui:config:bake
+        vars:
+          ENV: production
       # --publish never → build + sign + notarize only; nothing is uploaded or tagged.
       - bunx electron-builder --mac --publish never -c.mac.notarize=true
 
@@ -913,6 +930,48 @@ tasks:
           "$bucket" "$region" "$profile" "$cognito_pool_id" "$cognito_provider" "$cognito_domain" "$cognito_client_id" "$account_api" > "{{.DATA_DIR}}/config.json"
         echo "wrote {{.DATA_DIR}}/config.json  (bucket=$bucket region=$region profile=$profile cognito=${cognito_pool_id:+configured}${cognito_pool_id:-not configured} sign-in=${cognito_domain:+configured}${cognito_domain:-not configured})"
         echo "creds: ensure 'task daemon:creds' wired the '$profile' profile + Keychain (one-time). Verify: task ui:package:doctor"
+
+  ui:config:bake:
+    desc: "Bake the PUBLIC app config into ui/build/app-config.json (bundled at Contents/Resources/app-config.json) so a config-less download self-configures — sign-in is the only setup (PROD.md Phase 6d). ENV=production|staging picks the account-backend lane (prod → api.coldstorage.sh, staging → api-staging.coldstorage.sh) — the ONLY thing that differs between a customer build and a dogfood build (Cognito + vault bucket are shared). REQUIRED + explicit: there is no silent default, so a customer build can never accidentally ship staging-wired. Sourced from the SAME infra-outputs handoff as ui:config but PUBLIC-ONLY: no awsProfile (customers get creds via Cognito STS). Run automatically by ui:release (production) / ui:package (staging)."
+    dir: coldstorage
+    requires:
+      vars: [ENV]
+    vars:
+      OUT: "{{.ROOT_DIR}}/ui/build/app-config.json"
+    cmds:
+      - 'case "{{.ENV}}" in production|staging) ;; *) echo "ENV must be production|staging (got: {{.ENV}})"; exit 1 ;; esac'
+      - mkdir -p "{{.ROOT_DIR}}/ui/build"
+      - |
+        # The account-backend lane is the whole staging-vs-prod distinction for the app (Cognito + the S3
+        # vault bucket are SHARED across lanes — see cognito.tf; PROD.md Phase 4). The key-blob lives in
+        # whichever lane's DB, so a customer build MUST bake prod: onboarding against staging would strand the
+        # user's encrypted master key in the test DB. COLDSTORE_ACCOUNT_API still overrides if explicitly set.
+        case "{{.ENV}}" in
+          production) default_api="https://api.coldstorage.sh" ;;
+          staging)    default_api="https://api-staging.coldstorage.sh" ;;
+        esac
+        account_api="${COLDSTORE_ACCOUNT_API:-$default_api}"
+
+        # Same SSOT as ui:config (the handoff written by `task tf:coldstorage:creds-export`), but PUBLIC
+        # values ONLY — this file ships inside the .dmg, so awsProfile (the dogfood credential_process path)
+        # is deliberately omitted; a customer signs in and gets scoped STS creds. Cognito + bucket are
+        # lane-independent, so they come from the handoff unchanged for both ENVs.
+        CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
+        if [ ! -f "$CREDS" ]; then
+          printf '{\n  "accountApiBaseUrl": "%s"\n}\n' "$account_api" > "{{.OUT}}"
+          echo "⚠ no handoff ($CREDS) — baked only accountApiBaseUrl=$account_api (no bucket/Cognito). This build can't upload/sign-in (dogfood: relies on 'task ui:config'). Run 'task tf:coldstorage:creds-export' in the devcontainer for a real build."
+          exit 0
+        fi
+        set -a; . "$CREDS"; set +a
+        bucket="${COLDSTORE_BUCKET:-coldstorage}"
+        region="${AWS_REGION:-us-east-1}"
+        cognito_pool_id="${COLDSTORE_COGNITO_IDENTITY_POOL_ID:-}"
+        cognito_provider="${COLDSTORE_COGNITO_USER_POOL_PROVIDER:-}"
+        cognito_domain="${COLDSTORE_COGNITO_DOMAIN:-}"
+        cognito_client_id="${COLDSTORE_COGNITO_CLIENT_ID:-}"
+        printf '{\n  "bucket": "%s",\n  "region": "%s",\n  "cognitoIdentityPoolId": "%s",\n  "cognitoUserPoolProvider": "%s",\n  "cognitoDomain": "%s",\n  "cognitoClientId": "%s",\n  "accountApiBaseUrl": "%s"\n}\n' \
+          "$bucket" "$region" "$cognito_pool_id" "$cognito_provider" "$cognito_domain" "$cognito_client_id" "$account_api" > "{{.OUT}}"
+        echo "baked {{.OUT}}  (ENV={{.ENV}} bucket=$bucket region=$region cognito=${cognito_pool_id:+configured}${cognito_pool_id:-NOT configured} sign-in=${cognito_domain:+configured}${cognito_domain:-NOT configured} account-api=$account_api)"
 
   ui:bootstrap:
     desc: "[macOS] One-shot setup so the packaged ColdStorage.app can upload: seed creds (Keychain + `coldstorage` profile) → write the app's config.json. Run once after `task tf:coldstorage:creds-export` (devcontainer). The .app analogue of daemon:bootstrap."
