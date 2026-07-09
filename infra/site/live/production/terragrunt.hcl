@@ -24,7 +24,7 @@ inputs = {
   vercel_project_name = "coldstorage-web"
   vercel_team_slug    = "adpharm"
 
-  # 👉 Paste the Paddle LIVE client-side token (live_…) here once the live Paddle account
-  # exists — that's the only change needed to turn on production checkout.
-  paddle_client_token = "TODO_PASTE_LIVE_PADDLE_CLIENT_TOKEN_HERE"
+  # Paddle LIVE client-side token (live_…) for the /checkout page's Paddle.js. Minted via
+  # `task backend:paddle:client-token` (ctkn_01kx2hw4dn0b5ypk51kcsnr2b3). Public by design.
+  paddle_client_token = "live_64ce5712d4a5eebbf29c5796469"
 }

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-09
+
+- feat(backend): Paddle LIVE catalog go-live — new `account-backend/scripts/` (`seed-paddle-catalog.ts` PLANS/`--apply` 3 sizes × 4 terms, `create-paddle-client-token.ts`, `_paddle.ts` env-autodetect) + `task backend:paddle:seed`/`backend:paddle:client-token`; live `paddle_price_id` + `paddle_client_token` baked into `infra/{account-backend,site}` production terragrunt (public-by-design); new `PADDLE.md` ops SSOT; `tsconfig.json` includes `scripts`.
+
 ## 2026-07-08
 
 - feat(site): standalone `/pricing`, `/privacy`, `/terms`, `/refunds` routes (+ `/:lang` variants) for Paddle domain review — legal pages render from a new `legal.ts` content SSOT via a shared `LegalPage` component (`legal-page.tsx`/`.css`); footer `legal` links wired to the real URLs + `Contact us` → `mailto:support@m.coldstorage.sh`.

@@ -3,3 +3,5 @@
 # to expose in frontend code"). NOT the Paddle API key, which stays a dashboard-set secret.
 infra/account-backend/live/staging/terragrunt.hcl:generic-api-key:44
 infra/site/live/staging/terragrunt.hcl:generic-api-key:26
+infra/account-backend/live/production/terragrunt.hcl:generic-api-key:45
+infra/site/live/production/terragrunt.hcl:generic-api-key:29

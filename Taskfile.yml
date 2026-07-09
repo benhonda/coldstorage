@@ -1080,6 +1080,20 @@ tasks:
     cmds:
       - bun --env-file=.env.vercel --env-file=.env run dev
 
+  backend:paddle:seed:
+    desc: "Seed the Paddle catalog (3 products × 4 term prices). PLANS by default; pass `-- --apply` to write. Export PADDLE_API_KEY in your shell (never commit it); sandbox/production is auto-detected from the key."
+    dir: account-backend
+    cmds:
+      # Reads PADDLE_API_KEY (+ optional PADDLE_TAX_CATEGORY) from the environment you export — the
+      # task loads no secrets of its own. `{{.CLI_ARGS}}` forwards `-- --apply`.
+      - bun run scripts/seed-paddle-catalog.ts {{.CLI_ARGS}}
+
+  backend:paddle:client-token:
+    desc: "Mint (or reuse) the Paddle client-side token for Paddle.js on /checkout. Idempotent per environment. Export PADDLE_API_KEY; sandbox/production is auto-detected from the key. Prints the non-secret token for TF."
+    dir: account-backend
+    cmds:
+      - bun run scripts/create-paddle-client-token.ts
+
   backend:db:push:
     desc: "Push the Drizzle schema to Neon (drizzle-kit push) — NO migration files. Reads DATABASE_URL from account-backend/.env.vercel (or .env override)."
     dir: account-backend

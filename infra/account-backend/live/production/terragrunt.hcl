@@ -35,13 +35,14 @@ inputs = {
   cognito_user_pool_id        = dependency.coldstorage.outputs.cognito_user_pool_id
   cognito_user_pool_client_id = dependency.coldstorage.outputs.cognito_user_pool_client_id
 
-  # The Paddle LIVE recurring price (PROD.md Phase 5c). Empty until the production Paddle catalog exists
-  # (prod lane deferred) — set to the live pri_… when it does.
-  paddle_price_id = ""
+  # The Paddle LIVE recurring price the single-price checkout sells (PROD.md Phase 5c). The live
+  # catalog now exists (3 sizes × 4 terms — see /PADDLE.md); this is the interim default until the
+  # multi-plan picker lands. 500 GB · 1-year entry plan — change this one line for a different default.
+  paddle_price_id = "pri_01kx2h5hb2w0vmc2ppb8e6gvkr"
 
   # Paddle LIVE client-side token for the GET /checkout default-payment-link page (public by design,
-  # like the price id). Empty until the live Paddle account exists — set to the live_… token then.
-  paddle_client_token = ""
+  # like the price id). Minted via `task backend:paddle:client-token` (ctkn_01kx2hw4dn0b5ypk51kcsnr2b3).
+  paddle_client_token = "live_64ce5712d4a5eebbf29c5796469"
 
   # target=["production"] only, sensitive=true (has_staging=true above) per terraform.md's
   # env-var-ownership rule — these are REAL Paddle live-mode credentials + the real prod
