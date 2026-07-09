@@ -10,8 +10,16 @@ export const routePaths = [
   "/",
   "/:lang",
   "/:lang/checkout",
+  "/:lang/pricing",
+  "/:lang/privacy",
+  "/:lang/refunds",
+  "/:lang/terms",
   "/checkout",
   "/download",
+  "/pricing",
+  "/privacy",
+  "/refunds",
+  "/terms",
 ] as const;
 export type Path = (typeof routePaths)[number];
 
@@ -19,6 +27,10 @@ export type Path = (typeof routePaths)[number];
 export type Params = {
   "/:lang": { lang: string };
   "/:lang/checkout": { lang: string };
+  "/:lang/pricing": { lang: string };
+  "/:lang/privacy": { lang: string };
+  "/:lang/refunds": { lang: string };
+  "/:lang/terms": { lang: string };
 };
 
 // Utility type to extract the leaf nodes of Params

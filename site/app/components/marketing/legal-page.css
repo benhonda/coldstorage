@@ -1,0 +1,65 @@
+/* Long-form legal prose — reading measure, DS tokens only. Paired with legal-page.tsx. */
+
+.csf-legal {
+  padding-block: clamp(96px, 12vw, 160px) var(--section-y, 96px);
+}
+
+.csf-legal__head {
+  margin-bottom: var(--space-10, 40px);
+}
+
+.csf-legal__title {
+  margin: 0;
+  font: var(--type-page-title);
+  letter-spacing: var(--tracking-tighter);
+  color: var(--text-primary);
+  text-wrap: balance;
+}
+
+.csf-legal__updated {
+  margin: var(--space-3, 12px) 0 0;
+  font: var(--type-body);
+  color: var(--text-tertiary);
+}
+
+.csf-legal__lede {
+  margin: var(--space-5, 20px) 0 0;
+  font: var(--type-lead);
+  color: var(--text-secondary);
+  text-wrap: pretty;
+}
+
+.csf-legal__section {
+  margin-top: var(--space-9, 36px);
+}
+
+.csf-legal__heading {
+  margin: 0 0 var(--space-3, 12px);
+  font: var(--type-title-sm, 600 var(--text-lg) / 1.25 var(--font-ui));
+  letter-spacing: var(--tracking-tight);
+  color: var(--text-primary);
+}
+
+.csf-legal__p {
+  margin: 0 0 var(--space-4, 16px);
+  font: var(--type-body);
+  color: var(--text-secondary);
+  text-wrap: pretty;
+}
+
+.csf-legal__p:last-child {
+  margin-bottom: 0;
+}
+
+.csf-legal__list {
+  margin: 0 0 var(--space-4, 16px);
+  padding-left: 1.25em;
+  display: grid;
+  gap: var(--space-2, 8px);
+}
+
+.csf-legal__list li {
+  font: var(--type-body);
+  color: var(--text-secondary);
+  text-wrap: pretty;
+}

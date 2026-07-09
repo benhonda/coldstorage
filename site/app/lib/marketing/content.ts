@@ -185,8 +185,12 @@ export const FOOTER: Footer = {
   columns: [
     { heading: "Product", links: [{ label: "How it works", href: "#how" }, { label: "Pricing", href: "#pricing" }, { label: "Privacy", href: "#privacy" }] },
     { heading: "Company", links: [{ label: "About" }, { label: "The wind-down promise" }, { label: "Transparency notes" }] },
-    { heading: "Support", links: [{ label: "Help center" }, { label: "Status" }, { label: "Contact us" }] },
+    { heading: "Support", links: [{ label: "Help center" }, { label: "Status" }, { label: "Contact us", href: "mailto:support@m.coldstorage.sh" }] },
   ],
-  legal: [{ label: "Privacy" }, { label: "Terms" }],
+  legal: [
+    { label: "Privacy", href: "/privacy" },
+    { label: "Terms", href: "/terms" },
+    { label: "Refunds", href: "/refunds" },
+  ],
   copyright: "© 2026 ColdStorage",
 };

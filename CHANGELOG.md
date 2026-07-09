@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-08
+
+- feat(site): standalone `/pricing`, `/privacy`, `/terms`, `/refunds` routes (+ `/:lang` variants) for Paddle domain review — legal pages render from a new `legal.ts` content SSOT via a shared `LegalPage` component (`legal-page.tsx`/`.css`); footer `legal` links wired to the real URLs + `Contact us` → `mailto:support@m.coldstorage.sh`.
+
 ## 2026-07-07
 
 - feat(ui): **Phase 6d — self-configuring customer build, BUILT** (103 ui tests green; pending Ben's Mac verify). New pure `main/config.ts` resolves the packaged app's config as **baked base ← user override**; the baked base is `Contents/Resources/app-config.json`, written at package time by `task ui:config:bake ENV=production|staging` from the same infra-outputs handoff as `ui:config` (gitignored `ui/build/app-config.json`, PUBLIC values only — `awsProfile` omitted, customers get scoped STS via Cognito). Wired into `ui:package` (bakes staging/dogfood) + `ui:release`/`:dryrun` (bakes production/customer) via `electron-builder.yml` extraResources; `daemon.ts` consumes the merged result; new `config.test.ts`. Net: **sign-in is the only customer setup.** Docs: PROD.md 6d flipped BUILT + `ui/PACKAGING.md`.
