@@ -154,14 +154,19 @@ per `uploads/BRAND-VOICE.md`) — ported faithfully, voice untouched.
   with DS tokens (their data already lives in `site-common.jsx` — nav links, `CS_FOOTER`), extracting
   exact look from the bundle. Cleaner than reverse-engineering minified JS, and they're the
   "marketing-specific components" the site is meant to own anyway.
-- **"Download for Mac" CTA target** — _RESOLVED 2026-07-05:_ all three CTAs (nav + hero + closing)
-  link to a single `DOWNLOAD_PATH` (`app/lib/marketing/download.ts`) → the `/download` resource
-  route (`app/routes/download.tsx`), which resolves the *latest* GitHub Releases build and 302s to
-  its `.dmg` (edge-cached hourly; falls back to the releases page on failure). No version is
-  hardcoded, so release bumps need no site edit. Current build is **arm64-only** (v0.1.0) — the
-  clean cross-arch fix is a **universal `.dmg`** (build-side, `ui/electron-builder.yml`), _not_ an
-  arch-picker downloads page; deferred until Intel matters (all new Macs are Apple Silicon; macOS 27
-  drops Intel). The `/download` route already supports a multi-platform future without touching the buttons.
+- **"Download for Mac" CTA target** — _RESOLVED 2026-07-05, page added 2026-07-10:_ all three CTAs
+  (nav + hero + closing) link to a single `DOWNLOAD_PATH` (`app/lib/marketing/download.ts`) → now the
+  standalone **`/download` page** (`($lang).download.tsx` — CtaPanel-based: install steps, auto-starts
+  the file via meta refresh, "Download again" + "All releases" fallbacks). The actual file fetch is
+  `DOWNLOAD_DMG_PATH` → the **`/download.dmg` resource route** (`download[.]dmg.tsx`, the former
+  `/download` 302), which resolves the *latest* GitHub Releases build and 302s to its `.dmg`
+  (edge-cached hourly; falls back to the releases page on failure). No version is hardcoded, so
+  release bumps need no site edit. Current build is **arm64-only** (v0.1.0) — the clean cross-arch
+  fix is a **universal `.dmg`** (build-side, `ui/electron-builder.yml`), _not_ an arch-picker
+  downloads page; deferred until Intel matters (all new Macs are Apple Silicon; macOS 27 drops
+  Intel). The resource route already supports a multi-platform future without touching the buttons.
+  The page is stack-assembled from existing DS pieces (CtaPanel/Button/Nav/Footer) — flag it for an
+  upstream design pass whenever the next design session runs.
 - **Fonts loading strategy** — Phase 2 (see Upstream projects → Fonts).
 
 ## Non-goals (for now)

@@ -2,6 +2,7 @@
 
 ## 2026-07-10
 
+- feat(site): standalone `/download` page (`($lang).download.tsx` — CtaPanel install steps + meta-refresh auto-start); the latest-`.dmg` 302 resource route moves to `/download.dmg` — PROD.md 6c fully BUILT.
 - feat: daemon `deauthenticate` — sign-out now drops the cached STS creds + `vaultPrefix` immediately (`CognitoAuth.deauthenticate()` via `resolver.updateLogins(nil)`), fired by the app on every signed-out transition; PROD.md sub-decision closed.
 - feat: **multi-plan picker BUILT** (PADDLE.md spec, all 4 layers) — backend `GET /catalog` + catalog-validated `priceId` in `POST /checkout-session` (`PADDLE_PRICE_ID` retired from env schema + TF, apply pending); app `SubscribeModal` size-cards × term picker via new `entitlement:catalog` IPC + `subscribe(priceId)`.
 - docs: **Phase 4 production lane LIVE** — PROD.md gate flipped (live webhook destination + real prod secrets + smoke-tested `api.coldstorage.sh`); PADDLE.md gains webhook-destinations + scoped runtime-key sections; `infra/account-backend/README.md` status: all 6 manual secrets real, no blockers.

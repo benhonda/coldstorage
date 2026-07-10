@@ -1,4 +1,4 @@
-import type { Route } from "./+types/download";
+import type { Route } from "./+types/download[.]dmg";
 import { serverRedirect } from "~/lib/router/server-responses.server";
 import { RELEASE_REPO, RELEASES_LATEST_PAGE } from "~/lib/marketing/download";
 import { logError } from "~/lib/logger";
@@ -8,10 +8,11 @@ type GithubAsset = { name: string; browser_download_url: string };
 type GithubRelease = { assets: GithubAsset[] };
 
 /**
- * `/download` — resource route (loader-only, no component) behind every "Download for Mac"
- * CTA. It asks GitHub for the *latest* release and 302s the browser straight to that
- * release's macOS `.dmg`, so the marketing side never hardcodes a version that would rot on
- * the next build (the asset filename carries the version).
+ * `/download.dmg` — resource route (loader-only, no component) that the `/download` page
+ * auto-starts (and its "Download again" button re-triggers). It asks GitHub for the *latest*
+ * release and 302s the browser straight to that release's macOS `.dmg`, so the marketing
+ * side never hardcodes a version that would rot on the next build (the asset filename
+ * carries the version).
  *
  * The redirect is CDN-cached for an hour, so the GitHub API is hit at most ~once/hour per
  * region — well under the unauthenticated rate limit — while visitors still get an instant

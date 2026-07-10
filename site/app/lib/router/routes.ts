@@ -10,12 +10,14 @@ export const routePaths = [
   "/",
   "/:lang",
   "/:lang/checkout",
+  "/:lang/download",
   "/:lang/pricing",
   "/:lang/privacy",
   "/:lang/refunds",
   "/:lang/terms",
   "/checkout",
   "/download",
+  "/download[/]dmg",
   "/pricing",
   "/privacy",
   "/refunds",
@@ -27,6 +29,7 @@ export type Path = (typeof routePaths)[number];
 export type Params = {
   "/:lang": { lang: string };
   "/:lang/checkout": { lang: string };
+  "/:lang/download": { lang: string };
   "/:lang/pricing": { lang: string };
   "/:lang/privacy": { lang: string };
   "/:lang/refunds": { lang: string };
