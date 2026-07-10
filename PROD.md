@@ -203,9 +203,16 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
 4. **Account backend — GATE MET ✅ (2026-07-02, staging lane): Paddle-simulator webhook flipped
    `subscriptionActive` in the staging Neon DB, both confirmed by Ben.** Staging is deployed and
    verified live at `https://api-staging.coldstorage.sh` (health + 400-on-unsigned-webhook +
-   401-on-tokenless routes smoke-tested). What's deliberately left of P4 is only the **production
-   lane** — live Paddle account, prod Neon branch, prod secrets, first production deploy — which
-   nothing blocks on until Phase 5/6 need it. History below. Stack decided with Ben: **Hono on
+   401-on-tokenless routes smoke-tested). **PRODUCTION LANE LIVE ✅ (2026-07-10)** — the last P4
+   piece is done: live Paddle account + catalog (2026-07-09, see `PADDLE.md`), prod Neon DB with
+   schema pushed (Ben), a live webhook destination at `https://api.coldstorage.sh/webhooks/paddle`
+   (`ntfset_01kx68ekrpz6fzjt9jjr7zy9rf`, same nine `subscription.*` events as staging, created via
+   the Paddle API), all 3 prod Vercel secrets real (`DATABASE_URL` 07-01 by Ben; scoped runtime
+   `PADDLE_API_KEY` + `PADDLE_WEBHOOK_SECRET` 07-10 — see PADDLE.md "Runtime key scope"), production
+   redeployed and smoke-tested from outside (health 200 / unsigned webhook 400 / tokenless 401).
+   Residual: a *matching* webhook secret can't be proven from outside (wrong secret also 400s) —
+   proven by the first live event's 200 in Paddle's notification log. History below. Stack decided
+   with Ben: **Hono on
    Vercel + Neon/Drizzle** (not Lambda+DynamoDB) — Vercel-project infra is already the adpharm-stack
    convention (`references/terraform.md`), Neon is that convention's DB default, and this needed no AWS
    SDK/credentials at runtime (Cognito ID-token verification is a plain JWKS check), so the daemon's
@@ -535,9 +542,9 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      (+ `ui:release:dryrun`) bake `production` → `api.coldstorage.sh`** (the published customer build);
      **`ui:package` bakes `staging` → `api-staging.coldstorage.sh`** (Ben's local dogfood build — sandbox
      Paddle, never published to the public feed). A working `ui:release` therefore *requires the prod
-     account-backend lane to be up first* (Phase 4) — the correct gate. Rides with the other customer-facing
-     last-mile items still deferred: prod account-backend lane (Phase 4), live Paddle prod token + multi-plan
-     picker/pricing (Phase 5, §5c), and the download page + checkout move (6c above).
+     account-backend lane to be up first* (Phase 4) — that gate is now MET (prod lane live 2026-07-10, see
+     Phase 4). Still deferred of the customer-facing last mile: the multi-plan picker/pricing (Phase 5, §5c /
+     `PADDLE.md`) and the download page + checkout move (6c above).
 
 ## Open sub-decisions (don't block P1; flagged for when their phase lands)
 - ~~**Encryption password vs auth credential** — with a federated login there is no password to derive

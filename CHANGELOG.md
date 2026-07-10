@@ -2,6 +2,7 @@
 
 ## 2026-07-10
 
+- docs: **Phase 4 production lane LIVE** — PROD.md gate flipped (live webhook destination + real prod secrets + smoke-tested `api.coldstorage.sh`); PADDLE.md gains webhook-destinations + scoped runtime-key sections; `infra/account-backend/README.md` status: all 6 manual secrets real, no blockers.
 - feat(backend): Paddle scripts go two-key — required `--env sandbox|production` picks the account (`PADDLE_API_KEY`/`PADDLE_API_KEY_FOR_SANDBOX`, key prefix asserted); new seed `--archive-extras` retires off-SSOT products/prices; sandbox reseeded to the canonical 3×4 catalog + staging `paddle_price_id` repointed; PADDLE.md wiring status synced (client tokens DONE both envs).
 
 ## 2026-07-09

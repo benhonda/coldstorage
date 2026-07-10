@@ -48,11 +48,10 @@ Production's manual secrets are `sensitive=true` and **not** pullable by design 
 ## Status
 **Applied — both stacks live** (`terragrunt state list` confirms all 9 production / 10
 staging resources exist for real: the OIDC role, the `staging` custom environment, and every
-TF-managed + manual env var; re-running `plan` shows "No changes" for both). The 3 manual
-secrets per stack are still set to their Terraform-written placeholder
-(`SET_IN_VERCEL_DASHBOARD`) unless Ben has since replaced them by hand in the Vercel
-dashboard — that can't be verified from here (production's are `sensitive=true`, staging's
-are technically readable via the Vercel API but not checked, to avoid pulling live secret
-material into a doc/transcript). Remaining blockers are all manual, non-Terraform steps:
-Neon DB(s), Paddle sandbox/live credentials, then setting those 6 real values — see
-[`PROD.md`](../../PROD.md) Phase 4 for the exact checklist.
+TF-managed + manual env var; re-running `plan` shows "No changes" for both). **All 6 manual
+secrets are set for real** (staging's 3 on 2026-07-02; production's `DATABASE_URL` on
+2026-07-01 and `PADDLE_API_KEY` + `PADDLE_WEBHOOK_SECRET` on 2026-07-10 — verified via env-var
+`updatedAt` metadata, values never read). Both lanes are deployed and smoke-tested live at
+`api.coldstorage.sh` / `api-staging.coldstorage.sh` — no remaining blockers. See
+[`PROD.md`](../../PROD.md) Phase 4 for the full history and [`PADDLE.md`](../../PADDLE.md)
+for the webhook destinations + runtime key scope.

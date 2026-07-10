@@ -75,6 +75,26 @@ must be approved first in **Paddle → Catalog → Taxable categories**.
   `paddle_client_token`, production & staging. Empty ⇒ `/checkout` errors.
 - **Catalogs reconciled 2026-07-10:** sandbox reseeded to the canonical 3×4 shape and the original
   hand-made sandbox catalog archived (`--archive-extras`) — both accounts now differ only by ids.
+- **Webhook destinations (both live, same nine `subscription.*` events):**
+  - sandbox → `https://api-staging.coldstorage.sh/webhooks/paddle` (`ntfset_01kwhna1zqe98w8q7zr99by1dp`, 2026-07-02)
+  - live → `https://api.coldstorage.sh/webhooks/paddle` (`ntfset_01kx68ekrpz6fzjt9jjr7zy9rf`, 2026-07-10, created
+    via the API mirroring the sandbox destination's event list)
+
+  Each destination's endpoint secret is that stack's `PADDLE_WEBHOOK_SECRET` in Vercel (set by hand
+  in the dashboard — the TF convention for manual secrets). Both were set for real as of 2026-07-10.
+
+## Runtime key scope
+
+The `PADDLE_API_KEY` the deployed backend runs with is a **dedicated scoped key**, not the
+full-permission ops key (which stays in the shell for the scripts above). The runtime makes exactly
+one authenticated call today — `paddle.transactions.create` in `checkout-session.ts` — plus local
+HMAC webhook verification (no permission needed). Required scope:
+
+- **Transactions: read + write** — required now (the 5c war story: a zero-permission key fails here).
+- **Products: read + Prices: read** — pre-granted for the decided `GET /catalog` route (multi-plan
+  picker below), so shipping it won't repeat the war story.
+
+Nothing else. If the key was created with an expiry, note the rotation date here when it's known.
 ## Multi-plan picker — decided spec (TODO, deferred)
 
 Today's checkout sells one fixed plan (`PADDLE_PRICE_ID`). The picker lets a signed-in user choose
