@@ -43,14 +43,22 @@ money-back guarantee is a refund, not a Paddle trial).
 ## (Re)seed the catalog
 
 `account-backend/scripts/seed-paddle-catalog.ts` (via `task backend:paddle:seed`) creates this
-catalog idempotently — pricing is derived from the SSOT above, so it can't drift. Sandbox vs
-production is auto-detected from the key prefix (`pdl_live_…` / `pdl_sdbx_…`).
+catalog idempotently — pricing is derived from the SSOT above, so it can't drift. Both keys can
+sit in your shell at once; the **required `--env` flag** picks the target account, and the key's
+prefix (`pdl_live_…` / `pdl_sdbx_…`) is asserted against it so a wrong-slot key fails loudly.
 
 ```sh
-export PADDLE_API_KEY='<key with product + price write scope>'   # never commit it
-task backend:paddle:seed              # PLAN (read-only) — review, confirm the header
-task backend:paddle:seed -- --apply   # WRITE (idempotent — safe to re-run)
+export PADDLE_API_KEY='<live key with product + price write scope>'    # never commit these
+export PADDLE_API_KEY_FOR_SANDBOX='<sandbox key, same scope>'
+task backend:paddle:seed -- --env sandbox                # PLAN (read-only) — review, confirm the header
+task backend:paddle:seed -- --env sandbox --apply        # WRITE (idempotent — safe to re-run)
+task backend:paddle:seed -- --env production --apply     # same, against the LIVE account
 ```
+
+Add `--archive-extras` to also retire active entities **outside** the SSOT (products with off-SSOT
+names, prices with off-SSOT billing cycles) — archiving blocks new checkouts but existing
+subscriptions keep renewing. Plan-gated like the rest: without `--apply` it only lists the strays.
+Used 2026-07-10 to retire the original hand-made sandbox catalog after seeding the canonical one.
 
 Tax category defaults to `saas` (override with `PADDLE_TAX_CATEGORY=…`). Non-default categories
 must be approved first in **Paddle → Catalog → Taxable categories**.
@@ -58,13 +66,15 @@ must be approved first in **Paddle → Catalog → Taxable categories**.
 ## Wiring status
 
 - **Single-price checkout (today):** `checkout-session.ts` sells one `PADDLE_PRICE_ID`, TF-managed
-  per-stack. Production `paddle_price_id` is set to the **500 GB · 1yr** entry plan as the interim
-  default (`infra/account-backend/live/production/terragrunt.hcl`) — change that one line for a
-  different default. Needs `terragrunt apply` to take effect.
-- **Live client-side token (TODO):** mint it with `task backend:paddle:client-token` (idempotent —
-  reuses an existing one), then put the printed `live_…` value into the TF client-token vars
-  (`infra/site` production `PUBLIC_PADDLE_CLIENT_TOKEN` for the live www checkout, and/or
-  `infra/account-backend` production `paddle_client_token`) and apply. Empty ⇒ `/checkout` errors.
+  per-stack — both stacks point at their environment's canonical **500 GB · 1yr** price
+  (`infra/account-backend/live/{production,staging}/terragrunt.hcl`). Change that one line +
+  `terragrunt apply` + a **Vercel redeploy** for a different default — env-var changes only reach
+  the running app on deploy.
+- **Client-side tokens: DONE, both environments** (minted via `task backend:paddle:client-token`,
+  idempotent). Values live in TF: `infra/site` `PUBLIC_PADDLE_CLIENT_TOKEN` + `infra/account-backend`
+  `paddle_client_token`, production & staging. Empty ⇒ `/checkout` errors.
+- **Catalogs reconciled 2026-07-10:** sandbox reseeded to the canonical 3×4 shape and the original
+  hand-made sandbox catalog archived (`--archive-extras`) — both accounts now differ only by ids.
 ## Multi-plan picker — decided spec (TODO, deferred)
 
 Today's checkout sells one fixed plan (`PADDLE_PRICE_ID`). The picker lets a signed-in user choose

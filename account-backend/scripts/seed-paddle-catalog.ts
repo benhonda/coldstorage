@@ -9,16 +9,25 @@
  * re-run (e.g. sandbox first, then production, or after a partial failure) never duplicates.
  * Paddle entities can't be hard-deleted, so idempotency is the whole point.
  *
- * Run it via the Taskfile (loads no secrets itself — you supply the key):
- *   export PADDLE_API_KEY='pdl_live_apikey_…'   # or a pdl_sdbx_… sandbox key
- *   task backend:paddle:seed              # PLAN (read-only)
- *   task backend:paddle:seed -- --apply   # WRITE
+ * `--archive-extras` additionally ARCHIVES active entities outside the SSOT — products whose
+ * name isn't in the catalog, plus prices on kept products with an off-SSOT billing cycle.
+ * Archiving only blocks NEW checkouts; existing subscriptions keep renewing. Plan-gated like
+ * everything else: without `--apply` it just lists what it would archive.
+ *
+ * Run it via the Taskfile (loads no secrets itself — you supply the keys). `--env` picks which
+ * account a run targets; the key's prefix is asserted against it, so a wrong-slot key fails loudly:
+ *   export PADDLE_API_KEY='pdl_live_apikey_…'               # live
+ *   export PADDLE_API_KEY_FOR_SANDBOX='pdl_sdbx_apikey_…'   # sandbox
+ *   task backend:paddle:seed -- --env sandbox                            # PLAN (read-only)
+ *   task backend:paddle:seed -- --env production --apply                 # WRITE to the LIVE account
+ *   task backend:paddle:seed -- --env sandbox --archive-extras           # also PLAN the strays
+ *   task backend:paddle:seed -- --env sandbox --apply --archive-extras   # converge fully
  *
  * Env:
- *   PADDLE_API_KEY        (required) a Paddle API key with product + price write scope. The
- *                         environment (sandbox vs production) is auto-detected from its prefix.
- *   PADDLE_TAX_CATEGORY   (optional) default "saas" (must be approved in Catalog → Taxable
- *                         categories). Set "standard" to use the pre-approved default instead.
+ *   PADDLE_API_KEY             (for --env production) a live key with product + price write scope.
+ *   PADDLE_API_KEY_FOR_SANDBOX (for --env sandbox) the sandbox equivalent.
+ *   PADDLE_TAX_CATEGORY        (optional) default "saas" (must be approved in Catalog → Taxable
+ *                              categories). Set "standard" to use the pre-approved default instead.
  */
 import { type TaxCategory } from "@paddle/paddle-node-sdk";
 import { paddleFromEnv } from "./_paddle.js";
@@ -62,9 +71,10 @@ const priceDescription = (size: string, label: string) => `ColdStorage ${size} �
 const usd = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
 /* ── Config from env ──────────────────────────────────────────────────────────────────── */
-const { paddle, envName, keyMasked } = paddleFromEnv();
+const { paddle, envName, keyVar, keyMasked } = paddleFromEnv();
 const taxCategoryRaw = process.env.PADDLE_TAX_CATEGORY ?? "saas";
 const APPLY = process.argv.includes("--apply");
+const ARCHIVE_EXTRAS = process.argv.includes("--archive-extras");
 
 if (!isTaxCategory(taxCategoryRaw)) {
   console.error(`✗ PADDLE_TAX_CATEGORY "${taxCategoryRaw}" is not a valid Paddle tax category.\n  One of: ${TAX_CATEGORIES.join(", ")}`);
@@ -80,9 +90,9 @@ async function main() {
   console.log(`ColdStorage → Paddle catalog seed`);
   // Show only the non-secret prefix so you can spot a wrong-key run instantly.
   console.log(`  key         : ${keyMasked}`);
-  console.log(`  environment : ${envName}${envName === "production" ? "  ⚠️  LIVE ACCOUNT" : ""}  (from key prefix)`);
+  console.log(`  environment : ${envName}${envName === "production" ? "  ⚠️  LIVE ACCOUNT" : ""}  (--env, key prefix verified)`);
   console.log(`  tax category: ${taxCategory}`);
-  console.log(`  mode        : ${APPLY ? "APPLY (writes)" : "PLAN (dry-run — no writes)"}`);
+  console.log(`  mode        : ${APPLY ? "APPLY (writes)" : "PLAN (dry-run — no writes)"}${ARCHIVE_EXTRAS ? " + archive-extras" : ""}`);
   console.log("─".repeat(72));
 
   // Existing state (so we're idempotent).
@@ -92,12 +102,26 @@ async function main() {
   }
   const productByName = new Map(existingProducts.filter((p) => p.status === "active").map((p) => [p.name, p]));
 
-  // Map of productId -> set of "interval:frequency" for its active prices.
-  const pricesByProduct = new Map<string, Set<string>>();
+  // All ACTIVE prices — for idempotent matching and for --archive-extras.
+  const activePrices: { id: string; productId: string; name: string | null; amount: string; currency: string; cycle: string | null }[] = [];
   for await (const pr of paddle.prices.list()) {
-    if (pr.status !== "active" || !pr.billingCycle) continue;
+    if (pr.status !== "active") continue;
+    activePrices.push({
+      id: pr.id,
+      productId: pr.productId,
+      name: pr.name ?? null,
+      amount: pr.unitPrice.amount,
+      currency: pr.unitPrice.currencyCode,
+      cycle: pr.billingCycle ? cycleKey(pr.billingCycle.interval, pr.billingCycle.frequency) : null, // null = one-time
+    });
+  }
+
+  // Map of productId -> set of "interval:frequency" for its active recurring prices.
+  const pricesByProduct = new Map<string, Set<string>>();
+  for (const pr of activePrices) {
+    if (!pr.cycle) continue;
     const set = pricesByProduct.get(pr.productId) ?? new Set<string>();
-    set.add(cycleKey(pr.billingCycle.interval, pr.billingCycle.frequency));
+    set.add(pr.cycle);
     pricesByProduct.set(pr.productId, set);
   }
 
@@ -160,9 +184,49 @@ async function main() {
     }
   }
 
+  // ── --archive-extras: retire active entities outside the SSOT ─────────────────────────
+  const archived = { products: 0, prices: 0 };
+  if (ARCHIVE_EXTRAS) {
+    const ssotNames = new Set(PRODUCTS.map((p) => productName(p.size)));
+    const ssotCycles = new Set(TERMS.map((t) => cycleKey("year", t.years)));
+    const strayProducts = existingProducts.filter((p) => p.status === "active" && !ssotNames.has(p.name));
+    const strayProductIds = new Set(strayProducts.map((p) => p.id));
+    const keptProductIds = new Set(existingProducts.filter((p) => p.status === "active" && ssotNames.has(p.name)).map((p) => p.id));
+    // A stray price hangs off a stray product, or sits on a kept product with an off-SSOT
+    // billing cycle (incl. one-time prices).
+    const strayPrices = activePrices.filter(
+      (pr) => strayProductIds.has(pr.productId) || (keptProductIds.has(pr.productId) && (!pr.cycle || !ssotCycles.has(pr.cycle))),
+    );
+
+    console.log("─".repeat(72));
+    if (strayProducts.length === 0 && strayPrices.length === 0) {
+      console.log("archive-extras: nothing to archive — no active entities outside the SSOT.");
+    }
+    // Prices first, so no product is archived out from under a still-active price.
+    for (const pr of strayPrices) {
+      const label = `${(pr.name ?? "(unnamed)").padEnd(14)} ${pr.currency} ${(Number(pr.amount) / 100).toFixed(2)}  (${pr.id})`;
+      if (APPLY) {
+        await paddle.prices.update(pr.id, { status: "archived" });
+        archived.prices++;
+        console.log(`✓ price ARCHIVED   ${label}`);
+      } else {
+        console.log(`- price ARCHIVE    ${label}`);
+      }
+    }
+    for (const p of strayProducts) {
+      if (APPLY) {
+        await paddle.products.update(p.id, { status: "archived" });
+        archived.products++;
+        console.log(`✓ product ARCHIVED ${p.name}  (${p.id})`);
+      } else {
+        console.log(`- product ARCHIVE  ${p.name}  (${p.id})`);
+      }
+    }
+  }
+
   console.log("─".repeat(72));
-  console.log(`products: ${created.products} created, ${skipped.products} already existed`);
-  console.log(`prices:   ${created.prices} created, ${skipped.prices} already existed`);
+  console.log(`products: ${created.products} created, ${skipped.products} already existed${ARCHIVE_EXTRAS ? `, ${archived.products} archived` : ""}`);
+  console.log(`prices:   ${created.prices} created, ${skipped.prices} already existed${ARCHIVE_EXTRAS ? `, ${archived.prices} archived` : ""}`);
 
   if (APPLY) {
     console.log("\nPrice IDs (paste into the app plan-picker / Terraform paddle_price_id):");
@@ -184,7 +248,7 @@ main().catch((e) => {
       `  → This API key authenticated but lacks catalog permissions.\n` +
         `    A plan needs READ, and --apply needs WRITE, on both Products and Prices.\n` +
         `    The key auto-loaded from account-backend/.env is the minimal-scope webhook key —\n` +
-        `    export a full-access key instead:  export PADDLE_API_KEY='<key with product/price write>'`
+        `    export a full-access key instead:  export ${keyVar}='<key with product/price write>'`
     );
   }
   if (String(e?.code ?? "").includes("tax_category") || String(e?.detail ?? "").includes("tax category")) {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-10
+
+- feat(backend): Paddle scripts go two-key — required `--env sandbox|production` picks the account (`PADDLE_API_KEY`/`PADDLE_API_KEY_FOR_SANDBOX`, key prefix asserted); new seed `--archive-extras` retires off-SSOT products/prices; sandbox reseeded to the canonical 3×4 catalog + staging `paddle_price_id` repointed; PADDLE.md wiring status synced (client tokens DONE both envs).
+
 ## 2026-07-09
 
 - feat(backend): Paddle LIVE catalog go-live — new `account-backend/scripts/` (`seed-paddle-catalog.ts` PLANS/`--apply` 3 sizes × 4 terms, `create-paddle-client-token.ts`, `_paddle.ts` env-autodetect) + `task backend:paddle:seed`/`backend:paddle:client-token`; live `paddle_price_id` + `paddle_client_token` baked into `infra/{account-backend,site}` production terragrunt (public-by-design); new `PADDLE.md` ops SSOT; `tsconfig.json` includes `scripts`.

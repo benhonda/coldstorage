@@ -7,8 +7,9 @@
  * Idempotent: names the token per environment and reuses an existing active one, so re-running
  * prints the same token instead of creating duplicates.
  *
- *   export PADDLE_API_KEY='pdl_live_apikey_…'   # or a pdl_sdbx_… key
- *   task backend:paddle:client-token
+ *   export PADDLE_API_KEY='pdl_live_apikey_…'               # live
+ *   export PADDLE_API_KEY_FOR_SANDBOX='pdl_sdbx_apikey_…'   # sandbox
+ *   task backend:paddle:client-token -- --env production    # or --env sandbox
  *
  * The printed `live_…` / `test_…` value goes into your TF as the (non-secret) client token:
  *   • infra/site production        → PUBLIC_PADDLE_CLIENT_TOKEN   (the live www checkout page)
@@ -24,7 +25,7 @@ async function main() {
   console.log("─".repeat(72));
   console.log("ColdStorage → Paddle client-side token");
   console.log(`  key        : ${keyMasked}`);
-  console.log(`  environment: ${envName}${envName === "production" ? "  ⚠️  LIVE ACCOUNT" : ""}  (from key prefix)`);
+  console.log(`  environment: ${envName}${envName === "production" ? "  ⚠️  LIVE ACCOUNT" : ""}  (--env, key prefix verified)`);
   console.log(`  token name : ${tokenName}`);
   console.log("─".repeat(72));
 

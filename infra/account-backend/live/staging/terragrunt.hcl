@@ -33,9 +33,10 @@ inputs = {
   cognito_user_pool_id        = dependency.coldstorage.outputs.cognito_user_pool_id
   cognito_user_pool_client_id = dependency.coldstorage.outputs.cognito_user_pool_client_id
 
-  # The Paddle SANDBOX recurring price the checkout sells (PROD.md Phase 5c): 500 GB, 1-year term.
+  # The Paddle SANDBOX recurring price the checkout sells (PROD.md Phase 5c): 500 GB, 1-year term,
+  # from the seeded canonical catalog (`task backend:paddle:seed -- --env sandbox`, PADDLE.md).
   # Non-secret (it's exposed at checkout), so it lives here in TF, not the dashboard.
-  paddle_price_id = "pri_01kwhfexss8b3tfhggthvkwzrt"
+  paddle_price_id = "pri_01kx53mkb5knv7qgntq5w8jewc"
 
   # Paddle SANDBOX client-side token (dashboard → Developer tools → Authentication → client-side
   # tokens) for the GET /checkout default-payment-link page. Public by design ("safe to expose in
