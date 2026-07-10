@@ -232,6 +232,11 @@ export interface Commands {
    * with no Cognito identity pool configured (today's single-operator dogfood mode). The sign-in UI itself
    * is a later phase (PROD.md Phase 5); this is just the wire contract. */
   authenticate: { params: { idToken: string }; result: Auth };
+  /** Sign-out counterpart to `authenticate` (the credentials half — `lockVault` is the key half): the
+   * daemon drops its cached AWS credentials + vault prefix NOW instead of holding them for the remainder
+   * of the ~1h STS expiry. Errors on a daemon with no Cognito identity pool configured (dogfood mode —
+   * which never calls it: the auth UI doesn't exist there). */
+  deauthenticate: { params: Record<string, never>; result: Ack };
   /** Zero-knowledge vault (PROD.md Phase 5b) — all multi-user only (error on a dogfood daemon), all
    * carrying key material over the LOCAL control socket, never the network:
    * - `mintVault` (signup): mint MK + one-time recovery code, load it live, return the blob to store +

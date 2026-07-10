@@ -496,6 +496,13 @@ public actor DaemonService {
             guard let idToken = p["idToken"] else { throw ColdStorageError.staging("authenticate requires params.idToken") }
             let identityId = try await auth.authenticate(idToken: idToken)
             return AnyEncodable(AuthDTO(ok: true, identityId: identityId))
+        case "deauthenticate":
+            // Sign-out, the credentials half (`lockVault` is the key half): drop the resolver's cached
+            // STS creds + the vault prefix immediately, instead of letting them ride out the ~1h STS
+            // expiry. Same gate as `authenticate` — a dogfood daemon has no Cognito to deauthenticate.
+            guard let auth = cognitoAuth else { throw ColdStorageError.staging("deauthenticate: this daemon has no Cognito identity pool configured") }
+            await auth.deauthenticate()
+            return AnyEncodable(AckDTO(ok: true))
         case "mintVault":
             // Signup (first ever sign-in on any device for this account): mint a fresh MasterKey + a
             // one-time recovery code, load the MK live (so this session can deposit immediately), and hand

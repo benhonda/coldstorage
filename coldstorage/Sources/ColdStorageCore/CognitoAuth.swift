@@ -51,4 +51,16 @@ public actor CognitoAuth {
         vaultPrefix = "blobs/\(identityId)"
         return identityId
     }
+
+    /// Sign-out counterpart: drop the daemon's AWS credentials NOW rather than letting the last STS
+    /// creds ride out their ~1h expiry. `updateLogins(nil)` invalidates the resolver's internal
+    /// credential + identity-id cache (verified against aws-sdk-swift's
+    /// `CognitoAWSCredentialIdentityResolver` source: a logins change calls `cache.invalidate()`), and
+    /// the identity pool disallows unauthenticated identities (cognito.tf), so any S3 call after this
+    /// fails clean on Cognito's own auth error until the next `authenticate`. Local-only — nothing to
+    /// revoke server-side here (the app revokes its Cognito tokens itself).
+    public func deauthenticate() async {
+        await resolver.updateLogins(nil)
+        vaultPrefix = nil
+    }
 }

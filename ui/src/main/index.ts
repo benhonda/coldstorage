@@ -183,6 +183,10 @@ const offAuthFocus = auth.onStatus((s) => {
   if (prevAuthState === "signingIn" && s.state === "signedIn") focusMainWindow();
   if (prevAuthState !== "signedOut" && s.state === "signedOut") {
     void vault.relock();
+    // The credentials half of sign-out (relock is the key half): the daemon drops its cached STS
+    // creds + vault prefix now rather than holding them for the remainder of the ~1h expiry. Same
+    // daemon-may-be-down tolerance as relock — the daemon drops everything on exit anyway.
+    void client.request("deauthenticate").catch((e: unknown) => console.error("deauthenticate failed:", e));
     entitlement.reset();
   }
   prevAuthState = s.state;
