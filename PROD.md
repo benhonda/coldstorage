@@ -304,7 +304,7 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
    checkout UI. "Upload blocked when inactive" (the daemon consuming `/entitlement`) rides with
    Phase 5's auth handoff.
 5. **App auth + paywall UX — DONE ✅ (steel thread; 5a/5b/5c all gate-PASSED, last 2026-07-03).
-   Deferred by design: multi-plan paywall + moving the checkout page off `api.*` (pre-launch, see 5c) and
+   The once-deferred multi-plan paywall is now BUILT (2026-07-10, see 5c addendum below); still open:
    the daemon-side sign-out command (open sub-decision below).** Passwordless sign-in/up (Google via
    Cognito managed login in the SYSTEM browser — Google blocks embedded webviews — code+PKCE to the
    `coldstorage://` callback; email-OTP codes via `ALLOW_USER_AUTH` as the no-Google path) +
@@ -450,9 +450,20 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      http-500 in the app, root-caused by reproducing the exact call locally against pulled staging creds.
      Fixed: new sandbox API key with Transactions **read + write**, swapped into the staging
      `PADDLE_API_KEY` in the Vercel dashboard, redeploy. **The production lane's live key must be minted
-     with Transactions read+write from day one.** **Future: multi-plan paywall** (get `GET /plans` from Paddle, render a tier/term picker, validate
-     the chosen `priceId` at checkout) is a UX-heavy refinement — design-driven, defer to a dedicated UI
-     session + pre-launch. **Also pre-launch: move the default-payment-link page off `api.*`** — customers
+     with Transactions read+write from day one** (done — the prod runtime key is scoped per PADDLE.md
+     "Runtime key scope"). **Multi-plan picker: BUILT ✅ (2026-07-10, per the PADDLE.md decided spec —
+     all four layers in one cut, tests green; NOT yet deployed/applied or Mac-verified).** Backend:
+     new public `GET /catalog` maps live active Paddle products/prices → `{size, years, priceId,
+     amountCents, perMonthCents}` (pure `catalog.ts` + unit tests; module-TTL cache in
+     `catalog.server.ts`); `POST /checkout-session` now REQUIRES `{priceId}` and 400s any id not in
+     that catalog (never trust a client-named price) — `env.PADDLE_PRICE_ID` deleted from the env
+     schema and `paddle_price_id` retired from TF (both stacks plan surgical: 0/0/1 destroy of
+     `PADDLE_PRICE_ID`; **apply pending, Ben**). App: `getPlanCatalog()` + `subscribe(priceId)`
+     through manager/IPC/preload; `SubscribeModal` renders the spec UX (3 size cards w/ per-year
+     rate, default 1 TB; `[1yr][2yr][3yr][5yr]` segmented row, default 1yr; live total + per-month
+     line; "Subscribe to <size>"; quiet rate-lock line; catalog-fetch error → retry, no stale list).
+     Old single-price app builds break against the new backend by design (all-or-nothing cut,
+     AVOID4). **Also pre-launch: move the default-payment-link page off `api.*`** — customers
      shouldn't pay on an API hostname. The Phase 6 website (the download page forces it to exist) hosts the
      same two-script-tag checkout page on `coldstorage.sh`, and the LIVE Paddle account's default payment
      link points there; sandbox keeps pointing at staging's `/checkout`. Nothing to undo — the setting is
@@ -543,8 +554,8 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      **`ui:package` bakes `staging` → `api-staging.coldstorage.sh`** (Ben's local dogfood build — sandbox
      Paddle, never published to the public feed). A working `ui:release` therefore *requires the prod
      account-backend lane to be up first* (Phase 4) — that gate is now MET (prod lane live 2026-07-10, see
-     Phase 4). Still deferred of the customer-facing last mile: the multi-plan picker/pricing (Phase 5, §5c /
-     `PADDLE.md`) and the download page + checkout move (6c above).
+     Phase 4). The multi-plan picker is BUILT (2026-07-10, §5c) pending deploy + Mac verify; still deferred
+     of the customer-facing last mile: the download page + checkout move (6c above).
 
 ## Open sub-decisions (don't block P1; flagged for when their phase lands)
 - ~~**Encryption password vs auth credential** — with a federated login there is no password to derive

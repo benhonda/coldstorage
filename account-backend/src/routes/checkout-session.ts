@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { paddle } from "../paddle.server.js";
-import { env } from "../env.server.js";
+import { getCatalog } from "../catalog.server.js";
 import { requireAuth } from "../middleware/require-auth.js";
 import type { AppEnv } from "../hono-env.js";
 
@@ -11,15 +11,27 @@ import type { AppEnv } from "../hono-env.js";
  * custom data onto the subscription it creates, so the `subscription.*` webhooks link back to this user).
  * Returns the hosted-checkout URL for the app to open in the system browser; completion is learned from
  * the webhook flipping `subscriptionActive` (the app polls `GET /entitlement`), not from this response.
+ *
+ * The client picks WHICH plan via `{ priceId }` (the multi-plan picker), but the id is only trusted
+ * after it's found in the live catalog — a client must never be able to name an arbitrary price.
  */
 export const checkoutSessionRoute = new Hono<AppEnv>().use(requireAuth).post("/", async (c) => {
   const sub = c.get("sub");
-  if (!env.PADDLE_PRICE_ID) {
-    throw new HTTPException(500, { message: "checkout not configured: set PADDLE_PRICE_ID" });
+  const body: unknown = await c.req.json().catch(() => null);
+  const priceId = typeof body === "object" && body !== null ? (body as Record<string, unknown>).priceId : undefined;
+  if (typeof priceId !== "string" || priceId.length === 0) {
+    throw new HTTPException(400, { message: "priceId is required — pick a plan from GET /catalog" });
+  }
+
+  const catalog = await getCatalog().catch((e) => {
+    throw new HTTPException(502, { message: `plan catalog unavailable: ${e instanceof Error ? e.message : String(e)}` });
+  });
+  if (!catalog.some((p) => p.priceId === priceId)) {
+    throw new HTTPException(400, { message: "unknown priceId — not a plan in the current catalog" });
   }
 
   const txn = await paddle.transactions.create({
-    items: [{ priceId: env.PADDLE_PRICE_ID, quantity: 1 }],
+    items: [{ priceId, quantity: 1 }],
     customData: { cognitoSub: sub },
   });
 

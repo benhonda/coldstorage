@@ -14,10 +14,6 @@ const envSchema = z.object({
    *  lookups) rather than only reacting to webhooks. */
   PADDLE_API_KEY: z.string().min(1),
   PADDLE_ENVIRONMENT: z.enum(["sandbox", "production"]).default("sandbox"),
-  /** The Paddle price id the checkout sells (a recurring/subscription price). Environment-specific
-   *  (sandbox vs live catalogs differ), NOT a secret. Optional so the rest of the service boots without
-   *  it — `POST /checkout-session` returns a clear error if it's unset. */
-  PADDLE_PRICE_ID: z.string().optional(),
   /** Paddle CLIENT-SIDE token (dashboard → Developer tools → Authentication) for the /checkout
    *  page's Paddle.js. Public by design (Paddle: "safe to expose in frontend code"), NOT the API
    *  key. Environment-specific like the price id; optional so the service boots without it —

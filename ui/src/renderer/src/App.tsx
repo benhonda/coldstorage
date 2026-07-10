@@ -265,8 +265,9 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
 
       {paywallOpen && (
         <SubscribeModal
+          api={api}
           entitlement={state.entitlement}
-          onSubscribe={() => void api.subscribe()}
+          onSubscribe={(priceId) => void api.subscribe(priceId)}
           onClose={() => setPaywallOpen(false)}
         />
       )}

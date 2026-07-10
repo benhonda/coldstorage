@@ -1092,3 +1092,26 @@ button.cs-kv:hover { background: var(--surface-hover); }
   text-decoration: underline;
 }
 .cs-linkbtn:hover { color: var(--text-primary); }
+
+/* ── subscribe plan picker (SubscribeModal — PADDLE.md multi-plan spec) ── */
+.cs-plans { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-2); margin: var(--space-3) 0; }
+.cs-plan {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: var(--space-3);
+  background: var(--surface-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+}
+.cs-plan:hover { background: var(--surface-input-hover); }
+.cs-plan--active { border-color: var(--accent); background: var(--surface-card); box-shadow: 0 0 0 1px var(--accent); }
+.cs-plan-size { font: var(--type-card-title); letter-spacing: var(--tracking-tight); color: var(--text-primary); }
+.cs-plan-rate { font: var(--type-label); color: var(--text-secondary); }
+.cs-plan-terms { display: flex; align-items: center; }
+.cs-plan-price { margin: var(--space-3) 0 0; font: var(--type-body); color: var(--text-secondary); }
+.cs-plan-price strong { font: var(--type-card-title); color: var(--text-primary); }
+.cs-plan-lock { margin: var(--space-1) 0 0; font: var(--type-label); color: var(--text-tertiary); }

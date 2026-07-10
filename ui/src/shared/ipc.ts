@@ -73,7 +73,9 @@ export const IPC = {
   vaultStatusChanged: "vault:statusChanged",
   /** invoke: current {@link EntitlementStatus}. */
   entitlementStatus: "entitlement:status",
-  /** invoke: start a subscription checkout (opens the system browser + polls). */
+  /** invoke: the sellable plan catalog `(→ CatalogPlan[])` — what the subscribe picker renders. */
+  entitlementCatalog: "entitlement:catalog",
+  /** invoke: start a subscription checkout for a chosen plan `(priceId)` (opens the system browser + polls). */
   entitlementSubscribe: "entitlement:subscribe",
   /** push: the entitlement status changed, `(status)`. */
   entitlementStatusChanged: "entitlement:statusChanged",
@@ -140,6 +142,22 @@ export interface EntitlementStatus {
   /** A checkout is open in the browser and we're polling for the webhook to flip `active`. */
   checkingOut: boolean;
   error: string | null;
+}
+
+/**
+ * One sellable plan (a size × term cell of the backend's `GET /catalog`, PADDLE.md "Multi-plan
+ * picker") — fetched live so the picker always sells exactly what the Paddle account defines.
+ */
+export interface CatalogPlan {
+  /** Storage size label, e.g. "1 TB". */
+  size: string;
+  /** Term length in years — the subscription renews every N years (rate-lock, no discount). */
+  years: number;
+  priceId: string;
+  /** Total for the whole term, in USD cents (what checkout charges). */
+  amountCents: number;
+  /** Server-derived per-month equivalent in cents — display only. */
+  perMonthCents: number;
 }
 
 /**
@@ -227,9 +245,13 @@ export interface ColdstoreApi {
   onVaultStatus(listener: (status: VaultStatus) => void): () => void;
   /** Current subscription entitlement — for first paint before any push arrives. */
   getEntitlement(): Promise<EntitlementStatus>;
-  /** Start a subscription checkout: opens Paddle checkout in the system browser and polls until the
-   * webhook marks the subscription active (watch {@link onEntitlement}). Rejects if checkout can't start. */
-  subscribe(): Promise<void>;
+  /** The sellable plan catalog for the subscribe picker, fetched live from the billing server.
+   * Rejects when the server is unreachable — the picker shows a retryable error, never a stale list. */
+  getPlanCatalog(): Promise<CatalogPlan[]>;
+  /** Start a subscription checkout for the chosen plan: opens Paddle checkout in the system browser
+   * and polls until the webhook marks the subscription active (watch {@link onEntitlement}).
+   * Rejects if checkout can't start. */
+  subscribe(priceId: string): Promise<void>;
   /** Subscribe to entitlement changes. */
   onEntitlement(listener: (status: EntitlementStatus) => void): () => void;
   /** Current auto-update status — for first paint before any {@link onUpdateStatus} push arrives.

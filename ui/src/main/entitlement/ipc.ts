@@ -5,7 +5,8 @@ import type { EntitlementManager } from "./manager.ts";
 
 export const registerEntitlementIpc = (entitlement: EntitlementManager): (() => void) => {
   ipcMain.handle(IPC.entitlementStatus, () => entitlement.entitlementStatus());
-  ipcMain.handle(IPC.entitlementSubscribe, () => entitlement.subscribe());
+  ipcMain.handle(IPC.entitlementCatalog, () => entitlement.getCatalog());
+  ipcMain.handle(IPC.entitlementSubscribe, (_e, priceId: string) => entitlement.subscribe(priceId));
 
   const offStatus = entitlement.onStatus((s) => {
     for (const win of BrowserWindow.getAllWindows()) win.webContents.send(IPC.entitlementStatusChanged, s);
@@ -13,6 +14,7 @@ export const registerEntitlementIpc = (entitlement: EntitlementManager): (() => 
 
   return () => {
     ipcMain.removeHandler(IPC.entitlementStatus);
+    ipcMain.removeHandler(IPC.entitlementCatalog);
     ipcMain.removeHandler(IPC.entitlementSubscribe);
     offStatus();
   };

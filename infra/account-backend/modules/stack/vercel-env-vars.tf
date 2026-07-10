@@ -14,22 +14,25 @@ locals {
   # TF-managed: infra outputs + fully-determined-by-env values, always overwritten, never
   # secret. PADDLE_ENVIRONMENT is here (not a manual secret) because it's not external
   # secret material — it's fully determined by which stack this is.
-  # PADDLE_PRICE_ID + PADDLE_CLIENT_TOKEN are non-secret (both are exposed at checkout by design) but
-  # their values aren't TF-derivable — per-stack Paddle catalog/auth ids — so they're variables folded
-  # in here, and only when set (empty ⇒ omit the env var entirely rather than ship a blank one).
+  # PADDLE_CLIENT_TOKEN is non-secret (exposed at checkout by design) but its value isn't
+  # TF-derivable — a per-stack Paddle auth id — so it's a variable folded in here, and only
+  # when set (empty ⇒ omit the env var entirely rather than ship a blank one).
   tf_managed = merge({
     AWS_ROLE_ARN                = aws_iam_role.vercel.arn
     AWS_REGION                  = var.aws_region
     COGNITO_USER_POOL_ID        = var.cognito_user_pool_id
     COGNITO_USER_POOL_CLIENT_ID = var.cognito_user_pool_client_id
     PADDLE_ENVIRONMENT          = local.is_prod ? "production" : "sandbox"
-  }, var.paddle_price_id != "" ? { PADDLE_PRICE_ID = var.paddle_price_id } : {},
-    var.paddle_client_token != "" ? { PADDLE_CLIENT_TOKEN = var.paddle_client_token } : {})
+  }, var.paddle_client_token != "" ? { PADDLE_CLIENT_TOKEN = var.paddle_client_token } : {})
 
   # terraform.md env-var-ownership, applied verbatim (not the git_branch approach an earlier
   # version of this file used — reverted, see PROD.md Phase 4 for why): prod-only ⇒ all 3
   # targets (preview/dev need real values too); prod-with-staging ⇒ production only; staging
   # ⇒ preview+development, scoped to ITS custom environment via custom_environment_ids below.
+  #
+  # (PADDLE_PRICE_ID used to live here — retired 2026-07-10 with the multi-plan picker: the
+  # backend now sells only priceIds it finds in the live Paddle catalog, so there's no
+  # per-stack default price to configure.)
   # "devs `vercel env pull` the development target for local dev" is the convention's own
   # reasoning — this is a stack-wide pattern other Adpharm projects rely on, even though
   # account-backend's own Taskfile currently fills .env by hand instead.

@@ -65,11 +65,9 @@ must be approved first in **Paddle → Catalog → Taxable categories**.
 
 ## Wiring status
 
-- **Single-price checkout (today):** `checkout-session.ts` sells one `PADDLE_PRICE_ID`, TF-managed
-  per-stack — both stacks point at their environment's canonical **500 GB · 1yr** price
-  (`infra/account-backend/live/{production,staging}/terragrunt.hcl`). Change that one line +
-  `terragrunt apply` + a **Vercel redeploy** for a different default — env-var changes only reach
-  the running app on deploy.
+- **Multi-plan checkout (2026-07-10):** `checkout-session.ts` sells whichever `priceId` the app
+  sends, validated against the live catalog served by `GET /catalog` — no per-stack default price
+  exists anymore (`PADDLE_PRICE_ID` retired from TF + the env schema; see "Multi-plan picker" below).
 - **Client-side tokens: DONE, both environments** (minted via `task backend:paddle:client-token`,
   idempotent). Values live in TF: `infra/site` `PUBLIC_PADDLE_CLIENT_TOKEN` + `infra/account-backend`
   `paddle_client_token`, production & staging. Empty ⇒ `/checkout` errors.
@@ -95,11 +93,18 @@ HMAC webhook verification (no permission needed). Required scope:
   picker below), so shipping it won't repeat the war story.
 
 Nothing else. If the key was created with an expiry, note the rotation date here when it's known.
-## Multi-plan picker — decided spec (TODO, deferred)
+## Multi-plan picker — BUILT ✅ (2026-07-10, per this spec)
 
-Today's checkout sells one fixed plan (`PADDLE_PRICE_ID`). The picker lets a signed-in user choose
-size × term and check out the right one of the 12 prices. Build it as one unit across four layers —
-it can't ship half-built without breaking the current single-price checkout.
+The picker lets a signed-in user choose size × term and check out the right one of the 12 prices.
+Built as one unit across all four layers below (it couldn't ship half-built without breaking the
+old single-price checkout — which is now gone: `PADDLE_PRICE_ID` is deleted from the backend env
+schema and retired from TF). Code map: backend `src/catalog.ts` (pure mapping + tests) /
+`src/catalog.server.ts` (TTL cache) / `src/routes/catalog.ts` + the `priceId` validation in
+`src/routes/checkout-session.ts`; app `EntitlementManager.getCatalog()`/`subscribe(priceId)` →
+IPC `entitlement:catalog` → `SubscribeModal`. **Still pending: the TF apply (0/0/1 destroy of
+`PADDLE_PRICE_ID` per stack), deploy, and Ben's on-Mac visual + sandbox checkout verify.**
+
+The decided spec, kept for reference (what's built matches it):
 
 **UX** (in `ui/.../SubscribeModal.tsx`, DS-bound):
 - **Size** = three cards (the weighty choice), each showing size + neutral per-year base price

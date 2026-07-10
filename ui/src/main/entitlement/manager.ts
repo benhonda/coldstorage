@@ -10,7 +10,7 @@
  * backend entitlement route). Browse/restore stay available unsubscribed — you can always get data back.
  */
 import { shell } from "electron";
-import type { EntitlementStatus } from "../../shared/ipc.ts";
+import type { CatalogPlan, EntitlementStatus } from "../../shared/ipc.ts";
 
 /** How long checkout polling runs before giving up (checkout + webhook delivery); and the gap between polls. */
 const POLL_TIMEOUT_MS = 3 * 60 * 1000;
@@ -67,8 +67,22 @@ export class EntitlementManager {
     this.setStatus({ known: false, active: false, checkingOut: false, error: null });
   }
 
-  /** Open Paddle checkout in the system browser, then poll until the webhook marks the sub active. */
-  async subscribe(): Promise<void> {
+  /**
+   * The sellable plan catalog for the picker — fetched live (no cache here; the backend holds a
+   * short-TTL one), so a reopened modal can recover from a transient failure by refetching.
+   */
+  async getCatalog(): Promise<CatalogPlan[]> {
+    const res = await fetchJson(`${this.baseUrl}/catalog`, {});
+    const body: unknown = await res.json().catch(() => null);
+    const plans = typeof body === "object" && body !== null ? (body as Record<string, unknown>).plans : undefined;
+    if (!res.ok || !Array.isArray(plans)) {
+      throw new Error(`couldn't load the plans: http ${res.status}`);
+    }
+    return plans as CatalogPlan[];
+  }
+
+  /** Open Paddle checkout for the chosen plan in the system browser, then poll until the webhook marks the sub active. */
+  async subscribe(priceId: string): Promise<void> {
     if (this.status.active) return;
     const idToken = await this.getIdToken();
     if (!idToken) throw new Error("sign in first");
@@ -77,7 +91,7 @@ export class EntitlementManager {
       const res = await fetchJson(`${this.baseUrl}/checkout-session`, {
         method: "POST",
         headers: { Authorization: `Bearer ${idToken}`, "Content-Type": "application/json" },
-        body: "{}",
+        body: JSON.stringify({ priceId }),
       });
       const body: unknown = await res.json().catch(() => null);
       if (!res.ok || typeof body !== "object" || body === null || typeof (body as Record<string, unknown>).url !== "string") {

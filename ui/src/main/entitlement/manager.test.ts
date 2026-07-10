@@ -41,25 +41,42 @@ describe("EntitlementManager.refresh", () => {
 });
 
 describe("EntitlementManager.subscribe", () => {
-  test("opens the returned checkout URL in the browser", async () => {
-    const calls: string[] = [];
-    globalThis.fetch = mock((url: string) => {
-      calls.push(url);
+  test("posts the chosen priceId and opens the returned checkout URL in the browser", async () => {
+    const calls: { url: string; body: string | undefined }[] = [];
+    globalThis.fetch = mock((url: string, init?: RequestInit) => {
+      calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
       if (url.endsWith("/checkout-session")) return Promise.resolve(jsonResponse(200, { url: "https://pay.paddle.test/abc" }));
       return Promise.resolve(jsonResponse(200, { active: false })); // the poll
     }) as unknown as typeof fetch;
     const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
-    await m.subscribe();
-    expect(calls[0]).toBe("https://api.test/checkout-session");
+    await m.subscribe("pri_1tb_1yr");
+    expect(calls[0]).toEqual({ url: "https://api.test/checkout-session", body: JSON.stringify({ priceId: "pri_1tb_1yr" }) });
     expect(opened).toEqual(["https://pay.paddle.test/abc"]);
     expect(m.entitlementStatus().checkingOut).toBe(true); // polling started
   });
 
   test("a checkout-session error surfaces and rejects", async () => {
-    globalThis.fetch = mock(() => Promise.resolve(jsonResponse(500, { message: "set PADDLE_PRICE_ID" }))) as unknown as typeof fetch;
+    globalThis.fetch = mock(() => Promise.resolve(jsonResponse(400, { message: "unknown priceId" }))) as unknown as typeof fetch;
     const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
-    await expect(m.subscribe()).rejects.toThrow(/PADDLE_PRICE_ID/);
+    await expect(m.subscribe("pri_bogus")).rejects.toThrow(/unknown priceId/);
     expect(opened).toHaveLength(0);
-    expect(m.entitlementStatus().error).toContain("PADDLE_PRICE_ID");
+    expect(m.entitlementStatus().error).toContain("unknown priceId");
+  });
+});
+
+describe("EntitlementManager.getCatalog", () => {
+  test("returns the plans array from GET /catalog", async () => {
+    const plans = [{ size: "1 TB", years: 1, priceId: "pri_1tb_1yr", amountCents: 1899, perMonthCents: 158 }];
+    globalThis.fetch = mock((url: string) =>
+      url.endsWith("/catalog") ? Promise.resolve(jsonResponse(200, { plans })) : Promise.reject(new Error("unexpected url")),
+    ) as unknown as typeof fetch;
+    const m = new EntitlementManager("https://api.test", () => Promise.resolve(null));
+    expect(await m.getCatalog()).toEqual(plans);
+  });
+
+  test("a catalog error rejects with a user-facing message (no stale/empty list)", async () => {
+    globalThis.fetch = mock(() => Promise.resolve(jsonResponse(502, { message: "plan catalog unavailable" }))) as unknown as typeof fetch;
+    const m = new EntitlementManager("https://api.test", () => Promise.resolve(null));
+    await expect(m.getCatalog()).rejects.toThrow(/couldn't load the plans/);
   });
 });
