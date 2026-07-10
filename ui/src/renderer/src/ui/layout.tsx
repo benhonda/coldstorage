@@ -22,11 +22,14 @@ export const Sidebar = ({
   active,
   onNavigate,
   footer,
+  account,
 }: {
   items: NavItem[];
   active: string;
   onNavigate: (id: string) => void;
   footer?: ReactNode;
+  /** The pinned account card (very bottom, below the status footer) — multi-user installs only. */
+  account?: ReactNode;
 }): React.JSX.Element => (
   <aside className="cs-sidebar">
     <div className="cs-brand">
@@ -53,6 +56,7 @@ export const Sidebar = ({
     </nav>
     <div className="cs-nav-spacer" />
     <div className="cs-foot">{footer}</div>
+    {account}
   </aside>
 );
 

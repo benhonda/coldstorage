@@ -10,7 +10,7 @@
  * backend entitlement route). Browse/restore stay available unsubscribed — you can always get data back.
  */
 import { shell } from "electron";
-import type { CatalogPlan, EntitlementStatus } from "../../shared/ipc.ts";
+import type { CatalogPlan, EntitlementStatus, ManagePage, PlanChangePreview, SubscriptionInfo } from "../../shared/ipc.ts";
 
 /** How long checkout polling runs before giving up (checkout + webhook delivery); and the gap between polls. */
 const POLL_TIMEOUT_MS = 3 * 60 * 1000;
@@ -79,6 +79,60 @@ export class EntitlementManager {
       throw new Error(`couldn't load the plans: http ${res.status}`);
     }
     return plans as CatalogPlan[];
+  }
+
+  /** An authenticated JSON call against the billing server; parses the body and throws its `message` on failure. */
+  private async authedJson<T>(path: string, init?: RequestInit): Promise<{ res: Response; body: T }> {
+    const idToken = await this.getIdToken();
+    if (!idToken) throw new Error("sign in first");
+    const res = await fetchJson(`${this.baseUrl}${path}`, {
+      ...init,
+      headers: { Authorization: `Bearer ${idToken}`, "Content-Type": "application/json", ...init?.headers },
+    });
+    const body = (await res.json().catch(() => null)) as T;
+    return { res, body };
+  }
+
+  /** The live subscription summary (plan badge + manage surface). Null = never subscribed (404). */
+  async getSubscription(): Promise<SubscriptionInfo | null> {
+    const { res, body } = await this.authedJson<{ subscription?: SubscriptionInfo; message?: string }>("/subscription");
+    if (res.status === 404) return null;
+    if (!res.ok || !body?.subscription) throw new Error(body?.message ?? `couldn't load the subscription: http ${res.status}`);
+    return body.subscription;
+  }
+
+  /** Preview what changing to `priceId` charges (or credits) right now. Read-only. */
+  async previewPlanChange(priceId: string): Promise<PlanChangePreview> {
+    const { res, body } = await this.authedJson<PlanChangePreview & { message?: string }>("/subscription/change/preview", {
+      method: "POST",
+      body: JSON.stringify({ priceId }),
+    });
+    if (!res.ok) throw new Error(body?.message ?? `couldn't preview the change: http ${res.status}`);
+    return body;
+  }
+
+  /** Apply the plan change (prorated immediately), then re-check entitlement. */
+  async changePlan(priceId: string): Promise<SubscriptionInfo> {
+    const { res, body } = await this.authedJson<{ subscription?: SubscriptionInfo; message?: string }>("/subscription/change", {
+      method: "POST",
+      body: JSON.stringify({ priceId }),
+    });
+    if (!res.ok || !body?.subscription) throw new Error(body?.message ?? `couldn't change the plan: http ${res.status}`);
+    void this.refresh();
+    return body.subscription;
+  }
+
+  /** Open a Paddle-HOSTED management page in the system browser. Fetched fresh — the URLs are
+   * session-ish links off the live subscription entity, not stable enough to cache. */
+  async openManage(page: ManagePage): Promise<void> {
+    const { res, body } = await this.authedJson<{
+      subscription?: { cancelUrl: string | null; updatePaymentMethodUrl: string | null };
+      message?: string;
+    }>("/subscription");
+    if (!res.ok || !body?.subscription) throw new Error(body?.message ?? `couldn't load the subscription: http ${res.status}`);
+    const url = page === "cancel" ? body.subscription.cancelUrl : body.subscription.updatePaymentMethodUrl;
+    if (!url) throw new Error(page === "cancel" ? "no cancel page available" : "no payment page available");
+    await shell.openExternal(url);
   }
 
   /** Open Paddle checkout for the chosen plan in the system browser, then poll until the webhook marks the sub active. */

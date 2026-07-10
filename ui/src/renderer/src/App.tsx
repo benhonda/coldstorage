@@ -13,12 +13,12 @@ import { useEffect, useMemo, useState } from "react";
 import { Icon, IconButton } from "./ui/primitives.tsx";
 import { Sidebar, type NavItem } from "./ui/layout.tsx";
 import type { Store } from "./state/store.ts";
-import type { ColdstoreApi, ConnectionState } from "../../shared/ipc.ts";
+import type { ColdstoreApi, ConnectionState, SubscriptionInfo } from "../../shared/ipc.ts";
 import type { Exec } from "./views/types.ts";
 import { useAppState } from "./useStore.ts";
 import { useResizable } from "./ui/useResizable.ts";
 import { useFiles } from "./views/files/useFiles.ts";
-import { fileFromJournal, isFolderMarker, formatBytes, totalBytes } from "./views/files/model.ts";
+import { fileFromJournal, isFolderMarker, totalBytes } from "./views/files/model.ts";
 import { GettingBackPanel } from "./views/files/GettingBackPanel.tsx";
 import { FailuresPanel } from "./views/files/FailuresPanel.tsx";
 import type { BlobFailure } from "./state/reducer.ts";
@@ -27,6 +27,7 @@ import { SettingsView, type SettingsApi } from "./views/SettingsView.tsx";
 import { SignInView } from "./views/SignInView.tsx";
 import { RecoveryCodeShow, RecoveryCodeEnter, VaultGate } from "./views/RecoveryCodeView.tsx";
 import { SubscribeModal } from "./views/SubscribeModal.tsx";
+import { AccountCard } from "./views/AccountCard.tsx";
 import { UpdateBanner } from "./views/UpdateBanner.tsx";
 
 /** Plain status when the background uploader isn't connected — no "daemon" jargon, quiet when healthy. */
@@ -68,6 +69,26 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   useEffect(() => {
     if (state.entitlement.active) setPaywallOpen(false);
   }, [state.entitlement.active]);
+
+  // The live subscription summary (plan badge + Settings manage surface). Refetched on sign-in and
+  // whenever the entitlement flips (a checkout just landed / a cancellation took effect). Best-effort:
+  // a fetch failure just leaves the badge on its entitlement fallback — never an error surface here.
+  const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
+  const signedIn = state.auth.configured && state.auth.state === "signedIn";
+  useEffect(() => {
+    if (!signedIn) {
+      setSubscription(null);
+      return;
+    }
+    let alive = true;
+    api
+      .getSubscription()
+      .then((s) => alive && setSubscription(s))
+      .catch(() => alive && setSubscription(null));
+    return () => {
+      alive = false;
+    };
+  }, [api, signedIn, state.entitlement.active]);
 
   const exec: Exec = (fn) => {
     setCmdError(null);
@@ -114,10 +135,6 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           {notRunning}
         </div>
       )}
-      <div className="cs-store">
-        <Icon name="cloud_done" size={16} />
-        {formatBytes(vaultBytes)} stored
-      </div>
       {gettingBack.length > 0 && (
         <button
           type="button"
@@ -215,7 +232,22 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
 
   return (
     <div className="cs-shell" style={{ gridTemplateColumns: `${sidebarWidth}px 1fr` }}>
-      <Sidebar items={NAV} active={route} onNavigate={(id) => isRoute(id) && setRoute(id)} footer={footer} />
+      <Sidebar
+        items={NAV}
+        active={route}
+        onNavigate={(id) => isRoute(id) && setRoute(id)}
+        footer={footer}
+        account={
+          signedIn && state.auth.email ? (
+            <AccountCard
+              email={state.auth.email}
+              subscription={subscription}
+              active={state.entitlement.active}
+              onClick={() => setRoute("settings")}
+            />
+          ) : undefined
+        }
+      />
       <div
         className="cs-resizer"
         style={{ left: sidebarWidth }}
@@ -260,6 +292,8 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           auth={state.auth}
           entitlement={state.entitlement}
           onSubscribe={() => setPaywallOpen(true)}
+          subscription={subscription}
+          onSubscriptionChanged={setSubscription}
         />
       )}
 

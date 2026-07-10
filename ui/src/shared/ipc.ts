@@ -77,6 +77,14 @@ export const IPC = {
   entitlementCatalog: "entitlement:catalog",
   /** invoke: start a subscription checkout for a chosen plan `(priceId)` (opens the system browser + polls). */
   entitlementSubscribe: "entitlement:subscribe",
+  /** invoke: the live subscription summary `(→ SubscriptionInfo | null)` — plan badge + manage surface. */
+  entitlementSubscription: "entitlement:subscription",
+  /** invoke: preview a plan change `(priceId → PlanChangePreview)` — what Paddle charges/credits now. */
+  entitlementPreviewChange: "entitlement:previewChange",
+  /** invoke: apply a plan change `(priceId → SubscriptionInfo)` — prorated immediately. */
+  entitlementChangePlan: "entitlement:changePlan",
+  /** invoke: open a Paddle-HOSTED management page `("cancel" | "payment")` in the system browser. */
+  entitlementOpenManage: "entitlement:openManage",
   /** push: the entitlement status changed, `(status)`. */
   entitlementStatusChanged: "entitlement:statusChanged",
   /** invoke: current {@link UpdateStatus} — for first paint before any push arrives. */
@@ -159,6 +167,33 @@ export interface CatalogPlan {
   /** Server-derived per-month equivalent in cents — display only. */
   perMonthCents: number;
 }
+
+/**
+ * The live subscription, summarized by the backend against the catalog (`GET /subscription`) —
+ * what the sidebar plan badge and the Settings manage surface render. Null = never subscribed.
+ */
+export interface SubscriptionInfo {
+  /** Paddle subscription status ("active", "paused", "past_due", …) — display only; the
+   * deposit gate stays {@link EntitlementStatus} (the webhook-fed source of truth). */
+  status: string;
+  /** The catalog plan this subscription is on — null for an off-catalog (legacy) price. */
+  plan: CatalogPlan | null;
+  nextBilledAt: string | null;
+  /** Set when a cancellation is scheduled — the ISO date the subscription ends. */
+  cancelsAt: string | null;
+}
+
+/** What a plan change does to money RIGHT NOW (Paddle previewUpdate, prorated immediately). */
+export interface PlanChangePreview {
+  /** "charge" = pay the difference now; "credit" = balance applied to future bills. */
+  action: "charge" | "credit";
+  amountCents: number;
+  currency: string;
+  nextBilledAt: string | null;
+}
+
+/** The Paddle-hosted management pages the app can open (in the system browser). */
+export type ManagePage = "cancel" | "payment";
 
 /**
  * Auto-update status (PROD.md Phase 6), pushed from main. The packaged app checks a GitHub Releases feed
@@ -252,6 +287,14 @@ export interface ColdstoreApi {
    * and polls until the webhook marks the subscription active (watch {@link onEntitlement}).
    * Rejects if checkout can't start. */
   subscribe(priceId: string): Promise<void>;
+  /** The live subscription summary — null when this account never subscribed. */
+  getSubscription(): Promise<SubscriptionInfo | null>;
+  /** Preview what changing to `priceId` charges (or credits) right now, before committing. */
+  previewPlanChange(priceId: string): Promise<PlanChangePreview>;
+  /** Change the subscription to `priceId` (prorated immediately). Resolves to the new summary. */
+  changePlan(priceId: string): Promise<SubscriptionInfo>;
+  /** Open a Paddle-hosted management page (cancel / update payment method) in the system browser. */
+  openManage(page: ManagePage): Promise<void>;
   /** Subscribe to entitlement changes. */
   onEntitlement(listener: (status: EntitlementStatus) => void): () => void;
   /** Current auto-update status — for first paint before any {@link onUpdateStatus} push arrives.

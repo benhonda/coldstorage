@@ -60,6 +60,10 @@ const api: ColdstoreApi = {
   getEntitlement: () => ipcRenderer.invoke(IPC.entitlementStatus),
   getPlanCatalog: () => ipcRenderer.invoke(IPC.entitlementCatalog),
   subscribe: (priceId: string) => ipcRenderer.invoke(IPC.entitlementSubscribe, priceId),
+  getSubscription: () => ipcRenderer.invoke(IPC.entitlementSubscription),
+  previewPlanChange: (priceId: string) => ipcRenderer.invoke(IPC.entitlementPreviewChange, priceId),
+  changePlan: (priceId: string) => ipcRenderer.invoke(IPC.entitlementChangePlan, priceId),
+  openManage: (page) => ipcRenderer.invoke(IPC.entitlementOpenManage, page),
   onEntitlement: (listener) => {
     const handler = (_e: IpcRendererEvent, status: unknown): void =>
       (listener as (s: unknown) => void)(status);

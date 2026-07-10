@@ -93,6 +93,27 @@ HMAC webhook verification (no permission needed). Required scope:
   picker below), so shipping it won't repeat the war story.
 
 Nothing else. If the key was created with an expiry, note the rotation date here when it's known.
+## Managing a subscription — BUILT ✅ (2026-07-10)
+
+The account card's manage surface (sidebar bottom-left → Settings ▸ Account). Split of
+responsibilities, decided 2026-07-10:
+
+- **Cancel + update payment method → Paddle-HOSTED pages.** The subscription entity's
+  `managementUrls` (verified in the installed SDK types, `SubscriptionManagement`), fetched fresh
+  per click and opened in the system browser. Paddle is the MoR — its pages own the
+  confirm/effective-date/refund UX; we build none of it.
+- **Plan change (size/term) → in-app.** The same `PlanPicker` as checkout, seeded with the current
+  plan → `POST /subscription/change/preview` (Paddle `previewUpdate`) puts the money on the table
+  ("charged $X now" / "$X credit toward future bills") → `POST /subscription/change` applies with
+  `prorationBillingMode: "prorated_immediately"`. Price ids are catalog-validated like checkout.
+- **Current plan** → `GET /subscription`: live `subscriptions.get` summarized against the catalog
+  (status, plan, nextBilledAt, cancelsAt, management URLs). Nothing plan-shaped is duplicated into
+  the DB — the row only supplies the subscription id; `subscriptionActive` stays webhook-fed.
+
+Code map: backend `src/routes/subscription.ts`; app `EntitlementManager.{getSubscription,
+previewPlanChange,changePlan,openManage}` → IPC `entitlement:{subscription,previewChange,
+changePlan,openManage}` → `AccountCard` (sidebar) + Settings ▸ Account rows + `ChangePlanModal`.
+
 ## Multi-plan picker — BUILT ✅ (2026-07-10, per this spec)
 
 The picker lets a signed-in user choose size × term and check out the right one of the 12 prices.

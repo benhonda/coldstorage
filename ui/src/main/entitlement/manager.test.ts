@@ -64,6 +64,39 @@ describe("EntitlementManager.subscribe", () => {
   });
 });
 
+describe("EntitlementManager subscription surface", () => {
+  const sub = { status: "active", plan: { size: "1 TB", years: 1, priceId: "pri_1", amountCents: 1899, perMonthCents: 158 }, nextBilledAt: "2027-07-10T00:00:00Z", cancelsAt: null, cancelUrl: "https://paddle.test/cancel", updatePaymentMethodUrl: "https://paddle.test/pay" };
+
+  test("getSubscription returns the summary; 404 means never subscribed (null)", async () => {
+    globalThis.fetch = mock(() => Promise.resolve(jsonResponse(200, { subscription: sub }))) as unknown as typeof fetch;
+    const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
+    expect(await m.getSubscription()).toMatchObject({ status: "active", plan: { size: "1 TB" } });
+
+    globalThis.fetch = mock(() => Promise.resolve(jsonResponse(404, { message: "no subscription on this account" }))) as unknown as typeof fetch;
+    expect(await m.getSubscription()).toBeNull();
+  });
+
+  test("changePlan posts the priceId and returns the fresh summary", async () => {
+    const calls: { url: string; body: string | undefined }[] = [];
+    globalThis.fetch = mock((url: string, init?: RequestInit) => {
+      calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
+      if (url.endsWith("/subscription/change")) return Promise.resolve(jsonResponse(200, { subscription: { ...sub, plan: { ...sub.plan, size: "2 TB" } } }));
+      return Promise.resolve(jsonResponse(200, { active: true })); // the post-change refresh
+    }) as unknown as typeof fetch;
+    const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
+    const changed = await m.changePlan("pri_2tb");
+    expect(calls[0]).toEqual({ url: "https://api.test/subscription/change", body: JSON.stringify({ priceId: "pri_2tb" }) });
+    expect(changed.plan?.size).toBe("2 TB");
+  });
+
+  test("openManage fetches fresh and opens the right hosted page", async () => {
+    globalThis.fetch = mock(() => Promise.resolve(jsonResponse(200, { subscription: sub }))) as unknown as typeof fetch;
+    const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
+    await m.openManage("cancel");
+    expect(opened).toEqual(["https://paddle.test/cancel"]);
+  });
+});
+
 describe("EntitlementManager.getCatalog", () => {
   test("returns the plans array from GET /catalog", async () => {
     const plans = [{ size: "1 TB", years: 1, priceId: "pri_1tb_1yr", amountCents: 1899, perMonthCents: 158 }];

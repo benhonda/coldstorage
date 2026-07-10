@@ -6,7 +6,8 @@
  * daemon's pricing rate card).
  */
 import { useState } from "react";
-import type { AuthStatus, EntitlementStatus, Pricing, Source } from "../../../shared/ipc.ts";
+import type { AuthStatus, EntitlementStatus, Pricing, Source, SubscriptionInfo } from "../../../shared/ipc.ts";
+import { ChangePlanModal } from "./ChangePlanModal.tsx";
 import type { ViewProps } from "./types.ts";
 import type { ArchivedFile } from "./files/model.ts";
 import { baseName, formatBytes } from "./files/model.ts";
@@ -47,6 +48,8 @@ export const SettingsView = ({
   auth,
   entitlement,
   onSubscribe,
+  subscription,
+  onSubscriptionChanged,
 }: ViewProps & {
   /** Sign-in status (Phase 5). The account card renders only for a configured (multi-user) install —
    * dogfood mode has no account to show. */
@@ -54,6 +57,9 @@ export const SettingsView = ({
   /** Subscription status (Phase 5c) + a subscribe entry point (non-deposit path to checkout). */
   entitlement: EntitlementStatus;
   onSubscribe: () => void;
+  /** The live subscription summary (null = never subscribed) + how to record a plan change. */
+  subscription: SubscriptionInfo | null;
+  onSubscriptionChanged: (sub: SubscriptionInfo) => void;
   sources: Source[];
   /** A scan is in flight — the LIVE run state (`state.run.active`), folded from runStarted/runFinished.
    * NOT `status.running`, which only updates on a getStatus poll and so never flips during a quick run. */
@@ -68,9 +74,13 @@ export const SettingsView = ({
   const [pattern, setPattern] = useState("");
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuEntry[] } | null>(null);
   const [removing, setRemoving] = useState<Source | null>(null);
+  const [changingPlan, setChangingPlan] = useState(false);
 
   /** Shorten a macOS home path for display: /Users/ben/Downloads/x → ~/Downloads/x (full path on hover). */
   const tildify = (p: string): string => p.replace(/^\/Users\/[^/]+\//, "~/");
+  /** ISO date → "Jan 3, 2027" for the renews/ends lines. */
+  const shortDate = (iso: string): string =>
+    new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
   /** Destination as breadcrumb text: "Backups/Photos" → "My Files / Backups / Photos". */
   const dest = (m: string): string => ["My Files", ...m.split("/").filter(Boolean)].join(" / ");
 
@@ -270,11 +280,36 @@ export const SettingsView = ({
           }
         >
           <KeyValueRow label="Signed in as" value={auth.email ?? "—"} />
+          {subscription && (
+            <KeyValueRow
+              label="Plan"
+              value={
+                <span className="cs-plan-row">
+                  {subscription.plan ? (
+                    <Badge tone="accent">
+                      {subscription.plan.size} · {subscription.plan.years} yr{subscription.plan.years > 1 ? "s" : ""}
+                    </Badge>
+                  ) : (
+                    // A price that predates the current plan lineup (e.g. sold before a catalog
+                    // reshape) — still fully changeable; the picker just starts from the default.
+                    <Badge tone="neutral">Earlier plan</Badge>
+                  )}
+                  <Button size="sm" icon="swap_horiz" onClick={() => setChangingPlan(true)}>
+                    Change plan
+                  </Button>
+                </span>
+              }
+            />
+          )}
           <KeyValueRow
             label="Subscription"
             value={
-              entitlement.active ? (
-                <Badge tone="success" icon="check">Active</Badge>
+              subscription?.cancelsAt ? (
+                <Badge tone="warning" icon="event">Ends {shortDate(subscription.cancelsAt)}</Badge>
+              ) : entitlement.active ? (
+                <Badge tone="success" icon="check">
+                  {subscription?.nextBilledAt ? `Active · renews ${shortDate(subscription.nextBilledAt)}` : "Active"}
+                </Badge>
               ) : (
                 <Button size="sm" onClick={onSubscribe}>
                   {entitlement.checkingOut ? "Finishing…" : "Subscribe"}
@@ -282,7 +317,33 @@ export const SettingsView = ({
               )
             }
           />
+          {subscription && (
+            <KeyValueRow
+              label="Billing"
+              value={
+                <span className="cs-plan-row">
+                  <Button size="sm" icon="credit_card" onClick={() => exec(() => api.openManage("payment"))}>
+                    Update payment method
+                  </Button>
+                  {!subscription.cancelsAt && (
+                    <Button size="sm" icon="cancel" onClick={() => exec(() => api.openManage("cancel"))}>
+                      Cancel subscription
+                    </Button>
+                  )}
+                </span>
+              }
+            />
+          )}
         </Card>
+      )}
+
+      {changingPlan && subscription && (
+        <ChangePlanModal
+          api={api}
+          current={subscription}
+          onChanged={onSubscriptionChanged}
+          onClose={() => setChangingPlan(false)}
+        />
       )}
     </Page>
   );

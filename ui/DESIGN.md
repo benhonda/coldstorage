@@ -184,8 +184,13 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   checkout in the system browser → poll until the webhook flips active). Renderer sees only
   `EntitlementStatus` + `CatalogPlan[]`. A SOFT gate on DEPOSITS (not browse/restore): `MyFilesView`'s
   deposit paths bail to `views/SubscribeModal.tsx` when unsubscribed — the multi-plan picker
-  (PADDLE.md spec: size cards × term row, fetched live, never hardcoded); Settings shows the state.
-  `coldstorage://checkout-complete` is a check-now nudge.
+  (PADDLE.md spec: size cards × term row, fetched live, never hardcoded; the picker itself is the
+  shared `views/PlanPicker.tsx`); Settings shows the state. `coldstorage://checkout-complete` is a
+  check-now nudge. **Manage surface (2026-07-10, PADDLE.md "Managing a subscription"):**
+  `getSubscription()/previewPlanChange()/changePlan()/openManage()` → the sidebar's pinned
+  `views/AccountCard.tsx` (avatar · email · plan badge, click → Settings) + Settings ▸ Account
+  (plan row + `views/ChangePlanModal.tsx` with a proration preview; cancel/payment-method open
+  Paddle-hosted pages in the browser).
 - `src/renderer/src/styles/tokens/` — the 5 DS token CSS files **vendored verbatim** (SSOT — re-sync,
   don't hand-edit) from the coldstorage Design System (Claude Design `41ebafc1`), ported to native
   React 19 TSX (the DS's UMD/CDN runtime isn't consumable in electron-vite). Primitives in

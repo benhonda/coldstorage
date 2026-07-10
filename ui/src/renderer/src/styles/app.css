@@ -1115,3 +1115,44 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-plan-price { margin: var(--space-3) 0 0; font: var(--type-body); color: var(--text-secondary); }
 .cs-plan-price strong { font: var(--type-card-title); color: var(--text-primary); }
 .cs-plan-lock { margin: var(--space-1) 0 0; font: var(--type-label); color: var(--text-tertiary); }
+
+/* proration/status line under the picker (ChangePlanModal) + inline row of plan actions (Settings) */
+.cs-plan-now { margin: var(--space-2) 0 0; font: var(--type-label); color: var(--text-secondary); }
+.cs-plan-row { display: inline-flex; align-items: center; gap: var(--space-2); }
+
+/* ── sidebar account card (bottom-left — avatar · email · plan badge) ── */
+.cs-account {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-2);
+  padding: var(--space-2);
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+.cs-account:hover { background: var(--surface-hover); }
+.cs-account-avatar {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+  font: var(--type-label);
+  font-weight: var(--weight-medium);
+}
+.cs-account-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; align-items: flex-start; }
+.cs-account-email {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--type-label);
+  color: var(--text-primary);
+}
