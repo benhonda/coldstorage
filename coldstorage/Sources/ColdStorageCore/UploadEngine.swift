@@ -1,7 +1,7 @@
 import Foundation
 import Crypto
 
-/// Line to the daemon's stderr (→ `coldstored.err.log`, tailed by `task daemon:logs`). The portable Core
+/// Line to the daemon's stderr (→ `coldstored.err.log`, tailed by `task daemon:mac:logs`). The portable Core
 /// has no logger; upload faults are otherwise only emitted over the control socket, invisible at the daemon.
 private func log(_ message: String) {
     FileHandle.standardError.write(Data("\(message)\n".utf8))
@@ -69,7 +69,7 @@ public actor UploadEngine {
                 let files = blob.items.map { BlobFailure.File(id: $0.id, path: $0.relativePath) }
                 let kind = FailureKind.classify(error)
                 // Surface the REAL cause to the daemon log — `blobFailed` only travels over the socket to the UI,
-                // so without this an upload failure is invisible in `task daemon:logs`. Name the affected files.
+                // so without this an upload failure is invisible in `task daemon:mac:logs`. Name the affected files.
                 log("UploadEngine: blob \(blob.id) FAILED (\(kind.isPermanent ? "permanent" : "transient")): \(error) — \(files.count) file(s): \(files.map(\.path).joined(separator: ", "))")
                 failures.append(BlobFailure(blobId: blob.id, kind: kind, files: files))
                 try? FileManager.default.removeItem(at: stagingDir.appendingPathComponent(blob.id))   // don't leak a half-staged file

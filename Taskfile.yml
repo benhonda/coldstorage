@@ -8,24 +8,28 @@ output: prefixed
 #   daemon:*          → the Swift core / container dev loop (domain: coldstorage/)
 #   tf:coldstorage:*  → infra (domain: infra/coldstorage) — Terragrunt, ENV-scoped, shared first
 #
+# NAMING: tasks designed to run ON THE MAC (launchd/Keychain/codesign/Electron GUI/PhotoKit) carry a
+# `mac` segment right after their domain — `daemon:mac:*`, `ui:mac:*`. Everything else runs in the
+# devcontainer (or anywhere). `[devcontainer]` desc tags mark tasks that must NOT run on the Mac.
+#
 # THREE WAYS TO RUN `coldstored` — pick the one matching what you're doing, not all three at once:
 #
 #   1. DEV SANDBOX (fake AWS via MinIO — safe to break)
-#        daemon:run (or daemon:run:bg) + ui:dev
+#        daemon:run (or daemon:run:bg) + ui:mac:dev
 #        For changing Swift/UI code. Its own journal/socket under coldstorage/ — never touches the
-#        real vault; daemon:reset wipes it clean any time.
+#        real vault; daemon:mac:reset wipes it clean any time.
 #
 #   2. YOUR REAL BACKGROUND DAEMON (real AWS/Deep Archive, always-on)
-#        daemon:bootstrap (once) → then it just runs; drive/watch it via daemon:live / ui:live
+#        daemon:mac:bootstrap (once) → then it just runs; drive/watch it via daemon:mac:live / ui:mac:live
 #        A launchd LaunchAgent — starts at login, restarts on crash. This IS your day-to-day backup
 #        service. Leave it running; you don't re-bootstrap it to "start" it.
 #
 #   3. THE PACKAGED APP (what a real future customer downloads)
-#        ui:package (+ ui:package:sign-adhoc) → open the built ColdStorage.app → ui:package:doctor
+#        ui:mac:package (+ ui:mac:package:sign-adhoc) → open the built ColdStorage.app → ui:mac:package:doctor
 #        Bundles + spawns its OWN coldstored, Finder-launched with no shell env — tests the actual
 #        end-user experience (Photos permission grant, etc.), not day-to-day dogfooding.
 #        ⚠ COLLIDES with #2 — both use the SAME ~/Library/Application Support/ColdStorage (same
-#        socket/journal). `task daemon:uninstall` before testing this; `task daemon:bootstrap` again
+#        socket/journal). `task daemon:mac:uninstall` before testing this; `task daemon:mac:bootstrap` again
 #        afterward to bring your real daemon (#2) back. (Temporary: once packaging's background-run/
 #        Tray UX lands, the packaged app replaces #2 outright and this toggle goes away.)
 vars:
@@ -141,7 +145,7 @@ tasks:
         fi
 
   daemon:build:dev:
-    desc: "Build the Swift core — DEBUG, for the MinIO/test dev loop (any OS). First run fetches deps (a few minutes). For the prod release build, see daemon:install."
+    desc: "Build the Swift core — DEBUG, for the MinIO/test dev loop (any OS). First run fetches deps (a few minutes). For the prod release build, see daemon:mac:install."
     dir: coldstorage
     deps: [daemon:unlock] # clear a stale lock left by a previously-killed build
     cmds: [swift build]
@@ -195,8 +199,8 @@ tasks:
     cmds:
       - swift run coldstored
 
-  daemon:fsevents-test:
-    desc: "[macOS] Runtime-test the FSEvents FolderWatcher: runs coldstored vs MinIO with a 600s poll interval (so a prompt re-scan can ONLY be FSEvents, never the poll). Drop a file into coldstorage/testdata in Finder → expect a 'FolderWatcher: FSEvents fired' line + a runStarted→fileArchived→runFinished within ~1-2s. Watch events in another terminal with `task daemon:ctl -- watch`."
+  daemon:mac:fsevents-test:
+    desc: "Runtime-test the FSEvents FolderWatcher: runs coldstored vs MinIO with a 600s poll interval (so a prompt re-scan can ONLY be FSEvents, never the poll). Drop a file into coldstorage/testdata in Finder → expect a 'FolderWatcher: FSEvents fired' line + a runStarted→fileArchived→runFinished within ~1-2s. Watch events in another terminal with `task daemon:ctl -- watch`."
     dir: coldstorage
     deps: [daemon:minio, daemon:unlock] # unlock: clear a stale .build/.lock so the build can't wedge at 0% CPU
     vars:
@@ -226,16 +230,16 @@ tasks:
   # ── One-time dogfood→multi-user reset (decided 2026-07-02): instead of migrating the pre-auth
   #    archive (S3 re-prefix + journal rewrite + key rewrap), wipe it — the signed-in identity owns
   #    everything from day one. Two halves, both confirm-gated. Order: quit the app / uninstall the
-  #    daemon → reset:local (Mac) → reset:vault (devcontainer) → daemon:bootstrap → ui:live. ──
-  daemon:reset:local:
-    desc: "[macOS] DESTRUCTIVE: wipe the local archive state — the journal (file index + watched-folder registry), staging, status — for the Mode 2 data dir AND the dev sandbox. Keeps kek.bin, config.json, the app's sign-in session, and logs. Stop the daemon/app first."
+  #    daemon → reset:local (Mac) → reset:vault (devcontainer) → daemon:mac:bootstrap → ui:mac:live. ──
+  daemon:mac:reset:local:
+    desc: "DESTRUCTIVE: wipe the local archive state — the journal (file index + watched-folder registry), staging, status — for the Mode 2 data dir AND the dev sandbox. Keeps kek.bin, config.json, the app's sign-in session, and logs. Stop the daemon/app first."
     interactive: true
     vars:
       DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
     cmds:
       - |
         if pgrep -fl coldstored >/dev/null 2>&1; then
-          echo "✗ coldstored is running — stop it first (quit ColdStorage.app / task daemon:uninstall / task dev:stop)"; exit 1
+          echo "✗ coldstored is running — stop it first (quit ColdStorage.app / task daemon:mac:uninstall / task dev:stop)"; exit 1
         fi
         echo "This deletes the LOCAL archive index (files list + watched folders start empty):"
         echo "  {{.DATA_DIR}}/{coldstore.sqlite,status.json,staging/}"
@@ -247,8 +251,8 @@ tasks:
         rm -rf "{{.DATA_DIR}}/staging"
         echo "✓ local archive state wiped. Re-add watched folders in Settings after the next launch."
 
-  daemon:sim-new-device:
-    desc: "[macOS] Simulate signing in on a FRESH computer (PROD.md Phase 5b gate): delete this device's zero-knowledge MasterKey escrow (vault.json) so the next launch has no cached key and must prompt for the recovery code — proving the new-device unlock path without a second Mac. Keeps the sign-in session + the account's server-side key-blob, so it's a targeted 'forget my encryption key', not a full sign-out. QUIT the app first (it rewrites vault.json while running)."
+  daemon:mac:sim-new-device:
+    desc: "Simulate signing in on a FRESH computer (PROD.md Phase 5b gate): delete this device's zero-knowledge MasterKey escrow (vault.json) so the next launch has no cached key and must prompt for the recovery code — proving the new-device unlock path without a second Mac. Keeps the sign-in session + the account's server-side key-blob, so it's a targeted 'forget my encryption key', not a full sign-out. QUIT the app first (it rewrites vault.json while running)."
     vars:
       DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
     cmds:
@@ -349,16 +353,16 @@ tasks:
     cmds:
       - swift run coldstorectl coldstored.sock deposit src={{.SRC}} dest={{.DEST | default ""}} {{if .CONFLICTS}}'conflicts={{.CONFLICTS}}'{{end}}
 
-  daemon:logs:
-    desc: "[macOS] Tail the installed daemon's stdout+stderr logs (live). Shows PhotoKitResolver auth/resolve diagnostics, deposit errors, etc."
+  daemon:mac:logs:
+    desc: "Tail the installed daemon's stdout+stderr logs (live). Shows PhotoKitResolver auth/resolve diagnostics, deposit errors, etc."
     dir: coldstorage
     vars:
       DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
     cmds:
       - tail -n 40 -f "{{.DATA_DIR}}/coldstored.out.log" "{{.DATA_DIR}}/coldstored.err.log"
 
-  daemon:logs:clear:
-    desc: "[macOS] Truncate the installed daemon's logs in place — a clean slate before reproducing an issue, WITHOUT reinstalling. (daemon:install also resets them.) The daemon keeps writing to the same files."
+  daemon:mac:logs:clear:
+    desc: "Truncate the installed daemon's logs in place — a clean slate before reproducing an issue, WITHOUT reinstalling. (daemon:mac:install also resets them.) The daemon keeps writing to the same files."
     dir: coldstorage
     vars:
       DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
@@ -366,13 +370,13 @@ tasks:
       - ': > "{{.DATA_DIR}}/coldstored.out.log"; : > "{{.DATA_DIR}}/coldstored.err.log"'
       - 'echo "cleared daemon logs"'
 
-  daemon:reset-photos-tcc:
-    desc: "[macOS] Reset the daemon's Photos permission so the next depositPhotos re-prompts from scratch (use if you granted Limited instead of Full, or to re-test the grant). Derives the identifier from the signed binary, so it always matches the installed daemon."
+  daemon:mac:reset-photos-tcc:
+    desc: "Reset the daemon's Photos permission so the next depositPhotos re-prompts from scratch (use if you granted Limited instead of Full, or to re-test the grant). Derives the identifier from the signed binary, so it always matches the installed daemon."
     dir: coldstorage
     cmds:
       - |
         # The TCC grant keys to the binary's code-signing Identifier (pinned to com.theadpharm.coldstored in
-        # daemon:install) — read it straight from the binary so this can't drift. Also reset the old default
+        # daemon:mac:install) — read it straight from the binary so this can't drift. Also reset the old default
         # "coldstored" identifier, in case a pre-pinning grant is lingering. A "No such bundle identifier"
         # error just means there's no grant to clear (already reset / never granted) — not a failure.
         id=$(codesign -dv .build/release/coldstored 2>&1 | sed -n 's/^Identifier=//p')
@@ -382,8 +386,8 @@ tasks:
         done
         echo "done — the next photo deposit re-prompts; choose ALL Photos (Full), not Limited"
 
-  daemon:photo-picker:
-    desc: "[macOS] Run the native Photos picker helper standalone (no daemon, no UI) — opens the system picker and prints the selection as JSON {id, name} objects. Sanity-checks option B before wiring it through the UI."
+  daemon:mac:photo-picker:
+    desc: "Run the native Photos picker helper standalone (no daemon, no UI) — opens the system picker and prints the selection as JSON {id, name} objects. Sanity-checks option B before wiring it through the UI."
     dir: coldstorage
     cmds:
       - swift run coldstore-photo-picker
@@ -420,17 +424,17 @@ tasks:
       - "{{if .REMOVE}}swift run coldstorectl coldstored.sock removeExclude pattern={{.REMOVE}}{{end}}"
       - swift run coldstorectl coldstored.sock listExcludes
 
-  daemon:live:
-    desc: "[Mode 2: your real daemon] [macOS] Drive the INSTALLED launchd daemon (real prod AWS / Deep Archive), e.g. `task daemon:live -- getStatus` · `-- addSource path=/abs/dir` · `-- triggerNow` · `-- watch`. (daemon:ctl targets the dev/MinIO daemon instead.) Uses the release binary built by daemon:install."
+  daemon:mac:live:
+    desc: "[Mode 2: your real daemon] Drive the INSTALLED launchd daemon (real prod AWS / Deep Archive), e.g. `task daemon:mac:live -- getStatus` · `-- addSource path=/abs/dir` · `-- triggerNow` · `-- watch`. (daemon:ctl targets the dev/MinIO daemon instead.) Uses the release binary built by daemon:mac:install."
     dir: coldstorage
     vars:
       SOCK: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
     cmds:
-      - test -S "{{.SOCK}}" || { echo "no installed daemon socket at {{.SOCK}} — run task daemon:bootstrap first"; exit 1; }
+      - test -S "{{.SOCK}}" || { echo "no installed daemon socket at {{.SOCK}} — run task daemon:mac:bootstrap first"; exit 1; }
       - ./.build/release/coldstorectl "{{.SOCK}}" {{.CLI_ARGS | default "getStatus"}}
 
-  daemon:verify-aws:
-    desc: '[macOS] HEAD a single LIVE vault blob directly in S3 (bypasses the daemon) to confirm StorageClass=DEEP_ARCHIVE + see the Restore (thaw) status. BLOB=<blobId> (the hash from listFiles). Uses head-object, so it stays within the daemon''s least-priv GetObject grant (no ListBucket). Also the way to poll a thaw: re-run until Restore shows ongoing-request="false".'
+  daemon:mac:verify-aws:
+    desc: 'HEAD a single LIVE vault blob directly in S3 (bypasses the daemon) to confirm StorageClass=DEEP_ARCHIVE + see the Restore (thaw) status. BLOB=<blobId> (the hash from listFiles). Uses head-object, so it stays within the daemon''s least-priv GetObject grant (no ListBucket). Also the way to poll a thaw: re-run until Restore shows ongoing-request="false".'
     dir: coldstorage
     vars:
       CREDS: "{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
@@ -439,14 +443,14 @@ tasks:
         [ -f "{{.CREDS}}" ] && { set -a; . "{{.CREDS}}"; set +a; }
         bucket="${COLDSTORE_BUCKET:?missing COLDSTORE_BUCKET — run tf:coldstorage:creds-export in the devcontainer}"
         region="${AWS_REGION:-ca-central-1}"
-        blob="{{.BLOB}}"; : "${blob:?pass BLOB=<blobId> (the hash from task daemon:live -- listFiles)}"
+        blob="{{.BLOB}}"; : "${blob:?pass BLOB=<blobId> (the hash from task daemon:mac:live -- listFiles)}"
         echo "── HEAD s3://${bucket}/blobs/${blob} ──"
         aws s3api head-object --bucket "$bucket" --key "blobs/${blob}" \
           --query '{StorageClass:StorageClass,Size:ContentLength,Restore:Restore}' \
           --output table --profile coldstorage --region "$region"
 
-  daemon:restore-wait:
-    desc: "[macOS] Hands-off Deep Archive restore: re-fires `restore` against the INSTALLED daemon every INTERVAL until state=restored, then shows the recovered file. Start it and walk away (Glacier Standard thaw is ~12h). FILE=<id> OUT=<path> [TIER=standard] [INTERVAL=900]. Idempotent — re-issues no duplicate thaw while in progress."
+  daemon:mac:restore-wait:
+    desc: "Hands-off Deep Archive restore: re-fires `restore` against the INSTALLED daemon every INTERVAL until state=restored, then shows the recovered file. Start it and walk away (Glacier Standard thaw is ~12h). FILE=<id> OUT=<path> [TIER=standard] [INTERVAL=900]. Idempotent — re-issues no duplicate thaw while in progress."
     dir: coldstorage
     vars:
       SOCK: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
@@ -454,9 +458,9 @@ tasks:
       TIER: '{{.TIER | default "standard"}}'
       INTERVAL: '{{.INTERVAL | default "900"}}'
     cmds:
-      - test -S "{{.SOCK}}" || { echo "no installed daemon socket at {{.SOCK}} — run task daemon:bootstrap first"; exit 1; }
+      - test -S "{{.SOCK}}" || { echo "no installed daemon socket at {{.SOCK}} — run task daemon:mac:bootstrap first"; exit 1; }
       - |
-        file="{{.FILE}}"; : "${file:?pass FILE=<id> (from task daemon:live -- listFiles)}"
+        file="{{.FILE}}"; : "${file:?pass FILE=<id> (from task daemon:mac:live -- listFiles)}"
         ctl='./.build/release/coldstorectl'; sock="{{.SOCK}}"
         while :; do
           out="$($ctl "$sock" restore "file=$file" "out={{.OUT}}" "tier={{.TIER}}")"
@@ -469,8 +473,8 @@ tasks:
         echo "── recovered file (first 40 lines) ──"
         head -n 40 "{{.OUT}}"
 
-  daemon:install:
-    desc: "[macOS] Build release + install the coldstored LaunchAgent (RunAtLoad/KeepAlive)."
+  daemon:mac:install:
+    desc: "Build release + install the coldstored LaunchAgent (RunAtLoad/KeepAlive)."
     dir: coldstorage
     vars:
       DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
@@ -490,7 +494,7 @@ tasks:
           identity=$(security find-identity -v -p codesigning | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)
         fi
         if [ -z "$identity" ]; then
-          echo "No Apple Development identity in your Keychain — pass one: task daemon:install IDENTITY=\"Apple Development: …\""; exit 1
+          echo "No Apple Development identity in your Keychain — pass one: task daemon:mac:install IDENTITY=\"Apple Development: …\""; exit 1
         fi
         # --identifier pins the code-signing identifier to the bundle id (== launchd Label). TCC keys the
         # Photos grant to this identifier (NOT the embedded CFBundleIdentifier); without pinning, codesign
@@ -506,7 +510,7 @@ tasks:
         [ -f "$CREDS" ] && { set -a; . "$CREDS"; set +a; }
         bucket="${COLDSTORE_BUCKET:-coldstorage}"
         region="${AWS_REGION:-us-east-1}"
-        profile="${COLDSTORE_AWS_PROFILE:-coldstorage}"   # creds resolve via this profile's credential_process (task daemon:creds)
+        profile="${COLDSTORE_AWS_PROFILE:-coldstorage}"   # creds resolve via this profile's credential_process (task daemon:mac:creds)
         # Cognito (multi-user prod) is opt-in — empty when the handoff predates Phase 2c or was never
         # re-exported, which coldstored's own gate treats as "not configured" (dogfood mode, unchanged).
         cognito_pool_id="${COLDSTORE_COGNITO_IDENTITY_POOL_ID:-}"
@@ -529,8 +533,8 @@ tasks:
       - launchctl bootstrap "gui/$(id -u)" "{{.PLIST}}"
       - 'echo "installed → {{.PLIST}}  (socket: {{.DATA_DIR}}/coldstored.sock; logs reset)"'
 
-  daemon:creds:
-    desc: "[macOS] Seed the daemon's IAM-user creds into the login Keychain + wire the `coldstorage` AWS profile. Needs the handoff file — run `task tf:coldstorage:creds-export` in the devcontainer first."
+  daemon:mac:creds:
+    desc: "Seed the daemon's IAM-user creds into the login Keychain + wire the `coldstorage` AWS profile. Needs the handoff file — run `task tf:coldstorage:creds-export` in the devcontainer first."
     dir: coldstorage
     vars:
       # SCRIPT_DIR is a SPACE-FREE path on purpose: AWS splits `credential_process` on
@@ -560,33 +564,33 @@ tasks:
           cfg="$HOME/.aws/config"; mkdir -p "$HOME/.aws"; touch "$cfg"
           grep -q '^\[profile coldstorage\]' "$cfg" || printf '\n[profile coldstorage]\ncredential_process = %s\nregion = %s\n' "$SCRIPT" "$AWS_REGION" >> "$cfg"
         fi
-        # 4. secret is in the Keychain now — strip it from the on-disk handoff (leave bucket/region/akid for daemon:install)
+        # 4. secret is in the Keychain now — strip it from the on-disk handoff (leave bucket/region/akid for daemon:mac:install)
         grep -v '^DAEMON_SECRET=' "{{.CREDS}}" > "{{.CREDS}}.tmp" && mv "{{.CREDS}}.tmp" "{{.CREDS}}" && chmod 600 "{{.CREDS}}"
         echo "✓ Keychain seeded; profile 'coldstorage' wired (region=$AWS_REGION, helper=$SCRIPT); secret stripped from disk."
-        echo "  health check: task daemon:doctor"
+        echo "  health check: task daemon:mac:doctor"
 
-  daemon:bootstrap:
-    desc: "[Mode 2: your real daemon] [macOS] One-shot daemon setup: seed creds (Keychain + profile) → build + install the LaunchAgent. Run once, after `task tf:coldstorage:creds-export` in the devcontainer. After this, launchd keeps the daemon running (RunAtLoad/KeepAlive) — you don't re-run it to start it."
+  daemon:mac:bootstrap:
+    desc: "[Mode 2: your real daemon] One-shot daemon setup: seed creds (Keychain + profile) → build + install the LaunchAgent. Run once, after `task tf:coldstorage:creds-export` in the devcontainer. After this, launchd keeps the daemon running (RunAtLoad/KeepAlive) — you don't re-run it to start it."
     cmds:
-      - task: daemon:creds
-      - task: daemon:install
+      - task: daemon:mac:creds
+      - task: daemon:mac:install
 
-  daemon:doctor:
-    desc: "[macOS] Health-check the installed daemon: launchd state, AWS auth via the coldstorage profile (Keychain), and getStatus over the control socket."
+  daemon:mac:doctor:
+    desc: "Health-check the installed daemon: launchd state, AWS auth via the coldstorage profile (Keychain), and getStatus over the control socket."
     dir: coldstorage
     vars:
       SOCK: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
       ERRLOG: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.err.log"
     cmds:
       - 'echo "── launchd ──"'
-      - launchctl print "gui/$(id -u)/com.theadpharm.coldstored" 2>/dev/null | grep -iE "state =|pid =|last exit" || echo "not loaded — run task daemon:bootstrap"
+      - launchctl print "gui/$(id -u)/com.theadpharm.coldstored" 2>/dev/null | grep -iE "state =|pid =|last exit" || echo "not loaded — run task daemon:mac:bootstrap"
       - 'echo "── AWS auth (coldstorage profile → credential_process → Keychain) ──"'
-      - aws sts get-caller-identity --profile coldstorage || echo "auth FAILED — re-run task daemon:bootstrap (fixes the profile), then re-check"
+      - aws sts get-caller-identity --profile coldstorage || echo "auth FAILED — re-run task daemon:mac:bootstrap (fixes the profile), then re-check"
       - 'echo "── daemon status (control socket) ──"'
       - test -S "{{.SOCK}}" && ./.build/release/coldstorectl "{{.SOCK}}" getStatus || echo "no control socket at {{.SOCK}} — last errors:" && tail -n 20 "{{.ERRLOG}}" 2>/dev/null || true
 
-  daemon:uninstall:
-    desc: "[macOS] Stop + remove the coldstored LaunchAgent. Needed before testing Mode 3 (ui:package) — it and Mode 2 share the same socket/data dir; `task daemon:bootstrap` brings Mode 2 back afterward."
+  daemon:mac:uninstall:
+    desc: "Stop + remove the coldstored LaunchAgent. Needed before testing Mode 3 (ui:mac:package) — it and Mode 2 share the same socket/data dir; `task daemon:mac:bootstrap` brings Mode 2 back afterward."
     vars:
       PLIST: "{{.HOME}}/Library/LaunchAgents/com.theadpharm.coldstored.plist"
     cmds:
@@ -594,8 +598,8 @@ tasks:
       - rm -f "{{.PLIST}}"
       - 'echo "removed {{.PLIST}}"'
 
-  daemon:reset:
-    desc: "[macOS] DESTRUCTIVE — wipe the installed daemon's local state for a clean slate: stop it, delete the journal (the tree SSOT) + status + staged blobs + logs, restart empty. Comes back with NO files and NO watched folders. KEEPS the encryption key (dev-kek.bin) and does NOT touch S3 — old blobs in the prod vault are left orphaned (harmless; purge with an admin profile if you care). Re-deposits re-upload from scratch (the journal no longer marks anything verified)."
+  daemon:mac:reset:
+    desc: "DESTRUCTIVE — wipe the installed daemon's local state for a clean slate: stop it, delete the journal (the tree SSOT) + status + staged blobs + logs, restart empty. Comes back with NO files and NO watched folders. KEEPS the encryption key (dev-kek.bin) and does NOT touch S3 — old blobs in the prod vault are left orphaned (harmless; purge with an admin profile if you care). Re-deposits re-upload from scratch (the journal no longer marks anything verified)."
     dir: coldstorage
     vars:
       DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
@@ -612,7 +616,7 @@ tasks:
       - ': > "{{.DATA_DIR}}/coldstored.out.log"; : > "{{.DATA_DIR}}/coldstored.err.log"'
       # 5. Restart — the daemon recreates an empty journal on boot (RunAtLoad). dev-kek.bin is untouched.
       - launchctl bootstrap "gui/$(id -u)" "{{.PLIST}}"
-      - 'echo "✓ reset — empty tree, no watched folders, fresh logs. Verify: task daemon:live -- listFiles (expect [])"'
+      - 'echo "✓ reset — empty tree, no watched folders, fresh logs. Verify: task daemon:mac:live -- listFiles (expect [])"'
 
   # ------------------------------------------------------------------ ui (domain: ui/)
   # Electron/React control panel — a THIN client over the daemon's control socket. Layer 1 = Node IPC
@@ -627,8 +631,8 @@ tasks:
 
   ui:_ensure-electron:
     # Bun skips postinstall scripts by default, so Electron's binary download (its postinstall) never
-    # runs → `task ui:dev` dies with "Electron uninstall". This runs the downloader directly, and is
-    # idempotent: the `status` check skips it once the binary is present. A dep of ui:dev so launching
+    # runs → `task ui:mac:dev` dies with "Electron uninstall". This runs the downloader directly, and is
+    # idempotent: the `status` check skips it once the binary is present. A dep of ui:mac:dev so launching
     # self-heals. (We also list electron in package.json trustedDependencies for fresh installs.)
     internal: true
     dir: ui
@@ -651,8 +655,8 @@ tasks:
     cmds:
       - bun run test
 
-  ui:dev:
-    desc: "[Mode 1: dev sandbox] [macOS] Run the Electron app with HMR (electron-vite dev). Start `task daemon:run` first."
+  ui:mac:dev:
+    desc: "[Mode 1: dev sandbox] Run the Electron app with HMR (electron-vite dev). Start `task daemon:run` first."
     dir: ui
     deps: [ui:_ensure-electron]
     env:
@@ -665,23 +669,23 @@ tasks:
     cmds:
       - |
         # Sign-in config (Phase 5): dev has no config.json, so the app reads COLDSTORE_COGNITO_DOMAIN/
-        # _CLIENT_ID from env — sourced from the same infra-outputs handoff ui:config uses. Secrets are
+        # _CLIENT_ID from env — sourced from the same infra-outputs handoff ui:mac:config uses. Secrets are
         # stripped: the UI process must never carry the dogfood daemon's long-lived key.
         CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
         if [ -f "$CREDS" ]; then set -a; . "$CREDS"; set +a; unset DAEMON_AKID DAEMON_SECRET; fi
         bun run dev
 
-  ui:live:
-    desc: "[Mode 2: your real daemon] [macOS] Run the UI against the INSTALLED launchd daemon (real prod AWS), not the dev/MinIO one — dogfood the real thing. Needs task daemon:bootstrap done."
+  ui:mac:live:
+    desc: "[Mode 2: your real daemon] Run the UI against the INSTALLED launchd daemon (real prod AWS), not the dev/MinIO one — dogfood the real thing. Needs task daemon:mac:bootstrap done."
     dir: ui
     deps: [ui:_ensure-electron]
     env:
-      # The launchd daemon's socket (daemon:install path), NOT the dev socket ui:dev/ui:demo use.
+      # The launchd daemon's socket (daemon:mac:install path), NOT the dev socket ui:mac:dev/ui:mac:demo use.
       COLDSTORE_SOCKET: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
       COLDSTORE_PHOTO_PICKER: "{{.ROOT_DIR}}/coldstorage/.build/release/coldstore-photo-picker"
     cmds:
       - |
-        # Same sign-in-config sourcing as ui:dev (see there for why); secrets stripped.
+        # Same sign-in-config sourcing as ui:mac:dev (see there for why); secrets stripped.
         CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
         if [ -f "$CREDS" ]; then set -a; . "$CREDS"; set +a; unset DAEMON_AKID DAEMON_SECRET; fi
         bun run dev
@@ -692,8 +696,8 @@ tasks:
     cmds:
       - bun run build
 
-  ui:package:
-    desc: "[Mode 3: packaged app] [macOS] Package a distributable ColdStorage.app (+ dmg/zip) via electron-builder. Bundles the release Swift binaries. Unsigned unless a Developer ID + notary creds are set — see ui/PACKAGING.md."
+  ui:mac:package:
+    desc: "[Mode 3: packaged app] Package a distributable ColdStorage.app (+ dmg/zip) via electron-builder. Bundles the release Swift binaries. Unsigned unless a Developer ID + notary creds are set — see ui/PACKAGING.md."
     dir: ui
     deps: [ui:_ensure-electron]
     cmds:
@@ -705,15 +709,15 @@ tasks:
       - swift build -c release --package-path "{{.ROOT_DIR}}/coldstorage"
       - bun run build # electron-vite → out/{main,preload,renderer}
       # Bake the public config before electron-builder bundles it (Phase 6d). ENV=staging: a local
-      # `ui:package` is Ben's DOGFOOD build (sandbox Paddle + the staging key-blob DB, safe to test money);
-      # the customer build comes from `ui:release` (ENV=production). Never publish a staging build.
+      # `ui:mac:package` is Ben's DOGFOOD build (sandbox Paddle + the staging key-blob DB, safe to test money);
+      # the customer build comes from `ui:mac:release` (ENV=production). Never publish a staging build.
       - task: ui:config:bake
         vars:
           ENV: staging
       - bunx electron-builder --mac # node CLI (not --bun); reads electron-builder.yml → ui/dist/ColdStorage.app + dmg/zip
 
   ui:_require-apple-creds:
-    # Shared preflight for ui:release + ui:release:dryrun. `${VAR:?msg}` errors + exits non-zero when the
+    # Shared preflight for ui:mac:release + ui:mac:release:dryrun. `${VAR:?msg}` errors + exits non-zero when the
     # var is unset/empty (dotenv-loaded .env counts). The signing identity itself is auto-discovered from
     # the login keychain ('Developer ID Application'), or set via CSC_LINK/CSC_KEY_PASSWORD — not checked here.
     internal: true
@@ -723,8 +727,8 @@ tasks:
         : "${APPLE_TEAM_ID:?missing — your 10-char Apple Developer Team ID (see ui/PACKAGING.md)}"
         : "${APPLE_APP_SPECIFIC_PASSWORD:?missing — an app-specific password from appleid.apple.com (see ui/PACKAGING.md)}"
 
-  ui:release:
-    desc: "[Mode 3: packaged app] [macOS] Build + SIGN + NOTARIZE ColdStorage.app, then PUBLISH the .dmg/.zip + `latest-mac.yml` update feed to a GitHub Release (PROD.md Phase 6 — the auto-updater reads this feed). Bump `ui/package.json` version first. REFUSES unless you're on a clean, pushed `main`: GitHub tags main's latest REMOTE commit, so a dirty / wrong-branch / unpushed tree would ship a binary no tag reproduces (bypass with RELEASE_FORCE=1). For a signed build WITHOUT publishing, use ui:release:dryrun. Needs the Developer ID cert + notary creds + GH_TOKEN (env or .env). See ui/PACKAGING.md."
+  ui:mac:release:
+    desc: "[Mode 3: packaged app] Build + SIGN + NOTARIZE ColdStorage.app, then PUBLISH the .dmg/.zip + `latest-mac.yml` update feed to a GitHub Release (PROD.md Phase 6 — the auto-updater reads this feed). Bump `ui/package.json` version first. REFUSES unless you're on a clean, pushed `main`: GitHub tags main's latest REMOTE commit, so a dirty / wrong-branch / unpushed tree would ship a binary no tag reproduces (bypass with RELEASE_FORCE=1). For a signed build WITHOUT publishing, use ui:mac:release:dryrun. Needs the Developer ID cert + notary creds + GH_TOKEN (env or .env). See ui/PACKAGING.md."
     dir: ui
     deps: [ui:_ensure-electron, ui:_require-apple-creds]
     vars:
@@ -754,7 +758,7 @@ tasks:
       - |
         : "${GH_TOKEN:?missing — a GitHub token with 'repo' scope to publish the release; see ui/PACKAGING.md}"
       # Bump guard (dummy-proofing): refuse unless ui/package.json's version is strictly AHEAD of the latest
-      # PUBLISHED GitHub release, so re-running ui:release WITHOUT bumping can't republish / no-op the same
+      # PUBLISHED GitHub release, so re-running ui:mac:release WITHOUT bumping can't republish / no-op the same
       # version. `releases/latest` ignores drafts + prereleases. Fails fast — before the minutes-long
       # build/sign/notarize. If GitHub can't be read (no gh / none published yet / offline), it warns +
       # continues rather than block (the common footgun — "forgot to bump" — needs a successful read anyway).
@@ -768,7 +772,7 @@ tasks:
           echo "version $pkg is ahead of the latest release ($latest) — ok to release."
         else
           echo "✋ Refusing to release: ui/package.json version ($pkg) is NOT ahead of the latest published release ($latest)."
-          echo "   Bump \"version\" in ui/package.json to a higher patch/minor/major, commit + push, then re-run 'task ui:release'."
+          echo "   Bump \"version\" in ui/package.json to a higher patch/minor/major, commit + push, then re-run 'task ui:mac:release'."
           exit 1
         fi
       - echo "Building a signed + notarized ColdStorage and publishing to GitHub Releases (benhonda/coldstorage)…"
@@ -801,11 +805,11 @@ tasks:
         vars:
           ENV: production
       # --publish always → upload the .dmg/.zip + latest-mac.yml. -c.mac.notarize=true → notarize THIS build
-      # (the yml default is false so plain `ui:package` stays cert-free).
+      # (the yml default is false so plain `ui:mac:package` stays cert-free).
       - bunx electron-builder --mac --publish always -c.mac.notarize=true
 
-  ui:release:dryrun:
-    desc: "[Mode 3: packaged app] [macOS] Full signed-artifact rehearsal of ui:release: build + SIGN + NOTARIZE ColdStorage.app locally but DON'T publish (no GitHub release, no git tag, no GH_TOKEN — hence no provenance guard, run it dirty/any-branch freely). Output: ui/dist/. Needs the Developer ID cert + notary creds (APPLE_ID/APPLE_TEAM_ID/APPLE_APP_SPECIFIC_PASSWORD). See ui/PACKAGING.md."
+  ui:mac:release:dryrun:
+    desc: "[Mode 3: packaged app] Full signed-artifact rehearsal of ui:mac:release: build + SIGN + NOTARIZE ColdStorage.app locally but DON'T publish (no GitHub release, no git tag, no GH_TOKEN — hence no provenance guard, run it dirty/any-branch freely). Output: ui/dist/. Needs the Developer ID cert + notary creds (APPLE_ID/APPLE_TEAM_ID/APPLE_APP_SPECIFIC_PASSWORD). See ui/PACKAGING.md."
     dir: ui
     deps: [ui:_ensure-electron, ui:_require-apple-creds]
     cmds:
@@ -823,8 +827,8 @@ tasks:
       # --publish never → build + sign + notarize only; nothing is uploaded or tagged.
       - bunx electron-builder --mac --publish never -c.mac.notarize=true
 
-  ui:notarize:doctor:
-    desc: "[macOS] Diagnose a notarization 401 from ui:release: probe the Apple notary creds (APPLE_ID/APPLE_TEAM_ID/APPLE_APP_SPECIFIC_PASSWORD — the SAME env/.env values ui:release uses) directly against Apple via `notarytool history`. Prints a non-secret shape check, then a clean auth probe (passes with valid creds, 401 with bad ones) so you can fix creds WITHOUT rebuilding the app each time."
+  ui:mac:notarize:doctor:
+    desc: "Diagnose a notarization 401 from ui:mac:release: probe the Apple notary creds (APPLE_ID/APPLE_TEAM_ID/APPLE_APP_SPECIFIC_PASSWORD — the SAME env/.env values ui:mac:release uses) directly against Apple via `notarytool history`. Prints a non-secret shape check, then a clean auth probe (passes with valid creds, 401 with bad ones) so you can fix creds WITHOUT rebuilding the app each time."
     dir: ui
     deps: [ui:_require-apple-creds]
     cmds:
@@ -836,7 +840,7 @@ tasks:
         echo
         echo "Probing Apple's notary service (notarytool history)…"
         if xcrun notarytool history --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$pw" >/dev/null 2>/tmp/notary-err; then
-          echo "✓ Apple ACCEPTED the creds — notary auth is fine; re-run 'task ui:release'."
+          echo "✓ Apple ACCEPTED the creds — notary auth is fine; re-run 'task ui:mac:release'."
         else
           echo "✗ Apple REJECTED the creds (the same 401 the release hit). It's one of:"
           echo "  • APPLE_APP_SPECIFIC_PASSWORD must be an APP-SPECIFIC password (NOT your normal Apple ID password) —"
@@ -847,8 +851,8 @@ tasks:
           exit 1
         fi
 
-  ui:sign:doctor:
-    desc: "[macOS] Diagnose a 'not signed with a valid Developer ID certificate' notarization rejection: list your keychain's code-signing identities and check for a 'Developer ID Application' cert — the ONLY kind valid for notarized distribution. An 'Apple Development'/'Mac Developer' cert (what daemon:install uses for local runs) is NOT valid for notarization; Apple rejects it."
+  ui:mac:sign:doctor:
+    desc: "Diagnose a 'not signed with a valid Developer ID certificate' notarization rejection: list your keychain's code-signing identities and check for a 'Developer ID Application' cert — the ONLY kind valid for notarized distribution. An 'Apple Development'/'Mac Developer' cert (what daemon:mac:install uses for local runs) is NOT valid for notarization; Apple rejects it."
     dir: ui
     cmds:
       - |
@@ -862,33 +866,33 @@ tasks:
         else
           echo "✗ NO 'Developer ID Application' cert found — THIS is the notarization rejection."
           echo "  Notarized distribution REQUIRES a 'Developer ID Application' certificate. The 'Apple Development' cert"
-          echo "  (what daemon:install uses for local runs) is NOT valid for notarization."
+          echo "  (what daemon:mac:install uses for local runs) is NOT valid for notarization."
           echo "  Create one: Xcode ▸ Settings ▸ Accounts ▸ (your team) ▸ Manage Certificates ▸ + ▸ 'Developer ID Application',"
           echo "  or developer.apple.com ▸ Certificates ▸ + ▸ 'Developer ID Application' (needs Account Holder/Admin role)."
-          echo "  Install it into the login keychain, then re-run 'task ui:release'."
+          echo "  Install it into the login keychain, then re-run 'task ui:mac:release'."
           exit 1
         fi
 
-  ui:package:verify:
-    desc: "[macOS] Sanity-check the packaged app: bundled Swift binaries present + their code-signing status (the bits that can't be checked off-Mac)."
+  ui:mac:package:verify:
+    desc: "Sanity-check the packaged app: bundled Swift binaries present + their code-signing status (the bits that can't be checked off-Mac)."
     dir: ui
     cmds:
       - |
         app=$(find dist -maxdepth 3 -name 'ColdStorage.app' -type d 2>/dev/null | head -1)
-        [ -n "$app" ] || { echo "no ColdStorage.app under dist/ — run 'task ui:package' first"; exit 1; }
+        [ -n "$app" ] || { echo "no ColdStorage.app under dist/ — run 'task ui:mac:package' first"; exit 1; }
         echo "app: $app"
         echo "── bundled binaries (expect coldstored + helpers) ──"
         ls -la "$app/Contents/Resources/bin" || { echo "MISSING bin/ — extraResources didn't copy"; exit 1; }
         echo "── app signature ──";        codesign -dv --verbosity=2 "$app" 2>&1 | grep -Ei 'Identifier|Authority|Runtime' || echo "(unsigned)"
         echo "── coldstored signature ──"; codesign -dv --verbosity=2 "$app/Contents/Resources/bin/coldstored" 2>&1 | grep -Ei 'Identifier|Authority|Runtime' || echo "(unsigned — nested binary not signed)"
 
-  ui:package:sign-adhoc:
-    desc: "[Mode 3: packaged app] [macOS] Ad-hoc sign the built ColdStorage.app so it (+ its bundled arm64 helpers) will LAUNCH locally on Apple Silicon — a smoke-test stopgap. Ad-hoc is per-build (no stable TCC grant); real Developer/Apple-Development signing lands with #2. NOT for distribution. Run `task daemon:uninstall` first — this collides with the Mode 2 launchd daemon's socket/data dir."
+  ui:mac:package:sign-adhoc:
+    desc: "[Mode 3: packaged app] Ad-hoc sign the built ColdStorage.app so it (+ its bundled arm64 helpers) will LAUNCH locally on Apple Silicon — a smoke-test stopgap. Ad-hoc is per-build (no stable TCC grant); real Developer/Apple-Development signing lands with #2. NOT for distribution. Run `task daemon:mac:uninstall` first — this collides with the Mode 2 launchd daemon's socket/data dir."
     dir: ui
     cmds:
       - |
         app=$(find dist -maxdepth 3 -name 'ColdStorage.app' -type d 2>/dev/null | head -1)
-        [ -n "$app" ] || { echo "no ColdStorage.app under dist/ — run 'task ui:package' first"; exit 1; }
+        [ -n "$app" ] || { echo "no ColdStorage.app under dist/ — run 'task ui:mac:package' first"; exit 1; }
         # Sign the nested helpers FIRST (inside-out), then the app — codesign requires nested code be sealed
         # before the outer bundle. `-s -` = ad-hoc (no cert needed, just enough for AMFI to let arm64 run).
         for b in "$app/Contents/Resources/bin/coldstored" \
@@ -900,15 +904,15 @@ tasks:
         echo "ad-hoc signed $app — launching…"
         open "$app"
 
-  ui:config:
-    desc: "[macOS] Write the packaged app's config (~/Library/Application Support/ColdStorage/config.json: bucket/region/profile + the Cognito identity pool id/provider + the sign-in domain/client id, when the handoff has them) from the infra-outputs handoff, so a Finder-launched ColdStorage.app — which inherits no shell env — can upload and sign users in. NO secret is written here; creds resolve via the profile's credential_process → Keychain (run `task daemon:creds` once). Mirrors the env daemon:install bakes into the launchd plist."
+  ui:mac:config:
+    desc: "Write the packaged app's config (~/Library/Application Support/ColdStorage/config.json: bucket/region/profile + the Cognito identity pool id/provider + the sign-in domain/client id, when the handoff has them) from the infra-outputs handoff, so a Finder-launched ColdStorage.app — which inherits no shell env — can upload and sign users in. NO secret is written here; creds resolve via the profile's credential_process → Keychain (run `task daemon:mac:creds` once). Mirrors the env daemon:mac:install bakes into the launchd plist."
     dir: coldstorage
     vars:
       DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
     cmds:
       - mkdir -p "{{.DATA_DIR}}"
       - |
-        # Same SSOT + defaults as daemon:install: bucket/region/profile come from the handoff file written
+        # Same SSOT + defaults as daemon:mac:install: bucket/region/profile come from the handoff file written
         # by `task tf:coldstorage:creds-export` in the devcontainer. Env vars still override (e.g. MinIO test).
         CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
         [ -f "$CREDS" ] && { set -a; . "$CREDS"; set +a; }
@@ -929,10 +933,10 @@ tasks:
         printf '{\n  "bucket": "%s",\n  "region": "%s",\n  "awsProfile": "%s",\n  "cognitoIdentityPoolId": "%s",\n  "cognitoUserPoolProvider": "%s",\n  "cognitoDomain": "%s",\n  "cognitoClientId": "%s",\n  "accountApiBaseUrl": "%s"\n}\n' \
           "$bucket" "$region" "$profile" "$cognito_pool_id" "$cognito_provider" "$cognito_domain" "$cognito_client_id" "$account_api" > "{{.DATA_DIR}}/config.json"
         echo "wrote {{.DATA_DIR}}/config.json  (bucket=$bucket region=$region profile=$profile cognito=${cognito_pool_id:+configured}${cognito_pool_id:-not configured} sign-in=${cognito_domain:+configured}${cognito_domain:-not configured})"
-        echo "creds: ensure 'task daemon:creds' wired the '$profile' profile + Keychain (one-time). Verify: task ui:package:doctor"
+        echo "creds: ensure 'task daemon:mac:creds' wired the '$profile' profile + Keychain (one-time). Verify: task ui:mac:package:doctor"
 
   ui:config:bake:
-    desc: "Bake the PUBLIC app config into ui/build/app-config.json (bundled at Contents/Resources/app-config.json) so a config-less download self-configures — sign-in is the only setup (PROD.md Phase 6d). ENV=production|staging picks the account-backend lane (prod → api.coldstorage.sh, staging → api-staging.coldstorage.sh) — the ONLY thing that differs between a customer build and a dogfood build (Cognito + vault bucket are shared). REQUIRED + explicit: there is no silent default, so a customer build can never accidentally ship staging-wired. Sourced from the SAME infra-outputs handoff as ui:config but PUBLIC-ONLY: no awsProfile (customers get creds via Cognito STS). Run automatically by ui:release (production) / ui:package (staging)."
+    desc: "Bake the PUBLIC app config into ui/build/app-config.json (bundled at Contents/Resources/app-config.json) so a config-less download self-configures — sign-in is the only setup (PROD.md Phase 6d). ENV=production|staging picks the account-backend lane (prod → api.coldstorage.sh, staging → api-staging.coldstorage.sh) — the ONLY thing that differs between a customer build and a dogfood build (Cognito + vault bucket are shared). REQUIRED + explicit: there is no silent default, so a customer build can never accidentally ship staging-wired. Sourced from the SAME infra-outputs handoff as ui:mac:config but PUBLIC-ONLY: no awsProfile (customers get creds via Cognito STS). Run automatically by ui:mac:release (production) / ui:mac:package (staging)."
     dir: coldstorage
     requires:
       vars: [ENV]
@@ -952,14 +956,14 @@ tasks:
         esac
         account_api="${COLDSTORE_ACCOUNT_API:-$default_api}"
 
-        # Same SSOT as ui:config (the handoff written by `task tf:coldstorage:creds-export`), but PUBLIC
+        # Same SSOT as ui:mac:config (the handoff written by `task tf:coldstorage:creds-export`), but PUBLIC
         # values ONLY — this file ships inside the .dmg, so awsProfile (the dogfood credential_process path)
         # is deliberately omitted; a customer signs in and gets scoped STS creds. Cognito + bucket are
         # lane-independent, so they come from the handoff unchanged for both ENVs.
         CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
         if [ ! -f "$CREDS" ]; then
           printf '{\n  "accountApiBaseUrl": "%s"\n}\n' "$account_api" > "{{.OUT}}"
-          echo "⚠ no handoff ($CREDS) — baked only accountApiBaseUrl=$account_api (no bucket/Cognito). This build can't upload/sign-in (dogfood: relies on 'task ui:config'). Run 'task tf:coldstorage:creds-export' in the devcontainer for a real build."
+          echo "⚠ no handoff ($CREDS) — baked only accountApiBaseUrl=$account_api (no bucket/Cognito). This build can't upload/sign-in (dogfood: relies on 'task ui:mac:config'). Run 'task tf:coldstorage:creds-export' in the devcontainer for a real build."
           exit 0
         fi
         set -a; . "$CREDS"; set +a
@@ -973,14 +977,14 @@ tasks:
           "$bucket" "$region" "$cognito_pool_id" "$cognito_provider" "$cognito_domain" "$cognito_client_id" "$account_api" > "{{.OUT}}"
         echo "baked {{.OUT}}  (ENV={{.ENV}} bucket=$bucket region=$region cognito=${cognito_pool_id:+configured}${cognito_pool_id:-NOT configured} sign-in=${cognito_domain:+configured}${cognito_domain:-NOT configured} account-api=$account_api)"
 
-  ui:bootstrap:
-    desc: "[macOS] One-shot setup so the packaged ColdStorage.app can upload: seed creds (Keychain + `coldstorage` profile) → write the app's config.json. Run once after `task tf:coldstorage:creds-export` (devcontainer). The .app analogue of daemon:bootstrap."
+  ui:mac:bootstrap:
+    desc: "One-shot setup so the packaged ColdStorage.app can upload: seed creds (Keychain + `coldstorage` profile) → write the app's config.json. Run once after `task tf:coldstorage:creds-export` (devcontainer). The .app analogue of daemon:mac:bootstrap."
     cmds:
-      - task: daemon:creds
-      - task: ui:config
+      - task: daemon:mac:creds
+      - task: ui:mac:config
 
-  ui:auth:doctor:
-    desc: "[macOS] Diagnose a hanging/broken sign-in (Phase 5a). Run in a SECOND terminal while the browser is stuck. Checks: who owns loopback port 53682 (an Electron process = healthy pending sign-in; Code/Docker/OrbStack = a devcontainer port-forward stole it), whether the app's one-shot listener answers, and whether the sign-in config resolves."
+  ui:mac:auth:doctor:
+    desc: "Diagnose a hanging/broken sign-in (Phase 5a). Run in a SECOND terminal while the browser is stuck. Checks: who owns loopback port 53682 (an Electron process = healthy pending sign-in; Code/Docker/OrbStack = a devcontainer port-forward stole it), whether the app's one-shot listener answers, and whether the sign-in config resolves."
     cmds:
       - |
         echo "── who owns 127.0.0.1:53682 ──"
@@ -1001,15 +1005,15 @@ tasks:
           curl -s -o /dev/null -w "HTTP %{http_code} in %{time_total}s\n" --max-time 10 "https://${COLDSTORE_COGNITO_DOMAIN}/oauth2/authorize"
         fi
 
-  ui:package:doctor:
-    desc: "[Mode 3: packaged app] [macOS] Diagnose a packaged app stuck on 'Connecting…': did the bundled coldstored spawn, bind its socket, and what did it log? If the process path it finds is coldstorage/.build/release/coldstored (not Contents/Resources/bin/coldstored), that's actually the Mode 2 launchd daemon still holding the shared socket — run `task daemon:uninstall` and re-launch the app."
+  ui:mac:package:doctor:
+    desc: "[Mode 3: packaged app] Diagnose a packaged app stuck on 'Connecting…': did the bundled coldstored spawn, bind its socket, and what did it log? If the process path it finds is coldstorage/.build/release/coldstored (not Contents/Resources/bin/coldstored), that's actually the Mode 2 launchd daemon still holding the shared socket — run `task daemon:mac:uninstall` and re-launch the app."
     cmds:
       - |
         echo "── data dir (auto-discovered) ──"
         dir=$(ls -d "$HOME/Library/Application Support/"*[Cc]old[Ss]torage* 2>/dev/null | head -1)
         if [ -z "$dir" ]; then
           echo "NONE — the app never created a data dir ⇒ the daemon never started."
-          echo "Most likely the bundle is stale. Rebuild: task ui:package && task ui:package:sign-adhoc"; exit 0
+          echo "Most likely the bundle is stale. Rebuild: task ui:mac:package && task ui:mac:package:sign-adhoc"; exit 0
         fi
         echo "$dir"
         echo "── coldstored process ──"; pgrep -fl coldstored || echo "NOT running (never spawned, or crash-looping)"
@@ -1022,21 +1026,21 @@ tasks:
           profile="${profile:-coldstorage}"
           echo "── AWS auth (profile '$profile' → credential_process → Keychain) ──"
           aws sts get-caller-identity --profile "$profile" 2>&1 | grep -Ei 'Arn|error|could not|Unable' \
-            || echo "auth FAILED — run 'task daemon:creds' (wires the profile + Keychain)"
+            || echo "auth FAILED — run 'task daemon:mac:creds' (wires the profile + Keychain)"
         else
-          echo "MISSING — a Finder-launched app can't upload without it. Run 'task ui:config' (or 'task ui:bootstrap')."
+          echo "MISSING — a Finder-launched app can't upload without it. Run 'task ui:mac:config' (or 'task ui:mac:bootstrap')."
         fi
         echo "── coldstored.err.log (last 25) ──"; tail -n 25 "$dir/coldstored.err.log" 2>/dev/null || echo "(no err log — coldstored likely never spawned)"
 
-  ui:demo:
-    desc: "[macOS] One command to dogfood locally: MinIO + daemon (background) + the UI. Ctrl-C stops the UI; `task dev:stop` stops the rest."
+  ui:mac:demo:
+    desc: "One command to dogfood locally: MinIO + daemon (background) + the UI. Ctrl-C stops the UI; `task dev:stop` stops the rest."
     deps: [daemon:minio] # MinIO (bg) + bucket + OS-correct binaries
     cmds:
       - task: daemon:run:bg # daemon in the background, waits for its socket
-      - task: ui:dev # the UI in the foreground
+      - task: ui:mac:dev # the UI in the foreground
 
   dev:stop:
-    desc: "Stop the background daemon + MinIO left running by `task ui:demo`."
+    desc: "Stop the background daemon + MinIO left running by `task ui:mac:demo`."
     cmds:
       - 'pkill -f "coldstored$" 2>/dev/null || true'
       - task: daemon:minio:stop
@@ -1301,7 +1305,7 @@ tasks:
         echo "  If enable_google_idp is already true, re-plan+apply so Cognito picks up the new values: task tf:plan"
 
   tf:coldstorage:creds-export:
-    desc: "[devcontainer] Export the daemon's creds from TF state → gitignored handoff file the macOS daemon:* tasks read (so the Mac needs no terragrunt). Run after apply; the file rides the bind mount to the Mac."
+    desc: "[devcontainer] Export the daemon's creds from TF state → gitignored handoff file the daemon:mac:* tasks read (so the Mac needs no terragrunt). Run after apply; the file rides the bind mount to the Mac."
     deps: [check-aws-identity]
     dir: infra/coldstorage/live/production
     vars:
@@ -1318,7 +1322,7 @@ tasks:
           echo "DAEMON_AKID=$(terragrunt output -raw daemon_access_key_id)"
           echo "DAEMON_SECRET=$(terragrunt output -raw daemon_secret_access_key)"
           # Cognito (PROD.md Phase 2, multi-user) — NOT secrets (public client config), so they ride the
-          # handoff untouched by daemon:creds' secret-stripping step. Provider name is Cognito's documented
+          # handoff untouched by daemon:mac:creds' secret-stripping step. Provider name is Cognito's documented
           # `Logins` key shape (cognito-idp.<region>.amazonaws.com/<userPoolId>) — same one cognito.tf notes
           # next to `aws_cognito_user_pool.main.endpoint`.
           echo "COLDSTORE_COGNITO_IDENTITY_POOL_ID=$(terragrunt output -raw cognito_identity_pool_id)"
@@ -1329,7 +1333,7 @@ tasks:
           echo "COLDSTORE_COGNITO_CLIENT_ID=$(terragrunt output -raw cognito_user_pool_client_id)"
         } > "{{.OUT}}"
         echo "✓ wrote {{.OUT}} (0600, gitignored)."
-        echo "  now on the Mac:  task daemon:creds && task daemon:install"
+        echo "  now on the Mac:  task daemon:mac:creds && task daemon:mac:install"
 
   # ------------------------------------------------------------------ infra — tf:account-backend:* (domain: infra/account-backend)
   # The Vercel project's OIDC role + TF-managed env vars (Cognito ids sourced from

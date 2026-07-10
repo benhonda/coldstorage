@@ -6,7 +6,7 @@ import CoreServices
 /// `onChange` so the daemon can re-scan promptly instead of waiting out the poll interval. Apple-only
 /// (FSEvents has no Linux equivalent), so it lives in the Mac adapter behind `canImport(CoreServices)`;
 /// on Linux the daemon simply relies on its interval. Runtime-proven on a real Mac (2026-06-26): a drop
-/// fires a sub-second re-scan under a 600s poll — see `task daemon:fsevents-test`.
+/// fires a sub-second re-scan under a 600s poll — see `task daemon:mac:fsevents-test`.
 ///
 /// Re-armable: `setPaths` tears down + rebuilds the stream when the watched set changes, so a folder
 /// added via `addSource` (or unpaused) — which emits `sourcesChanged` — gets watched without a daemon
@@ -51,7 +51,7 @@ public final class FolderWatcher: @unchecked Sendable {
                                        retain: nil, release: nil, copyDescription: nil)
         let cb: FSEventStreamCallback = { _, info, count, _, _, _ in
             guard let info else { return }
-            // Diagnostic so the FSEvents path is directly observable in `daemon:logs` (not inferred from
+            // Diagnostic so the FSEvents path is directly observable in `daemon:mac:logs` (not inferred from
             // timing). Mirrors PhotoKitResolver's stderr breadcrumbs.
             FileHandle.standardError.write(Data("FolderWatcher: FSEvents fired (\(count) change(s)) → rescan.\n".utf8))
             Unmanaged<FolderWatcher>.fromOpaque(info).takeUnretainedValue().onChange()

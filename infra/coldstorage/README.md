@@ -40,9 +40,9 @@ handoff file crosses on the bind mount):
 # in the devcontainer, after apply:
 task tf:coldstorage:creds-export    # TF outputs (incl. secret) → coldstorage/.local/daemon-creds.env (0600)
 # then on the Mac:
-task daemon:bootstrap               # secret→Keychain + coldstorage profile, then build + install the LaunchAgent
-task daemon:doctor                  # health check: launchd state · AWS auth · getStatus
+task daemon:mac:bootstrap               # secret→Keychain + coldstorage profile, then build + install the LaunchAgent
+task daemon:mac:doctor                  # health check: launchd state · AWS auth · getStatus
 ```
 The daemon's IAM secret lives only in the macOS Keychain; the `credential_process` helper installs to a
 **space-free** `~/.coldstorage/` (AWS splits `credential_process` on whitespace). Rotate the key by tainting
-`aws_iam_access_key.daemon`, then re-run `creds-export` → `daemon:creds`.
+`aws_iam_access_key.daemon`, then re-run `creds-export` → `daemon:mac:creds`.

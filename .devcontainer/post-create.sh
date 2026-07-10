@@ -10,7 +10,7 @@ echo "Installing Bun"
 curl -fsSL https://bun.sh/install | bash
 
 # UI deps live in a named volume (see devcontainer.json mounts), so the container's Linux-native
-# node_modules never collides with the macOS host's (the Mac runs the GUI via `task ui:dev`). A fresh
+# node_modules never collides with the macOS host's (the Mac runs the GUI via `task ui:mac:dev`). A fresh
 # volume mounts as root-owned and empty — take ownership, then populate. Idempotent.
 if [ -d /workspace/ui ]; then
   echo "Populating ui/node_modules (named volume)"

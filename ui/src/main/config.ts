@@ -2,7 +2,7 @@
  * The packaged app's config seam — pure, electron-free, so it's unit-testable (the electron glue that
  * picks the file *paths* lives in daemon.ts). PROD.md Phase 6d: a customer download self-configures
  * because the public, non-secret config is BAKED into the bundle at package time (from the same
- * infra-outputs handoff `task ui:config` uses), and the user's own `config.json` (dev/dogfood) merely
+ * infra-outputs handoff `task ui:mac:config` uses), and the user's own `config.json` (dev/dogfood) merely
  * OVERRIDES it. So the resolution is always: baked base ← user override.
  *
  * NO secret ever lives here. Customer AWS creds resolve via Cognito → short-lived STS (coldstored/main.swift),

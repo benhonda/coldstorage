@@ -18,7 +18,7 @@ commands. Full plan + decisions: [`DESIGN.md`](./DESIGN.md). Orientation:
 > modal w/ native folder picker) + **Settings** (watched folders, exclude chips, storage). The old 4-tab
 > Vault/Sources/Restore/Browse views are deleted; DS tokens/primitives/fonts + all layer-1/2 plumbing
 > were kept. `task ui:typecheck` + `task ui:test` + `task ui:build` green. **PENDING Ben (macOS): visual
-> verify** (`task ui:demo` / `ui:live` — Electron can't render in the container). The browser tree is
+> verify** (`task ui:mac:demo` / `ui:mac:live` — Electron can't render in the container). The browser tree is
 > **real journal data** — the daemon's `listFiles` read is built and the fixtures stand-in is deleted
 > (proven vs MinIO, `task ui:prove`); **drop-to-upload / "Choose files" really archive through the daemon**
 > (the `deposit` command, proven vs MinIO); request-a-copy issues the **real `restore` command**;
@@ -37,7 +37,7 @@ commands. Full plan + decisions: [`DESIGN.md`](./DESIGN.md). Orientation:
 
 Toolchain: **electron-vite** (Vite, three-process split), **React 19**, secure IPC
 (`contextIsolation: true`, `contextBridge`). Tooling runs on **Bun**; the Electron runtime is its own
-bundled Node. The DS port (tokens + primitives) is verified live on macOS (`task ui:live`); see
+bundled Node. The DS port (tokens + primitives) is verified live on macOS (`task ui:mac:live`); see
 [Design system](#design-system).
 
 ## Layout
@@ -113,14 +113,14 @@ task ui:test        # headless state-layer tests (no Electron/daemon needed)
 task ui:build       # build main/preload/renderer → ui/out
 
 # dogfood locally — ONE command: MinIO + daemon (bg) + UI (installs minio/mc if missing):
-task ui:demo        # then archive files + restore from the UI; `task dev:stop` to tear down
+task ui:mac:demo        # then archive files + restore from the UI; `task dev:stop` to tear down
 
 # or run the pieces yourself (macOS; HMR):
 task daemon:run &   # wait for coldstorage/coldstored.sock
-task ui:dev
+task ui:mac:dev
 
-# dogfood against the INSTALLED launchd daemon — real prod AWS (needs task daemon:bootstrap done):
-task ui:live        # same UI, COLDSTORE_SOCKET → ~/Library/Application Support/ColdStorage/coldstored.sock
+# dogfood against the INSTALLED launchd daemon — real prod AWS (needs task daemon:mac:bootstrap done):
+task ui:mac:live        # same UI, COLDSTORE_SOCKET → ~/Library/Application Support/ColdStorage/coldstored.sock
 
 # prove the layer-1 bridge against a live daemon:
 task ui:prove       # getStatus round-trips + triggerNow streams runStarted→fileArchived→runFinished
@@ -179,7 +179,7 @@ the *tokens*, not the bundle.
   `task ui:typecheck` + `task ui:build` (all three processes compile) + `task ui:test` (real reducer +
   controller, headless) — *not* the look. **Visual verify is a macOS step.** Layers 1–3 are verified on
   macOS: the GUI runs, connects (`connection: connected`), and renders the skinned views live against the
-  installed daemon (`task ui:live`, 2026-06-23).
+  installed daemon (`task ui:mac:live`, 2026-06-23).
 - **`node_modules` can't be shared between the container and the Mac.** This is an Electron app, so
   `node_modules` contains platform-native binaries (electron, rolldown/vite, esbuild). The repo is
   bind-mounted into the Linux devcontainer, so a `bun install` run in the container leaves Linux
@@ -189,7 +189,7 @@ the *tokens*, not the bundle.
   Bun-on-tooling, Electron-on-its-own-Node split only holds *within one OS*.
 - **Bun blocks postinstall scripts → Electron's binary isn't downloaded.** Electron fetches its app
   binary in a `postinstall`, which Bun skips by default (so a bare `bun install` leaves it missing and
-  `electron-vite dev` dies with `Error: Electron uninstall`). **Handled by the Taskfile:** `task ui:dev`
+  `electron-vite dev` dies with `Error: Electron uninstall`). **Handled by the Taskfile:** `task ui:mac:dev`
   depends on `ui:_ensure-electron`, which downloads the binary if absent (idempotent — skipped once
   present); `task ui:setup` does it too. No manual step. (`electron` is also in package.json
   `trustedDependencies` for fresh installs.) `build`/`typecheck`/`test` don't need the binary.

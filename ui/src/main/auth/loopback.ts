@@ -1,7 +1,7 @@
 /**
  * Dev-only loopback redirect listener. An UNPACKAGED Electron on macOS can't receive custom-scheme
  * deep links (the running Electron.app's Info.plist has no `coldstorage` scheme — registration is
- * build-time), so `task ui:dev` sign-in redirects to http://localhost:53682/auth/callback instead:
+ * build-time), so `task ui:mac:dev` sign-in redirects to http://localhost:53682/auth/callback instead:
  * a throwaway one-shot server, bound to 127.0.0.1, alive for exactly one sign-in attempt. The
  * packaged app never starts this — it gets the real `open-url` deep link.
  */

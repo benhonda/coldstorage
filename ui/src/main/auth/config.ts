@@ -2,9 +2,9 @@
  * Resolve the app's sign-in (OAuth) config — or null, which means "sign-in not configured" and the
  * whole auth surface disappears (single-operator dogfood mode, unchanged).
  *
- * Packaged: from `config.json` (written by `task ui:config` from the infra-outputs handoff — the
+ * Packaged: from `config.json` (written by `task ui:mac:config` from the infra-outputs handoff — the
  * same file the daemon supervisor reads, because a Finder-launched app inherits no shell env).
- * Dev: from env (`task ui:dev` sources the handoff), with the loopback redirect because an
+ * Dev: from env (`task ui:mac:dev` sources the handoff), with the loopback redirect because an
  * unpackaged Electron can't receive custom-scheme deep links on macOS (see loopback.ts).
  */
 import { app } from "electron";

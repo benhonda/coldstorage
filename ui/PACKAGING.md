@@ -8,12 +8,12 @@
 > filename-defaulted identity anyway). So the original screenshot problem is **still open**; see
 > "Identity — UNRESOLVED" below. Two things also remain before it's actually usable: ~~production AWS
 > credentials (the app connects but can't upload)~~ **AWS creds wiring is now BUILT (2026-06-29) — pending
-> Ben's Mac verify** (`task ui:bootstrap` + `config.json`; see "Production AWS credentials" below) and real
+> Ben's Mac verify** (`task ui:mac:bootstrap` + `config.json`; see "Production AWS credentials" below) and real
 > code signing.
 
 ## Why this exists
 
-`coldstored` currently installs as an **unbundled** Mach-O binary via a LaunchAgent (`task daemon:install`).
+`coldstored` currently installs as an **unbundled** Mach-O binary via a LaunchAgent (`task daemon:mac:install`).
 macOS TCC labels unbundled path-clients by their **executable filename** — so users see "coldstored", not
 "ColdStorage", and the grant is brittle (re-signing/rebuilding orphans it; the `-10814` gotcha). Only a
 proper `.app` bundle gets a `CFBundleDisplayName` + icon + a stable bundle id. So: package the app (#1),
@@ -27,13 +27,13 @@ then move the daemon inside it as an SMAppService helper (#2).
 - `build/entitlements.mac.plist` — hardened-runtime entitlements Electron needs (JIT heap, dyld env,
   library-validation off); deliberately **not** sandboxed (the app opens the unix control socket + spawns
   the bundled helpers).
-- `task ui:package` — builds release Swift binaries → `electron-vite build` → `electron-builder --mac`.
+- `task ui:mac:package` — builds release Swift binaries → `electron-vite build` → `electron-builder --mac`.
 - `main/system.ts` resolves `coldstore-photo-picker` from `Contents/Resources/bin` when `app.isPackaged`.
 
 ## Build it (on your Mac)
 
 ```
-task ui:package      # → ui/dist/ColdStorage.app + .dmg + .zip
+task ui:mac:package      # → ui/dist/ColdStorage.app + .dmg + .zip
 ```
 
 Unsigned/unnotarized by default, so it runs locally without certs. To produce a **distributable**:
@@ -44,18 +44,18 @@ These genuinely need on-device iteration (can't be done/verified off a Mac):
 
 1. **Icon** — add `build/icon.icns` (1024px, from the Design System). Without it electron-builder uses its
    stock Electron icon. *This is also the icon users will see in the Photos privacy list.*
-2. **Signing + notarization — WIRED ✅ (2026-07-04), pending Ben's Mac + certs to run.** `task ui:release`
+2. **Signing + notarization — WIRED ✅ (2026-07-04), pending Ben's Mac + certs to run.** `task ui:mac:release`
    drives build → sign → notarize → publish. It needs a **Developer ID Application** cert in your login
    keychain (electron-builder auto-discovers it; or set `CSC_LINK`/`CSC_KEY_PASSWORD`) + notary creds in the
    env or the gitignored `.env`: `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_SPECIFIC_PASSWORD` (an app-specific
    password from appleid.apple.com). The task overrides the yml's `notarize: false` default to true on the
-   CLI, so plain `task ui:package` stays cert-free for local smoke tests. Use a STABLE identity — the Photos
-   TCC grant is keyed to it (same constraint `daemon:install` documents).
+   CLI, so plain `task ui:mac:package` stays cert-free for local smoke tests. Use a STABLE identity — the Photos
+   TCC grant is keyed to it (same constraint `daemon:mac:install` documents).
 3. **Nested-binary signing — WIRED ✅ (2026-07-04).** `electron-builder.yml` `mac.binaries` now lists the
    three bundled Swift Mach-Os so electron-builder signs them inside-out with the app's Developer ID +
    hardened runtime (notarization rejects any unsigned nested binary). `coldstored` carries its
    `-sectcreate` Info.plist (Photos usage string); **confirm on the signed build that it survives the
-   re-sign** — `task ui:package:verify` prints each binary's signature/authority.
+   re-sign** — `task ui:mac:package:verify` prints each binary's signature/authority.
 
 ## Auto-update (Phase 6b) — GitHub Releases
 
@@ -63,7 +63,7 @@ The packaged app self-updates from **GitHub Releases** (the repo is public → f
 infra). electron-updater lives in `src/main/updater/` (`manager.ts` = the state machine, `ipc.ts` = the seam),
 wired into `main/index.ts` packaged-only:
 
-- **Feed:** `electron-builder.yml` `publish: github benhonda/coldstorage`. `task ui:release` uploads the
+- **Feed:** `electron-builder.yml` `publish: github benhonda/coldstorage`. `task ui:mac:release` uploads the
   `.dmg` + `.zip` + `latest-mac.yml` metadata to a release tagged `v<version>`; the app reads that same feed.
   (The `zip` target is required — electron-updater applies macOS updates from the `.zip`, not the `.dmg`.)
 - **Flow:** on launch + every 6h it checks, background-downloads a newer *signed* build, and surfaces a quiet
@@ -73,15 +73,15 @@ wired into `main/index.ts` packaged-only:
   auth/vault/entitlement; the banner shows only in the `ready` state (calm, non-urgent voice). Dev is inert
   (a no-op port — auto-update can't run unpackaged/unsigned).
 - **Cutting a release:** bump `ui/package.json` `version` (semver — the update comparison), commit + push,
-  then `task ui:release`. **macOS refuses to apply an update to an unsigned/ad-hoc app**, so end-to-end
-  self-update only works once 6a's Developer ID signing is in place — an `ui:package:sign-adhoc` build can't
+  then `task ui:mac:release`. **macOS refuses to apply an update to an unsigned/ad-hoc app**, so end-to-end
+  self-update only works once 6a's Developer ID signing is in place — an `ui:mac:package:sign-adhoc` build can't
   self-update.
-- **Provenance guard:** `ui:release` refuses unless you're on a **clean, pushed `main`**. Why: electron-builder
+- **Provenance guard:** `ui:mac:release` refuses unless you're on a **clean, pushed `main`**. Why: electron-builder
   uploads to a *draft* release, and when that draft is published GitHub creates the `v<version>` tag on
   **main's latest remote commit** — not your working tree. So a dirty tree, a feature branch, or unpushed
   commits would ship a binary that no tag reproduces (bad for a feed users auto-pull). Bypass with
   `RELEASE_FORCE=1` if you truly mean to. To rehearse a signed + notarized build **without** publishing (no
-  release, no tag, no `GH_TOKEN`, no guard), use **`task ui:release:dryrun`** → `ui/dist/`.
+  release, no tag, no `GH_TOKEN`, no guard), use **`task ui:mac:release:dryrun`** → `ui/dist/`.
 
 ## Step #2 — app owns its daemon (approach **B**): CONNECT ✅, IDENTITY ❌
 
@@ -92,7 +92,7 @@ daemon runs while the app runs (menu-bar/Backblaze model), not as an independent
 
 **Wired + PROVEN on a real Mac (2026-06-28) — the app reaches "connected":** (`main/daemon.ts` + `main/index.ts`)
 - Spawn/supervise the bundled `coldstored` (packaged only); per-user data dir = `app.getPath("userData")`
-  (`~/Library/Application Support/ColdStorage` — same `DATA_DIR` `task daemon:logs` tails).
+  (`~/Library/Application Support/ColdStorage` — same `DATA_DIR` `task daemon:mac:logs` tails).
 - Socket SSOT: `daemonSocketPath()` feeds both the daemon's `COLDSTORE_SOCKET` and `new DaemonClient({…})`,
   so the packaged app dials the child it just launched (this is what fixed "Connecting…").
 - `app.setName("ColdStorage")` pins userData so the client's (module-load) and daemon's (whenReady) socket
@@ -107,7 +107,7 @@ embedded Info.plist). Compounding it, the test build is **ad-hoc** signed, which
 filename-defaulted identity regardless — so a clean verdict isn't even possible until proper signing.
 
 **Untested caveat:** unconfirmed whether a fresh Photos *prompt* actually fired during the test, or whether
-the pane just showed the stale entry from the old `daemon:install`. Worth re-checking on a signed build.
+the pane just showed the stale entry from the old `daemon:mac:install`. Worth re-checking on a signed build.
 
 Options for when we return to this (need a **properly signed** build to evaluate any of them):
 1. **Native disclaim-responsibility launcher** — a tiny shim that `posix_spawn`s `coldstored` with
@@ -129,18 +129,18 @@ build — defer it to the signing milestone. Prioritize the two things that bloc
   cognitoIdentityPoolId, cognitoUserPoolProvider}` — the last two added 2026-07-01 for the Cognito
   multi-user seam, PROD.md Phase 2c; empty/absent until `tf:coldstorage:creds-export` has been re-run
   since) and injects `COLDSTORE_BUCKET`/`AWS_REGION`/`AWS_PROFILE`/`COLDSTORE_COGNITO_IDENTITY_POOL_ID`/
-  `COLDSTORE_COGNITO_USER_POOL_PROVIDER` into the daemon env — exactly what `daemon:install` bakes into the
+  `COLDSTORE_COGNITO_USER_POOL_PROVIDER` into the daemon env — exactly what `daemon:mac:install` bakes into the
   launchd plist. **No secret is in config.json**: creds resolve via the `coldstorage` profile's
-  `credential_process → Keychain`, the same path `task daemon:creds` already sets up. Write it with
-  **`task ui:config`** (from the infra-outputs handoff SSOT) or **`task ui:bootstrap`** (`daemon:creds` +
-  `ui:config`, the .app analogue of `daemon:bootstrap`). Reading is best-effort — a missing/malformed file
+  `credential_process → Keychain`, the same path `task daemon:mac:creds` already sets up. Write it with
+  **`task ui:mac:config`** (from the infra-outputs handoff SSOT) or **`task ui:mac:bootstrap`** (`daemon:mac:creds` +
+  `ui:mac:config`, the .app analogue of `daemon:mac:bootstrap`). Reading is best-effort — a missing/malformed file
   logs + the daemon still starts (graceful "connected but can't upload" degrade).
 - **Self-configuring customer build (baked public config)** — **BUILT ✅ (2026-07-05), PENDING Ben's Mac
   verify (PROD.md Phase 6d).** `config.json` above is the *dogfood/dev* seam — a stranger's download has no
   such file, so it can't sign in or upload. The fix: `main/config.ts` now resolves config as **baked base ←
   user override**. The baked base is **`Contents/Resources/app-config.json`**, written at package time by
   **`task ui:config:bake ENV=production|staging`** (run automatically inside the packaging tasks) from the
-  **same infra-outputs handoff** as `ui:config` — so it's SSOT-generated, never hand-maintained, and
+  **same infra-outputs handoff** as `ui:mac:config` — so it's SSOT-generated, never hand-maintained, and
   gitignored (`ui/build/app-config.json`). It carries only PUBLIC config (bucket, region, Cognito ids,
   sign-in domain/client, account-API URL) — **`awsProfile` is deliberately omitted**: a customer has no local
   profile, they sign in and get scoped short-lived STS creds via Cognito (`coldstored/main.swift`). The
@@ -148,24 +148,24 @@ build — defer it to the signing milestone. Prioritize the two things that bloc
   effect: **sign-in is the only customer setup.**
   - **Two lanes, explicit (no silent default):** the account-backend URL is the ONLY thing that differs
     between a customer and a dogfood build (Cognito + the vault bucket are shared) — and the key-blob lives in
-    whichever lane's DB, so they must never cross. **`ui:release`/`ui:release:dryrun` bake `production`**
+    whichever lane's DB, so they must never cross. **`ui:mac:release`/`ui:mac:release:dryrun` bake `production`**
     (`api.coldstorage.sh` — the published customer build; requires the prod account-backend lane up first);
-    **`ui:package` bakes `staging`** (`api-staging.coldstorage.sh` — Ben's local dogfood build, sandbox
+    **`ui:mac:package` bakes `staging`** (`api-staging.coldstorage.sh` — Ben's local dogfood build, sandbox
     Paddle, never published). `ENV` is required, so a customer build can't accidentally ship staging-wired.
   - When the handoff is absent at package time, bake writes just `accountApiBaseUrl` (a cert-less dogfood
     build with no bucket/Cognito — the runtime falls back to `config.json`, exactly as before).
   **Ben to verify on Mac:** a fresh customer `.dmg` on a machine with NO `config.json` → launch → sign in →
   subscribe → deposit, end-to-end.
-  `task ui:package:doctor` now reports config.json + runs `aws sts get-caller-identity` on its profile —
+  `task ui:mac:package:doctor` now reports config.json + runs `aws sts get-caller-identity` on its profile —
   **but note it auto-discovers by data dir, which the packaged app SHARES with the launchd daemon (see the
-  NOTE just below), so a `daemon:install`ed launchd daemon still running will make `doctor` report on
+  NOTE just below), so a `daemon:mac:install`ed launchd daemon still running will make `doctor` report on
   *that* process, not the packaged app's own bundled `coldstored` — check the binary path it prints
   (`Contents/Resources/bin/coldstored` = the real packaged-app process).**
   **NOTE: the packaged app's data dir == the launchd daemon's `DATA_DIR`** (both `~/Library/Application
-  Support/ColdStorage`, same `coldstored.sock`) — don't run both at once; `task daemon:uninstall` the
-  launchd one before dogfooding the .app. **Ben to verify on Mac:** `task ui:bootstrap` → launch the .app →
-  deposit a file → confirm it lands in the prod vault (`task ui:package:doctor` should show a valid Arn).
-- **Real code signing** (Developer ID / the Apple Development cert `daemon:install` already uses) — needed
+  Support/ColdStorage`, same `coldstored.sock`) — don't run both at once; `task daemon:mac:uninstall` the
+  launchd one before dogfooding the .app. **Ben to verify on Mac:** `task ui:mac:bootstrap` → launch the .app →
+  deposit a file → confirm it lands in the prod vault (`task ui:mac:package:doctor` should show a valid Arn).
+- **Real code signing** (Developer ID / the Apple Development cert `daemon:mac:install` already uses) — needed
   for arm64 launch beyond the ad-hoc stopgap, for the grant to persist across rebuilds, AND to even judge
   the identity options above. Confirm electron-builder signs `Contents/Resources/bin/*` (may need `mac.binaries`).
 - **Background-run UX** — a **Tray** + `LSUIElement` so the always-running app lives in the menu bar, plus a

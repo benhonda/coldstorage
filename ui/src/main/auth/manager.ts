@@ -153,7 +153,7 @@ export class AuthManager {
         this.pending = null;
         this.lastError =
           `port ${LOOPBACK_PORT} is taken on this Mac, so the sign-in redirect can't come back — ` +
-          `often a VS Code forwarded port (Ports panel → remove it). Run: task ui:auth:doctor ` +
+          `often a VS Code forwarded port (Ports panel → remove it). Run: task ui:mac:auth:doctor ` +
           `(${e instanceof Error ? e.message : String(e)})`;
         this.emitStatus();
         return;

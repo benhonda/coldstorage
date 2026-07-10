@@ -130,7 +130,7 @@ export class VaultManager {
 
   /** Sign-out: tell the daemon to drop the MasterKey. The per-device Keychain escrow is deliberately
    * KEPT (signing out of the account ≠ un-trusting the device), so re-signing in unlocks silently; a
-   * full reset (`task daemon:reset:local`) is what wipes the escrow. */
+   * full reset (`task daemon:mac:reset:local`) is what wipes the escrow. */
   async relock(): Promise<void> {
     this.sub = null;
     this.pendingBlob = null;

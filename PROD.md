@@ -152,9 +152,9 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      `COLDSTORE_COGNITO_IDENTITY_POOL_ID` + `COLDSTORE_COGNITO_USER_POOL_PROVIDER` (composed from the
      already-applied `cognito_identity_pool_id`/`cognito_user_pool_id`/`aws_region` TF outputs — no new
      Terraform output needed, so no apply required for this sub-step) into the gitignored handoff. Both
-     consumers read them: **`daemon:install`** substitutes 2 new plist placeholders
+     consumers read them: **`daemon:mac:install`** substitutes 2 new plist placeholders
      (`__COGNITO_IDENTITY_POOL_ID__`/`__COGNITO_USER_POOL_PROVIDER__`) into
-     `launchd/com.theadpharm.coldstored.plist.template`, blank when the handoff predates 2c; **`ui:config`**
+     `launchd/com.theadpharm.coldstored.plist.template`, blank when the handoff predates 2c; **`ui:mac:config`**
      writes the same 2 values into the packaged app's `config.json`, read by `ui/src/main/daemon.ts`'s
      `AppConfig`/`daemonEnv` (same pass-through pattern as `bucket`/`region`/`awsProfile`) so the Electron-app
      daemon supervisor picks them up too. `coldstored/main.swift`'s gate now treats an **empty string** the
@@ -304,8 +304,8 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
    checkout UI. "Upload blocked when inactive" (the daemon consuming `/entitlement`) rides with
    Phase 5's auth handoff.
 5. **App auth + paywall UX — DONE ✅ (steel thread; 5a/5b/5c all gate-PASSED, last 2026-07-03).
-   The once-deferred multi-plan paywall is now BUILT (2026-07-10, see 5c addendum below); still open:
-   the daemon-side sign-out command (open sub-decision below).** Passwordless sign-in/up (Google via
+   The once-deferred multi-plan paywall is now BUILT (2026-07-10, see 5c addendum below), and the
+   daemon-side sign-out command landed the same day (sub-decision closed below).** Passwordless sign-in/up (Google via
    Cognito managed login in the SYSTEM browser — Google blocks embedded webviews — code+PKCE to the
    `coldstorage://` callback; email-OTP codes via `ALLOW_USER_AUTH` as the no-Google path) +
    recovery-code capture + subscribe flow in the Electron UI; token handed to the daemon. Cut
@@ -328,7 +328,7 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      (`configured: false`) see zero auth UI, byte-for-byte the old behavior. Infra: callback list +
      `cognito_domain` output (plan verified **0 add / 1 change / 0 destroy**; also pinned the six
      AWS-computed Google `provider_details` keys that were causing perpetual plan drift); handoff →
-     `ui:config`/`ui:dev`/`ui:live` now carry `COLDSTORE_COGNITO_DOMAIN`/`_CLIENT_ID` (dev lanes strip
+     `ui:mac:config`/`ui:mac:dev`/`ui:mac:live` now carry `COLDSTORE_COGNITO_DOMAIN`/`_CLIENT_ID` (dev lanes strip
      the daemon secrets). **5a gate — MET ✅ (2026-07-02):** Ben signed in with Google and deposited a
      file that landed under his per-user prefix in the production vault; `task daemon:gate-test` then
      proved the boundary adversarially (own-prefix PUT ok, cross-prefix PUT + GET of Ben's real object
@@ -337,7 +337,7 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      in a terraform plan) and squatted `127.0.0.1:53682` on the Mac, black-holing the OAuth redirect;
      fixed with `devcontainer.json` `portsAttributes` (`onAutoForward: ignore`) + a fail-loud bind in
      `manager.signIn` (binds the listener BEFORE opening the browser). **Decided alongside:**
-     dogfood→multi-user is a clean RESET, not a migration (`task daemon:reset:{local,vault}`) — the
+     dogfood→multi-user is a clean RESET, not a migration (`task daemon:mac:reset:local + daemon:reset:vault`) — the
      pre-auth archive at `blobs/<hash>` is unreachable from a Cognito identity anyway, so no S3
      re-prefix / journal-rewrite / key-rewrap migration is needed.
    - **5b — email-OTP lane + signup + recovery code + ZK wiring — DONE ✅ (2026-07-02, all three
@@ -374,14 +374,14 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
        only `VaultStatus` over IPC (never key material except the one-time code): reducer/controller
        fold + `views/RecoveryCodeView.tsx` (show-once, enter-code, provisioning/error gates) wired into
        `App.tsx`'s gate. Sign-out relocks the daemon but KEEPS the per-device escrow (`vault.json`,
-       re-signin is silent); `task daemon:sim-new-device` deletes just that escrow to force the
+       re-signin is silent); `task daemon:mac:sim-new-device` deletes just that escrow to force the
        recovery-code path. Tests: `VaultManager` cached/mint/new-device/error/relock branches headless +
        the vault-status fold. **Gate — PASSED ✅ (2026-07-02, Ben, Mac):** fresh Google sign-in → recovery
-       code shown once → deposit; then `task daemon:sim-new-device` (deletes the MasterKey escrow, no
+       code shown once → deposit; then `task daemon:mac:sim-new-device` (deletes the MasterKey escrow, no
        second Mac) → relaunch → sign-in prompted for the recovery code → entered it → the vault unlocked
        and the files were there. The full zero-knowledge spine is proven on real hardware.
        **Fixes found during the gate run (all committed):** (1) the installed launchd daemon predated
-       5b-1 — `daemon:install` rebuilds it (obvious in hindsight; ui:live uses the installed binary);
+       5b-1 — `daemon:mac:install` rebuilds it (obvious in hindsight; ui:mac:live uses the installed binary);
        (2) `unlockVaultWithRecoveryCode` sent the key-blob's numeric `opsLimit`/`memLimit` as JSON
        numbers over the `[String:String]` control wire, so the daemon rejected the command and it looked
        like a wrong code — now sent as strings (like restore's `days`), regression-tested; (3) UX:
@@ -472,21 +472,21 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
    page. *Gate:* a notarized build launches Gatekeeper-clean on a non-dev Mac and self-updates. Scoped
    hardest-first into 6a/6b/6c/6d (2026-07-04; 6d added 2026-07-05):
    - **6a — Developer ID signing + notarization + nested-binary signing + the TCC identity fix:
-     SIGNED + NOTARIZED + PUBLISHED ✅ (2026-07-05, Ben's Mac).** `task ui:release` completed clean
+     SIGNED + NOTARIZED + PUBLISHED ✅ (2026-07-05, Ben's Mac).** `task ui:mac:release` completed clean
      end-to-end: built → Developer-ID-signed → Apple-notarized (all nested binaries + frameworks) →
      published a draft GitHub Release with the `.dmg`/`.zip`/`latest-mac.yml`. `mac.binaries` signs the three
      bundled Swift Mach-Os (`coldstored` + photo-picker + restore) inside-out with the app's Developer ID —
      notarization *rejects* any unsigned nested binary, and TCC keys the Photos grant to `coldstored`'s
-     signature. `task ui:release` drives build → sign → notarize → publish, reading creds from the env or the
+     signature. `task ui:mac:release` drives build → sign → notarize → publish, reading creds from the env or the
      gitignored `.env` (APPLE_ID/APPLE_TEAM_ID/APPLE_APP_SPECIFIC_PASSWORD + GH_TOKEN); the yml default stays
-     `notarize: false` so plain `task ui:package` still builds unsigned with no cert.
+     `notarize: false` so plain `task ui:mac:package` still builds unsigned with no cert.
      **War stories getting the first release out (2026-07-05):** (1) electron-builder's production-dep
      collection failed on a stale `node_modules` after the pull (`electron-updater not found`) → the
      packaging tasks now `bun install` first; (2) notary **401** — the `.env` value wasn't a valid
-     app-specific password (new **`ui:notarize:doctor`** probes creds against Apple's notarytool directly);
+     app-specific password (new **`ui:mac:notarize:doctor`** probes creds against Apple's notarytool directly);
      (3) notarization rejected **every** binary as "not signed with a valid Developer ID certificate" — Ben
      had an *Apple Development* cert, not a *Developer ID Application* one (the only type valid for notarized
-     distribution); created the Developer ID cert → clean pass (new **`ui:sign:doctor`** lists identities +
+     distribution); created the Developer ID cert → clean pass (new **`ui:mac:sign:doctor`** lists identities +
      checks for it). **Remaining to fully close the phase gate (on-Mac, Ben):** (a) **publish the draft**
      v0.1.0 release on GitHub (electron-builder's default `releaseType` is *draft* — the feed isn't live and
      no `v0.1.0` tag exists until it's published); (b) install the `.dmg` + launch **Gatekeeper-clean on a
@@ -498,7 +498,7 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
    - **6b — auto-update via GitHub Releases: BUILT ✅ (2026-07-04) + FEED PUBLISHED ✅ (2026-07-05) — the
      self-update *apply* round trip is the last unproven step.** The first signed + notarized build published
      its `.dmg`/`.zip`/`latest-mac.yml` to the GitHub feed (6a), so the feed is real; what's left is to prove
-     a running app actually updates itself: install v0.1.0, bump `ui/package.json` → 0.1.1, `task ui:release`
+     a running app actually updates itself: install v0.1.0, bump `ui/package.json` → 0.1.1, `task ui:mac:release`
      + publish, and confirm the running app surfaces **"Restart to update"** and relaunches on 0.1.1.
      Decision (Ben, 2026-07-04): **GitHub Releases** as the
      update feed — the repo is public → free, CDN-backed release assets, zero new infra, and it's
@@ -523,20 +523,24 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      account-backend Hono app. The `api.*`→website checkout move (§5c) rides along with this.
      **Update 2026-07-05:** the live site's "Download for Mac" CTAs are now wired — a `/download`
      resource route (`site/app/routes/download.tsx`) 302s to the latest GitHub Releases `.dmg`, so
-     the direct-download half of 6c is done. The standalone download *page* + the `api.*`→site
-     checkout move remain deferred.
+     the direct-download half of 6c is done. **Update 2026-07-10: 6c is now fully BUILT** — the
+     standalone `/download` *page* landed (CTAs → page with install steps + meta-refresh auto-start;
+     the 302 resource moved to `/download.dmg`; smoke-tested locally: page renders, resource 302s to
+     the real v0.1.0 asset — see `site/SPEC.md`), and the `api.*`→site checkout move shipped earlier
+     (`c660c87`, §5c). Remaining 6c-adjacent: Ben pointing the LIVE Paddle default payment link at
+     the site's `/checkout` (dashboard-only).
    - **6d — self-configuring customer build — BUILT ✅ (2026-07-05, `ui:typecheck` + 103 ui tests
      green, bake task emits valid JSON verified); PENDING Ben's Mac verify. This is the gate
      between "works for the operator who set it up" and "a stranger can download + use it," so it's
      the true blocker on pointing the live `coldstorage.sh` download button at real customers.**
      Was: the shipped `.dmg` was a **dogfood build** — the daemon's non-secret config (bucket, region,
      Cognito pool ids) reached it *only* via `~/Library/Application Support/ColdStorage/config.json`,
-     written by the dev-only `task ui:config`, so a cold customer download launched, showed "connected",
+     written by the dev-only `task ui:mac:config`, so a cold customer download launched, showed "connected",
      and had nowhere to store. **Fix (SSOT-driven):** `ui/src/main/config.ts` (new, pure/testable) resolves
      config as **baked base ← user override**. The baked base is `Contents/Resources/app-config.json`,
-     written at package time by **`task ui:config:bake`** (wired into `ui:package`/`ui:release`/
-     `ui:release:dryrun` before electron-builder bundles it, `electron-builder.yml` extraResources) from the
-     **same infra-outputs handoff** as `ui:config` — SSOT-generated, gitignored (`ui/build/app-config.json`),
+     written at package time by **`task ui:config:bake`** (wired into `ui:mac:package`/`ui:mac:release`/
+     `ui:mac:release:dryrun` before electron-builder bundles it, `electron-builder.yml` extraResources) from the
+     **same infra-outputs handoff** as `ui:mac:config` — SSOT-generated, gitignored (`ui/build/app-config.json`),
      PUBLIC values only (bucket/region/Cognito ids/sign-in domain+client/account-API). **`awsProfile` is
      deliberately omitted** — customers get scoped STS creds via Cognito (`coldstored/main.swift`), not a
      local profile. The user's `config.json` still overrides per-key, so dogfood/dev/MinIO is byte-for-byte
@@ -549,10 +553,10 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      URL is the ONLY thing that differs between a customer build and a dogfood build (Cognito + the vault
      bucket are shared across lanes — cognito.tf), and the key-blob lives in whichever lane's DB, so the two
      must never cross (onboarding on staging would strand a user's encrypted MK in the test DB). ENV is
-     REQUIRED — no silent default — so a customer build can't accidentally ship staging-wired: **`ui:release`
-     (+ `ui:release:dryrun`) bake `production` → `api.coldstorage.sh`** (the published customer build);
-     **`ui:package` bakes `staging` → `api-staging.coldstorage.sh`** (Ben's local dogfood build — sandbox
-     Paddle, never published to the public feed). A working `ui:release` therefore *requires the prod
+     REQUIRED — no silent default — so a customer build can't accidentally ship staging-wired: **`ui:mac:release`
+     (+ `ui:mac:release:dryrun`) bake `production` → `api.coldstorage.sh`** (the published customer build);
+     **`ui:mac:package` bakes `staging` → `api-staging.coldstorage.sh`** (Ben's local dogfood build — sandbox
+     Paddle, never published to the public feed). A working `ui:mac:release` therefore *requires the prod
      account-backend lane to be up first* (Phase 4) — that gate is now MET (prod lane live 2026-07-10, see
      Phase 4). The multi-plan picker is BUILT (2026-07-10, §5c) pending deploy + Mac verify; still deferred
      of the customer-facing last mile: the download page + checkout move (6c above).
@@ -587,8 +591,13 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
   (`AdminLinkProviderForUser`, which must run BEFORE the federated first sign-in — a pre-signup
   Lambda). Surfaced by the 2026-07-02 research pass. Leaning: ship 5a/5b unlinked with plain copy
   ("sign in the way you signed up"), decide linking before public launch — but this is Ben's call.
-- **[open] Daemon-side sign-out** — app sign-out revokes tokens, drops the session, AND relocks the
+- ~~**Daemon-side sign-out** — app sign-out revokes tokens, drops the session, AND relocks the
   vault (5b's `lockVault`, so no crypto happens after sign-out), but the daemon still holds its STS
-  creds + `vaultPrefix` until expiry (~1h). 5b shipped WITHOUT the once-planned `deauthenticate`
-  control command (verified 2026-07-03: no such command in `DaemonService.handle`) — still open,
-  land it whenever the daemon control surface is next touched (pre-launch at the latest).
+  creds + `vaultPrefix` until expiry (~1h).~~ **CLOSED ✅ (2026-07-10): `deauthenticate` landed.**
+  `CognitoAuth.deauthenticate()` calls `resolver.updateLogins(nil)` — which invalidates the SDK
+  resolver's internal credential + identity-id cache (verified against aws-sdk-swift's
+  `CognitoAWSCredentialIdentityResolver` source, not assumed) — and nils `vaultPrefix`; with
+  `allow_unauthenticated_identities = false` any later S3 call fails clean until the next
+  `authenticate`. New `deauthenticate` control command (same no-Cognito gate as `authenticate`);
+  the app fires it on every signed-out transition alongside `relock`, daemon-may-be-down tolerant.
+  84 core tests + 105 ui tests green. Live signed-in→out flip rides Ben's next on-Mac session.

@@ -19,7 +19,7 @@ let endpoint = env["COLDSTORE_ENDPOINT"]
 let folderRoots = (env["COLDSTORE_SOURCES"] ?? "").split(separator: ":").map { URL(fileURLWithPath: String($0)) }
 
 // Cognito (multi-user prod, PROD.md Phase 2) is opt-in: unset ⇒ the default AWS credential chain (the
-// scoped IAM user via `daemon:bootstrap`'s profile/Keychain) and the "blobs" keyPrefix, exactly as today.
+// scoped IAM user via `daemon:mac:bootstrap`'s profile/Keychain) and the "blobs" keyPrefix, exactly as today.
 // Set ⇒ every S3 call signs as whoever is signed in over the control socket (`authenticate` command); until
 // that succeeds, S3 calls fail clean on Cognito's own auth error — the identity pool grants no
 // unauthenticated role (infra/coldstorage/modules/stack/cognito.tf: allow_unauthenticated_identities = false).
@@ -65,7 +65,7 @@ let platformSources: [IngestSource] = []
 // to full-res originals via PhotoKit and archives only those. The resolver is Mac-only (PhotoKit); off
 // macOS it's nil and the command reports photos-unavailable. NOTE: actual Photos access still needs the
 // daemon binary to embed coldstored-Info.plist + be codesigned (recipe proven in phase0-photos-spike) —
-// see daemon:install. Until that lands, the resolver compiles + dispatches but PhotoKit will deny reads.
+// see daemon:mac:install. Until that lands, the resolver compiles + dispatches but PhotoKit will deny reads.
 #if canImport(Photos)
 let photoResolver: (any PhotoResolver)? = PhotoKitResolver()
 #else

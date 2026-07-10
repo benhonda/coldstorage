@@ -78,7 +78,7 @@
     "source=${localEnv:HOME}/.gitconfig,target=/home/vscode/.gitconfig,type=bind,consistency=cached",
     // UI node_modules in a NAMED VOLUME, NOT on the bind mount: this is an Electron app, so
     // node_modules holds platform-native binaries (electron, rolldown/vite, esbuild). The workspace is
-    // bind-mounted from the macOS host, which also runs the GUI (`task ui:dev`) and needs macOS-native
+    // bind-mounted from the macOS host, which also runs the GUI (`task ui:mac:dev`) and needs macOS-native
     // binaries — the two can't share one folder. The volume gives the container its own Linux copy;
     // the host keeps its own macOS copy. post-create.sh chowns + populates it.
     "source=coldstorage-ui-node-modules,target=/workspace/ui/node_modules,type=volume"

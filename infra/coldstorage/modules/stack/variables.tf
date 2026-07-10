@@ -71,7 +71,7 @@ variable "app_oauth_callback_urls" {
   default = [
     # Packaged app: the custom scheme electron-builder registers in the app's Info.plist (Phase 5).
     "coldstorage://auth/callback",
-    # Dev (`task ui:dev`): custom-scheme deep links can't reach an unpackaged Electron on macOS (the
+    # Dev (`task ui:mac:dev`): custom-scheme deep links can't reach an unpackaged Electron on macOS (the
     # running Electron.app's Info.plist has no `coldstorage` scheme — Electron docs are explicit), so
     # dev sign-in redirects to a throwaway 127.0.0.1 listener the app binds per sign-in. Cognito allows
     # plain http for localhost only; the port is fixed because Cognito exact-matches the URL.

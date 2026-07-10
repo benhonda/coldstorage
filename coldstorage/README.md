@@ -17,7 +17,7 @@ Sources/coldstore-restore/ # get one file back — thaw (if Deep Archive) → ra
 Sources/coldstorectl/      # thin client over the daemon control socket (getStatus, addSource, watch, …)
 Sources/coldstore-photo-picker/  # macOS native PHPickerViewController helper → prints picked {id,name} (option B)
 Sources/coldstored/        # daemon entrypoint — wires engine + EventBus + ControlServer (+ FSEvents on Mac)
-launchd/                   # plist template + coldstored-Info.plist (TCC identity for Photos); task daemon:install
+launchd/                   # plist template + coldstored-Info.plist (TCC identity for Photos); task daemon:mac:install
 Tests/                     # Core tests (swift-testing — NOT XCTest; XCTest deadlocks on Linux, see the root README gotchas)
 ```
 
@@ -57,9 +57,9 @@ before they reach us.
 The **journal is the SSOT for sources** — add/remove via the socket survives restarts (`COLDSTORE_SOURCES`
 is only a one-time seed). The socket is `0600` (owner-only). On macOS the full setup is two task runs:
 `task tf:coldstorage:creds-export` (in the devcontainer — TF creds → a gitignored handoff file over the bind
-mount) then `task daemon:bootstrap` (seeds the AWS secret into the login Keychain + wires a `coldstorage`
+mount) then `task daemon:mac:bootstrap` (seeds the AWS secret into the login Keychain + wires a `coldstorage`
 profile whose `credential_process` reads it, then renders the LaunchAgent plist (RunAtLoad + KeepAlive) and
-bootstraps it). `task daemon:doctor` health-checks it; `daemon:uninstall` removes it. AWS creds resolve via
+bootstraps it). `task daemon:mac:doctor` health-checks it; `daemon:mac:uninstall` removes it. AWS creds resolve via
 the Keychain — never a plaintext file — and the `credential_process` helper lives at a space-free
 `~/.coldstorage/` (AWS splits that command on whitespace).
 
@@ -109,14 +109,14 @@ real Mac — durable Photos TCC grant under launchd + full-res iCloud original).
 EXPLICIT-deposit only, never auto-watched** (product decision 2026-06-26): the daemon's old
 `COLDSTORE_PHOTOS=1` enumerate-everything path is **removed** (`platformSources` is empty); the explicit
 photo-deposit path is **built + proven end-to-end on a real Mac (2026-06-26)** — native PHPicker helper →
-`depositPhotos` → daemon archives full-res originals (see CHANGELOG). **`FolderWatcher` FSEvents behavior is now PROVEN on a real Mac (2026-06-26)** — a drop fires a sub-second re-scan under a 600s poll (`task daemon:fsevents-test`). The watcher is now **re-armable** (`FolderWatcher.setPaths` + `main.swift` subscribes to `sourcesChanged`), so `addSource`'d/unpaused folders are watched without a daemon restart (**proven on a real Mac 2026-06-26** — a drop into a folder added post-startup fired a sub-second re-scan, no restart).
+`depositPhotos` → daemon archives full-res originals (see CHANGELOG). **`FolderWatcher` FSEvents behavior is now PROVEN on a real Mac (2026-06-26)** — a drop fires a sub-second re-scan under a 600s poll (`task daemon:mac:fsevents-test`). The watcher is now **re-armable** (`FolderWatcher.setPaths` + `main.swift` subscribes to `sourcesChanged`), so `addSource`'d/unpaused folders are watched without a daemon restart (**proven on a real Mac 2026-06-26** — a drop into a folder added post-startup fired a sub-second re-scan, no restart).
 `S3ClientConfiguration`/`*Input` deprecation warnings remain (SDK moved to `S3ClientConfig`); a non-urgent cleanup.
 
 ## Known stubs / TODO (next build chunks)
-- ~~Live Deep Archive **thaw** leg~~ — **DONE ✅ (2026-06-27): PROVEN END-TO-END on the real prod vault.** First REAL thaw was requested + AWS-confirmed 2026-06-26 (`restore` → `state=thawRequested`; `head-object` `ongoing-request="true"`); after the ~12h Standard clock a single re-run returned `state=restored` with a verified file written (`RestoreEngine` won't write on hash mismatch, so that *is* the byte-identical proof). No longer a stub — the whole pipeline has zero unproven legs vs real AWS. `task daemon:restore-wait` remains the hands-off poller for future thaws. See CHANGELOG.
+- ~~Live Deep Archive **thaw** leg~~ — **DONE ✅ (2026-06-27): PROVEN END-TO-END on the real prod vault.** First REAL thaw was requested + AWS-confirmed 2026-06-26 (`restore` → `state=thawRequested`; `head-object` `ongoing-request="true"`); after the ~12h Standard clock a single re-run returned `state=restored` with a verified file written (`RestoreEngine` won't write on hash mismatch, so that *is* the byte-identical proof). No longer a stub — the whole pipeline has zero unproven legs vs real AWS. `task daemon:mac:restore-wait` remains the hands-off poller for future thaws. See CHANGELOG.
 - **UI contract gaps** (the Electron panel needs these — see [`../ui/DESIGN.md`](../ui/DESIGN.md) "Remaining UI-lane work"):
   - **`newFolder`** (a virtual path, still local-only); a per-run **filesFailed** count (blobs ≠ files); **skipped-count reporting** (how many files the excludes filtered). *(`move`/`rename`/`delete` landed as `movePath`/`deletePath`; **exclude get/set**, the **restore fee** estimate, and **bytes/size** all landed too — see below.)*
-- **Explicit photo-deposit path — DONE ✅ + proven on a real Mac (2026-06-26):** native PHPicker helper (`coldstore-photo-picker`) → `depositPhotos` → daemon resolves picked ids via `PhotoKitResolver` + archives full-res originals; `coldstored-Info.plist` embedded (`-sectcreate`) + codesigned `--identifier`-pinned in `task daemon:install`. *Remaining TODO in this area:* real plaintext hashing pre-pass for photos (the `contentHash` metadata still keys on `localIdentifier` — integrity is unaffected, it's computed from real bytes at archive time, but a real hash would dedup re-deposits better). *(FSEvents `FolderWatcher` — incl. live re-arm on `sourcesChanged` — is now PROVEN on a real Mac, 2026-06-26; was listed here as untested.)*
+- **Explicit photo-deposit path — DONE ✅ + proven on a real Mac (2026-06-26):** native PHPicker helper (`coldstore-photo-picker`) → `depositPhotos` → daemon resolves picked ids via `PhotoKitResolver` + archives full-res originals; `coldstored-Info.plist` embedded (`-sectcreate`) + codesigned `--identifier`-pinned in `task daemon:mac:install`. *Remaining TODO in this area:* real plaintext hashing pre-pass for photos (the `contentHash` metadata still keys on `localIdentifier` — integrity is unaffected, it's computed from real bytes at archive time, but a real hash would dedup re-deposits better). *(FSEvents `FolderWatcher` — incl. live re-arm on `sourcesChanged` — is now PROVEN on a real Mac, 2026-06-26; was listed here as untested.)*
 - Cross-blob concurrency + adaptive throughput (engine is correct sequential today); persistent poison-blob state (skip-list is in-memory).
 - R2 bucket for photo **thumbnails** + cross-device index portability (the browse *tree* is journal-backed and needs no R2).
 

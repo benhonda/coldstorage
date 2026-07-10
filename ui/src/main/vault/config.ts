@@ -1,6 +1,6 @@
 /**
  * Resolve the account-backend base URL the vault client talks to (PROD.md Phase 5b). Packaged: from
- * `config.json` (`task ui:config`); dev: from `COLDSTORE_ACCOUNT_API`. Defaults to the staging lane —
+ * `config.json` (`task ui:mac:config`); dev: from `COLDSTORE_ACCOUNT_API`. Defaults to the staging lane —
  * which accepts production Cognito tokens (staging shares the production user pool), so vault
  * provisioning works end-to-end against staging today; the production lane just overrides this URL.
  */

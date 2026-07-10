@@ -19,7 +19,7 @@ export type { AppConfig } from "./config.ts";
 
 /** Per-user data dir — the SSOT for everything the daemon persists. `userData` resolves to
  * `~/Library/Application Support/ColdStorage` (the productName), which is ALSO the `DATA_DIR` that
- * `task daemon:logs` tails — so the packaged daemon's logs land where the existing ops task expects.
+ * `task daemon:mac:logs` tails — so the packaged daemon's logs land where the existing ops task expects.
  * Exported for the auth config resolver (config.json is the packaged app's whole config seam). */
 export const dataDir = (): string => app.getPath("userData");
 
@@ -39,7 +39,7 @@ const bakedConfigPath = (): string => join(process.resourcesPath, "app-config.js
 /** The packaged app's per-user config, resolved as **baked base ← user override**:
  *   - baked  = `Contents/Resources/app-config.json` (the public prod config, packaged builds only) — the
  *     SSOT that makes a config-less customer download work; NO secret (creds come via Cognito STS).
- *   - user   = `<dataDir>/config.json` (written by `task ui:config`) — dev/dogfood overrides on top, e.g.
+ *   - user   = `<dataDir>/config.json` (written by `task ui:mac:config`) — dev/dogfood overrides on top, e.g.
  *     `awsProfile` for the credential_process path, or a MinIO/staging bucket for testing.
  * A missing file on either side is normal (a customer has no user file; dev has no baked file), so this
  * silently degrades: uploads just fail clean until something supplies bucket + Cognito, the daemon still
@@ -76,7 +76,7 @@ const daemonEnv = (dir: string): NodeJS.ProcessEnv => {
  * Spawn + supervise `coldstored`. Returns a disposer that stops the supervisor and terminates the child.
  * Restarts on unexpected exit after a short backoff (so a crash-loop can't peg the CPU); a disposer call
  * suppresses further restarts. stdout/stderr → `coldstored.{out,err}.log` in the data dir (what
- * `task daemon:logs` tails — incl. the PhotoKitResolver auth diagnostics).
+ * `task daemon:mac:logs` tails — incl. the PhotoKitResolver auth diagnostics).
  */
 export const startDaemon = (): (() => void) => {
   const dir = dataDir();

@@ -49,8 +49,8 @@ task daemon:run &              # wait for coldstorage/coldstored.sock
 task ui:prove                  # socket round-trip + live event stream
 task ui:test && task ui:typecheck
 ```
-On a Mac: `task daemon:bootstrap` (creds → Keychain + launchd install), `task daemon:doctor`,
-`task ui:live` to dogfood the UI against the installed daemon, `task ui:package` for the `.app`.
+On a Mac: `task daemon:mac:bootstrap` (creds → Keychain + launchd install), `task daemon:mac:doctor`,
+`task ui:mac:live` to dogfood the UI against the installed daemon, `task ui:mac:package` for the `.app`.
 
 ## Dev environment & gotchas (read before building — saves hours)
 - **No Docker.** Native toolchain: Swift via `swiftly`, MinIO + `mc` as plain binaries

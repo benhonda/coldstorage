@@ -46,7 +46,7 @@ let package = Package(
             // Embed Info.plist into the Mach-O so the unbundled daemon has a TCC identity (required for any
             // Photos read — the explicit photo-deposit path). macOS-only: -sectcreate is a Mach-O/ld64 flag,
             // meaningless on Linux ELF, so the platform condition keeps Linux/CI builds clean. The codesign
-            // step (a STABLE identity, which TCC also keys to) lives in `task daemon:install`. See
+            // step (a STABLE identity, which TCC also keys to) lives in `task daemon:mac:install`. See
             // launchd/coldstored-Info.plist + phase0-photos-spike.
             linkerSettings: [
                 .unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT",

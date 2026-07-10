@@ -9,7 +9,7 @@ describe("awaitLoopbackCallback", () => {
     const { ready } = awaitLoopbackCallback((url) => (got = url));
     await ready;
 
-    // A non-callback probe (what ui:auth:doctor sends) 404s WITHOUT consuming the listener.
+    // A non-callback probe (what ui:mac:auth:doctor sends) 404s WITHOUT consuming the listener.
     const probe = await fetch(`http://127.0.0.1:${LOOPBACK_PORT}/ping`);
     expect(probe.status).toBe(404);
     expect(got).toBeNull();

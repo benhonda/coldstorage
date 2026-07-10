@@ -2,7 +2,7 @@
 # of the "real app identity" track (see PACKAGING.md): it produces a bundled, named, icon'd app so the
 # daemon's Photos grant can later (#2, SMAppService) show as "ColdStorage" instead of the raw "coldstored"
 # binary. Config targets electron-builder v26 (signing fields top-level under `mac`; v27 nests them in
-# `mac.sign`). Build with `task ui:package` (macOS only).
+# `mac.sign`). Build with `task ui:mac:package` (macOS only).
 appId: com.theadpharm.coldstorage
 productName: ColdStorage
 copyright: © 2026 The Adpharm
@@ -64,7 +64,7 @@ mac:
   # identity (#2). Harmless before then. (NSPhotoLibraryUsageDescription is Info.plist, not an entitlement.)
   extendInfo:
     NSPhotoLibraryUsageDescription: "ColdStorage uploads the photos you choose to your private cold storage."
-  # Left false so a plain local `task ui:package` runs unsigned without certs. `task ui:release` overrides
+  # Left false so a plain local `task ui:mac:package` runs unsigned without certs. `task ui:mac:release` overrides
   # this to true on the CLI (`-c.mac.notarize=true`) with the Developer ID + notary creds (APPLE_ID /
   # APPLE_TEAM_ID / APPLE_APP_SPECIFIC_PASSWORD) in the env. See ui/PACKAGING.md.
   notarize: false
@@ -76,7 +76,7 @@ dmg:
   title: ColdStorage
 
 # Auto-update feed (PROD.md Phase 6). electron-builder uploads the .dmg/.zip + the `latest-mac.yml` metadata
-# to a GitHub Release when built with `--publish always` (see `task ui:release`); the packaged app's
+# to a GitHub Release when built with `--publish always` (see `task ui:mac:release`); the packaged app's
 # electron-updater reads that same feed. Repo is public → the release assets are free, CDN-backed downloads.
 publish:
   provider: github

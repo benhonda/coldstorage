@@ -15,7 +15,7 @@ import { IPC, type PhotoPick } from "../shared/ipc.ts";
 const PHOTOS_PRIVACY_PANE = "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos";
 
 /** Resolve the native Photos-picker helper binary. Precedence: explicit `$COLDSTORE_PHOTO_PICKER` (set by
- * the Taskfile for ui:dev/ui:live) → the bundled copy under `Contents/Resources/bin` in a packaged app
+ * the Taskfile for ui:mac:dev/ui:mac:live) → the bundled copy under `Contents/Resources/bin` in a packaged app
  * (see electron-builder.yml extraResources) → the dev `.build/release` path. */
 const photoPickerPath = (): string =>
   process.env.COLDSTORE_PHOTO_PICKER ??
