@@ -38,6 +38,10 @@ export interface DaemonClientOptions {
   autoReconnect?: boolean;
   /** Backoff between redials (ms). Default 1_000. */
   reconnectDelayMs?: number;
+  /** Socket factory — the test seam for the dial/retry logic (bun test v1.3 can't host real
+   * failing sockets: it flags the socket's `error` event even when handled). Defaults to
+   * `net.createConnection`. */
+  dial?: (socketPath: string) => net.Socket;
 }
 
 /** Lifecycle events emitted alongside daemon events (distinct namespaces, never collide). */
@@ -59,6 +63,7 @@ export class DaemonClient {
   private readonly requestTimeoutMs: number;
   private readonly autoReconnect: boolean;
   private readonly reconnectDelayMs: number;
+  private readonly dial: (socketPath: string) => net.Socket;
 
   private socket: net.Socket | null = null;
   private connected = false;
@@ -74,22 +79,31 @@ export class DaemonClient {
     this.requestTimeoutMs = opts.requestTimeoutMs ?? 10_000;
     this.autoReconnect = opts.autoReconnect ?? true;
     this.reconnectDelayMs = opts.reconnectDelayMs ?? 1_000;
+    this.dial = opts.dial ?? net.createConnection;
   }
 
   get isConnected(): boolean {
     return this.connected;
   }
 
-  /** Dial the socket. Resolves once connected; rejects if the first dial fails. */
+  /** Dial the socket. Resolves once connected; rejects if the first dial fails — but a failed dial
+   * still enters the reconnect cycle (autoReconnect), so a caller may treat the rejection as
+   * non-fatal and wait for the eventual `connect` lifecycle push. This matters most for the
+   * packaged app: it dials at `ready` while its just-spawned `coldstored` child is still binding
+   * the socket, and whoever loses that race must not stay disconnected forever (the "Setting up…"
+   * hang, root-caused 2026-07-10 — the retry used to arm only AFTER a successful connection). */
   connect(): Promise<void> {
     this.closing = false;
     return new Promise((resolve, reject) => {
-      const socket = net.createConnection(this.socketPath);
+      const socket = this.dial(this.socketPath);
       this.socket = socket;
       socket.setNoDelay(true);
 
       const onError = (err: Error) => {
         socket.removeListener("connect", onConnect);
+        // A failed FIRST dial never reaches onClose (its close handler is attached on connect),
+        // so it must arm the retry loop itself — same policy as a post-connect drop.
+        if (this.autoReconnect && !this.closing) this.scheduleReconnect();
         reject(err);
       };
       const onConnect = () => {

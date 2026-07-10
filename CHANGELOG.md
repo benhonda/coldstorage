@@ -2,6 +2,7 @@
 
 ## 2026-07-10
 
+- fix(ui): `DaemonClient` arms its reconnect loop on a failed FIRST dial too — the packaged app dialing before its spawned `coldstored` binds the socket no longer hangs on "Setting up…"; new `client.test.ts` via a `dial` seam.
 - chore: Mac-only Taskfile tasks renamed under a `mac` segment (`daemon:mac:*`, `ui:mac:*`, replacing `[macOS]` desc tags) — task references synced across docs + code comments repo-wide.
 - feat(site): standalone `/download` page (`($lang).download.tsx` — CtaPanel install steps + meta-refresh auto-start); the latest-`.dmg` 302 resource route moves to `/download.dmg` — PROD.md 6c fully BUILT.
 - feat: daemon `deauthenticate` — sign-out now drops the cached STS creds + `vaultPrefix` immediately (`CognitoAuth.deauthenticate()` via `resolver.updateLogins(nil)`), fired by the app on every signed-out transition; PROD.md sub-decision closed.
