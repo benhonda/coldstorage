@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-11
+
+- fix(backend): subscription plan-change hardening — `onPaymentFailure: "prevent_change"` pinned (no upgrade without the prorated charge clearing) + Paddle errors surfaced as clear 502s (`paddleCall`); PADDLE.md key scope gains **Subscriptions read+write** (war story #2: staging key had read-only → change 500'd); PROD.md logs new open sub-decision: storage quota is sold but unenforced.
+
 ## 2026-07-10
 
 - feat: **subscription management surface** (PADDLE.md "Managing a subscription") — backend `GET /subscription` + `POST /subscription/change{,/preview}` (live Paddle, prorated immediately, catalog-validated); app sidebar `AccountCard` + Settings ▸ Account plan/billing rows + `ChangePlanModal` w/ proration preview; cancel/payment open Paddle-hosted pages; picker extracted to shared `PlanPicker`.

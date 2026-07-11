@@ -66,8 +66,20 @@ async function validatedPriceId(body: unknown): Promise<string> {
   return priceId;
 }
 
+/** Run a Paddle call, surfacing its error detail as a clear 502 instead of an opaque 500 —
+ *  a key-permission gap (see PADDLE.md "Runtime key scope") should say so to the app. */
+async function paddleCall<T>(op: string, fn: () => Promise<T>): Promise<T> {
+  return fn().catch((e: unknown) => {
+    const detail = (e as { detail?: string }).detail ?? (e instanceof Error ? e.message : String(e));
+    throw new HTTPException(502, { message: `${op} failed: ${detail}` });
+  });
+}
+
 async function summarize(subscriptionId: string): Promise<SubscriptionSummary> {
-  const [s, catalog] = await Promise.all([paddle.subscriptions.get(subscriptionId), getCatalog()]);
+  const [s, catalog] = await Promise.all([
+    paddleCall("reading the subscription", () => paddle.subscriptions.get(subscriptionId)),
+    getCatalog(),
+  ]);
   const priceId = s.items[0]?.price.id;
   return {
     status: s.status,
@@ -89,10 +101,12 @@ export const subscriptionRoute = new Hono<AppEnv>()
   .post("/change/preview", async (c) => {
     const id = await subscriptionIdFor(c.get("sub"));
     const priceId = await validatedPriceId(await c.req.json().catch(() => null));
-    const preview = await paddle.subscriptions.previewUpdate(id, {
-      items: [{ priceId, quantity: 1 }],
-      prorationBillingMode: "prorated_immediately",
-    });
+    const preview = await paddleCall("previewing the change", () =>
+      paddle.subscriptions.previewUpdate(id, {
+        items: [{ priceId, quantity: 1 }],
+        prorationBillingMode: "prorated_immediately",
+      }),
+    );
     const result = preview.updateSummary?.result;
     return c.json({
       // "charge" = pay the difference now; "credit" = balance applied to future bills.
@@ -106,9 +120,14 @@ export const subscriptionRoute = new Hono<AppEnv>()
   .post("/change", async (c) => {
     const id = await subscriptionIdFor(c.get("sub"));
     const priceId = await validatedPriceId(await c.req.json().catch(() => null));
-    await paddle.subscriptions.update(id, {
-      items: [{ priceId, quantity: 1 }],
-      prorationBillingMode: "prorated_immediately",
-    });
+    await paddleCall("changing the plan", () =>
+      paddle.subscriptions.update(id, {
+        items: [{ priceId, quantity: 1 }],
+        prorationBillingMode: "prorated_immediately",
+        // An upgrade is only real once its prorated charge clears — if the card fails, the plan
+        // must NOT change. This is Paddle's default; pinned explicitly because it's load-bearing.
+        onPaymentFailure: "prevent_change",
+      }),
+    );
     return c.json({ subscription: await summarize(id) });
   });

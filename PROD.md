@@ -562,6 +562,14 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      of the customer-facing last mile: the download page + checkout move (6c above).
 
 ## Open sub-decisions (don't block P1; flagged for when their phase lands)
+- **[open] Storage quota enforcement** (surfaced 2026-07-10 while building the plan-change flow) —
+  plan sizes (500 GB / 1 TB / 2 TB) are SOLD but never ENFORCED: no deposit path checks stored
+  bytes against the plan, and a downgrade doesn't check the vault fits the new size. The money
+  side of changes is safe (upgrades apply only when the prorated charge clears —
+  `onPaymentFailure: "prevent_change"`, PADDLE.md), but a 500 GB customer can store beyond 500 GB
+  at our S3 cost. Belongs with the hard entitlement gate (IAM-layer enforcement, deferred by
+  design): the likely shape is `GET /entitlement` growing a byte allowance + the daemon soft-gating
+  deposits on it, with warnings in the UI before the cap. Decide pre-launch; not a dogfood blocker.
 - ~~**Encryption password vs auth credential** — with a federated login there is no password to derive
   KEK_pw from.~~ **DECIDED ✅ (2026-07-02), forced universal by going passwordless:** option (b),
   **recovery-code-only** — the recovery code is the sole MK protector (`wrappedMK_rc`; the `wrappedMK_pw`

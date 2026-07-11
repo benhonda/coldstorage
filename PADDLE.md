@@ -84,15 +84,20 @@ must be approved first in **Paddle → Catalog → Taxable categories**.
 ## Runtime key scope
 
 The `PADDLE_API_KEY` the deployed backend runs with is a **dedicated scoped key**, not the
-full-permission ops key (which stays in the shell for the scripts above). The runtime makes exactly
-one authenticated call today — `paddle.transactions.create` in `checkout-session.ts` — plus local
-HMAC webhook verification (no permission needed). Required scope:
+full-permission ops key (which stays in the shell for the scripts above). Required scope — BOTH
+environments' keys (edit permissions in the dashboard; the key string doesn't change, so no
+Vercel/redeploy step):
 
-- **Transactions: read + write** — required now (the 5c war story: a zero-permission key fails here).
-- **Products: read + Prices: read** — pre-granted for the decided `GET /catalog` route (multi-plan
-  picker below), so shipping it won't repeat the war story.
+- **Transactions: read + write** — checkout (`transactions.create`; the 5c war story: a
+  zero-permission key fails here).
+- **Subscriptions: read + write** — the manage surface (`subscriptions.get`/`previewUpdate` read,
+  `subscriptions.update` WRITE). War story #2 (2026-07-10): the staging key had read but not
+  write — `GET /subscription` + the proration preview worked while the actual plan change 500'd
+  with `forbidden: not authorized to read|update subscription`.
+- **Products: read + Prices: read** — the `GET /catalog` route.
 
-Nothing else. If the key was created with an expiry, note the rotation date here when it's known.
+Nothing else (webhook verification is local HMAC — no permission). If the key was created with an
+expiry, note the rotation date here when it's known.
 ## Managing a subscription — BUILT ✅ (2026-07-10)
 
 The account card's manage surface (sidebar bottom-left → Settings ▸ Account). Split of
@@ -105,7 +110,9 @@ responsibilities, decided 2026-07-10:
 - **Plan change (size/term) → in-app.** The same `PlanPicker` as checkout, seeded with the current
   plan → `POST /subscription/change/preview` (Paddle `previewUpdate`) puts the money on the table
   ("charged $X now" / "$X credit toward future bills") → `POST /subscription/change` applies with
-  `prorationBillingMode: "prorated_immediately"`. Price ids are catalog-validated like checkout.
+  `prorationBillingMode: "prorated_immediately"` + `onPaymentFailure: "prevent_change"` (Paddle's
+  default, pinned explicitly): an upgrade whose prorated charge fails does NOT apply — no
+  upgrade-without-paying. Price ids are catalog-validated like checkout.
 - **Current plan** → `GET /subscription`: live `subscriptions.get` summarized against the catalog
   (status, plan, nextBilledAt, cancelsAt, management URLs). Nothing plan-shaped is duplicated into
   the DB — the row only supplies the subscription id; `subscriptionActive` stays webhook-fed.
