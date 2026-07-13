@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-13
+
+- chore(skills): re-vendor `adpharm-stack` + `audit-code-quality` — the audit skill now reads the 4 pillars from CLAUDE.md instead of restating a drifted copy; `skills-lock.json` gains `sourceUrl`.
+
 ## 2026-07-12
 
 - docs: **free tier decided (25 GB forever, no trial) + retrieval billed at cost** — PROD.md sub-decision closed with a hardest-first plan (A: retrieval pass-through steel thread, B: free-tier entitlement flip, C: surfaces); new root `RETRIEVAL.md` specs the quote → pay → restore flow, the free rolling allowance, and the open Paddle questions (EXPLORING).

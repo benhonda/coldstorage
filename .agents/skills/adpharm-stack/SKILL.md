@@ -215,7 +215,8 @@ properties rather than collapsing to a framework default — a raw `<a href>`, a
   or treat yourself as logged out on a hunch. Only run `task login` (or flag it) **after** a
   command actually fails with expired/missing creds, or the user tells you you're logged out
   (identity facts: `references/aws-oidc.md`).
-- **Never** start a dev server (`task dev`/`bun run dev`/etc.) without explicit permission.
+- **Never** start a dev server (`task dev`/`bun run dev`/etc.) without explicit permission —
+  global-CLAUDE.md TP5, restated here for the exact commands.
 - **Never** run a Drizzle migration or `db:push` without explicit permission
   (see `references/db.md`).
 - One-offs are tasks too — never hand over a bare `bun run …`/`terragrunt …` for a throwaway;

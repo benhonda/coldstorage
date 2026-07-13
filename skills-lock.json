@@ -3,15 +3,17 @@
   "skills": {
     "add-and-commit": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
+      "sourceUrl": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",
       "skillPath": "skills/engineering/add-and-commit/SKILL.md",
       "computedHash": "6009389e26b8003f870bf4e0f3c29704772fc625abc124eb46b282f37ae7babb"
     },
     "adpharm-stack": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
+      "sourceUrl": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",
       "skillPath": "skills/engineering/adpharm-stack/SKILL.md",
-      "computedHash": "f41601c4929c1629dbae14c118c95cae8e99d07ab4f27c7cf46fd15ea3eeffc9"
+      "computedHash": "70203f29fb79a69586703f9f993a82803bae8eeda77a05879615a22a4fd7ce8c"
     },
     "ai-gateway": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
@@ -21,9 +23,10 @@
     },
     "audit-code-quality": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
+      "sourceUrl": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",
       "skillPath": "skills/engineering/audit-code-quality/SKILL.md",
-      "computedHash": "11f6ab00b2ecf026542c199c3c7eb0beac5ef970863e10a0ad23af8f3bf4bd69"
+      "computedHash": "bf0ec8afa66c93fe01e7e7622a49e41d3fc0a94ec0ad72f8282ae5a687d3300f"
     },
     "brand-review": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
@@ -33,6 +36,7 @@
     },
     "checkpoint": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
+      "sourceUrl": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",
       "skillPath": "skills/engineering/checkpoint/SKILL.md",
       "computedHash": "70d80d89678f84af80a30510cf686682a05a3597501adaaaa68abc137daef2fc"
