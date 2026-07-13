@@ -2,6 +2,7 @@
 
 ## 2026-07-12
 
+- docs: **free tier decided (25 GB forever, no trial) + retrieval billed at cost** — PROD.md sub-decision closed with a hardest-first plan (A: retrieval pass-through steel thread, B: free-tier entitlement flip, C: surfaces); new root `RETRIEVAL.md` specs the quote → pay → restore flow, the free rolling allowance, and the open Paddle questions (EXPLORING).
 - feat: **storage quota enforcement (soft gate)** — usage is S3-derived, not journal-derived (a per-device sum undercounts a multi-device user): scoped `s3:ListBucket` (`OwnPrefixList`, apply pending) + daemon `S3Store.usageBytes(prefix:)` → cached `Status.bytesStored`; `GET /catalog` returns `quotaBytes` per plan and `GET /entitlement` resolves it via a new cached `accounts.paddle_price_id` (schema not pushed); app gates deposits on `hasCapacity` (fails open), adds an over-capacity modal → `ChangePlanModal` upgrade path, a Settings plan-usage row, and a downgrade-below-usage warning.
 - feat: **pricing reshaped to 5 annual-only sizes** (500 GB / 1 TB / 2 TB / 5 TB / 10 TB, no multi-year terms) — new `account-backend/src/plan-sizes.ts` SSOT (size ↔ bytes ↔ price, generator-derived) drives `seed-paddle-catalog.ts`; `PlanPicker` drops the term segmented row + rate-lock line; PADDLE.md logs the catalog reshape + `--archive-extras` migration for the 9 retired term prices.
 

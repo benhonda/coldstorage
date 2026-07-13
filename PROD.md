@@ -626,7 +626,41 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
   apply stored client_id `1000` — the creds task had used `read GID`, and GID is a READONLY built-in
   (the unix group id) in go-task's mvdan/sh; renamed vars + shape guards now prevent that class.)
   The app side (system-browser flow + `coldstorage://auth/callback` handling) landed + gate-passed in 5a.
-- **Free trial / plan tiers / retrieval-fee charging** — product/economics (private `strategy/`) — P4.
+- ~~**Free trial / plan tiers / retrieval-fee charging** — product/economics (private `strategy/`) — P4.~~
+  **DECIDED ✅ (2026-07-12, Ben): no trial — a FREE TIER instead: 25 GB, every account, forever.
+  Retrieval is passed through AT COST for everyone, free and paid — the margin is made on storage
+  only.** Why a free tier over a trial: this product's value is longevity, which a 14-day window
+  can't demonstrate; GDA pricing makes a maxed free account cost ~$0.30/yr; and the quota layer
+  (above) already built the enforcement machinery it needs. "Forever" is a promise — the number can
+  only ever move UP, hence starting small (25 GB, still above Google's 15 GB free).
+  Implementation plan (**DRAFT 2026-07-12**, hardest-first; builds on the quota-enforcement work
+  above, so that lands first):
+  - **A. Retrieval pass-through steel thread [open — the load-bearing unknown].** Spec'd
+    2026-07-12: engineering flow + open questions in root `RETRIEVAL.md` (EXPLORING); margin
+    model + allowance sizing in private `strategy/retrieval-economics.md` (DRAFT — verdict:
+    included egress beyond a tiny allowance structurally cannot fit the rate-locked margins).
+    Quote → pay → restore unlocked, end-to-end in sandbox. Daemon sizes the restore job; backend prices it at a
+    flat ¢/GB that covers GDA restore + egress **+ Paddle's ~5% + $0.50 per-transaction cut** ("at
+    cost" must include payment processing or every small restore loses money); Paddle one-time
+    transaction; paid webhook unlocks the job. Verify while building: inline custom non-recurring
+    prices on `transactions.create`, saved-payment-method checkout for existing subscribers, and
+    Paddle's minimum-charge floor. [settled 2026-07-12, Ben] tiny-restore economics: per-job
+    checkout for material restores + a small FREE rolling allowance so single-photo/album
+    restores cost nothing and need no checkout. A prepaid credit bank was considered and
+    deferred (stored-value ledger + balance liability not warranted by bimodal cold-archive
+    retrieval; drops in on the same meter later if usage asks). [open] allowance size — sizing
+    math in `strategy/retrieval-economics.md`; leaning 1 GB/mo paid, 250 MB/mo free. [assumption]
+    bulk retrieval tier only at first (48 h, cheapest); standard (12 h) as a priced option later.
+  - **B. Free-tier entitlement flip (small, independent to build — but its LAUNCH gates on A,
+    since until retrieval is billed a free account's restores are our cost).** `FREE_TIER_BYTES`
+    (25 GB) joins `plan-sizes.ts` as a separate export (same SSOT, never a Paddle product);
+    `GET /entitlement` returns it as `quotaBytes` when there's no active subscription. `active`
+    stops gating deposits — quota becomes the deposit gate for every signed-in account; `active`
+    remains as UI signal only (upgrade vs. manage). App: the not-subscribed paywall on deposit
+    becomes the over-quota upsell; AccountCard shows the free plan + usage. Same soft-gate posture
+    as the quota layer above.
+  - **C. Surfaces.** Site pricing section gains the free tier (design-synced upstream per
+    `site/SPEC.md`, not hand-edited); app copy for the cap-reached state (plain-voice rules).
 - **[open] Same-email, two sign-in methods = two Cognito accounts.** A Google-federated user and an
   email-OTP user with the SAME address are separate profiles (separate `sub`s → separate key-blobs,
   separate S3 prefixes — under ZK they can't see each other's data) unless linked server-side
