@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-12
+
+- feat: **pricing reshaped to 5 annual-only sizes** (500 GB / 1 TB / 2 TB / 5 TB / 10 TB, no multi-year terms) — new `account-backend/src/plan-sizes.ts` SSOT (size ↔ bytes ↔ price, generator-derived) drives `seed-paddle-catalog.ts`; `PlanPicker` drops the term segmented row + rate-lock line; PADDLE.md logs the catalog reshape + `--archive-extras` migration for the 9 retired term prices.
+
 ## 2026-07-11
 
 - fix(backend): subscription plan-change hardening — `onPaymentFailure: "prevent_change"` pinned (no upgrade without the prorated charge clearing) + Paddle errors surfaced as clear 502s (`paddleCall`); PADDLE.md key scope gains **Subscriptions read+write** (war story #2: staging key had read-only → change 500'd); PROD.md logs new open sub-decision: storage quota is sold but unenforced.

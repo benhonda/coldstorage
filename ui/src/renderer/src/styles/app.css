@@ -1111,7 +1111,6 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-plan--active { border-color: var(--accent); background: var(--surface-card); box-shadow: 0 0 0 1px var(--accent); }
 .cs-plan-size { font: var(--type-card-title); letter-spacing: var(--tracking-tight); color: var(--text-primary); }
 .cs-plan-rate { font: var(--type-label); color: var(--text-secondary); }
-.cs-plan-terms { display: flex; align-items: center; }
 .cs-plan-price { margin: var(--space-3) 0 0; font: var(--type-body); color: var(--text-secondary); }
 .cs-plan-price strong { font: var(--type-card-title); color: var(--text-primary); }
 .cs-plan-lock { margin: var(--space-1) 0 0; font: var(--type-label); color: var(--text-tertiary); }

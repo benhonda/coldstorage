@@ -1,7 +1,7 @@
 /**
- * Seed the ColdStorage product catalog in Paddle — 3 products (storage sizes) × 4 prices
- * (1/2/3/5-year terms) = 12 recurring prices, at the settled no-multi-year-discount pricing
- * (SPEC §5 / site/app/lib/marketing/content.ts is the pricing SSOT this mirrors).
+ * Seed the ColdStorage product catalog in Paddle — 5 products (storage sizes), one annual
+ * recurring price each = 5 prices total. No terms — annual only (SPEC.md §5, decided 2026-07-12
+ * / site/app/lib/marketing/content.ts is the pricing SSOT this mirrors).
  *
  * SAFE BY DEFAULT: with no `--apply` flag it PLANS only (reads the account, prints what it
  * would create) and writes nothing. Pass `--apply` to actually create. Idempotent — matches
@@ -31,6 +31,7 @@
  */
 import { type TaxCategory } from "@paddle/paddle-node-sdk";
 import { paddleFromEnv } from "./_paddle.js";
+import { PLAN_SIZES } from "../src/plan-sizes.js";
 
 /** The full Paddle tax-category union, as a runtime list so we can validate env input. */
 const TAX_CATEGORIES: readonly TaxCategory[] = [
@@ -47,27 +48,17 @@ const TAX_CATEGORIES: readonly TaxCategory[] = [
 const isTaxCategory = (v: string): v is TaxCategory => (TAX_CATEGORIES as readonly string[]).includes(v);
 
 /* ── Pricing SSOT (mirrors site/app/lib/marketing/content.ts) ─────────────────────────────
- * A term is EXACTLY N × the yearly rate — the rate-lock model has no multi-year discount, so
- * every multi-year amount is derived, never hand-typed. Amounts are in cents (minor units). */
-const PRODUCTS = [
-  { size: "500 GB", perYearCents: 999 },
-  { size: "1 TB", perYearCents: 1899 },
-  { size: "2 TB", perYearCents: 3699 },
-] as const;
-
-const TERMS = [
-  { years: 1, label: "1 year" },
-  { years: 2, label: "2 years" },
-  { years: 3, label: "3 years" },
-  { years: 5, label: "5 years" },
-] as const;
+ * One annual price per size — no terms. Amounts are in cents (minor units). Sizes + prices come
+ * from `../src/plan-sizes.js`, the SSOT shared with `catalog.ts`'s quota mapping — never
+ * duplicate the size/price literals here. */
+const PRODUCTS = PLAN_SIZES;
 
 const CURRENCY = "USD";
 
 const productName = (size: string) => `ColdStorage — ${size}`;
 const productDescription = (size: string) =>
-  `${size} of long-term cloud storage for your photos and files. Prepaid subscription that renews until you cancel.`;
-const priceDescription = (size: string, label: string) => `ColdStorage ${size} — ${label} term`;
+  `${size} of long-term cloud storage for your photos and files. Annual subscription that auto-renews until you cancel.`;
+const priceDescription = (size: string) => `ColdStorage ${size} — annual`;
 const usd = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
 /* ── Config from env ──────────────────────────────────────────────────────────────────── */
@@ -82,8 +73,9 @@ if (!isTaxCategory(taxCategoryRaw)) {
 }
 const taxCategory: TaxCategory = taxCategoryRaw;
 
-const bill = (years: number) => ({ interval: "year" as const, frequency: years });
+const ANNUAL = { interval: "year" as const, frequency: 1 };
 const cycleKey = (interval: string, frequency: number) => `${interval}:${frequency}`;
+const ANNUAL_CYCLE = cycleKey(ANNUAL.interval, ANNUAL.frequency);
 
 async function main() {
   console.log("─".repeat(72));
@@ -127,8 +119,8 @@ async function main() {
 
   const created = { products: 0, prices: 0 };
   const skipped = { products: 0, prices: 0 };
-  /** size × term → price id, for the final copy-paste block. */
-  const priceIds: { size: string; years: number; label: string; amount: number; id: string | null }[] = [];
+  /** size → price id, for the final copy-paste block. */
+  const priceIds: { size: string; amount: number; id: string | null }[] = [];
 
   for (const { size, perYearCents } of PRODUCTS) {
     const name = productName(size);
@@ -151,36 +143,29 @@ async function main() {
     }
 
     const existingCycles = productId.startsWith("pro_") ? pricesByProduct.get(productId) ?? new Set<string>() : new Set<string>();
+    const amount = perYearCents;
 
-    for (const { years, label } of TERMS) {
-      const amount = perYearCents * years;
-      const key = cycleKey("year", years);
-
-      if (existingCycles.has(key)) {
-        skipped.prices++;
-        priceIds.push({ size, years, label, amount, id: "(exists)" });
-        console.log(`    ● price exists  ${label.padEnd(8)} ${usd(amount)}`);
-        continue;
-      }
-
-      if (APPLY && productId.startsWith("pro_")) {
-        const price = await paddle.prices.create({
-          productId,
-          name: label,
-          description: priceDescription(size, label),
-          unitPrice: { amount: String(amount), currencyCode: CURRENCY },
-          billingCycle: bill(years),
-          // A customer buys ONE storage plan — cap quantity so nobody can order multiples.
-          quantity: { minimum: 1, maximum: 1 },
-          taxMode: "account_setting",
-        });
-        created.prices++;
-        priceIds.push({ size, years, label, amount, id: price.id });
-        console.log(`    ✓ price CREATED ${label.padEnd(8)} ${usd(amount)}  (${price.id})`);
-      } else {
-        priceIds.push({ size, years, label, amount, id: null });
-        console.log(`    + price PLAN    ${label.padEnd(8)} ${usd(amount)}  every ${years} year(s), qty 1`);
-      }
+    if (existingCycles.has(ANNUAL_CYCLE)) {
+      skipped.prices++;
+      priceIds.push({ size, amount, id: "(exists)" });
+      console.log(`    ● price exists  annual   ${usd(amount)}`);
+    } else if (APPLY && productId.startsWith("pro_")) {
+      const price = await paddle.prices.create({
+        productId,
+        name: "Annual",
+        description: priceDescription(size),
+        unitPrice: { amount: String(amount), currencyCode: CURRENCY },
+        billingCycle: ANNUAL,
+        // A customer buys ONE storage plan — cap quantity so nobody can order multiples.
+        quantity: { minimum: 1, maximum: 1 },
+        taxMode: "account_setting",
+      });
+      created.prices++;
+      priceIds.push({ size, amount, id: price.id });
+      console.log(`    ✓ price CREATED annual   ${usd(amount)}  (${price.id})`);
+    } else {
+      priceIds.push({ size, amount, id: null });
+      console.log(`    + price PLAN    annual   ${usd(amount)}  every year, qty 1`);
     }
   }
 
@@ -188,7 +173,7 @@ async function main() {
   const archived = { products: 0, prices: 0 };
   if (ARCHIVE_EXTRAS) {
     const ssotNames = new Set(PRODUCTS.map((p) => productName(p.size)));
-    const ssotCycles = new Set(TERMS.map((t) => cycleKey("year", t.years)));
+    const ssotCycles = new Set([ANNUAL_CYCLE]);
     const strayProducts = existingProducts.filter((p) => p.status === "active" && !ssotNames.has(p.name));
     const strayProductIds = new Set(strayProducts.map((p) => p.id));
     const keptProductIds = new Set(existingProducts.filter((p) => p.status === "active" && ssotNames.has(p.name)).map((p) => p.id));
@@ -231,8 +216,8 @@ async function main() {
   if (APPLY) {
     console.log("\nPrice IDs (paste into the app plan-picker / Terraform paddle_price_id):");
     for (const r of priceIds) {
-      const slug = `${r.size.replace(/\s+/g, "").toUpperCase()}_${r.years}YR`;
-      console.log(`  ${slug.padEnd(12)} ${usd(r.amount).padEnd(9)} ${r.id ?? "(exists — fetch from dashboard)"}`);
+      const slug = r.size.replace(/\s+/g, "").toUpperCase();
+      console.log(`  ${slug.padEnd(8)} ${usd(r.amount).padEnd(9)} ${r.id ?? "(exists — fetch from dashboard)"}`);
     }
   } else {
     console.log("\nThis was a PLAN. Re-run with `-- --apply` to create the catalog.");
