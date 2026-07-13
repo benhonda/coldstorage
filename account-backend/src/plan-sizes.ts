@@ -28,7 +28,34 @@ export const PLAN_SIZES = [
  * "Forever" is a promise, so this number can only ever move UP. Deliberately started small (still above
  * Google's 15 GB); a maxed free account costs ~$0.30/yr on Deep Archive.
  */
-export const FREE_TIER_BYTES = 25_000_000_000;
+/* ⚠️⚠️ TEMPORARY — 2026-07-13, Ben: shrunk to 1 GB to test the cap-reached gate + restore in one sitting.
+ *      THE REAL VALUE IS 25_000_000_000 (25 GB). REVERT THIS LINE BEFORE MERGING TO main. ⚠️⚠️ */
+export const FREE_TIER_BYTES = 1_000_000_000;
+
+/**
+ * The free tier a given deployment actually hands out — `FREE_TIER_BYTES` unless a NON-PRODUCTION
+ * deployment overrides it (`FREE_TIER_BYTES_OVERRIDE`, e.g. 1_000_000_000 to fill a test vault in one
+ * upload and exercise the cap-reached gate without shipping 25 GB at it).
+ *
+ * **The override is ignored in production, by construction.** It is gated on `PADDLE_ENVIRONMENT`, the
+ * same var that decides whether money is real — so a stray env var, a copied Vercel project, or a
+ * merged test branch cannot quietly shrink the free tier under real customers. "25 GB forever" is a
+ * promise, and a promise that a config value can silently break is not one. A production deployment
+ * that *tries* to set it gets the real number and a loud warning, not the override.
+ */
+export function resolveFreeTierBytes(
+  override: number | undefined,
+  paddleEnvironment: "sandbox" | "production",
+): number {
+  if (override === undefined) return FREE_TIER_BYTES;
+  if (paddleEnvironment === "production") {
+    console.warn(
+      `FREE_TIER_BYTES_OVERRIDE (${override}) IGNORED — this is a production deployment; free tier stays ${FREE_TIER_BYTES}.`,
+    );
+    return FREE_TIER_BYTES;
+  }
+  return override;
+}
 
 /**
  * The Paddle PRODUCT that retrieval charges hang off (root `RETRIEVAL.md`). It deliberately carries NO

@@ -703,7 +703,11 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
     `ui/src/renderer/src/state/entitlement.ts` (a gate that wrongly says "no" is indistinguishable
     from a working paywall — it earned its own tests). `active` survives as a UI signal only, picking
     which upsell a FULL vault shows: a free account picks a plan, a subscriber resizes theirs.
-    Fails OPEN on unknown usage/quota, as before.
+    Fails OPEN on unknown usage/quota, as before. **Testing the cap:** `FREE_TIER_BYTES_OVERRIDE`
+    (env, non-TF) shrinks the free tier on a NON-production deployment — 1 GB fills a test vault in
+    one upload, so the cap-reached gate + upsell + restore flow are all exercisable without pushing
+    25 GB. `resolveFreeTierBytes()` gates it on `PADDLE_ENVIRONMENT`, so production ignores it
+    outright: the "forever" promise cannot be shrunk by a config value.
   - **C. Surfaces — app DONE ✅ (2026-07-13), site REMAINING.** In-app: `SubscribeModal` is now
     `reason`-aware ("Your free storage is full" when a free vault blocks a deposit vs. a plain "Choose
     a plan" from Settings), AccountCard + Settings say **"Free"** rather than "No plan", and the

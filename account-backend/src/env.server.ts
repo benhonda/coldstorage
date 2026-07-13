@@ -38,6 +38,13 @@ const envSchema = z.object({
   /** Identity Pool id — resolves a caller's ID token to the identity their S3 keys are prefixed with
    *  (`identity.server.ts`), so we can prove a blob is theirs before paying to thaw it. */
   COGNITO_IDENTITY_POOL_ID: z.string().min(1),
+
+  /** TEST KNOB — shrinks the free tier so a test vault fills in one upload and the cap-reached gate,
+   *  the over-quota upsell and the restore flow can all be exercised without pushing 25 GB. Bytes,
+   *  e.g. `1000000000` for 1 GB. **Ignored outright on a production deployment** (`resolveFreeTierBytes`
+   *  gates it on PADDLE_ENVIRONMENT) — it cannot shrink the real free tier under real customers.
+   *  Unset it to go back to 25 GB; there is no code to revert. */
+  FREE_TIER_BYTES_OVERRIDE: z.coerce.number().int().positive().optional(),
 });
 
 export const env = envSchema.parse(process.env);
