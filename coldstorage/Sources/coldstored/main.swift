@@ -92,7 +92,12 @@ if cognitoAuth != nil {
 let engine = UploadEngine(
     journal: journal, store: store, keys: vaultKey,
     stagingDir: URL(fileURLWithPath: env["COLDSTORE_STAGING"] ?? ".staging"))
-let restoreEngine = RestoreEngine(journal: journal, store: store, keys: vaultKey)
+// `canSelfThaw` mirrors what this daemon's credentials can actually do, so it's derived from the same
+// signal every other multi-user seam uses (`cognitoAuth != nil`), never configured separately:
+//   - dogfood  → the IAM user from infra/coldstorage/.../iam.tf, which HAS s3:RestoreObject → thaw directly.
+//   - multi-user → a customer's Cognito role, which deliberately does NOT (cognito.tf). The thaw is the
+//     paid-retrieval hard gate; only the account backend can perform it (root RETRIEVAL.md).
+let restoreEngine = RestoreEngine(journal: journal, store: store, keys: vaultKey, canSelfThaw: cognitoAuth == nil)
 
 let bus = EventBus()
 let daemon = DaemonService(engine: engine, restoreEngine: restoreEngine, journal: journal, bus: bus,

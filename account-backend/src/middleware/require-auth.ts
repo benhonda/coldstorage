@@ -17,5 +17,9 @@ export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
   if (!payload) throw new HTTPException(401, { message: "invalid or expired token" });
 
   c.set("sub", payload.sub);
+  // The verified token itself — retrieval trades it to Cognito Identity for the caller's identity-pool
+  // id, which is what S3 keys are actually prefixed with (see hono-env.ts). Safe to expose: it only
+  // reaches the context after `verify()` above has passed.
+  c.set("idToken", token);
   await next();
 });

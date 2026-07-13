@@ -2,6 +2,8 @@
 
 ## 2026-07-13
 
+- feat: **retrieval billing — quote → pay → thaw, HARD-gated at IAM** (RETRIEVAL.md): `s3:RestoreObject` moves off the Cognito user role onto the backend's OIDC role, so a tampered client can't thaw (and thus can't read) Deep Archive at our egress cost; new `retrieval-pricing.ts` (0% margin, thaw + egress + Paddle fee), `identity.server.ts` ownership check, `retrieval.server.ts`, `routes/retrieval.ts` + `retrieval_jobs` table (doubles as the free-allowance ledger); daemon gains pure `RestoreStep.next` + `restorePlan`; `RequestBackModal` shows the backend's quote.
+- refactor: **daemon rate card deleted** — the app priced restores from AWS's thaw rate (no egress, ~40× understated) and showed customers our S3 cost in Settings; `getPricing`, Swift `Pricing`, `views/files/pricing.ts` and the store's `pricing` slice are gone. A restore's price now has one source: `POST /retrieval/quote`.
 - chore(skills): re-vendor `adpharm-stack` + `audit-code-quality` — the audit skill now reads the 4 pillars from CLAUDE.md instead of restating a drifted copy; `skills-lock.json` gains `sourceUrl`.
 
 ## 2026-07-12

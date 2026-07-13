@@ -11,8 +11,12 @@
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
+    "@aws-sdk/client-cognito-identity": "^3.1085.0",
+    "@aws-sdk/client-s3": "^3.1085.0",
+    "@aws-sdk/credential-providers": "^3.1081.0",
     "@neondatabase/serverless": "^1.1.0",
     "@paddle/paddle-node-sdk": "^3.8.0",
+    "@vercel/functions": "^3.7.5",
     "aws-jwt-verify": "^5.2.1",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.27",

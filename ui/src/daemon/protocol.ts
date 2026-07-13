@@ -109,31 +109,23 @@ export interface Status {
 /**
  * `RestoreDTO` — one idempotent restore step's outcome. Re-issue `restore` until `state==="restored"`.
  * `out` is set only when bytes landed; `tier`/`typicalWait` only while thawing (for the quoted wait).
+ *
+ * `authorizationRequired` is the paid-retrieval hard gate (root `RETRIEVAL.md`): on a signed-in
+ * (multi-user) daemon the blob is frozen and the daemon has no right to thaw it — only the account
+ * backend does, and only for a restore that's paid for or inside the free monthly allowance. It is NOT an
+ * error: it's the normal first step. `blobKey`/`egressBytes` are set only in this state, and are exactly
+ * what `POST /retrieval/quote` needs to price the restore.
  */
 export interface RestoreStep {
   file: string;
-  state: "restored" | "thawRequested" | "thawInProgress";
+  state: "restored" | "thawRequested" | "thawInProgress" | "authorizationRequired";
   out: string | null;
   tier: string | null;
   typicalWait: string | null;
-}
-
-/** `TierQuoteDTO` — one Glacier retrieval tier's per-GB fee + typical wait (SSOT: the daemon's `RestoreTier`). */
-export interface TierQuote {
-  tier: string;
-  usdPerGB: number;
-  typicalWait: string;
-}
-
-/**
- * `PricingDTO` — the storage/retrieval rate card the UI quotes cost+fee from (the daemon is the SSOT;
- * `note` is the estimate disclaimer to show beside any figure). All figures are USD list prices. Static
- * estimate — the UI does the trivial bytes × rate math, the daemon owns the numbers. See `getPricing`.
- */
-export interface Pricing {
-  storageUsdPerGBMonth: number;
-  retrieval: TierQuote[];
-  note: string;
+  /** Only on `authorizationRequired` — the blob the backend must thaw. */
+  blobKey: string | null;
+  /** Only on `authorizationRequired` — bytes that will come back (what the quote is priced on). */
+  egressBytes: number | null;
 }
 
 /** `AuthDTO` — `authenticate`'s result: the Cognito identity id this daemon's uploads are now scoped
@@ -179,8 +171,6 @@ export interface Commands {
   getStatus: { params: Record<string, never>; result: Status };
   listSources: { params: Record<string, never>; result: Source[] };
   listFiles: { params: Record<string, never>; result: ListedFile[] };
-  /** The storage/retrieval rate card (SSOT) the UI quotes cost+fee from. Static — fetched once on connect. */
-  getPricing: { params: Record<string, never>; result: Pricing };
   /** Register a watched folder. `mountPath` is the vault-relative destination its tree lands under in My
    * Files; omit/empty → the daemon defaults to the source's basename (never root, to keep mounts namespaced). */
   addSource: { params: { path: string; mountPath?: string }; result: Ack };
@@ -221,6 +211,15 @@ export interface Commands {
    * blob mapping are kept (byte reclaim is a deferred repack/GC — deep storage has a 180-day minimum).
    * Emits `filesChanged`. */
   deletePath: { params: { path: string }; result: Ack };
+  /** What restoring these files would take to serve — the input to the backend's `POST /retrieval/quote`
+   * (root RETRIEVAL.md). Ask this BEFORE showing any price: a restore is billed on the whole BLOBS that
+   * must be thawed (packed, so one photo can drag a 1 GiB blob with it) plus the bytes that come back —
+   * neither of which the renderer can work out. `blobKeys` is deduped (one thaw per blob, however many
+   * files ride in it). Read-only: touches the journal, never S3. */
+  restorePlan: {
+    params: { files: string };
+    result: { blobKeys: string[]; egressBytes: number };
+  };
   restore: {
     params: { file: string; out: string; tier?: string; days?: string };
     result: RestoreStep;

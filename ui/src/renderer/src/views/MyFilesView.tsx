@@ -7,7 +7,7 @@
  * request-back issues the real `restore` command via `exec`.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ColdstoreApi, ConflictPolicy, DepositPreviewItem, Pricing } from "../../../shared/ipc.ts";
+import type { ColdstoreApi, ConflictPolicy, DepositPreviewItem, RetrievalQuote } from "../../../shared/ipc.ts";
 import type { Exec } from "./types.ts";
 import type { FilesApi } from "./files/useFiles.ts";
 import {
@@ -48,8 +48,6 @@ interface Props {
   files: ArchivedFile[];
   virtualFolders: string[];
   filesApi: FilesApi;
-  /** Rate card (store `state.pricing`) — drives the request-a-copy fee quote. */
-  pricing: Pricing;
   /** Live per-file upload progress (store `run.uploadProgress`), keyed by daemon file id — drives the
    * determinate bar on an uploading row. Empty between runs. */
   uploadProgress: Record<string, UploadProgress>;
@@ -72,7 +70,6 @@ export const MyFilesView = ({
   files,
   virtualFolders,
   filesApi,
-  pricing,
   uploadProgress,
   canDeposit,
   onDepositBlocked,
@@ -83,6 +80,10 @@ export const MyFilesView = ({
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [requestFiles, setRequestFiles] = useState<ArchivedFile[] | null>(null);
+  /** The backend's price for the pending request (null while it's still being fetched). The renderer never
+   *  computes a restore price — see RequestBackModal's note on why the old local estimate was ~40× wrong. */
+  const [quote, setQuote] = useState<RetrievalQuote | null>(null);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<RowTarget[] | null>(null);
   const [moveTargets, setMoveTargets] = useState<RowTarget[] | null>(null);
   const [infoOpen, setInfoOpen] = useState(false);
@@ -150,17 +151,55 @@ export const MyFilesView = ({
     return out;
   };
 
-  // ── request back: issue the REAL restore command per frozen file ──
+  // ── request back: price it, take payment if it isn't free, then issue the REAL restore ──
+  //
+  // A restore is a HARD-gated, priced operation now (root RETRIEVAL.md): the daemon holds no
+  // `s3:RestoreObject`, so the blobs cannot thaw until the backend says this restore is paid for (or free
+  // under the monthly allowance) and thaws them itself. Hence the order here — quote, pay, THEN restore.
+  // Issuing `restore` first would just get `authorizationRequired` back and strand the user.
   const openRequest = (candidates: ArchivedFile[]): void => {
     const restorable = candidates.filter((f) => f.status === "frozen");
-    if (restorable.length > 0) setRequestFiles(restorable);
+    if (restorable.length === 0) return;
+    setRequestFiles(restorable);
+    setQuote(null);
+    setQuoteError(null);
+
+    // Ask the DAEMON which blobs this needs (it dedupes — many files usually share one blob, and a blob
+    // is thawed and billed once), then ask the BACKEND what that costs. The renderer prices nothing.
+    void (async () => {
+      try {
+        const plan = await api.request("restorePlan", { files: restorable.map((f) => f.id).join("\n") });
+        setQuote(await api.quoteRestore(plan.blobKeys, plan.egressBytes));
+      } catch (e) {
+        setQuoteError(e instanceof Error ? e.message : String(e));
+      }
+    })();
   };
+
   const confirmRequest = (folder: string): void => {
-    for (const f of requestFiles ?? []) {
-      const out = `${folder}/${baseName(f.relativePath)}`;
-      exec(() => api.request("restore", { file: f.id, out }));
-    }
+    const files = requestFiles ?? [];
+    const job = quote;
     setRequestFiles(null);
+    if (!job) return; // never start a transfer we couldn't price — the button is disabled, but be certain
+
+    void (async () => {
+      // Pay first when there's something to pay. `payForRestore` resolves only once the webhook confirms
+      // the money AND the backend has begun thawing — so by the time we issue `restore`, the daemon will
+      // find the blobs thawing rather than frozen. A free (allowance-covered) job is already authorized at
+      // quote time, so it skips straight through.
+      if (job.quoteCents > 0) {
+        try {
+          await api.payForRestore(job.jobId);
+        } catch (e) {
+          setQuoteError(e instanceof Error ? e.message : String(e));
+          return; // payment didn't land — don't pretend a restore started
+        }
+      }
+      for (const f of files) {
+        const out = `${folder}/${baseName(f.relativePath)}`;
+        exec(() => api.request("restore", { file: f.id, out }));
+      }
+    })();
   };
 
   // ── reorganize ──
@@ -535,11 +574,16 @@ export const MyFilesView = ({
       {requestFiles && (
         <RequestBackModal
           files={requestFiles}
-          pricing={pricing}
+          quote={quote}
+          quoteError={quoteError}
           chooseFolder={api.chooseFolder}
           getDownloadsDir={api.getDownloadsDir}
           onConfirm={confirmRequest}
-          onClose={() => setRequestFiles(null)}
+          onClose={() => {
+            // Let go of an unpaid quote so it burns none of the user's free monthly allowance.
+            if (quote && quote.quoteCents > 0) void api.cancelRestore(quote.jobId);
+            setRequestFiles(null);
+          }}
         />
       )}
 

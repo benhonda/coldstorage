@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { mapCatalog, type CatalogPrice, type CatalogProduct } from "./catalog.js";
+import { RETRIEVAL_PRODUCT_NAME } from "./plan-sizes.js";
 
 /** Fixtures shaped like what `scripts/seed-paddle-catalog.ts` writes. */
 const product = (id: string, name: string, status = "active"): CatalogProduct => ({ id, name, status });
@@ -80,5 +81,23 @@ describe("mapCatalog", () => {
     const products = [product("pro_4tb", "ColdStorage — 4 TB")];
     const prices = [price("pri_4tb_1", "pro_4tb", 5999, 1)];
     expect(() => mapCatalog(products, prices)).toThrow(/Unrecognized plan size/);
+  });
+
+  test("ignores the retrieval product — it matches the name pattern but is not a plan", () => {
+    // RETRIEVAL.md: restores are billed as inline one-time prices hanging off a real Paddle product
+    // named "ColdStorage — Data retrieval". That name matches the `ColdStorage — <x>` plan pattern, so
+    // without the explicit skip it would be read as a storage size named "Data retrieval" — and the
+    // moment any price sat on it, the unrecognized-size throw above would take /catalog down entirely.
+    const products = [...SEEDED_PRODUCTS, product("pro_retrieval", RETRIEVAL_PRODUCT_NAME)];
+    const prices = [
+      price("pri_ok", "pro_1tb", 1899, 1),
+      // A one-time inline restore price. Belongs to nobody's plan; must never reach the size lookup.
+      price("pri_restore", "pro_retrieval", 1026, null),
+      // And even if one somehow acquired a yearly cycle, /catalog must survive it.
+      price("pri_restore_weird", "pro_retrieval", 1026, 1),
+    ];
+
+    expect(() => mapCatalog(products, prices)).not.toThrow();
+    expect(mapCatalog(products, prices).map((e) => e.priceId)).toEqual(["pri_ok"]);
   });
 });

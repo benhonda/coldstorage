@@ -286,7 +286,6 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           files={filesApi.files}
           virtualFolders={filesApi.virtualFolders}
           filesApi={filesApi}
-          pricing={state.pricing}
           uploadProgress={state.run?.uploadProgress ?? {}}
           canDeposit={canDeposit}
           onDepositBlocked={() => (subscribed ? setOverCapacityOpen(true) : setPaywallOpen(true))}
@@ -299,7 +298,6 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           sources={state.status?.sources ?? []}
           running={state.run?.active ?? false}
           settings={settings}
-          pricing={state.pricing}
           vaultBytes={vaultBytes}
           bytesStored={state.status?.bytesStored ?? null}
           files={filesApi.files}

@@ -8,7 +8,7 @@
  * products, one-time prices, non-year cycles, non-USD) is excluded rather than guessed at — the
  * picker must never sell an entity the seed script didn't define.
  */
-import { PLAN_SIZES } from "./plan-sizes.js";
+import { PLAN_SIZES, RETRIEVAL_PRODUCT_NAME } from "./plan-sizes.js";
 
 /** One sellable plan: a size × term cell of the catalog. */
 export interface CatalogEntry {
@@ -49,6 +49,11 @@ const bytesForSize = new Map<string, number>(PLAN_SIZES.map((p) => [p.size, p.by
 export function mapCatalog(products: CatalogProduct[], prices: CatalogPrice[]): CatalogEntry[] {
   const sizeByProductId = new Map<string, string>();
   for (const p of products) {
+    // The retrieval product matches the `ColdStorage — <x>` pattern but is NOT a plan: it's the parent
+    // of the inline per-restore prices (see RETRIEVAL_PRODUCT_NAME). Skipped explicitly rather than
+    // relying on it having no yearly prices — the day someone adds one, the throw below would fire on
+    // "Data retrieval" and take down /catalog for a reason nobody would guess.
+    if (p.name === RETRIEVAL_PRODUCT_NAME) continue;
     const size = p.status === "active" ? PRODUCT_NAME_PATTERN.exec(p.name)?.[1] : undefined;
     if (size) sizeByProductId.set(p.id, size);
   }

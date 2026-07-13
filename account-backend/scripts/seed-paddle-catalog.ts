@@ -31,7 +31,7 @@
  */
 import { type TaxCategory } from "@paddle/paddle-node-sdk";
 import { paddleFromEnv } from "./_paddle.js";
-import { PLAN_SIZES } from "../src/plan-sizes.js";
+import { PLAN_SIZES, RETRIEVAL_PRODUCT_NAME } from "../src/plan-sizes.js";
 
 /** The full Paddle tax-category union, as a runtime list so we can validate env input. */
 const TAX_CATEGORIES: readonly TaxCategory[] = [
@@ -169,14 +169,45 @@ async function main() {
     }
   }
 
+  // ── The retrieval product (RETRIEVAL.md) — a product with NO catalog prices ────────────
+  // Restores are billed as non-catalog (inline) prices for their exact amount, so there is nothing to
+  // enumerate here; this product just gives those charges a real parent. Same idempotent match-by-name
+  // as the plans above.
+  const existingRetrieval = productByName.get(RETRIEVAL_PRODUCT_NAME);
+  if (existingRetrieval) {
+    skipped.products++;
+    console.log(`● product exists  ${RETRIEVAL_PRODUCT_NAME}  (${existingRetrieval.id})  [no catalog prices — billed inline]`);
+  } else if (APPLY) {
+    const p = await paddle.products.create({
+      name: RETRIEVAL_PRODUCT_NAME,
+      description:
+        "Getting your data back out of cold storage. Charged per restore at cost — the amount depends on how much you're retrieving.",
+      taxCategory,
+    });
+    created.products++;
+    console.log(`✓ product CREATED ${RETRIEVAL_PRODUCT_NAME}  (${p.id})  [no catalog prices — billed inline]`);
+  } else {
+    console.log(`+ product PLAN    ${RETRIEVAL_PRODUCT_NAME}  [tax: ${taxCategory}, no prices — billed inline]`);
+  }
+
   // ── --archive-extras: retire active entities outside the SSOT ─────────────────────────
   const archived = { products: 0, prices: 0 };
   if (ARCHIVE_EXTRAS) {
-    const ssotNames = new Set(PRODUCTS.map((p) => productName(p.size)));
+    // The retrieval product is SSOT too — without this it reads as a stray and gets archived, which
+    // would break every restore charge (retrieval.server.ts resolves it by name at runtime).
+    const ssotNames = new Set([...PRODUCTS.map((p) => productName(p.size)), RETRIEVAL_PRODUCT_NAME]);
     const ssotCycles = new Set([ANNUAL_CYCLE]);
     const strayProducts = existingProducts.filter((p) => p.status === "active" && !ssotNames.has(p.name));
     const strayProductIds = new Set(strayProducts.map((p) => p.id));
-    const keptProductIds = new Set(existingProducts.filter((p) => p.status === "active" && ssotNames.has(p.name)).map((p) => p.id));
+    // Kept products get their off-SSOT prices swept — but NOT the retrieval product's. Any price sitting
+    // on it is a one-time inline charge (`billingCycle: null`), which the sweep would read as a stray;
+    // those are per-restore artifacts, not catalog drift, and archiving them is churn at best.
+    const retrievalProductId = productByName.get(RETRIEVAL_PRODUCT_NAME)?.id;
+    const keptProductIds = new Set(
+      existingProducts
+        .filter((p) => p.status === "active" && ssotNames.has(p.name) && p.id !== retrievalProductId)
+        .map((p) => p.id),
+    );
     // A stray price hangs off a stray product, or sits on a kept product with an off-SSOT
     // billing cycle (incl. one-time prices).
     const strayPrices = activePrices.filter(

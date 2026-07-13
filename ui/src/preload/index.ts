@@ -64,6 +64,10 @@ const api: ColdstoreApi = {
   previewPlanChange: (priceId: string) => ipcRenderer.invoke(IPC.entitlementPreviewChange, priceId),
   changePlan: (priceId: string) => ipcRenderer.invoke(IPC.entitlementChangePlan, priceId),
   openManage: (page) => ipcRenderer.invoke(IPC.entitlementOpenManage, page),
+  quoteRestore: (blobKeys: string[], egressBytes: number) => ipcRenderer.invoke(IPC.retrievalQuote, blobKeys, egressBytes),
+  payForRestore: (jobId: string) => ipcRenderer.invoke(IPC.retrievalPay, jobId),
+  getRestoreJob: (jobId: string) => ipcRenderer.invoke(IPC.retrievalJob, jobId),
+  cancelRestore: (jobId: string) => ipcRenderer.invoke(IPC.retrievalCancel, jobId),
   onEntitlement: (listener) => {
     const handler = (_e: IpcRendererEvent, status: unknown): void =>
       (listener as (s: unknown) => void)(status);

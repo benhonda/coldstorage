@@ -6,6 +6,7 @@ import { subscriptionRoute } from "./routes/subscription.js";
 import { checkoutSessionRoute } from "./routes/checkout-session.js";
 import { catalogRoute } from "./routes/catalog.js";
 import { checkoutRoute } from "./routes/checkout.js";
+import { retrievalRoute } from "./routes/retrieval.js";
 import { paddleWebhookRoute } from "./routes/webhooks/paddle.js";
 
 const app = new Hono();
@@ -17,6 +18,7 @@ app.route("/subscription", subscriptionRoute);
 app.route("/checkout-session", checkoutSessionRoute);
 app.route("/catalog", catalogRoute);
 app.route("/checkout", checkoutRoute);
+app.route("/retrieval", retrievalRoute);
 app.route("/webhooks/paddle", paddleWebhookRoute);
 
 app.onError((err, c) => {

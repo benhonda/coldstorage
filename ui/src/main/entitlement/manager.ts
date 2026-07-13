@@ -6,11 +6,17 @@
  * truth, the browser round-trip is not. A `coldstorage://checkout-complete` deep link, if it arrives,
  * is just a "check now" nudge into the same poll.
  *
- * This is a SOFT gate: it blocks the app from starting a deposit, not S3 at the IAM layer (see the
- * backend entitlement route). Browse/restore stay available unsubscribed — you can always get data back.
+ * The DEPOSIT gate is SOFT: it stops the app starting an upload, not S3 at the IAM layer (see the backend
+ * entitlement route). Browsing stays open unsubscribed.
+ *
+ * Restore is a different story since 2026-07-13 (root `RETRIEVAL.md`). It is still always AVAILABLE —
+ * you can always get your data back, subscribed or not, and small restores are free under a monthly
+ * allowance — but it is now PRICED at cost beyond that allowance, and enforced HARD: a signed-in daemon
+ * holds no `s3:RestoreObject`, so only the backend can thaw a blob, and only for a restore that's paid
+ * for. See the retrieval methods at the bottom of this class.
  */
 import { shell } from "electron";
-import type { CatalogPlan, EntitlementStatus, ManagePage, PlanChangePreview, SubscriptionInfo } from "../../shared/ipc.ts";
+import type { CatalogPlan, EntitlementStatus, ManagePage, PlanChangePreview, RetrievalQuote, SubscriptionInfo } from "../../shared/ipc.ts";
 
 /** How long checkout polling runs before giving up (checkout + webhook delivery); and the gap between polls. */
 const POLL_TIMEOUT_MS = 3 * 60 * 1000;
@@ -186,6 +192,70 @@ export class EntitlementManager {
     }
     this.polling = false;
     this.setStatus({ ...this.status, checkingOut: false });
+  }
+
+  /* ── Paid retrieval (root RETRIEVAL.md) ───────────────────────────────────────────────────────────
+   * Unlike the deposit gate above, this one is HARD: a signed-in daemon has no `s3:RestoreObject`, so a
+   * frozen blob simply cannot be thawed except by the backend, and only for a restore that's paid for or
+   * inside the free monthly allowance. So these aren't "checks" the UI could skip — they're the only way
+   * the data comes back. */
+
+  /**
+   * Price a restore. Small ones come back `authorized` with `quoteCents: 0` — inside the free monthly
+   * allowance, already thawing, nothing to pay and nothing to confirm.
+   *
+   * The bytes are quoted by the BACKEND, from the blobs' real sizes in S3 — never from anything the
+   * renderer computes. (A restore is billed on whole blob objects thawed plus bytes downloaded; the
+   * renderer can't know the first and shouldn't guess at the second.)
+   */
+  async quoteRestore(blobKeys: string[], egressBytes: number): Promise<RetrievalQuote> {
+    const { res, body } = await this.authedJson<RetrievalQuote & { message?: string }>("/retrieval/quote", {
+      method: "POST",
+      body: JSON.stringify({ blobKeys, egressBytes }),
+    });
+    if (!res.ok) throw new Error(body?.message ?? `couldn't price this restore: http ${res.status}`);
+    return body;
+  }
+
+  /**
+   * Pay for a quoted restore, then wait for the money to land.
+   *
+   * Two paths, and the user only notices one of them: a subscriber's saved card is charged in place (no
+   * browser, no checkout — they confirmed the price already), while someone with no card on file gets the
+   * hosted Paddle checkout in their browser. Either way we then POLL until the webhook flips the job to
+   * `paid` — the webhook is the source of truth, exactly as with subscription checkout above. The backend
+   * thaws at that moment; the daemon can't do it, so nothing before that point makes the data reachable.
+   */
+  async payForRestore(jobId: string): Promise<RetrievalQuote> {
+    const { res, body } = await this.authedJson<{ charged?: boolean; url?: string | null; message?: string }>(
+      `/retrieval/jobs/${jobId}/pay`,
+      { method: "POST" },
+    );
+    if (!res.ok) throw new Error(body?.message ?? `couldn't take the payment: http ${res.status}`);
+    if (body?.url) await shell.openExternal(body.url);
+
+    const deadline = Date.now() + POLL_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      const job = await this.getRestoreJob(jobId);
+      if (job.authorized) return job;
+      if (job.status === "canceled") throw new Error("this restore was canceled");
+    }
+    // Not a failure of the payment — just of our patience. The job stays quoted and payable, and a
+    // completed checkout will still flip it; say so rather than implying the money vanished.
+    throw new Error("still waiting on the payment to clear — it may complete shortly; check back in a moment");
+  }
+
+  /** Poll one restore job (status + whether the backend has thawed its blobs yet). */
+  async getRestoreJob(jobId: string): Promise<RetrievalQuote> {
+    const { res, body } = await this.authedJson<RetrievalQuote & { message?: string }>(`/retrieval/jobs/${jobId}`);
+    if (!res.ok) throw new Error(body?.message ?? `couldn't check this restore: http ${res.status}`);
+    return body;
+  }
+
+  /** Drop a quote the user walked away from, so it burns none of their free allowance. */
+  async cancelRestore(jobId: string): Promise<void> {
+    await this.authedJson(`/retrieval/jobs/${jobId}/cancel`, { method: "POST" }).catch(() => undefined);
   }
 
   private setStatus(s: EntitlementStatus): void {

@@ -108,18 +108,18 @@ public enum RestoreTier: String, Sendable, CaseIterable { case expedited, standa
         }
     }
 
-    /// Glacier *retrieval* fee, USD per GB, for this tier — the public S3 Glacier Deep Archive list price
-    /// (us-east-1). The SSOT the daemon quotes a get-a-copy-back fee from, co-located with `typicalWait`
-    /// so a tier carries its whole speed/cost story in one place. An ESTIMATE by nature (AWS changes list
-    /// prices, other regions differ); we quote this dominant per-GB term only — per-request fees + egress
-    /// are excluded to keep the number calm and legible. See `Pricing` for the storage rate + disclaimer.
-    public var retrievalUsdPerGB: Double {
-        switch self {
-        case .expedited: return 0.03    // Glacier Flexible only — never valid for Deep Archive
-        case .standard:  return 0.02
-        case .bulk:      return 0.0025
-        }
-    }
+    // A `retrievalUsdPerGB` rate card used to live here (and a `Pricing` enum beside it), quoting AWS's
+    // Deep Archive list prices to the UI. Both were DELETED on 2026-07-13 and must not come back.
+    //
+    // They were an honest estimate of what AWS bills US — and they explicitly excluded egress, which is
+    // ~36× the thaw rate. That was fine while Ben was the only user and paid AWS directly. It became a LIE
+    // the moment retrieval had a real price: the app quoted restores from this card and understated the
+    // actual charge by roughly 40× (root `RETRIEVAL.md`).
+    //
+    // What a restore costs is now decided — and stated — by the only party that can know: the account
+    // backend, which prices the thaw AND the egress AND the payment fee, and applies the account's free
+    // allowance (`account-backend/src/retrieval-pricing.ts`). The daemon does not quote money. If you find
+    // yourself wanting a price here, you want `POST /retrieval/quote`.
 
     /// Parse a CLI/IPC tier argument (SSOT for both `coldstore-restore` and the daemon's `restore` command).
     /// `nil` → `.standard` (the default); an unrecognized value **throws** rather than silently downgrading —
@@ -133,20 +133,6 @@ public enum RestoreTier: String, Sendable, CaseIterable { case expedited, standa
     }
 }
 
-/// The storage/retrieval **rate card** the daemon quotes to the UI (the `getPricing` command) — the
-/// pricing SSOT, so cost copy lives in ONE place instead of magic numbers scattered across views. Public
-/// S3 Glacier Deep Archive list prices (us-east-1). ESTIMATES, stated as such: AWS revises list prices,
-/// other regions cost more, and we surface only the dominant per-GB terms (no per-request fee, no egress)
-/// to keep the figure calm and honest. The per-tier *retrieval* rate lives on `RestoreTier`; this holds
-/// the storage rate, the valid Deep-Archive tiers, and the disclaimer shown beside any quote.
-public enum Pricing {
-    /// Deep Archive storage, USD per GB per month (us-east-1 list price).
-    public static let storageUsdPerGBMonth = 0.00099
-    /// The tiers a Deep Archive object can actually be retrieved with (`.expedited` is Flexible-only).
-    public static let deepArchiveTiers: [RestoreTier] = [.standard, .bulk]
-    /// Always shown with a quote so we never assert a price as fact.
-    public static let estimateNote = "Estimate — public AWS list prices, before tax and small per-request fees."
-}
 
 /// Whether a blob object can be ranged-GET *right now*. Deep Archive / Glacier Flexible objects must be
 /// thawed (RestoreObject) first; everything else (STANDARD/MinIO, GLACIER_IR) serves directly.
@@ -161,9 +147,42 @@ public enum ThawState: Sendable, Equatable { case ready, needed, inProgress
     }
 }
 
+/// What a restore should DO next, given where the blob stands and whether this daemon is allowed to thaw.
+///
+/// Pure, exactly like `ThawState.from` above and for the same reason: `RestoreEngine.restore` is wrapped
+/// in S3 I/O, so the *decision* is lifted out where it can be unit-tested — including the one case that
+/// carries real money, `.needsAuthorization` (root `RETRIEVAL.md`).
+public enum RestoreStep: Sendable, Equatable {
+    case thaw               // frozen, and we may thaw it ourselves (dogfood)
+    case needsAuthorization // frozen, and we may NOT — the backend thaws, once the restore is paid for
+    case wait               // a thaw is already underway
+    case download           // thawed: ranged-GET + decrypt
+}
+
+extension RestoreStep {
+    /// The whole gate, in one line: a daemon that cannot thaw (`canSelfThaw == false`, i.e. running on a
+    /// customer's Cognito credentials, which have no `s3:RestoreObject`) must never *attempt* a thaw on a
+    /// frozen blob — it must go get the restore authorized. Everything else is unchanged by billing.
+    public static func next(thaw: ThawState, canSelfThaw: Bool) -> RestoreStep {
+        switch thaw {
+        case .needed:     return canSelfThaw ? .thaw : .needsAuthorization
+        case .inProgress: return .wait
+        case .ready:      return .download
+        }
+    }
+}
+
 /// Result of an idempotent restore step. Re-run a restore until it returns `.restored`.
 public enum RestoreOutcome: Sendable, Equatable {
     case restored                          // bytes on disk, hash-verified
     case thawRequested(tier: RestoreTier)  // a Glacier retrieval was just kicked off
     case thawInProgress                    // retrieval underway; not downloadable yet
+    /// This daemon may NOT thaw (multi-user mode — see `RestoreEngine.canSelfThaw`), and the blob is
+    /// still frozen. The app must get the restore AUTHORIZED by the account backend first
+    /// (`POST /retrieval/quote` → pay if it's over the free allowance), which thaws it on our behalf.
+    /// Carries exactly what that quote needs: which blob to thaw, and how many bytes come back.
+    ///
+    /// This is not an error, and must not be presented as one — it's the normal first step of a paid
+    /// restore, the same way a locked door isn't a fault (root `RETRIEVAL.md`).
+    case authorizationRequired(blobKey: String, egressBytes: Int)
 }

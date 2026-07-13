@@ -205,19 +205,32 @@ data "aws_iam_policy_document" "user_trust" {
   }
 }
 
-# Permissions: the SAME three S3 actions the daemon needs (PutObject/GetObject/RestoreObject), but scoped
-# to the CALLER'S OWN prefix. `$${cognito-identity.amazonaws.com:sub}` is escaped so Terraform emits the
-# literal IAM policy variable (NOT an HCL interpolation) — AWS substitutes the caller's identity id at eval
-# time. THIS is the cross-user boundary; adversarially test it (a real token must get AccessDenied on
-# another sub's prefix).
+# Permissions, scoped to the CALLER'S OWN prefix. `$${cognito-identity.amazonaws.com:sub}` is escaped so
+# Terraform emits the literal IAM policy variable (NOT an HCL interpolation) — AWS substitutes the caller's
+# identity id at eval time. THIS is the cross-user boundary; adversarially test it (a real token must get
+# AccessDenied on another sub's prefix).
+#
+# ── s3:RestoreObject is DELIBERATELY ABSENT (2026-07-13, RETRIEVAL.md) ────────────────────────────────
+# It used to be here, and its absence is now the HARD GATE on paid retrieval — the single most important
+# line in this file to not "helpfully" add back.
+#
+# Deep Archive objects cannot be downloaded at all until they are thawed with RestoreObject; a GetObject
+# against an un-thawed object fails with InvalidObjectState. By withholding RestoreObject from the user
+# role and granting it ONLY to the account-backend (see infra/account-backend), the thaw becomes something
+# the user cannot do for themselves — the backend performs it, and only for a restore job that is paid for
+# or covered by the free allowance. Without this, a tampered client could pull an entire vault down for
+# free while WE pay the egress ($0.09/GB — a 2 TB vault is ~$185 of our money, unrecoverable).
+#
+# GetObject STAYS, and must: it is also what HeadObject authorizes, which the daemon needs for
+# `verify()` (post-upload "archived means verified-present") and `thawState()` (polling the thaw). It is
+# safe precisely because it is inert against a cold object — the thaw is the gate, not the read.
 data "aws_iam_policy_document" "user_s3" {
   statement {
-    sid    = "OwnPrefixReadWriteRestore"
+    sid    = "OwnPrefixReadWrite"
     effect = "Allow"
     actions = [
       "s3:PutObject",
-      "s3:GetObject",
-      "s3:RestoreObject",
+      "s3:GetObject", # + HeadObject. Useless on an un-thawed Deep Archive object — see the note above.
     ]
     resources = ["${aws_s3_bucket.vault.arn}/blobs/$${cognito-identity.amazonaws.com:sub}/*"]
   }

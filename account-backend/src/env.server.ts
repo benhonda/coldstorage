@@ -24,6 +24,20 @@ const envSchema = z.object({
   COGNITO_USER_POOL_ID: z.string().min(1),
   /** Public app-client id (no secret — the desktop app is a public client). */
   COGNITO_USER_POOL_CLIENT_ID: z.string().min(1),
+
+  /* ── AWS: woken up 2026-07-13 by the retrieval hard gate (root RETRIEVAL.md) ─────────────────────
+   * This service made no AWS calls at all until it became the only holder of `s3:RestoreObject` —
+   * the thaw the user's own credentials deliberately cannot perform. All three are TF-managed Vercel
+   * env vars (infra/account-backend), never hand-set. */
+
+  /** IAM role Vercel's OIDC token assumes in production. No long-lived keys — see aws.server.ts. */
+  AWS_ROLE_ARN: z.string().min(1),
+  AWS_REGION: z.string().min(1).default("ca-central-1"),
+  /** The vault bucket whose blobs this service thaws (ciphertext only — it never reads a body). */
+  VAULT_BUCKET_NAME: z.string().min(1),
+  /** Identity Pool id — resolves a caller's ID token to the identity their S3 keys are prefixed with
+   *  (`identity.server.ts`), so we can prove a blob is theirs before paying to thaw it. */
+  COGNITO_IDENTITY_POOL_ID: z.string().min(1),
 });
 
 export const env = envSchema.parse(process.env);

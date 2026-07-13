@@ -55,3 +55,23 @@ variable "paddle_client_token" {
   default     = ""
   description = "Paddle CLIENT-SIDE token (dashboard → Developer tools → Authentication) for the GET /checkout page's Paddle.js — the default-payment-link page the hosted checkout renders on. Public by design (Paddle: 'safe to expose in frontend code'), NOT the API key; per-stack (sandbox test_… vs live live_…). Empty ⇒ the env var isn't set (/checkout returns a clear 'set PADDLE_CLIENT_TOKEN' error until you fill this in)."
 }
+
+# ── Retrieval hard gate (2026-07-13, root RETRIEVAL.md) ────────────────────────────────────────────
+# All three read from infra/coldstorage's outputs (SSOT — never hand-copied), same as the Cognito ids
+# above. They exist because this service now performs the Deep Archive thaw that the user's own
+# credentials deliberately cannot: it must know WHICH bucket, and WHO the caller really is in S3 terms.
+
+variable "vault_bucket_arn" {
+  type        = string
+  description = "From infra/coldstorage's bucket_arn output — the vault the OIDC role may thaw blobs in (scoped to blobs/*)."
+}
+
+variable "vault_bucket_name" {
+  type        = string
+  description = "From infra/coldstorage's bucket_name output — the same bucket, as the backend's VAULT_BUCKET_NAME env var."
+}
+
+variable "cognito_identity_pool_id" {
+  type        = string
+  description = "From infra/coldstorage's cognito_identity_pool_id output. The backend trades a caller's verified ID token for their IDENTITY-pool id (Cognito GetId) — the id S3 keys are prefixed with (blobs/<identityId>/…) — so it can prove a blob belongs to the caller before thawing it at our expense. The User Pool sub (above) is a DIFFERENT identifier and cannot do this job."
+}

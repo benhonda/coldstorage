@@ -635,11 +635,20 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
   only ever move UP, hence starting small (25 GB, still above Google's 15 GB free).
   Implementation plan (**DRAFT 2026-07-12**, hardest-first; builds on the quota-enforcement work
   above, so that lands first):
-  - **A. Retrieval pass-through steel thread [open — the load-bearing unknown].** Spec'd
-    2026-07-12: engineering flow + open questions in root `RETRIEVAL.md` (EXPLORING); margin
-    model + allowance sizing in private `strategy/retrieval-economics.md` (DRAFT — verdict:
-    included egress beyond a tiny allowance structurally cannot fit the rate-locked margins).
-    Quote → pay → restore unlocked, end-to-end in sandbox. Daemon sizes the restore job; backend prices it at a
+  - **A. Retrieval pass-through — BUILT ✅ (2026-07-13), all four layers green; NOT yet exercised
+    end-to-end.** Spec: root `RETRIEVAL.md`; margin model: private `strategy/retrieval-economics.md`
+    (verdict: included egress beyond a tiny allowance structurally cannot fit the rate-locked
+    margins). **The big find: retrieval could not be soft-gated.** The Cognito user role held
+    `s3:RestoreObject`, so any tampered client could thaw + download a whole vault while WE paid the
+    egress (~$185 for 2 TB, unrecoverable, possibly from a free user). Unlike the deposit gate, that
+    loss is unbounded — so it got a **HARD gate**: `RestoreObject` was removed from the user role and
+    granted only to the backend, which thaws only for a paid (or allowance-covered) job. Deep Archive
+    can't be read until it's thawed, so this is enforced by IAM, not by asking the client nicely.
+    Zero-knowledge is untouched (the backend sees ciphertext metadata only), and no presigned-URL
+    machinery was needed — the daemon keeps `GetObject`, which is inert against a frozen object.
+    **Applied.** Also fixed: the app was pricing restores from the daemon's rate card (thaw rate only,
+    no egress) — **~40× understated** vs what we charge; that local estimate is deleted.
+    **Remaining: run one real restore (quote → pay → thaw → download) against Paddle sandbox.** Daemon sizes the restore job; backend prices it at a
     flat ¢/GB that covers GDA restore + egress **+ Paddle's ~5% + $0.50 per-transaction cut** ("at
     cost" must include payment processing or every small restore loses money); Paddle one-time
     transaction; paid webhook unlocks the job. Verify while building: inline custom non-recurring

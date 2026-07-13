@@ -44,14 +44,6 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
     }
   };
 
-  // Pricing is a static rate card — fetch once per connect (no event invalidates it).
-  const refreshPricing = async (): Promise<void> => {
-    try {
-      store.dispatch({ type: "pricingLoaded", pricing: await api.request("getPricing") });
-    } catch {
-      /* falls back to the seeded FALLBACK_PRICING already in state */
-    }
-  };
 
   const offEvent = api.onEvent((name, data) => {
     store.dispatch(eventAction(name, data));
@@ -75,7 +67,6 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
       void refreshStatus(); // resync the snapshot after a (re)connect
       void refreshFiles();
       void refreshExcludes();
-      void refreshPricing();
     }
   });
 
@@ -86,7 +77,7 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
   const offUpdate = api.onUpdateStatus((update) => store.dispatch({ type: "updateChanged", update }));
 
   // First paint: read the current connection + sign-in state and, if already connected, the snapshot
-  // + tree + excludes + pricing.
+  // + tree + excludes.
   void (async () => {
     const [state, auth, vault, entitlement, update] = await Promise.all([
       api.getConnectionState(),
@@ -104,7 +95,7 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
     // connected refreshes so the right screen paints as soon as the auth answer is in.
     store.dispatch({ type: "initialized" });
     if (state === "connected") {
-      await Promise.all([refreshStatus(), refreshFiles(), refreshExcludes(), refreshPricing()]);
+      await Promise.all([refreshStatus(), refreshFiles(), refreshExcludes()]);
     }
   })();
 

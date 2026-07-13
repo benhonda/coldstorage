@@ -1,17 +1,23 @@
 /**
  * Settings — the rules behind My Files (the *stuff* lives there; the *rules* live here). Watched folders
- * (auto-sync, demoted from the old home hero), what not to back up, and storage/cost. Fully daemon-backed
- * now: sources (each with a destination mount + per-folder pause/resume), catch-up, excludes ({@link
- * SettingsApi}), and the storage-cost estimate (the
- * daemon's pricing rate card).
+ * (auto-sync, demoted from the old home hero), what not to back up, and storage. Fully daemon-backed:
+ * sources (each with a destination mount + per-folder pause/resume), catch-up, and excludes ({@link
+ * SettingsApi}).
+ *
+ * It used to show "Roughly ~$X/month (estimate)" for storage, computed from AWS's list price. That was
+ * removed on 2026-07-13: it was OUR cost, not the customer's. A customer pays their plan price (shown on
+ * the AccountCard) whatever they store, so quoting them an AWS figure answered a question nobody asked,
+ * in the place a price belongs. It was honest when Ben was the only user and paid AWS directly — a
+ * dogfood-era number that quietly turned into a customer-facing one when the product grew a real price,
+ * the same drift that made the restore dialog understate its charge by ~40× (root `RETRIEVAL.md`).
+ * If a cost figure ever returns here, it must be the one we actually bill.
  */
 import { useState } from "react";
-import type { AuthStatus, EntitlementStatus, Pricing, Source, SubscriptionInfo } from "../../../shared/ipc.ts";
+import type { AuthStatus, EntitlementStatus, Source, SubscriptionInfo } from "../../../shared/ipc.ts";
 import { ChangePlanModal } from "./ChangePlanModal.tsx";
 import type { ViewProps } from "./types.ts";
 import type { ArchivedFile } from "./files/model.ts";
 import { baseName, formatBytes } from "./files/model.ts";
-import { formatUsd, monthlyStorageUsd } from "./files/pricing.ts";
 import { AddWatchedFolderModal } from "./files/AddWatchedFolderModal.tsx";
 import { ContextMenu, type MenuEntry } from "./files/ContextMenu.tsx";
 import { Badge, Button, Card, Chip, EmptyState, Field, Icon, IconButton, KeyValueRow, Modal } from "../ui/primitives.tsx";
@@ -41,7 +47,6 @@ export const SettingsView = ({
   sources,
   running,
   settings,
-  pricing,
   vaultBytes,
   bytesStored,
   files,
@@ -66,7 +71,6 @@ export const SettingsView = ({
    * NOT `status.running`, which only updates on a getStatus poll and so never flips during a quick run. */
   running: boolean;
   settings: SettingsApi;
-  pricing: Pricing;
   vaultBytes: number;
   /** Authoritative (S3-derived) total, for the quota line + downgrade warning. Null until the daemon's
    * first listing completes or in dogfood/unconfigured mode. */
@@ -272,9 +276,7 @@ export const SettingsView = ({
         {entitlement.quotaBytes != null && bytesStored != null && (
           <KeyValueRow label="Plan usage" value={`${formatBytes(bytesStored)} of ${formatBytes(entitlement.quotaBytes)} used`} />
         )}
-        <KeyValueRow label="Roughly" value={`${formatUsd(monthlyStorageUsd(pricing, vaultBytes))}/month (estimate)`} />
         <KeyValueRow label="Encryption" value="on this Mac, before upload" icon="lock" />
-        <p className="cs-help" style={{ marginTop: "var(--space-3)" }}>{pricing.note}</p>
       </Card>
 
       {auth.configured && (

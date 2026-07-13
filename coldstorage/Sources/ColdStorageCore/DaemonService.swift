@@ -336,29 +336,24 @@ public actor DaemonService {
     /// One idempotent restore step's outcome. `state` ∈ restored | thawRequested | thawInProgress —
     /// re-issue `restore` until it's `restored`. `out` is set only when bytes landed; `tier`/`typicalWait`
     /// only while thawing, so the UI can show the quoted wait.
-    private struct RestoreDTO: Encodable { let file, state: String; let out, tier, typicalWait: String? }
-    /// The pricing rate card the UI quotes cost/fee from — the daemon is the SSOT (constants live in
-    /// `Pricing`/`RestoreTier`, not scattered across views). Honest by construction: each retrieval tier
-    /// carries its own per-GB fee + typical wait (all USD — list prices), and `note` is the estimate
-    /// disclaimer shown beside any figure.
-    private struct TierQuoteDTO: Encodable { let tier: String; let usdPerGB: Double; let typicalWait: String }
-    private struct PricingDTO: Encodable {
-        let storageUsdPerGBMonth: Double
-        let retrieval: [TierQuoteDTO]
-        let note: String
+    /// `restorePlan`'s result: everything the account backend needs to price a restore. `blobKeys` is
+    /// DEDUPED (one thaw per blob, however many files ride in it); `egressBytes` is the plaintext-span
+    /// total that will actually come back.
+    private struct RestorePlanDTO: Encodable { let blobKeys: [String]; let egressBytes: Int }
+
+    /// `blobKey`/`egressBytes` are set only for `state == "authorizationRequired"` — they're what the app
+    /// hands to the account backend's `POST /retrieval/quote` to price (and, once paid, trigger) the thaw.
+    private struct RestoreDTO: Encodable {
+        let file, state: String
+        let out, tier, typicalWait: String?
+        let blobKey: String?
+        let egressBytes: Int?
     }
 
     private func sourceDTOs() throws -> [SourceDTO] {
         try journal.listSources().map { SourceDTO(id: $0.id, kind: $0.kind.rawValue, path: $0.path, mountPath: $0.mountPath, paused: $0.paused) }
     }
 
-    private func pricingDTO() -> PricingDTO {
-        PricingDTO(storageUsdPerGBMonth: Pricing.storageUsdPerGBMonth,
-                   retrieval: Pricing.deepArchiveTiers.map {
-                       TierQuoteDTO(tier: $0.rawValue, usdPerGB: $0.retrievalUsdPerGB, typicalWait: $0.typicalWait)
-                   },
-                   note: Pricing.estimateNote)
-    }
 
     /// Map an idempotent restore step's outcome to its wire DTO, and push a matching progress event so a
     /// live `watch`er (the future UI) sees it without polling. Re-issue `restore` until `state == "restored"`.
@@ -366,13 +361,22 @@ public actor DaemonService {
         switch outcome {
         case .restored:
             bus.publish(DaemonEvent("restoreCompleted", ["file": file, "out": out]))
-            return RestoreDTO(file: file, state: "restored", out: out, tier: nil, typicalWait: nil)
+            return RestoreDTO(file: file, state: "restored", out: out, tier: nil, typicalWait: nil, blobKey: nil, egressBytes: nil)
         case .thawRequested(let tier):
             bus.publish(DaemonEvent("restoreRequested", ["file": file, "tier": tier.rawValue]))
-            return RestoreDTO(file: file, state: "thawRequested", out: nil, tier: tier.rawValue, typicalWait: tier.typicalWait)
+            return RestoreDTO(file: file, state: "thawRequested", out: nil, tier: tier.rawValue, typicalWait: tier.typicalWait,
+                              blobKey: nil, egressBytes: nil)
         case .thawInProgress:
             bus.publish(DaemonEvent("restoreInProgress", ["file": file]))
-            return RestoreDTO(file: file, state: "thawInProgress", out: nil, tier: nil, typicalWait: nil)
+            return RestoreDTO(file: file, state: "thawInProgress", out: nil, tier: nil, typicalWait: nil, blobKey: nil, egressBytes: nil)
+        case .authorizationRequired(let blobKey, let egressBytes):
+            // NOT an error — the normal first step of a paid restore on a multi-user daemon. The app takes
+            // (blobKey, egressBytes) to the backend for a quote; once that's paid (or covered by the free
+            // allowance) the backend thaws, and re-running `restore` picks up at `.thawInProgress`.
+            bus.publish(DaemonEvent("restoreNeedsAuthorization",
+                                    ["file": file, "blobKey": blobKey, "egressBytes": "\(egressBytes)"]))
+            return RestoreDTO(file: file, state: "authorizationRequired", out: nil, tier: nil, typicalWait: nil,
+                              blobKey: blobKey, egressBytes: egressBytes)
         }
     }
 
@@ -395,10 +399,6 @@ public actor DaemonService {
                 FileDTO(id: $0.id, relativePath: $0.relativePath, size: $0.size, status: $0.status.rawValue, blobId: $0.blobId,
                         date: $0.createdAt)
             })
-        case "getPricing":
-            // The storage/retrieval rate card (SSOT) the UI shows cost/fee from — static list-price estimate,
-            // no I/O. The UI does the trivial bytes × rate math; the daemon owns the numbers + the disclaimer.
-            return AnyEncodable(pricingDTO())
         case "listExcludes":
             return AnyEncodable(try journal.listExcludes())
         case "addSource":
@@ -432,6 +432,28 @@ public actor DaemonService {
             try journal.removeExclude(pattern)
             bus.publish(DaemonEvent("excludesChanged", ["removed": pattern]))
             return AnyEncodable(AckDTO(ok: true))
+        case "restorePlan":
+            // What restoring these files would actually COST US to serve — the input to the account
+            // backend's `POST /retrieval/quote` (root RETRIEVAL.md). The app calls this BEFORE it shows a
+            // price, because a restore is priced on two things the renderer cannot know: the whole BLOB
+            // objects that must be thawed (blobs are packed, so one photo can drag a 1 GiB blob with it)
+            // and the bytes that actually come back.
+            //
+            // Blob keys are DEDUPED: several files usually share one blob, and that blob is thawed — and
+            // billed — exactly once. Charging per-file here would overcharge the common case badly.
+            guard let raw = p["files"], !raw.isEmpty else {
+                throw ColdStorageError.staging("restorePlan requires params.files (newline-joined fileIds)")
+            }
+            var keys: [String] = []
+            var seen = Set<String>()
+            var egress = 0
+            for fileId in raw.split(separator: "\n").map(String.init) {
+                guard let f = try journal.fileMapping(fileId) else { throw ColdStorageError.staging("no archived file '\(fileId)'") }
+                guard let key = try journal.blobS3Key(f.blobId) else { throw ColdStorageError.staging("no S3 key for blob \(f.blobId)") }
+                egress += f.length
+                if seen.insert(key).inserted { keys.append(key) }
+            }
+            return AnyEncodable(RestorePlanDTO(blobKeys: keys, egressBytes: egress))
         case "restore":
             guard let file = p["file"] else { throw ColdStorageError.staging("restore requires params.file (the fileId)") }
             guard let out = p["out"] else { throw ColdStorageError.staging("restore requires params.out (output path)") }

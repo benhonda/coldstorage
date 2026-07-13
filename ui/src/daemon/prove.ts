@@ -6,7 +6,6 @@
  *   1. `getStatus` round-trips (typed reply by id).
  *   2. `listFiles` round-trips (the browser's journal-backed tree read).
  *   3. `triggerNow` produces `runStarted` … `runFinished` on the event stream.
- *   4. `getPricing` returns a real rate card (storage + per-tier retrieval).
  *   5. `listExcludes`/`addExclude`/`removeExclude` round-trip (defaults seeded; add then remove).
  * `fileArchived` only fires when there's something new to archive (the pipeline is idempotent), so
  * it's reported when seen but not required — runStarted/runFinished are the reliable invariants.
@@ -88,19 +87,9 @@ log(
     (seen.has("fileArchived") ? " (fileArchived seen)" : " (nothing new to archive)"),
 );
 
-// 4 — pricing rate card: real storage + per-tier retrieval numbers (what the UI quotes cost/fee from).
-const pricing = await client.request("getPricing");
-if (typeof pricing.storageUsdPerGBMonth !== "number" || !Array.isArray(pricing.retrieval)) {
-  fail(`getPricing shape unexpected: ${JSON.stringify(pricing)}`);
-}
-const std = pricing.retrieval.find((t) => t.tier === "standard");
-if (!std) {
-  fail(`getPricing missing the standard tier: ${JSON.stringify(pricing)}`);
-} else if (typeof std.usdPerGB !== "number" || !std.typicalWait) {
-  fail(`getPricing standard tier malformed: ${JSON.stringify(std)}`);
-} else {
-  log(`getPricing → storage=$${pricing.storageUsdPerGBMonth}/GB-mo · standard=$${std.usdPerGB}/GB (${std.typicalWait})`);
-}
+// (There used to be a `getPricing` check here. The daemon's rate card was deleted on 2026-07-13 — it
+// quoted AWS thaw rates with no egress, and the app was pricing restores from it ~40× under. A restore's
+// price now comes only from the account backend. See ColdStorageCore/Models.swift.)
 
 // 5 — excludes registry: defaults are seeded, and add→list→remove round-trips on the live journal.
 const defaults = await client.request("listExcludes");

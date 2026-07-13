@@ -13,13 +13,11 @@ import type {
   DaemonEvents,
   EntitlementStatus,
   ListedFile,
-  Pricing,
   Source,
   Status,
   UpdateStatus,
   VaultStatus,
 } from "../../../shared/ipc.ts";
-import { FALLBACK_PRICING } from "../views/files/pricing.ts";
 
 /** Live progress of the current/most-recent run, folded from runStarted/fileArchived/runFinished. */
 export interface RunProgress {
@@ -79,9 +77,6 @@ export interface AppState {
   /** Exclude patterns (daemon `listExcludes`) — Settings' "Don't back up" chips. Authoritative; the
    * daemon seeds defaults on first run + applies them at scan time. */
   excludes: string[];
-  /** Storage/retrieval rate card (daemon `getPricing`) — what cost/fee figures quote from. Seeded with
-   * a fallback so first paint isn't blank, replaced by the real quote on connect (never null). */
-  pricing: Pricing;
   run: RunProgress | null;
   failures: BlobFailure[];
   /** Keyed by file id. */
@@ -102,7 +97,6 @@ export const initialState: AppState = {
   status: null,
   files: [],
   excludes: [],
-  pricing: FALLBACK_PRICING,
   run: null,
   failures: [],
   restores: {},
@@ -127,7 +121,6 @@ export type Action =
   | { type: "sourcesLoaded"; sources: Source[] }
   | { type: "filesLoaded"; files: ListedFile[] }
   | { type: "excludesLoaded"; excludes: string[] }
-  | { type: "pricingLoaded"; pricing: Pricing }
   | EventAction;
 
 /**
@@ -192,8 +185,6 @@ export const reducer = (state: AppState, action: Action): AppState => {
     case "excludesLoaded":
       return { ...state, excludes: action.excludes };
 
-    case "pricingLoaded":
-      return { ...state, pricing: action.pricing };
 
     case "event":
       return foldEvent(state, action);

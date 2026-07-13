@@ -18,6 +18,9 @@ dependency "coldstorage" {
   mock_outputs = {
     cognito_user_pool_id        = "mock_user_pool_id"
     cognito_user_pool_client_id = "mock_client_id"
+    cognito_identity_pool_id    = "mock_identity_pool_id"
+    bucket_arn                  = "arn:aws:s3:::mock-bucket"
+    bucket_name                 = "mock-bucket"
   }
 }
 
@@ -32,6 +35,13 @@ inputs = {
 
   cognito_user_pool_id        = dependency.coldstorage.outputs.cognito_user_pool_id
   cognito_user_pool_client_id = dependency.coldstorage.outputs.cognito_user_pool_client_id
+
+  # Retrieval hard gate (root RETRIEVAL.md): this service holds s3:RestoreObject — the thaw the user's
+  # own Cognito role deliberately cannot perform — so it needs the vault bucket, plus the identity pool
+  # to resolve a caller's real S3 prefix before thawing anything at our expense.
+  cognito_identity_pool_id = dependency.coldstorage.outputs.cognito_identity_pool_id
+  vault_bucket_arn         = dependency.coldstorage.outputs.bucket_arn
+  vault_bucket_name        = dependency.coldstorage.outputs.bucket_name
 
   # Paddle SANDBOX client-side token (dashboard → Developer tools → Authentication → client-side
   # tokens) for the GET /checkout default-payment-link page. Public by design ("safe to expose in

@@ -23,6 +23,12 @@ locals {
     COGNITO_USER_POOL_ID        = var.cognito_user_pool_id
     COGNITO_USER_POOL_CLIENT_ID = var.cognito_user_pool_client_id
     PADDLE_ENVIRONMENT          = local.is_prod ? "production" : "sandbox"
+
+    # Retrieval hard gate (RETRIEVAL.md): the bucket whose blobs this service thaws, and the identity
+    # pool it resolves callers against so it only ever thaws blobs that belong to them. Both are
+    # infra-derived, so they belong here rather than in manual_secrets.
+    VAULT_BUCKET_NAME        = var.vault_bucket_name
+    COGNITO_IDENTITY_POOL_ID = var.cognito_identity_pool_id
   }, var.paddle_client_token != "" ? { PADDLE_CLIENT_TOKEN = var.paddle_client_token } : {})
 
   # terraform.md env-var-ownership, applied verbatim (not the git_branch approach an earlier

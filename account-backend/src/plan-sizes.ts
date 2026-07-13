@@ -15,3 +15,19 @@ export const PLAN_SIZES = [
   { size: "5 TB", bytes: 5_000_000_000_000, perYearCents: 9099 },
   { size: "10 TB", bytes: 10_000_000_000_000, perYearCents: 18099 },
 ] as const;
+
+/**
+ * The Paddle PRODUCT that retrieval charges hang off (root `RETRIEVAL.md`). It deliberately carries NO
+ * catalog prices — every restore is billed as a non-catalog (inline) price for its own exact amount,
+ * because a restore's cost is a function of its bytes and can't be enumerated in advance. The product
+ * exists only to give those inline prices something real to belong to (Paddle requires it, and it keeps
+ * retrieval revenue legible in Paddle's own reporting).
+ *
+ * It lives in this SSOT — not as a bare string in the seed script — because THREE places must agree on
+ * it, and a drift between them fails in a different, confusing way each time:
+ *   - `scripts/seed-paddle-catalog.ts` creates it, and must NOT archive it as an off-SSOT stray.
+ *   - `catalog.ts` must EXCLUDE it from the plan mapping (it matches the `ColdStorage — <x>` pattern,
+ *     but "Data retrieval" is not a storage size and has no byte quota).
+ *   - `retrieval.server.ts` resolves its id at runtime, by this exact name, to bill against it.
+ */
+export const RETRIEVAL_PRODUCT_NAME = "ColdStorage — Data retrieval";

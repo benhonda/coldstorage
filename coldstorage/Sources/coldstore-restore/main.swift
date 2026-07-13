@@ -41,4 +41,14 @@ case .thawRequested(let t):
 case .thawInProgress:
     print("⏳ '\(fileId)' is still thawing — check back later, then re-run to download.")
     exit(75)   // EX_TEMPFAIL
+case .authorizationRequired(let blobKey, let egressBytes):
+    // Unreachable in practice: this CLI is a DOGFOOD tool. It builds its own S3 client from local AWS
+    // creds (the IAM user, which still holds s3:RestoreObject), so its RestoreEngine self-thaws. The case
+    // exists because a customer-credentials daemon CANNOT thaw — that's the paid-retrieval hard gate
+    // (root RETRIEVAL.md) — and Swift rightly makes us say what we'd do about it rather than assume.
+    print("🔒 '\(fileId)' needs an authorized (paid) restore before it can be thawed.")
+    print("   blob: \(blobKey)  (\(egressBytes) bytes would come back)")
+    print("   This CLI has no billing path — restore it from the app, or run with credentials that")
+    print("   hold s3:RestoreObject.")
+    exit(77)   // EX_NOPERM
 }

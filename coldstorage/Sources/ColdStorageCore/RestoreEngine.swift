@@ -14,8 +14,23 @@ public struct RestoreEngine: Sendable {
     let keys: KeyProvider
     let cipher = EnvelopeCipher()
 
-    public init(journal: Journal, store: S3Store, keys: KeyProvider) {
-        self.journal = journal; self.store = store; self.keys = keys
+    /// Whether THIS daemon is allowed to thaw Deep Archive objects itself.
+    ///
+    /// - **Dogfood / single-user (`true`)** — the daemon runs as the IAM user from
+    ///   `infra/coldstorage/.../iam.tf`, which still holds `s3:RestoreObject`. It thaws directly, as it
+    ///   always has.
+    /// - **Multi-user (`false`)** — the daemon runs on a customer's Cognito credentials, and that role
+    ///   deliberately has NO `s3:RestoreObject` (see `cognito.tf`). The thaw is the paid-retrieval hard
+    ///   gate: only the account backend can perform it, and only for a restore that's paid for or inside
+    ///   the free allowance (root `RETRIEVAL.md`).
+    ///
+    /// So this flag is not a preference — it mirrors what the daemon's credentials can actually DO.
+    /// Attempting a thaw with `false` would just earn an AccessDenied; instead we return
+    /// `.authorizationRequired` and let the app go get the restore authorized.
+    let canSelfThaw: Bool
+
+    public init(journal: Journal, store: S3Store, keys: KeyProvider, canSelfThaw: Bool = true) {
+        self.journal = journal; self.store = store; self.keys = keys; self.canSelfThaw = canSelfThaw
     }
 
     /// Do the next step toward getting `fileId` back. Safe to re-run: starts the thaw if needed,
@@ -27,13 +42,25 @@ public struct RestoreEngine: Sendable {
         // Read the STORED key (SSOT) rather than recomputing `"blobs/<blobId>"` — a multi-user object lives
         // under its owner's prefix (`blobs/<cognito-identity-id>/<blobId>`), so recomputing would miss it.
         guard let key = try journal.blobS3Key(f.blobId) else { throw ColdStorageError.staging("no S3 key for blob \(f.blobId)") }
-        switch try await store.thawState(key: key) {
-        case .needed:
+        // `thawState` is a HeadObject, which the daemon can always do — in BOTH modes. Only the thaw itself
+        // (RestoreObject) is gated, so a multi-user daemon can still see exactly where a restore stands;
+        // it just can't be the one to start it. The decision is pure + tested (`RestoreStep.next`).
+        switch RestoreStep.next(thaw: try await store.thawState(key: key), canSelfThaw: canSelfThaw) {
+        case .thaw:
             try await store.requestThaw(key: key, days: days, tier: tier)
             return .thawRequested(tier: tier)
-        case .inProgress:
+        case .needsAuthorization:
+            // Frozen, and we may not thaw it: the backend performs the thaw once this restore is paid for
+            // (or covered by the free allowance). Hand back what the quote needs. A RETURN, not a throw —
+            // this is the normal first step of a paid restore, not a failure.
+            return .authorizationRequired(blobKey: key, egressBytes: f.length)
+        case .wait:
+            // A thaw is underway — started by us (dogfood) or by the backend (multi-user, once paid).
+            // Nothing to do but re-run later.
             return .thawInProgress
-        case .ready:
+        case .download:
+            // Thawed, so a ranged GET works — the daemon keeps `s3:GetObject`, which is exactly why the
+            // paid-retrieval gate had to be the THAW and not the read.
             try await download(f, key: key, to: outURL, fileId: fileId)
             return .restored
         }

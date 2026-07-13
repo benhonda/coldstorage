@@ -22,11 +22,9 @@ export type {
   ListedFile,
   Method,
   ParamsArg,
-  Pricing,
   RestoreStep,
   Source,
   Status,
-  TierQuote,
 } from "../daemon/protocol.ts";
 
 import type { Commands, DaemonEventName, DaemonEvents, Method, ParamsArg } from "../daemon/protocol.ts";
@@ -87,6 +85,16 @@ export const IPC = {
   entitlementOpenManage: "entitlement:openManage",
   /** push: the entitlement status changed, `(status)`. */
   entitlementStatusChanged: "entitlement:statusChanged",
+  /** invoke: price a restore `({blobKeys, egressBytes} → RetrievalQuote)` — the ONLY honest restore price
+   *  (root RETRIEVAL.md); never compute one in the renderer. */
+  retrievalQuote: "retrieval:quote",
+  /** invoke: pay for a quoted restore `(jobId → RetrievalQuote)`; resolves once the webhook confirms and
+   *  the backend has thawed. Charges a saved card in place, or opens Paddle checkout in the browser. */
+  retrievalPay: "retrieval:pay",
+  /** invoke: poll one restore job `(jobId → RetrievalQuote)`. */
+  retrievalJob: "retrieval:job",
+  /** invoke: drop an unpaid quote `(jobId → void)` so it burns none of the free allowance. */
+  retrievalCancel: "retrieval:cancel",
   /** invoke: current {@link UpdateStatus} — for first paint before any push arrives. */
   updateStatus: "update:status",
   /** invoke: check for an app update now (the app also checks on launch + periodically). */
@@ -152,6 +160,33 @@ export interface EntitlementStatus {
   /** Byte cap of the current plan. Null = unknown/inactive — treated as unlimited (fail-open). */
   quotaBytes: number | null;
   error: string | null;
+}
+
+/**
+ * A priced restore, straight from the backend's `POST /retrieval/quote` (root `RETRIEVAL.md`).
+ *
+ * THIS IS THE ONLY HONEST RESTORE PRICE — the one the card is actually charged. The daemon's local rate
+ * card (`Pricing`) quotes raw AWS *thaw* rates and knows nothing about egress (36× bigger), Paddle's cut,
+ * or this account's free allowance; using it for a restore figure understates the real charge by ~40×.
+ * Never compute a restore cost in the renderer. Ask the backend, show what it says.
+ */
+export interface RetrievalQuote {
+  jobId: string;
+  /** `allowed` (free, already authorized) | `quoted` (needs payment) | `paid` | `canceled`. */
+  status: string;
+  /** Bytes that will come back to the user. */
+  egressBytes: number;
+  /** Bytes covered by the free monthly allowance — no charge. */
+  allowanceBytes: number;
+  /** Bytes the user pays for. Zero ⇒ this restore is free. */
+  billableBytes: number;
+  /** The charge, in whole US cents. Zero ⇒ free. */
+  quoteCents: number;
+  /** True once the backend has thawed (or is thawing) the blobs — the daemon may now proceed. */
+  authorized: boolean;
+  /** How long the thaw takes, in plain words ("~48 hours"). Comes from the BACKEND because the backend
+   *  picks the retrieval tier — the app must never state a wait the backend didn't quote. */
+  typicalWait: string;
 }
 
 /**
@@ -299,6 +334,23 @@ export interface ColdstoreApi {
   changePlan(priceId: string): Promise<SubscriptionInfo>;
   /** Open a Paddle-hosted management page (cancel / update payment method) in the system browser. */
   openManage(page: ManagePage): Promise<void>;
+
+  /* ── Paid retrieval (root RETRIEVAL.md) ─────────────────────────────────────────────────────────
+   * The daemon reports `authorizationRequired` for a frozen blob it isn't allowed to thaw; these four
+   * are how the app gets that restore authorized. */
+
+  /** Price a restore of these blobs. `quoteCents: 0` + `authorized` ⇒ free under the monthly allowance,
+   *  already thawing — nothing to confirm. This is the only trustworthy restore price; do not compute one
+   *  from the daemon's rate card, which omits egress and understates the real charge by ~40×. */
+  quoteRestore(blobKeys: string[], egressBytes: number): Promise<RetrievalQuote>;
+  /** Pay for a quoted restore. Charges a saved card in place, or opens Paddle checkout in the browser;
+   *  resolves once the payment is confirmed and the backend has begun thawing. */
+  payForRestore(jobId: string): Promise<RetrievalQuote>;
+  /** Poll one restore job. */
+  getRestoreJob(jobId: string): Promise<RetrievalQuote>;
+  /** Abandon an unpaid quote, so it burns none of the free allowance. */
+  cancelRestore(jobId: string): Promise<void>;
+
   /** Subscribe to entitlement changes. */
   onEntitlement(listener: (status: EntitlementStatus) => void): () => void;
   /** Current auto-update status — for first paint before any {@link onUpdateStatus} push arrives.
