@@ -221,6 +221,24 @@ data "aws_iam_policy_document" "user_s3" {
     ]
     resources = ["${aws_s3_bucket.vault.arn}/blobs/$${cognito-identity.amazonaws.com:sub}/*"]
   }
+
+  # ListBucket is a BUCKET-level action (resource = the bucket itself, not an object ARN), so it can't be
+  # folded into the statement above. Scoped down with an s3:prefix condition to the same own-prefix
+  # boundary — the caller can only enumerate keys under their own identity prefix, never anyone else's.
+  statement {
+    sid    = "OwnPrefixList"
+    effect = "Allow"
+    actions = [
+      "s3:ListBucket",
+    ]
+    resources = [aws_s3_bucket.vault.arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["blobs/$${cognito-identity.amazonaws.com:sub}/*"]
+    }
+  }
 }
 
 resource "aws_iam_role" "user" {

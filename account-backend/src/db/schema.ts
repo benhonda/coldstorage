@@ -28,4 +28,7 @@ export const accountsTable = pgTable("accounts", {
   subscriptionActive: boolean("subscription_active").notNull().default(false),
   paddleCustomerId: text("paddle_customer_id"),
   paddleSubscriptionId: text("paddle_subscription_id"),
+  // Cached so GET /entitlement can look up a byte quota from the catalog without a live Paddle
+  // call on this hot path (checked hourly + on every deposit) — see routes/entitlement.ts.
+  paddlePriceId: text("paddle_price_id"),
 });

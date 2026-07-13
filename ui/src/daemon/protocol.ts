@@ -101,6 +101,9 @@ export interface Status {
   running: boolean;
   permanentlyFailedBlobs: number;
   sources: Source[];
+  /** Total bytes stored in S3 under this identity's own prefix. Null in dogfood/unconfigured mode
+   * (no Cognito identity to scope a listing to) or before the first listing completes. */
+  bytesStored: number | null;
 }
 
 /**

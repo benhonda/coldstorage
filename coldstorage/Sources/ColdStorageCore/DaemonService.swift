@@ -35,6 +35,12 @@ public actor DaemonService {
     // pass so we don't re-stage+re-attempt a doomed blob every interval. In-memory by design: a restart
     // retries once (maybe the operator fixed the config). Persisting it would need a journal schema change.
     private var permanentlyFailedBlobs: Set<String> = []
+    // Storage-quota usage cache: a fresh S3 listing (`usageBytes`) is cheap but not free, and `getStatus`
+    // can be polled rapidly by the UI — a short TTL avoids a listing call on every poll while staying
+    // current enough for a soft deposit gate. Per-vaultPrefix so a mid-session re-auth (different
+    // identity) never serves a stale total for the wrong user.
+    private var cachedUsage: (prefix: String, bytes: Int, at: Date)?
+    private let usageCacheTTL: TimeInterval = 60
     // Wakeable sleep: `trigger()` either resumes a sleeping loop or, if none is sleeping yet, latches
     // so the next sleep returns immediately (coalesces bursts of triggers into one extra run).
     private var sleeper: CheckedContinuation<Void, Never>?
@@ -245,6 +251,9 @@ public actor DaemonService {
         let running: Bool
         let permanentlyFailedBlobs: Int   // >0 ⇒ a blob is stuck on a config/logic fault the operator must fix
         let sources: [SourceDTO]
+        /// Bytes currently stored in S3 under this user's prefix (storage-quota enforcement's usage
+        /// figure — see `currentUsageBytes`). `nil` in dogfood/unconfigured mode or pre-`authenticate`.
+        let bytesStored: Int?
     }
     private struct SourceDTO: Encodable { let id, kind: String; let path: String?; let mountPath: String; let paused: Bool }
     /// One browsable file (the `listFiles` element). `status` is the raw journal `FileStatus` — the UI
@@ -277,6 +286,21 @@ public actor DaemonService {
     /// gate as `authenticate`, so the two multi-user seams stay in lockstep.
     private func requireMultiUser(_ command: String) throws {
         guard cognitoAuth != nil else { throw ColdStorageError.staging("\(command): this daemon has no Cognito identity pool configured") }
+    }
+
+    /// Storage-quota usage: bytes actually stored in S3 under the caller's own prefix (see
+    /// `S3Store.usageBytes` for why this is S3, not the local journal). `nil` in dogfood/unconfigured
+    /// mode (no Cognito identity to scope a listing to) or before `authenticate` has run — matches the
+    /// nil-safety already used for `vaultPrefix` elsewhere in this file. Cached `usageCacheTTL` seconds
+    /// so a UI that polls `getStatus` frequently doesn't trigger a fresh S3 listing on every poll.
+    private func currentUsageBytes() async throws -> Int? {
+        guard let prefix = await cognitoAuth?.vaultPrefix else { return nil }
+        if let cached = cachedUsage, cached.prefix == prefix, Date().timeIntervalSince(cached.at) < usageCacheTTL {
+            return cached.bytes
+        }
+        let bytes = try await restoreEngine.store.usageBytes(prefix: prefix)
+        cachedUsage = (prefix: prefix, bytes: bytes, at: Date())
+        return bytes
     }
 
     /// Decode a base64 32-byte key param, or nil if absent. Throws on present-but-malformed (wrong length
@@ -358,9 +382,11 @@ public actor DaemonService {
             return AnyEncodable(AckDTO(ok: true))
         case "getStatus":
             let s = try journal.summary()
+            let bytesStored = try await currentUsageBytes()
             return AnyEncodable(StatusDTO(filesTotal: s.total, filesArchived: s.archived,
                                           blobsVerified: s.blobsVerified, running: running,
-                                          permanentlyFailedBlobs: permanentlyFailedBlobs.count, sources: try sourceDTOs()))
+                                          permanentlyFailedBlobs: permanentlyFailedBlobs.count, sources: try sourceDTOs(),
+                                          bytesStored: bytesStored))
         case "listSources":
             return AnyEncodable(try sourceDTOs())
         case "listFiles":

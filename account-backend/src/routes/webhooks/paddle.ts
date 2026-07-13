@@ -40,6 +40,9 @@ export const paddleWebhookRoute = new Hono().post("/", async (c) => {
       const sub = event.data.customData?.["cognitoSub"];
       if (typeof sub === "string" && sub.length > 0) {
         const active = isActiveStatus(event.data.status);
+        // A customer buys exactly ONE storage plan (seed script caps quantity at 1), so the
+        // first item's price is the whole subscription's plan — see catalog.ts/entitlement.ts.
+        const priceId = event.data.items[0]?.price?.id ?? null;
         await db
           .insert(accountsTable)
           .values({
@@ -47,6 +50,7 @@ export const paddleWebhookRoute = new Hono().post("/", async (c) => {
             subscriptionActive: active,
             paddleCustomerId: event.data.customerId,
             paddleSubscriptionId: event.data.id,
+            paddlePriceId: priceId,
           })
           .onConflictDoUpdate({
             target: accountsTable.sub,
@@ -54,6 +58,7 @@ export const paddleWebhookRoute = new Hono().post("/", async (c) => {
               subscriptionActive: active,
               paddleCustomerId: event.data.customerId,
               paddleSubscriptionId: event.data.id,
+              paddlePriceId: priceId,
             },
           });
       }

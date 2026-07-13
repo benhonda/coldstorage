@@ -8,11 +8,14 @@
  * products, one-time prices, non-year cycles, non-USD) is excluded rather than guessed at — the
  * picker must never sell an entity the seed script didn't define.
  */
+import { PLAN_SIZES } from "./plan-sizes.js";
 
 /** One sellable plan: a size × term cell of the catalog. */
 export interface CatalogEntry {
   /** Storage size label, e.g. "1 TB" (from the product name). */
   size: string;
+  /** Byte quota for this size, from the `PLAN_SIZES` SSOT — e.g. "1 TB" → 1_000_000_000_000. */
+  quotaBytes: number;
   /** Term length in years (the billing cycle — renews every N years). */
   years: number;
   priceId: string;
@@ -38,7 +41,11 @@ export interface CatalogPrice {
 
 const PRODUCT_NAME_PATTERN = /^ColdStorage — (.+)$/;
 
-/** Map raw Paddle entities to the sorted plan catalog (cheapest size first, shortest term first). */
+const bytesForSize = new Map<string, number>(PLAN_SIZES.map((p) => [p.size, p.bytes]));
+
+/** Map raw Paddle entities to the sorted plan catalog (cheapest size first, shortest term first).
+ * Throws if an active product's size doesn't match `PLAN_SIZES` — an unrecognized size must fail
+ * loud, never silently ship a plan with no enforceable byte quota. */
 export function mapCatalog(products: CatalogProduct[], prices: CatalogPrice[]): CatalogEntry[] {
   const sizeByProductId = new Map<string, string>();
   for (const p of products) {
@@ -54,9 +61,14 @@ export function mapCatalog(products: CatalogProduct[], prices: CatalogPrice[]): 
     if (pr.unitPrice.currencyCode !== "USD") continue;
     const amountCents = Number(pr.unitPrice.amount);
     if (!Number.isInteger(amountCents) || amountCents <= 0) continue;
+    const quotaBytes = bytesForSize.get(size);
+    if (quotaBytes === undefined) {
+      throw new Error(`Unrecognized plan size "${size}" — not in PLAN_SIZES. Refusing to sell an unquotad plan.`);
+    }
     const years = pr.billingCycle.frequency;
     entries.push({
       size,
+      quotaBytes,
       years,
       priceId: pr.id,
       amountCents,

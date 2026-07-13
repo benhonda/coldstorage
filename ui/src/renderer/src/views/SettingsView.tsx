@@ -43,6 +43,7 @@ export const SettingsView = ({
   settings,
   pricing,
   vaultBytes,
+  bytesStored,
   files,
   virtualFolders,
   auth,
@@ -67,6 +68,9 @@ export const SettingsView = ({
   settings: SettingsApi;
   pricing: Pricing;
   vaultBytes: number;
+  /** Authoritative (S3-derived) total, for the quota line + downgrade warning. Null until the daemon's
+   * first listing completes or in dogfood/unconfigured mode. */
+  bytesStored: number | null;
   files: ArchivedFile[];
   virtualFolders: string[];
 }): React.JSX.Element => {
@@ -265,6 +269,9 @@ export const SettingsView = ({
 
       <Card title="Storage">
         <KeyValueRow label="In deep storage" value={formatBytes(vaultBytes)} accent />
+        {entitlement.quotaBytes != null && bytesStored != null && (
+          <KeyValueRow label="Plan usage" value={`${formatBytes(bytesStored)} of ${formatBytes(entitlement.quotaBytes)} used`} />
+        )}
         <KeyValueRow label="Roughly" value={`${formatUsd(monthlyStorageUsd(pricing, vaultBytes))}/month (estimate)`} />
         <KeyValueRow label="Encryption" value="on this Mac, before upload" icon="lock" />
         <p className="cs-help" style={{ marginTop: "var(--space-3)" }}>{pricing.note}</p>
@@ -341,6 +348,7 @@ export const SettingsView = ({
         <ChangePlanModal
           api={api}
           current={subscription}
+          bytesStored={bytesStored}
           onChanged={onSubscriptionChanged}
           onClose={() => setChangingPlan(false)}
         />

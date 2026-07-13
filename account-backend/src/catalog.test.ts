@@ -37,9 +37,23 @@ describe("mapCatalog", () => {
     const catalog = mapCatalog(SEEDED_PRODUCTS, prices);
 
     expect(catalog.map((e) => e.priceId)).toEqual(["pri_500_1", "pri_500_3", "pri_1tb_1", "pri_1tb_5", "pri_2tb_1"]);
-    expect(catalog[0]).toEqual({ size: "500 GB", years: 1, priceId: "pri_500_1", amountCents: 999, perMonthCents: 83 });
+    expect(catalog[0]).toEqual({
+      size: "500 GB",
+      quotaBytes: 500_000_000_000,
+      years: 1,
+      priceId: "pri_500_1",
+      amountCents: 999,
+      perMonthCents: 83,
+    });
     // Rate-lock model: a 5-year term is exactly 5× yearly, so per-month equals the 1-year rate's.
-    expect(catalog[3]).toEqual({ size: "1 TB", years: 5, priceId: "pri_1tb_5", amountCents: 9495, perMonthCents: 158 });
+    expect(catalog[3]).toEqual({
+      size: "1 TB",
+      quotaBytes: 1_000_000_000_000,
+      years: 5,
+      priceId: "pri_1tb_5",
+      amountCents: 9495,
+      perMonthCents: 158,
+    });
   });
 
   test("excludes everything off-SSOT: foreign products, archived entities, one-time/monthly/non-USD prices", () => {
@@ -60,5 +74,11 @@ describe("mapCatalog", () => {
 
   test("returns empty for an unseeded account", () => {
     expect(mapCatalog([], [])).toEqual([]);
+  });
+
+  test("throws on an active plan whose size isn't in PLAN_SIZES, rather than selling an unquotad plan", () => {
+    const products = [product("pro_4tb", "ColdStorage — 4 TB")];
+    const prices = [price("pri_4tb_1", "pro_4tb", 5999, 1)];
+    expect(() => mapCatalog(products, prices)).toThrow(/Unrecognized plan size/);
   });
 });

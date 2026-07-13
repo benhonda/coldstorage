@@ -69,7 +69,7 @@ const makeApi = (initial: ConnectionState) => {
       vaultCb = cb;
       return () => (vaultCb = null);
     },
-    getEntitlement: () => Promise.resolve({ known: false, active: false, checkingOut: false, error: null }),
+    getEntitlement: () => Promise.resolve({ known: false, active: false, checkingOut: false, quotaBytes: null, error: null }),
     subscribe: () => Promise.resolve(),
     onEntitlement: (cb) => {
       entCb = cb;
@@ -242,8 +242,8 @@ describe("controller sync policy", () => {
     await tick();
     expect(store.getState().entitlement.active).toBe(false); // initial pull landed
 
-    f.fireEntitlement({ known: true, active: true, checkingOut: false, error: null });
-    expect(store.getState().entitlement).toEqual({ known: true, active: true, checkingOut: false, error: null });
+    f.fireEntitlement({ known: true, active: true, checkingOut: false, quotaBytes: 500_000_000_000, error: null });
+    expect(store.getState().entitlement).toEqual({ known: true, active: true, checkingOut: false, quotaBytes: 500_000_000_000, error: null });
   });
 
   test("reads the initial update status and folds pushed changes", async () => {

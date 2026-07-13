@@ -149,6 +149,8 @@ export interface EntitlementStatus {
   active: boolean;
   /** A checkout is open in the browser and we're polling for the webhook to flip `active`. */
   checkingOut: boolean;
+  /** Byte cap of the current plan. Null = unknown/inactive — treated as unlimited (fail-open). */
+  quotaBytes: number | null;
   error: string | null;
 }
 
@@ -166,6 +168,8 @@ export interface CatalogPlan {
   amountCents: number;
   /** Server-derived per-month equivalent in cents — display only. */
   perMonthCents: number;
+  /** Storage cap for this plan, in bytes (e.g. 500_000_000_000 for "500 GB"). */
+  quotaBytes: number;
 }
 
 /**

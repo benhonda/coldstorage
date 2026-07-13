@@ -25,7 +25,7 @@ const fetchJson = async (url: string, init: RequestInit): Promise<Response> => {
 };
 
 export class EntitlementManager {
-  private status: EntitlementStatus = { known: false, active: false, checkingOut: false, error: null };
+  private status: EntitlementStatus = { known: false, active: false, checkingOut: false, quotaBytes: null, error: null };
   private polling = false;
   private readonly listeners = new Set<(s: EntitlementStatus) => void>();
 
@@ -47,15 +47,17 @@ export class EntitlementManager {
   async refresh(): Promise<void> {
     const idToken = await this.getIdToken();
     if (!idToken) {
-      this.setStatus({ known: false, active: false, checkingOut: false, error: null });
+      this.setStatus({ known: false, active: false, checkingOut: false, quotaBytes: null, error: null });
       return;
     }
     try {
       const res = await fetchJson(`${this.baseUrl}/entitlement`, { headers: { Authorization: `Bearer ${idToken}` } });
       if (!res.ok) throw new Error(`entitlement check failed: http ${res.status}`);
       const body: unknown = await res.json().catch(() => null);
-      const active = typeof body === "object" && body !== null && (body as Record<string, unknown>).active === true;
-      this.setStatus({ ...this.status, known: true, active, error: null });
+      const record = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : null;
+      const active = record?.active === true;
+      const quotaBytes = typeof record?.quotaBytes === "number" ? record.quotaBytes : null;
+      this.setStatus({ ...this.status, known: true, active, quotaBytes, error: null });
     } catch (e) {
       this.setStatus({ ...this.status, error: e instanceof Error ? e.message : String(e) });
     }
@@ -64,7 +66,7 @@ export class EntitlementManager {
   /** Reset to signed-out (called on sign-out) so a next user doesn't inherit this one's entitlement. */
   reset(): void {
     this.polling = false;
-    this.setStatus({ known: false, active: false, checkingOut: false, error: null });
+    this.setStatus({ known: false, active: false, checkingOut: false, quotaBytes: null, error: null });
   }
 
   /**

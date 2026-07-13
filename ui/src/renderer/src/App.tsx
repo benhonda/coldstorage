@@ -10,7 +10,7 @@
  * clickable getting-back indicator that opens the restore queue.
  */
 import { useEffect, useMemo, useState } from "react";
-import { Icon, IconButton } from "./ui/primitives.tsx";
+import { Icon, IconButton, Modal, Button } from "./ui/primitives.tsx";
 import { Sidebar, type NavItem } from "./ui/layout.tsx";
 import type { Store } from "./state/store.ts";
 import type { ColdstoreApi, ConnectionState, SubscriptionInfo } from "../../shared/ipc.ts";
@@ -27,6 +27,7 @@ import { SettingsView, type SettingsApi } from "./views/SettingsView.tsx";
 import { SignInView } from "./views/SignInView.tsx";
 import { RecoveryCodeShow, RecoveryCodeEnter, VaultGate } from "./views/RecoveryCodeView.tsx";
 import { SubscribeModal } from "./views/SubscribeModal.tsx";
+import { ChangePlanModal } from "./views/ChangePlanModal.tsx";
 import { AccountCard } from "./views/AccountCard.tsx";
 import { UpdateBanner } from "./views/UpdateBanner.tsx";
 
@@ -65,10 +66,23 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   // Deposit gate (Phase 5c): only a signed-in (configured) user whose subscription we've CONFIRMED
   // inactive is gated — dogfood mode and the pre-first-check window stay open (the real enforcement is
   // the later hard gate; this is the soft app-side one). Close the paywall the moment a sub goes active.
-  const canDeposit = !state.auth.configured || !state.entitlement.known || state.entitlement.active;
+  const subscribed = !state.auth.configured || !state.entitlement.known || state.entitlement.active;
+  // Storage-quota gate: soft, same posture as the subscription check above — a byte-level IAM/S3 gate is
+  // a separate, deferred hard-enforcement layer. Unknown usage or quota fails OPEN (never block on a
+  // transient/unconfigured value), matching the subscription gate's philosophy.
+  const hasCapacity = state.entitlement.quotaBytes == null || state.status?.bytesStored == null || state.status.bytesStored < state.entitlement.quotaBytes;
+  const canDeposit = subscribed && hasCapacity;
   useEffect(() => {
     if (state.entitlement.active) setPaywallOpen(false);
   }, [state.entitlement.active]);
+  const [overCapacityOpen, setOverCapacityOpen] = useState(false);
+  const [changingPlanFromCapacity, setChangingPlanFromCapacity] = useState(false);
+  useEffect(() => {
+    if (hasCapacity) {
+      setOverCapacityOpen(false);
+      setChangingPlanFromCapacity(false);
+    }
+  }, [hasCapacity]);
 
   // The live subscription summary (plan badge + Settings manage surface). Refetched on sign-in and
   // whenever the entitlement flips (a checkout just landed / a cancellation took effect). Best-effort:
@@ -275,7 +289,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           pricing={state.pricing}
           uploadProgress={state.run?.uploadProgress ?? {}}
           canDeposit={canDeposit}
-          onDepositBlocked={() => setPaywallOpen(true)}
+          onDepositBlocked={() => (subscribed ? setOverCapacityOpen(true) : setPaywallOpen(true))}
         />
       )}
       {route === "settings" && (
@@ -287,6 +301,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           settings={settings}
           pricing={state.pricing}
           vaultBytes={vaultBytes}
+          bytesStored={state.status?.bytesStored ?? null}
           files={filesApi.files}
           virtualFolders={filesApi.virtualFolders}
           auth={state.auth}
@@ -303,6 +318,46 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           entitlement={state.entitlement}
           onSubscribe={(priceId) => void api.subscribe(priceId)}
           onClose={() => setPaywallOpen(false)}
+        />
+      )}
+
+      {/* Over-capacity block: distinct from the not-subscribed paywall above — already a customer,
+          just at their plan's storage cap. Plain, factual, no alarm; offers the upgrade path directly. */}
+      {overCapacityOpen && !changingPlanFromCapacity && (
+        <Modal
+          title="Storage full"
+          icon="database"
+          onClose={() => setOverCapacityOpen(false)}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setOverCapacityOpen(false)}>
+                Not now
+              </Button>
+              {subscription && (
+                <Button variant="primary" onClick={() => setChangingPlanFromCapacity(true)}>
+                  Change plan
+                </Button>
+              )}
+            </>
+          }
+        >
+          <p>
+            You&apos;ve used all of your plan&apos;s storage. Free up space, or upgrade your plan to keep
+            backing up.
+          </p>
+        </Modal>
+      )}
+      {changingPlanFromCapacity && subscription && (
+        <ChangePlanModal
+          api={api}
+          current={subscription}
+          bytesStored={state.status?.bytesStored ?? null}
+          onChanged={(sub) => {
+            setSubscription(sub);
+            setChangingPlanFromCapacity(false);
+            setOverCapacityOpen(false);
+          }}
+          onClose={() => setChangingPlanFromCapacity(false)}
         />
       )}
 

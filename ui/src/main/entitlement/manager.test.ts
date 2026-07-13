@@ -22,7 +22,7 @@ describe("EntitlementManager.refresh", () => {
     globalThis.fetch = mock(() => Promise.reject(new Error("should not be called"))) as unknown as typeof fetch;
     const m = new EntitlementManager("https://api.test", () => Promise.resolve(null));
     await m.refresh();
-    expect(m.entitlementStatus()).toEqual({ known: false, active: false, checkingOut: false, error: null });
+    expect(m.entitlementStatus()).toEqual({ known: false, active: false, checkingOut: false, quotaBytes: null, error: null });
   });
 
   test("active subscription → known + active", async () => {
@@ -30,6 +30,20 @@ describe("EntitlementManager.refresh", () => {
     const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
     await m.refresh();
     expect(m.entitlementStatus()).toMatchObject({ known: true, active: true });
+  });
+
+  test("active subscription with a quota → quotaBytes carried through", async () => {
+    globalThis.fetch = mock(() => Promise.resolve(jsonResponse(200, { active: true, quotaBytes: 500_000_000_000 }))) as unknown as typeof fetch;
+    const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
+    await m.refresh();
+    expect(m.entitlementStatus()).toMatchObject({ known: true, active: true, quotaBytes: 500_000_000_000 });
+  });
+
+  test("active subscription with no priceId yet → quotaBytes null", async () => {
+    globalThis.fetch = mock(() => Promise.resolve(jsonResponse(200, { active: true, quotaBytes: null }))) as unknown as typeof fetch;
+    const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
+    await m.refresh();
+    expect(m.entitlementStatus()).toMatchObject({ known: true, active: true, quotaBytes: null });
   });
 
   test("a backend error sets error but doesn't crash", async () => {
@@ -65,7 +79,7 @@ describe("EntitlementManager.subscribe", () => {
 });
 
 describe("EntitlementManager subscription surface", () => {
-  const sub = { status: "active", plan: { size: "1 TB", years: 1, priceId: "pri_1", amountCents: 1899, perMonthCents: 158 }, nextBilledAt: "2027-07-10T00:00:00Z", cancelsAt: null, cancelUrl: "https://paddle.test/cancel", updatePaymentMethodUrl: "https://paddle.test/pay" };
+  const sub = { status: "active", plan: { size: "1 TB", years: 1, priceId: "pri_1", amountCents: 1899, perMonthCents: 158, quotaBytes: 1_000_000_000_000 }, nextBilledAt: "2027-07-10T00:00:00Z", cancelsAt: null, cancelUrl: "https://paddle.test/cancel", updatePaymentMethodUrl: "https://paddle.test/pay" };
 
   test("getSubscription returns the summary; 404 means never subscribed (null)", async () => {
     globalThis.fetch = mock(() => Promise.resolve(jsonResponse(200, { subscription: sub }))) as unknown as typeof fetch;
@@ -99,7 +113,7 @@ describe("EntitlementManager subscription surface", () => {
 
 describe("EntitlementManager.getCatalog", () => {
   test("returns the plans array from GET /catalog", async () => {
-    const plans = [{ size: "1 TB", years: 1, priceId: "pri_1tb_1yr", amountCents: 1899, perMonthCents: 158 }];
+    const plans = [{ size: "1 TB", years: 1, priceId: "pri_1tb_1yr", amountCents: 1899, perMonthCents: 158, quotaBytes: 1_000_000_000_000 }];
     globalThis.fetch = mock((url: string) =>
       url.endsWith("/catalog") ? Promise.resolve(jsonResponse(200, { plans })) : Promise.reject(new Error("unexpected url")),
     ) as unknown as typeof fetch;

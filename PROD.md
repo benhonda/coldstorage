@@ -451,23 +451,34 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      Fixed: new sandbox API key with Transactions **read + write**, swapped into the staging
      `PADDLE_API_KEY` in the Vercel dashboard, redeploy. **The production lane's live key must be minted
      with Transactions read+write from day one** (done — the prod runtime key is scoped per PADDLE.md
-     "Runtime key scope"). **Multi-plan picker: BUILT ✅ (2026-07-10, per the PADDLE.md decided spec —
-     all four layers in one cut, tests green; NOT yet deployed/applied or Mac-verified).** Backend:
-     new public `GET /catalog` maps live active Paddle products/prices → `{size, years, priceId,
+     "Runtime key scope"). **Multi-plan picker: BUILT + DEPLOYED + INFRA APPLIED ✅ (2026-07-10/11).**
+     Backend: new public `GET /catalog` maps live active Paddle products/prices → `{size, years, priceId,
      amountCents, perMonthCents}` (pure `catalog.ts` + unit tests; module-TTL cache in
      `catalog.server.ts`); `POST /checkout-session` now REQUIRES `{priceId}` and 400s any id not in
      that catalog (never trust a client-named price) — `env.PADDLE_PRICE_ID` deleted from the env
-     schema and `paddle_price_id` retired from TF (both stacks plan surgical: 0/0/1 destroy of
-     `PADDLE_PRICE_ID`; **apply pending, Ben**). App: `getPlanCatalog()` + `subscribe(priceId)`
-     through manager/IPC/preload; `SubscribeModal` renders the spec UX (3 size cards w/ per-year
-     rate, default 1 TB; `[1yr][2yr][3yr][5yr]` segmented row, default 1yr; live total + per-month
-     line; "Subscribe to <size>"; quiet rate-lock line; catalog-fetch error → retry, no stale list).
-     Old single-price app builds break against the new backend by design (all-or-nothing cut,
-     AVOID4). **Also pre-launch: move the default-payment-link page off `api.*`** — customers
-     shouldn't pay on an API hostname. The Phase 6 website (the download page forces it to exist) hosts the
-     same two-script-tag checkout page on `coldstorage.sh`, and the LIVE Paddle account's default payment
-     link points there; sandbox keeps pointing at staging's `/checkout`. Nothing to undo — the setting is
-     per-Paddle-account.
+     schema and `paddle_price_id` retired from TF. **`terragrunt plan` re-verified clean ("No changes")
+     against real state on BOTH stacks (2026-07-11)** — the retirement is applied, not pending. **Both
+     `/catalog` endpoints verified live from outside (2026-07-11):** staging and production each return
+     real, distinct Paddle price sets (sandbox vs. live price ids), `/subscription` 401s unauthenticated
+     as expected. App: `getPlanCatalog()` + `subscribe(priceId)` through manager/IPC/preload;
+     `SubscribeModal` renders the spec UX (3 size cards w/ per-year rate, default 1 TB;
+     `[1yr][2yr][3yr][5yr]` segmented row, default 1yr; live total + per-month line; "Subscribe to
+     <size>"; quiet rate-lock line; catalog-fetch error → retry, no stale list). Old single-price app
+     builds break against the new backend by design (all-or-nothing cut, AVOID4). **Still open: Mac-verify
+     the actual click-through** — new-customer subscribe via `SubscribeModal` end-to-end to an active sub.
+     **Move the default-payment-link page off `api.*` — DONE ✅ (2026-07-11).** The site's branded
+     `/checkout` page (`site/app/routes/($lang).checkout.tsx`) is live, verified serving with a real
+     production Paddle client token + `environment: "production"`; Ben pointed the LIVE Paddle account's
+     default payment link at `https://www.coldstorage.sh/checkout`. Sandbox keeps pointing at staging's
+     `/checkout` (`account-backend/src/routes/checkout.ts`, intentionally kept as the staging target).
+     **Existing-customer plan changes — BUILT ✅ (2026-07-11, `e686648` + `2969be3`), not yet Mac-verified.**
+     Beyond the new-subscriber picker above: `GET/POST /subscription` (backend) + `ChangePlanModal` +
+     shared `PlanPicker` (UI) let an already-subscribed customer change plans with a Paddle proration
+     preview before committing; `onPaymentFailure: "prevent_change"` so a failed proration charge never
+     silently changes the plan, and Paddle errors surface as clean 502s rather than opaque failures. Same-day
+     fix: the runtime `PADDLE_API_KEY` needed Subscriptions **read+write**, not just read (mirrors the
+     Transactions-scope lesson above). **Open: Mac-verify an existing subscriber actually changing plans**
+     end-to-end (preview → confirm → webhook reflects the new plan).
 6. **Sign + notarize + ship — IN PROGRESS.** Developer ID signing + notarization + auto-update + download
    page. *Gate:* a notarized build launches Gatekeeper-clean on a non-dev Mac and self-updates. Scoped
    hardest-first into 6a/6b/6c/6d (2026-07-04; 6d added 2026-07-05):
@@ -562,14 +573,37 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      of the customer-facing last mile: the download page + checkout move (6c above).
 
 ## Open sub-decisions (don't block P1; flagged for when their phase lands)
-- **[open] Storage quota enforcement** (surfaced 2026-07-10 while building the plan-change flow) —
-  plan sizes (500 GB / 1 TB / 2 TB) are SOLD but never ENFORCED: no deposit path checks stored
-  bytes against the plan, and a downgrade doesn't check the vault fits the new size. The money
-  side of changes is safe (upgrades apply only when the prorated charge clears —
-  `onPaymentFailure: "prevent_change"`, PADDLE.md), but a 500 GB customer can store beyond 500 GB
-  at our S3 cost. Belongs with the hard entitlement gate (IAM-layer enforcement, deferred by
-  design): the likely shape is `GET /entitlement` growing a byte allowance + the daemon soft-gating
-  deposits on it, with warnings in the UI before the cap. Decide pre-launch; not a dogfood blocker.
+- ~~**Storage quota enforcement** (surfaced 2026-07-10 while building the plan-change flow) — plan
+  sizes were SOLD but never ENFORCED.~~ **BUILT ✅ (2026-07-12), soft-gated — matches the existing
+  `subscriptionActive` enforcement posture exactly** (hard IAM-layer enforcement remains a separate,
+  deliberately deferred piece, same as it always was for the active-subscription check itself).
+  **Usage source of truth is S3, not the local journal** — the journal is per-device only and a
+  per-device sum would silently undercount (and be trivially defeated) the moment a customer has
+  more than one device signed in, which today's architecture doesn't block. Instead: the
+  authenticated IAM role gained a scoped `s3:ListBucket` (new `OwnPrefixList` statement,
+  `infra/coldstorage/modules/stack/cognito.tf`, condition `s3:prefix` = the caller's own
+  `blobs/<sub>/*`, plan-verified surgical — `0 add / 1 change / 0 destroy` — **apply pending, Ben**);
+  the daemon's new `S3Store.usageBytes(prefix:)` paginates `ListObjectsV2` under the caller's own
+  prefix and sums real ciphertext bytes (60s-cached, keyed by `vaultPrefix` so a re-auth to a
+  different identity never serves a stale total) — exposed as `StatusDTO.bytesStored` /
+  `Status.bytesStored` (nil in dogfood/unconfigured mode). Byte-quota mapping is a new SSOT,
+  `account-backend/src/plan-sizes.ts` (`{size, bytes, perYearCents}`), imported by both the Paddle
+  seed script and `catalog.ts` — `GET /catalog` now returns `quotaBytes` per plan, throwing loud if a
+  live Paddle product's size label isn't recognized (never silently unlimited). `GET /entitlement`
+  grows `quotaBytes: number | null`: a new nullable `paddlePriceId` column on `accountsTable`
+  (schema-only — **not pushed**, Ben's call same as always) is populated by the existing Paddle
+  webhook on every `subscription.*` event, so entitlement can resolve the quota from the
+  already-5-min-cached catalog without adding a live Paddle call to the hot path (checked hourly +
+  every deposit). App: `canDeposit` (`App.tsx`) gains a `hasCapacity` clause (fails open on any
+  unknown value, matching the existing permissive-on-unknown philosophy); over-capacity blocks a
+  deposit with distinct, calm copy from the not-subscribed paywall, chaining into `ChangePlanModal` as
+  the upgrade path; Settings shows a "plan usage" line once quota is known; `ChangePlanModal` warns
+  (non-blocking — a downgrade never deletes data, it only pauses new deposits until back under the
+  cap) when the selected plan's quota is below current usage. All four layers verified independently
+  green (`daemon:test` 84/84, backend `typecheck`+`test`, `ui:typecheck`+`ui:test` 110/110, TF plan
+  surgical) and cross-checked for exact wire-contract consistency. **Remaining: Ben applies the TF
+  change, pushes the schema column, and Mac-verifies the actual gate (approach cap → blocked deposit →
+  upgrade path clears it).**
 - ~~**Encryption password vs auth credential** — with a federated login there is no password to derive
   KEK_pw from.~~ **DECIDED ✅ (2026-07-02), forced universal by going passwordless:** option (b),
   **recovery-code-only** — the recovery code is the sole MK protector (`wrappedMK_rc`; the `wrappedMK_pw`

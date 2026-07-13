@@ -97,7 +97,7 @@ export const initialState: AppState = {
   connection: "connecting",
   auth: { configured: false, state: "signedOut", email: null, error: null, emailAvailable: false },
   vault: { state: "locked", recoveryCode: null, error: null },
-  entitlement: { known: false, active: false, checkingOut: false, error: null },
+  entitlement: { known: false, active: false, checkingOut: false, quotaBytes: null, error: null },
   update: { state: "idle", version: null, percent: null, error: null },
   status: null,
   files: [],

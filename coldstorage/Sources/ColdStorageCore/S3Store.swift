@@ -60,6 +60,24 @@ public struct S3Store: BlobStore {
     /// "Archived" means verified-present, not "PUT 200".
     public func verify(key: String) async throws { _ = try await client.headObject(input: .init(bucket: bucket, key: key)) }
 
+    /// Sums `Size` (ciphertext bytes, as actually billed/stored) across every object under `prefix` —
+    /// storage-quota enforcement's source of truth. Deliberately NOT the local journal: the journal is
+    /// per-device, so it would undercount a user signed in on more than one device. S3, scoped to the
+    /// caller's own identity prefix, is the one thing already shared across any number of devices for
+    /// that identity. Paginated (`ListObjectsV2` returns ≤1,000 keys/call); a LIST call needs no Deep
+    /// Archive thaw, so this is cheap even for a large vault.
+    public func usageBytes(prefix: String) async throws -> Int {
+        var total = 0
+        var token: String? = nil
+        repeat {
+            let out = try await client.listObjectsV2(input: .init(
+                bucket: bucket, continuationToken: token, prefix: prefix))
+            total += (out.contents ?? []).reduce(0) { $0 + ($1.size ?? 0) }
+            token = (out.isTruncated == true) ? out.nextContinuationToken : nil
+        } while token != nil
+        return total
+    }
+
     /// Ranged GET of an object's byte span (a logical file's ciphertext within its blob).
     /// Assumes the object is downloadable now — Deep Archive callers must `thawState`/`requestThaw` first
     /// (RestoreEngine orchestrates this); STANDARD/MinIO/GLACIER_IR serve directly.
