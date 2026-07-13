@@ -39,27 +39,46 @@ import Foundation
         defer { try? FileManager.default.removeItem(at: f.base) }
 
         let items = try await f.source.enumerate()
-        let prefix = "blobs/ca-central-1:11111111-2222-3333-4444-555555555555"   // a Cognito identity id
-        _ = try await f.engine.run(source: f.source, keyPrefix: prefix)
+        let identityId = "ca-central-1:11111111-2222-3333-4444-555555555555"   // a Cognito identity id
+        let prefix = VaultPrefix.user(identityId: identityId)
+        _ = try await f.engine.run(source: f.source, prefix: prefix)
 
         // The blob id is content-derived (prefix-independent) — recompute it to know the expected key.
-        let blob = BlobPlanner().plan(items, keyPrefix: prefix)[0]
-        let expectedKey = "\(prefix)/\(blob.id)"
+        let blob = BlobPlanner().plan(items, prefix: prefix)[0]
+        let expectedKey = "blobs/\(identityId)/\(blob.id)"
 
         #expect(f.store.createdKeys == [expectedKey])                       // the real S3 PUT went to the user's prefix
         #expect(try f.journal.blobS3Key(blob.id) == expectedKey)           // and restore will read the SAME key (SSOT)
         #expect(try f.journal.isFileArchived(items[0].id) == true)         // file linked through the full pipeline
     }
 
-    @Test func defaultPrefixIsBlobsSoSingleUserPathIsUnchanged() async throws {
+    @Test func devPrefixIsFlatBlobsSoLocalDevIsUnchanged() async throws {
         let f = try fixture()
         defer { try? FileManager.default.removeItem(at: f.base) }
 
         let items = try await f.source.enumerate()
-        _ = try await f.engine.run(source: f.source)                        // no keyPrefix → default "blobs"
+        _ = try await f.engine.run(source: f.source)                        // no prefix → .dev
         let blob = BlobPlanner().plan(items)[0]
 
         #expect(f.store.createdKeys == ["blobs/\(blob.id)"])
         #expect(try f.journal.blobS3Key(blob.id) == "blobs/\(blob.id)")
+    }
+
+    /// The bug that silently disabled storage-quota enforcement in production (2026-07-13): a LISTING must
+    /// carry the trailing slash, because the IAM grant for `s3:ListBucket` is conditioned on `s3:prefix`
+    /// matching `blobs/<sub>/*` — and the bare `blobs/<sub>` does not match it, so AWS answers AccessDenied
+    /// and `bytesStored` comes back nil. An object KEY must NOT carry it, or every key doubles its slash.
+    /// One type, both jobs, no call site left to get it wrong.
+    @Test func listingPrefixIsSlashTerminatedButKeysAreNot() {
+        let p = VaultPrefix.user(identityId: "ca-central-1:abc")
+
+        #expect(p.listing == "blobs/ca-central-1:abc/")          // what ListObjectsV2 + the IAM condition need
+        #expect(p.key(for: "deadbeef") == "blobs/ca-central-1:abc/deadbeef")   // no double slash
+        #expect(p.listing.hasSuffix("/"))
+        #expect(!p.key(for: "x").contains("//"))
+
+        // The dev namespace obeys the same contract.
+        #expect(VaultPrefix.dev.listing == "blobs/")
+        #expect(VaultPrefix.dev.key(for: "deadbeef") == "blobs/deadbeef")
     }
 }

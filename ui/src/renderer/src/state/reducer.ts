@@ -160,8 +160,31 @@ export const reducer = (state: AppState, action: Action): AppState => {
     case "initialized":
       return { ...state, initializing: false };
 
-    case "authChanged":
-      return { ...state, auth: action.auth };
+    case "authChanged": {
+      // Sign-out, or a switch to a DIFFERENT account: drop every vault-derived slice.
+      //
+      // The daemon is already correct about this — a signed-out `DaemonService` holds no session and so
+      // serves nothing (see `UserSession`). But the renderer keeps its own copy of the last user's tree in
+      // memory, and `initialState` is only used at construction. Without this, account B would see account
+      // A's files rendered for the window between B signing in and the first refetch landing — the same
+      // leak, one layer up. Keyed on the ACCOUNT, not merely the state, so an A→B switch resets even
+      // though both ends of it are `signedIn`.
+      const sameAccount =
+        action.auth.state === "signedIn" && action.auth.email === state.auth.email;
+      if (sameAccount) return { ...state, auth: action.auth };
+      return {
+        ...state,
+        auth: action.auth,
+        status: null,
+        files: [],
+        excludes: [],
+        run: null,
+        failures: [],
+        restores: {},
+        lastError: null,
+        lastErrorCode: null,
+      };
+    }
 
     case "vaultChanged":
       return { ...state, vault: action.vault };

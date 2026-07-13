@@ -10,12 +10,23 @@ const run = (...actions: Parameters<typeof reducer>[1][]): AppState =>
   actions.reduce(reducer, initialState);
 
 const status: AppState["status"] = {
+  signedIn: true,
   filesTotal: 10,
   filesArchived: 4,
   blobsVerified: 4,
   running: false,
   permanentlyFailedBlobs: 0,
   sources: [{ id: "s1", kind: "folder", path: "/a", mountPath: "a", paused: false }],
+  bytesStored: 4096,
+};
+
+const signedIn = (email: string): Parameters<typeof reducer>[1] => ({
+  type: "authChanged",
+  auth: { configured: true, state: "signedIn", email, error: null, emailAvailable: true },
+});
+const signedOut: Parameters<typeof reducer>[1] = {
+  type: "authChanged",
+  auth: { configured: true, state: "signedOut", email: null, error: null, emailAvailable: true },
 };
 
 describe("connection + snapshot", () => {
@@ -35,6 +46,49 @@ describe("connection + snapshot", () => {
     const s = run({ type: "sourcesLoaded", sources: [{ id: "s2", kind: "folder", path: "/b", mountPath: "b", paused: false }] });
     expect(s.status).toBeNull();
     expect(s).toBe(initialState); // unchanged reference → store skips the notify
+  });
+});
+
+/**
+ * The renderer half of the 2026-07-13 cross-account leak. The daemon now serves nothing when signed out
+ * (a signed-out `DaemonService` holds no `UserSession`), but the renderer keeps its OWN copy of the last
+ * user's tree in memory, and `initialState` is only used at construction — so without a reset here,
+ * account B would be shown account A's files for the window between signing in and the first refetch.
+ */
+describe("account switch clears vault-derived state", () => {
+  const withVaultState = (...pre: Parameters<typeof reducer>[1][]): AppState =>
+    run(...pre, { type: "statusLoaded", status }, {
+      type: "filesLoaded",
+      files: [{ id: "f1", relativePath: "Taxes/2025.pdf", size: 4096, status: "archived", blobId: "b1", date: null }],
+    }, { type: "excludesLoaded", excludes: ["*.secret"] });
+
+  test("signing out drops the previous account's files, sources and excludes", () => {
+    const before = withVaultState(signedIn("alice@example.com"));
+    expect(before.files).toHaveLength(1);
+
+    const after = reducer(before, signedOut);
+    expect(after.files).toEqual([]);
+    expect(after.status).toBeNull();
+    expect(after.excludes).toEqual([]);
+  });
+
+  test("switching straight from one account to another drops the first's files", () => {
+    // The real shape of the bug: both ends are `signedIn`, so keying the reset on the auth STATE alone
+    // would miss it. It must be keyed on the account.
+    const alice = withVaultState(signedIn("alice@example.com"));
+    const bob = reducer(alice, signedIn("bob@example.com"));
+
+    expect(bob.files).toEqual([]);
+    expect(bob.status).toBeNull();
+    expect(bob.auth.email).toBe("bob@example.com");
+  });
+
+  test("a token refresh for the SAME account keeps the tree (no churn)", () => {
+    const alice = withVaultState(signedIn("alice@example.com"));
+    const refreshed = reducer(alice, signedIn("alice@example.com"));
+
+    expect(refreshed.files).toHaveLength(1);
+    expect(refreshed.status).not.toBeNull();
   });
 });
 

@@ -35,7 +35,35 @@ Target layout (what lives where, how to gate the Mac target): [`README.md`](./RE
   Status section and `phase0-photos-spike/`.)*
 - **Electron/React app** — a control panel + observer. Owns no upload state; connects over a local
   Unix-domain socket (JSONL + an event stream). Can be closed/crashed/reopened freely.
-- **Single source of truth = the daemon's journal.** The UI renders journal state; it never holds it.
+- **Single source of truth = the signed-in user's journal.** The UI renders journal state; it never
+  holds it.
+
+### The session — the daemon acts as exactly one user, or none
+
+`UserSession` (`ColdStorageCore/UserSession.swift`) owns **all** per-user state: the journal, the
+staging dir, `status.json`, the MasterKey holder (`SwappableKeyProvider`), the `VaultPrefix`, and both
+engines. `DaemonService` holds a single `private var session: UserSession?` and nothing unscoped.
+
+- **Built at `authenticate`, destroyed at `deauthenticate`.** A session is never re-pointed at another
+  user; a different Cognito `sub` means the old session is torn down (key cleared) and a new one built.
+  Re-authenticating the *same* `sub` (the app's hourly token refresh) keeps the session, so an unlocked
+  MasterKey and an in-flight upload survive it.
+- **Signed out ⇒ nothing to serve.** Reads (`getStatus`/`listFiles`/`listSources`/`listExcludes`)
+  return the empty answer; every mutation throws *"not signed in"*. Not because each path remembers to
+  filter — because there is no unscoped journal to reach for. *(This is the fix for the 2026-07-13
+  cross-account leak: a machine-wide journal with no owner column showed account B account A's whole
+  file tree, folder paths, sizes and watched-folder registry after a sign-out/sign-in on one Mac. File
+  **bytes** never crossed — IAM scopes S3 per identity, MasterKeys are escrowed per `sub` — but the
+  index did.)*
+- **Identity is stated, never inferred.** `coldstored` requires **exactly one** of: Cognito configured
+  (multi-user), or an explicit `COLDSTORE_DEV_IDENTITY` (local dev/MinIO). Neither ⇒ it refuses to
+  start (`exit 2`). There is no "no auth configured" fallback: that mode signed every S3 call as the
+  shared all-access IAM user against a shared key prefix.
+- **`VaultPrefix`** (`VaultPrefix.swift`) is the only way to spell a user's S3 namespace:
+  `.key(for: blobId)` (no trailing slash) vs `.listing` (**with** the trailing slash, which
+  `ListObjectsV2` and the IAM `s3:prefix` condition `blobs/<sub>/*` both require). A bare
+  `blobs/<identityId>` string passed to the usage listing is what made every quota read `AccessDenied`
+  — so the slash is settled by the type, once, and never again at a call site.
 
 ## 3. Data model — logical file → blob → frame → part
 
@@ -51,8 +79,19 @@ folder/album) so a folder-restore pulls few blobs; large files get their own blo
 batching is economically negligible (Deep Archive retrieval is $0.0025/GB and egress is ranged to the
 file's bytes) — blobs stay bounded for latency sanity, not cost.
 
-## 4. The journal — durable, crash-safe state (the heart)
+## 4. The journal — per-user, durable, crash-safe (the heart)
 
+- **One journal per user, not per machine.** Per-user state lives under a data **root**
+  (`COLDSTORE_DATA_DIR`), keyed by the Cognito **user-pool `sub`** — the canonical identity (the
+  identity-pool `identityId` is a derived S3-addressing detail, and names the vault prefix only):
+  ```
+  <dataRoot>/users/<sub>/coldstore.sqlite   # journal: file index, watched-folder registry, excludes
+  <dataRoot>/users/<sub>/staging/           # encrypted-blob scratch (plaintext-derived bytes mid-upload)
+  <dataRoot>/users/<sub>/status.json        # run summary this user's app reads
+  <dataRoot>/coldstored.sock                # the ONE machine-level file (COLDSTORE_SOCKET)
+  ```
+  A local-dev identity gets the same layout at `users/dev-<name>/`, so dev exercises the real path.
+  Nothing is opened at process start — at launch nobody is signed in yet.
 - **Store:** embedded **SQLite, WAL mode**, via **`libsqlite3` directly** (the `Csqlite3` system module
   + a thin typed wrapper in `Journal.swift` — GRDB was the original sketch; the dep surface was kept
   minimal instead). This *is* the resumability guarantee.
@@ -129,16 +168,21 @@ Local Unix-domain socket (`0600`), newline-delimited JSON commands + a server-pu
 Secrets live in Keychain, never in the UI.
 
 - **Commands — SSOT is `DaemonService.handle`:** `ping · getStatus · listSources · listFiles ·
-  getPricing · listExcludes · addSource · removeSource · addExclude · removeExclude · restore ·
+  listExcludes · addSource · removeSource · addExclude · removeExclude · restorePlan · restore ·
   deposit · depositPhotos · previewDeposit · movePath · createFolder · deletePath · authenticate ·
-  triggerNow · pauseSource · resumeSource`.
+  deauthenticate · mintVault · unlockVault · unlockVaultWithRecoveryCode · lockVault · triggerNow ·
+  pauseSource · resumeSource`.
 - **Events — SSOT is the `DaemonEvent(...)` call sites:** `runStarted · fileArchived · uploadProgress ·
-  runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged ·
-  restoreRequested · restoreInProgress · restoreCompleted · error`.
+  runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged · restoreRequested ·
+  restoreInProgress · restoreCompleted · restoreNeedsAuthorization · error`.
+- **Every command is session-scoped** (§2): signed out, the four reads answer empty and everything else
+  throws *"not signed in"*. `getStatus` says so explicitly — `signedIn: bool` — and its `bytesStored`
+  (the S3-derived storage-quota usage figure) is non-null whenever signed in, `null` only when not.
 - Semantics worth knowing: `movePath {from,to}` is the single primitive behind move AND rename (a
   journal `relativePath` prefix-sweep — no S3, no thaw, stable `id` preserved); `deletePath`
   tombstones (`status=deleted`, rows kept for a deferred repack/GC); `filesChanged` carries
-  `{moved,to}` / `{created}` / `{deleted}`; `authenticate idToken=…` is the Cognito seam
+  `{moved,to}` / `{created}` / `{deleted}` — plus `{signedIn}` / `{signedOut}`, the cue that the whole
+  tree just changed owner; `authenticate idToken=…` / `deauthenticate` open and close the session
   (`../PROD.md` Phase 2); per-source pause lives on the source rows (`pauseSource`/`resumeSource` emit
   `sourcesChanged` — there are no global pause events).
 
@@ -151,11 +195,15 @@ Secrets live in Keychain, never in the UI.
 | Blob cap | **~1–2 GB**, locality-grouped | PUT-cost vs restore latency |
 | AEAD | **AES-256-GCM (CryptoKit)** | native + HW-accelerated; per-blob DEK |
 | Journal | **SQLite/WAL via libsqlite3 directly** | the resumability + SPOF store |
+| Per-user state | **`<dataRoot>/users/<sub>/`**, owned by a `UserSession` | one journal/staging/status per account, never machine-wide |
+| S3 namespace | **`VaultPrefix`** (`blobs/<identityId>`) | typed: keys unslashed, listings slashed — the IAM `s3:prefix` condition needs the slash |
 | Multipart | **Low-level** (`CreateMultipartUpload`/`UploadPart`/`Complete`) | Transfer Manager hides `uploadId`/ETags; we persist them for cross-reboot resume |
 | Abort lifecycle | **14 days** | caps the Deep Archive staging-cost bleed |
 
 ### TL;DR
-A launchd Swift daemon owns ingest→encrypt→upload; Electron is a thin observer. SQLite/WAL journal +
+A launchd Swift daemon owns ingest→encrypt→upload; Electron is a thin observer. It acts as exactly one
+signed-in user at a time — a `UserSession` (journal, staging, status, key, prefix) built at sign-in and
+destroyed at sign-out, so signed out there is nothing to serve. SQLite/WAL journal +
 `ListParts` reconciliation + deterministic parts = crash-safe idempotent resume. Integrity is layered
 (plaintext SHA-256, per-frame GCM tags, per-part SHA-256 validated by S3, verify-after) and "archived"
 means verified. Locality-grouped ≤2 GB blobs of 4 MiB AEAD frames; per-blob DEK under a KEK that the

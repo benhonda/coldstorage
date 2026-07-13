@@ -18,15 +18,16 @@ import type { Exec } from "./views/types.ts";
 import { useAppState } from "./useStore.ts";
 import { useResizable } from "./ui/useResizable.ts";
 import { useFiles } from "./views/files/useFiles.ts";
-import { fileFromJournal, isFolderMarker, totalBytes } from "./views/files/model.ts";
+import { fileFromJournal, isFolderMarker } from "./views/files/model.ts";
 import { GettingBackPanel } from "./views/files/GettingBackPanel.tsx";
 import { FailuresPanel } from "./views/files/FailuresPanel.tsx";
 import type { BlobFailure } from "./state/reducer.ts";
+import { hasCapacity } from "./state/entitlement.ts";
 import { MyFilesView } from "./views/MyFilesView.tsx";
 import { SettingsView, type SettingsApi } from "./views/SettingsView.tsx";
 import { SignInView } from "./views/SignInView.tsx";
 import { RecoveryCodeShow, RecoveryCodeEnter, VaultGate } from "./views/RecoveryCodeView.tsx";
-import { SubscribeModal } from "./views/SubscribeModal.tsx";
+import { SubscribeModal, type PaywallReason } from "./views/SubscribeModal.tsx";
 import { ChangePlanModal } from "./views/ChangePlanModal.tsx";
 import { AccountCard } from "./views/AccountCard.tsx";
 import { UpdateBanner } from "./views/UpdateBanner.tsx";
@@ -60,29 +61,27 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   const [dismissedError, setDismissedError] = useState<string | null>(null);
   const [queueOpen, setQueueOpen] = useState(false);
   const [failuresOpen, setFailuresOpen] = useState(false);
-  const [paywallOpen, setPaywallOpen] = useState(false);
+  // Null = closed. The reason is load-bearing: the same plan picker is a "you're out of room" block when a
+  // free vault fills up, and a plain "pick a plan" when someone upgrades from Settings by choice.
+  const [paywallReason, setPaywallReason] = useState<PaywallReason | null>(null);
   const { width: sidebarWidth, onResizeStart } = useResizable("cs-sidebar-width", 232, 200, 360);
 
-  // Deposit gate (Phase 5c): only a signed-in (configured) user whose subscription we've CONFIRMED
-  // inactive is gated — dogfood mode and the pre-first-check window stay open (the real enforcement is
-  // the later hard gate; this is the soft app-side one). Close the paywall the moment a sub goes active.
-  const subscribed = !state.auth.configured || !state.entitlement.known || state.entitlement.active;
-  // Storage-quota gate: soft, same posture as the subscription check above — a byte-level IAM/S3 gate is
-  // a separate, deferred hard-enforcement layer. Unknown usage or quota fails OPEN (never block on a
-  // transient/unconfigured value), matching the subscription gate's philosophy.
-  const hasCapacity = state.entitlement.quotaBytes == null || state.status?.bytesStored == null || state.status.bytesStored < state.entitlement.quotaBytes;
-  const canDeposit = subscribed && hasCapacity;
+  // THE deposit gate — is there room? Nothing else (see `state/entitlement.ts`). "No subscription" stopped
+  // being a reason to refuse a deposit when the free tier landed; only a full vault is one.
+  const canDeposit = hasCapacity(state.entitlement, state.status?.bytesStored ?? null);
+  // Which upsell a full vault shows: a free account picks a plan (paywall), a subscriber resizes theirs.
+  const subscribed = state.entitlement.active;
   useEffect(() => {
-    if (state.entitlement.active) setPaywallOpen(false);
+    if (state.entitlement.active) setPaywallReason(null);
   }, [state.entitlement.active]);
   const [overCapacityOpen, setOverCapacityOpen] = useState(false);
   const [changingPlanFromCapacity, setChangingPlanFromCapacity] = useState(false);
   useEffect(() => {
-    if (hasCapacity) {
+    if (canDeposit) {
       setOverCapacityOpen(false);
       setChangingPlanFromCapacity(false);
     }
-  }, [hasCapacity]);
+  }, [canDeposit]);
 
   // The live subscription summary (plan badge + Settings manage surface). Refetched on sign-in and
   // whenever the entitlement flips (a checkout just landed / a cancellation took effect). Best-effort:
@@ -127,7 +126,6 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
     removeExclude: (pattern) => exec(() => api.request("removeExclude", { pattern })),
   };
 
-  const vaultBytes = totalBytes(filesApi.files);
   const gettingBack = filesApi.files.filter((f) => f.status === "gettingBack");
   const notRunning = NOT_RUNNING[state.connection];
 
@@ -288,7 +286,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           filesApi={filesApi}
           uploadProgress={state.run?.uploadProgress ?? {}}
           canDeposit={canDeposit}
-          onDepositBlocked={() => (subscribed ? setOverCapacityOpen(true) : setPaywallOpen(true))}
+          onDepositBlocked={() => (subscribed ? setOverCapacityOpen(true) : setPaywallReason("quotaReached"))}
         />
       )}
       {route === "settings" && (
@@ -298,29 +296,29 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           sources={state.status?.sources ?? []}
           running={state.run?.active ?? false}
           settings={settings}
-          vaultBytes={vaultBytes}
           bytesStored={state.status?.bytesStored ?? null}
           files={filesApi.files}
           virtualFolders={filesApi.virtualFolders}
           auth={state.auth}
           entitlement={state.entitlement}
-          onSubscribe={() => setPaywallOpen(true)}
+          onSubscribe={() => setPaywallReason("upgrade")}
           subscription={subscription}
           onSubscriptionChanged={setSubscription}
         />
       )}
 
-      {paywallOpen && (
+      {paywallReason && (
         <SubscribeModal
           api={api}
+          reason={paywallReason}
           entitlement={state.entitlement}
           onSubscribe={(priceId) => void api.subscribe(priceId)}
-          onClose={() => setPaywallOpen(false)}
+          onClose={() => setPaywallReason(null)}
         />
       )}
 
-      {/* Over-capacity block: distinct from the not-subscribed paywall above — already a customer,
-          just at their plan's storage cap. Plain, factual, no alarm; offers the upgrade path directly. */}
+      {/* Out of room on a PAID plan — the free-tier equivalent is the plan picker above (nothing to resize
+          yet). Already a customer, just at their plan's cap. Plain, factual, no alarm; offers the way out. */}
       {overCapacityOpen && !changingPlanFromCapacity && (
         <Modal
           title="Storage full"

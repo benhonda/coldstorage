@@ -47,7 +47,6 @@ export const SettingsView = ({
   sources,
   running,
   settings,
-  vaultBytes,
   bytesStored,
   files,
   virtualFolders,
@@ -71,9 +70,9 @@ export const SettingsView = ({
    * NOT `status.running`, which only updates on a getStatus poll and so never flips during a quick run. */
   running: boolean;
   settings: SettingsApi;
-  vaultBytes: number;
-  /** Authoritative (S3-derived) total, for the quota line + downgrade warning. Null until the daemon's
-   * first listing completes or in dogfood/unconfigured mode. */
+  /** The vault total: a live S3 listing under this user's own prefix — every device, and the figure the
+   * plan quota is enforced against. Drives the Storage card AND the downgrade warning, so they can never
+   * disagree. Null only before the daemon's first listing lands (or signed out). */
   bytesStored: number | null;
   files: ArchivedFile[];
   virtualFolders: string[];
@@ -272,10 +271,22 @@ export const SettingsView = ({
       </Card>
 
       <Card title="Storage">
-        <KeyValueRow label="In deep storage" value={formatBytes(vaultBytes)} accent />
-        {entitlement.quotaBytes != null && bytesStored != null && (
-          <KeyValueRow label="Plan usage" value={`${formatBytes(bytesStored)} of ${formatBytes(entitlement.quotaBytes)} used`} />
-        )}
+        {/* ONE number, one meaning: `bytesStored` is a live listing of what's actually in the user's own
+            vault, so it counts every device they've deposited from and it's the figure the plan's quota is
+            enforced against. This row used to sum the local file rows instead — a per-device number sitting
+            under a label that reads like the whole vault. Two numbers that could disagree, both presented as
+            the truth. (Selection sizes elsewhere still sum rows; that's a different question.) */}
+        <KeyValueRow
+          label="In deep storage"
+          value={
+            bytesStored == null
+              ? "—"
+              : entitlement.quotaBytes != null
+                ? `${formatBytes(bytesStored)} of ${formatBytes(entitlement.quotaBytes)}`
+                : formatBytes(bytesStored)
+          }
+          accent
+        />
         <KeyValueRow label="Encryption" value="on this Mac, before upload" icon="lock" />
       </Card>
 
@@ -320,9 +331,14 @@ export const SettingsView = ({
                   {subscription?.nextBilledAt ? `Active · renews ${shortDate(subscription.nextBilledAt)}` : "Active"}
                 </Badge>
               ) : (
-                <Button size="sm" onClick={onSubscribe}>
-                  {entitlement.checkingOut ? "Finishing…" : "Subscribe"}
-                </Button>
+                // No subscription = the free tier, not a dead account. Name the plan they're on before
+                // offering the one they aren't; the Storage row above already shows it filling up.
+                <span className="cs-plan-row">
+                  <Badge tone="neutral">Free</Badge>
+                  <Button size="sm" onClick={onSubscribe}>
+                    {entitlement.checkingOut ? "Finishing…" : "Upgrade"}
+                  </Button>
+                </span>
               )
             }
           />

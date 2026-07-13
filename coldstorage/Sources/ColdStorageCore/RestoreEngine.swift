@@ -10,7 +10,7 @@ import Crypto
 /// step — request the thaw, report it's still thawing, or (once ready) download. Re-run until `.restored`.
 public struct RestoreEngine: Sendable {
     let journal: Journal
-    let store: S3Store
+    let store: any VaultStore
     let keys: KeyProvider
     let cipher = EnvelopeCipher()
 
@@ -29,7 +29,7 @@ public struct RestoreEngine: Sendable {
     /// `.authorizationRequired` and let the app go get the restore authorized.
     let canSelfThaw: Bool
 
-    public init(journal: Journal, store: S3Store, keys: KeyProvider, canSelfThaw: Bool = true) {
+    public init(journal: Journal, store: any VaultStore, keys: KeyProvider, canSelfThaw: Bool = true) {
         self.journal = journal; self.store = store; self.keys = keys; self.canSelfThaw = canSelfThaw
     }
 

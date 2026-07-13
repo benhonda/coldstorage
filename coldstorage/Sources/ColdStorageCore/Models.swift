@@ -31,15 +31,14 @@ public struct IngestItem: Sendable {
 public struct BlobPlan: Sendable {
     public let id: String
     public let items: [IngestItem]
-    /// The S3 key namespace this blob lands under. Single-user/dogfood = `"blobs"`. **Multi-user prod**
-    /// = `"blobs/<cognito-identity-id>"` — the per-user prefix the IAM role scopes creds to
+    /// The S3 key namespace this blob lands under — the per-user prefix the IAM role scopes creds to
     /// (`blobs/${cognito-identity.amazonaws.com:sub}/*`), so user A's creds can't touch user B's objects.
-    /// Supplied per-run from the daemon's auth state; the content-derived `id` is unchanged by it.
-    public let keyPrefix: String
-    public init(id: String, items: [IngestItem], keyPrefix: String = "blobs") {
-        self.id = id; self.items = items; self.keyPrefix = keyPrefix
+    /// Supplied per-run from the daemon's live session; the content-derived `id` is unchanged by it.
+    public let prefix: VaultPrefix
+    public init(id: String, items: [IngestItem], prefix: VaultPrefix = .dev) {
+        self.id = id; self.items = items; self.prefix = prefix
     }
-    public var s3Key: String { "\(keyPrefix)/\(id)" }
+    public var s3Key: String { prefix.key(for: id) }
 }
 
 /// A configured ingest source (design §3 `sources` table). Folders carry a `path`; the Photos

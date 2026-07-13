@@ -51,19 +51,23 @@ export const readAppConfig = (dir: string): AppConfig => {
   return mergeAppConfig(baked, user);
 };
 
-/** The env `coldstored` reads (see coldstored/main.swift) — per-user paths under {@link dataDir}, plus the
- * AWS bucket/region/profile from {@link readAppConfig} so a Finder-launched app (which inherits no shell
- * env) can actually upload. Only keys present in config.json are set, so `coldstored`'s own defaults still
- * apply when it's absent. Creds = `AWS_PROFILE` → credential_process → Keychain (no secret in env). */
+/** The env `coldstored` reads (see coldstored/main.swift), plus the AWS bucket/region/profile from
+ * {@link readAppConfig} so a Finder-launched app (which inherits no shell env) can actually upload. Only
+ * keys present in config.json are set, so `coldstored`'s own defaults still apply when it's absent.
+ * Creds = Cognito STS, per signed-in user (`AWS_PROFILE` is the local-dev credential_process path only).
+ *
+ * We hand the daemon a DATA ROOT, not a journal/staging/status path each. Per-user state lives at
+ * `<root>/users/<sub>/…` and is opened by the daemon at sign-in, because at spawn time nobody is signed in
+ * yet and there is no user whose journal it could be. Passing individual paths is what produced the
+ * 2026-07-13 cross-account leak: one machine-wide `coldstore.sqlite`, handed to whoever was running,
+ * survived sign-out and was served to the next account. The socket stays at the root — it's a machine-level
+ * rendezvous, not user data. */
 const daemonEnv = (dir: string): NodeJS.ProcessEnv => {
   const cfg = readAppConfig(dir);
   return {
     ...process.env,
+    COLDSTORE_DATA_DIR: dir,
     COLDSTORE_SOCKET: join(dir, "coldstored.sock"),
-    COLDSTORE_JOURNAL: join(dir, "coldstore.sqlite"),
-    COLDSTORE_KEK: join(dir, "kek.bin"),
-    COLDSTORE_STAGING: join(dir, "staging"),
-    COLDSTORE_STATUS: join(dir, "status.json"),
     ...(cfg.bucket ? { COLDSTORE_BUCKET: cfg.bucket } : {}),
     ...(cfg.region ? { AWS_REGION: cfg.region } : {}),
     ...(cfg.awsProfile ? { AWS_PROFILE: cfg.awsProfile } : {}),

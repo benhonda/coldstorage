@@ -95,14 +95,18 @@ export interface DepositPreviewItem {
 
 /** `StatusDTO` — the daemon snapshot. `permanentlyFailedBlobs > 0` ⇒ a config/logic fault to fix. */
 export interface Status {
+  /** Whether the daemon holds a session (see `UserSession`). When false every other field is the
+   * empty/zero truth for a signed-out daemon — there is no vault to report on, and the daemon will refuse
+   * any command that would touch one. */
+  signedIn: boolean;
   filesTotal: number;
   filesArchived: number;
   blobsVerified: number;
   running: boolean;
   permanentlyFailedBlobs: number;
   sources: Source[];
-  /** Total bytes stored in S3 under this identity's own prefix. Null in dogfood/unconfigured mode
-   * (no Cognito identity to scope a listing to) or before the first listing completes. */
+  /** Total bytes stored in S3 under this identity's own prefix — a live listing, so it is the figure the
+   * storage quota is actually enforced against. Null only when signed out. */
   bytesStored: number | null;
 }
 

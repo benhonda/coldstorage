@@ -23,8 +23,11 @@ opaque cents.
   `strategy/retrieval-economics.md`; effectively ~$0.0974/GB + ~$0.53 per retrieval. Compute the
   quote exactly — do NOT round the per-GB rate up to a clean number, that books margin on
   retrieval. The backend owns this math; the daemon and app treat a quote as opaque cents.
-- A **small free rolling allowance** (size TBD in `strategy/`) makes tiny restores — a photo, an
-  album — cost nothing and need no checkout. Material restores get one quote → one payment.
+- A **small free rolling allowance** makes tiny restores — a photo, an album — cost nothing and need
+  no checkout. Material restores get one quote → one payment. **Sizes DECIDED (2026-07-13, Ben):
+  1 GB per 30-day window on a paid plan, 200 MB on the free tier** (`retrieval-pricing.ts`:
+  `ALLOWANCE_BYTES_SUBSCRIBED` / `ALLOWANCE_BYTES_FREE`). The paid allowance is funded by storage
+  margin; the free one is booked as acquisition spend, the same line the 25 GB free tier sits on.
 - **No credit/balance system in V1.** Considered (2026-07-12) and deferred: a stored-value
   ledger + unspent-balance liability isn't warranted by cold-archive retrieval patterns
   (bimodal: tiny-and-cheap vs. rare-and-big). All options need the same metering plumbing, so

@@ -1,7 +1,14 @@
 /**
- * Paywall + plan picker (PROD.md Phase 5c · PADDLE.md "Multi-plan picker") — shown when a signed-in
- * user without an active subscription tries to deposit. A soft gate: backing up NEW files needs a
- * subscription, but anything already stored stays restorable (say so — no holding data hostage).
+ * Plan picker (PROD.md "Free-tier entitlement flip" · PADDLE.md "Multi-plan picker"). Two moments,
+ * one modal — hence {@link PaywallReason}:
+ *
+ *  - `quotaReached` — a free account has filled its 25 GB and a deposit was blocked. Since the free tier
+ *    landed this is the ONLY blocking case, and it's a full vault, not an unsubscribed one: a plan raises
+ *    the cap. Never gate on "you haven't paid".
+ *  - `upgrade` — nobody is blocked; they chose "Subscribe" in Settings with room to spare.
+ *
+ * Soft either way, and say so: anything already stored stays restorable, plan or no plan (small restores
+ * are free under the monthly allowance) — we don't hold data hostage.
  *
  * The catalog is fetched live from the billing server (annual sizes, exactly what Paddle will sell) —
  * never hardcoded here. The picker itself is the shared {@link PlanPicker} (also used by
@@ -11,15 +18,21 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Modal } from "../ui/primitives.tsx";
 import { PlanPicker } from "./PlanPicker.tsx";
+import { formatBytes } from "./files/model.ts";
 import type { CatalogPlan, ColdstoreApi, EntitlementStatus } from "../../../shared/ipc.ts";
+
+/** Why the picker is open: blocked mid-deposit on a full free vault, or an upgrade by choice. */
+export type PaywallReason = "quotaReached" | "upgrade";
 
 export const SubscribeModal = ({
   api,
+  reason,
   entitlement,
   onSubscribe,
   onClose,
 }: {
   api: ColdstoreApi;
+  reason: PaywallReason;
   entitlement: EntitlementStatus;
   onSubscribe: (priceId: string) => void;
   onClose: () => void;
@@ -41,9 +54,13 @@ export const SubscribeModal = ({
     };
   }, [api, loadNonce]);
 
+  // The free cap, straight from the entitlement the backend handed us — never a hardcoded "25 GB" here
+  // (it's a promise that can only move up, and it lives in the backend's plan-sizes SSOT).
+  const freeCap = entitlement.quotaBytes == null ? null : formatBytes(entitlement.quotaBytes);
+
   return (
     <Modal
-      title="Subscribe to keep backing up"
+      title={reason === "quotaReached" ? "Your free storage is full" : "Choose a plan"}
       icon="workspace_premium"
       onClose={onClose}
       footer={
@@ -67,8 +84,10 @@ export const SubscribeModal = ({
       ) : (
         <>
           <p className="cs-quote-lead">
-            A subscription lets coldstorage keep backing up your new and changed files. Anything you&apos;ve
-            already stored stays available to get back, subscription or not.
+            {reason === "quotaReached"
+              ? `You've used the ${freeCap ?? "free"} storage that comes with every account. A plan gives you more room, so coldstorage can keep backing up your new and changed files.`
+              : `Every account gets ${freeCap ?? "free"} of storage. A plan gives you more room for new and changed files.`}{" "}
+            Anything you&apos;ve already stored stays available to get back, plan or no plan.
           </p>
 
           {loadError ? (

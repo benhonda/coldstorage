@@ -68,7 +68,16 @@ On a Mac: `task daemon:mac:bootstrap` (creds → Keychain + launchd install), `t
 - **Builds:** cold ~60s (debug-linking the AWS SDK), incrementals seconds. Don't spawn parallel
   builds — and note `swift run` acquires the build lock too, so on a fresh tree run
   `task daemon:build:dev` once before starting daemon + ctl together.
-- **Inspect the journal:** `sqlite3 coldstorage/coldstore.sqlite`. **MinIO console:**
+- **The daemon states its identity or refuses to start (2026-07-13).** `coldstored` needs *exactly one* of
+  Cognito config (multi-user) or `COLDSTORE_DEV_IDENTITY=<name>` (local dev) — with neither it prints why
+  and exits 2, rather than silently signing S3 calls as the shared all-access IAM user. `task daemon:run`
+  already sets it; `task daemon:mac:install` now fails fast if the Cognito handoff is missing. If you have
+  a Mac data dir from before this, run **`task daemon:mac:reset:local` once** — the old machine-wide
+  `coldstore.sqlite` is orphaned (and is the file that leaked one account's index to the next).
+- **Inspect the journal:** it's **per signed-in user**, under the daemon's data root —
+  `sqlite3 coldstorage/.dev-data/users/dev-local/coldstore.sqlite` for the dev daemon (`task
+  daemon:run`), `~/Library/Application Support/ColdStorage/users/<cognito-sub>/coldstore.sqlite` for
+  the installed one. There is no machine-wide journal. **MinIO console:**
   http://localhost:9001 (`minioadmin`/`minioadmin`). Storage class is conditional — `DEEP_ARCHIVE` on
   real AWS, omitted for MinIO.
 - **VS Code port-forward hijack:** VS Code can resurrect a stale 9000/9001 forward that blocks native

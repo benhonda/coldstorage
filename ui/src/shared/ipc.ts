@@ -148,16 +148,23 @@ export interface VaultStatus {
 }
 
 /**
- * Subscription entitlement (PROD.md Phase 5c) — the billing gate on DEPOSITS (browse/restore stay open).
- * `known` guards against gating before the first check lands (don't paywall on a transient unknown).
+ * Storage entitlement (PROD.md "Free-tier entitlement flip") — the gate on DEPOSITS (browse/restore
+ * stay open). `known` guards against gating before the first check lands (never block on a transient
+ * unknown).
+ *
+ * **`quotaBytes` is the gate; `active` is only a UI signal.** Every signed-in account has a byte quota
+ * — the free tier's 25 GB with no subscription, the plan's allowance with one — and backing up is
+ * blocked only when the vault is FULL. `active` just picks which upsell that block shows (subscribe
+ * vs. change plan). Not subscribing is not a reason to refuse a deposit.
  */
 export interface EntitlementStatus {
   /** Whether entitlement has been fetched at least once for the signed-in user. */
   known: boolean;
+  /** Has a paid subscription. NOT the deposit gate — display/upsell only (see above). */
   active: boolean;
   /** A checkout is open in the browser and we're polling for the webhook to flip `active`. */
   checkingOut: boolean;
-  /** Byte cap of the current plan. Null = unknown/inactive — treated as unlimited (fail-open). */
+  /** Byte cap on deposits: the free tier's, or the plan's. Null = unknown — fails OPEN (unlimited). */
   quotaBytes: number | null;
   error: string | null;
 }

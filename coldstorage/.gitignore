@@ -21,3 +21,4 @@ status.json
 # Key material — NEVER commit (public repo)
 dev-kek.bin
 *.bin
+.dev-data/

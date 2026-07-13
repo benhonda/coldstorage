@@ -95,9 +95,10 @@ src/renderer/     The web app (React). No Node, no socket — talks to window.co
                       flips them uploading⇄failed; move/rename/delete apply an optimistic edit while the view
                       fires the real movePath/deletePath (filesChanged → listFiles refetch reconciles); only
                       newFolder stays local (virtual path); overlays live restore status.
-      pricing.ts      cost math (bytes × the daemon's getPricing rate card) for Settings + request-a-copy;
-                      FALLBACK_PRICING seeds the store until the real quote lands. (Excludes are daemon-backed:
-                      Settings' chips read state.excludes + issue addExclude/removeExclude — no local store.)
+                      (No pricing module: the daemon's rate card was deleted 2026-07-13 — a restore's price
+                      has ONE source, the backend's POST /retrieval/quote. See RETRIEVAL.md.)
+                      (Excludes are daemon-backed: Settings' chips read state.excludes + issue
+                      addExclude/removeExclude — no local store.)
       Breadcrumb, StatusBadge (StatusIcon: ✓ stored · ↑ uploading · ⚠ couldn't upload · ↓ transferring ·
                       saved-here), ContextMenu (incl. Retry upload on failed rows), InfoModal (Get info),
                       RequestBackModal (request-a-copy + native folder picker), GettingBackPanel (transfer

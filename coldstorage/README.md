@@ -54,8 +54,9 @@ is pushed (`paths` = newline-joined relativePaths of the files in the blob), and
 fault also marks its files `failed` in the journal (`Journal.markFilesFailed`), so `listFiles` returns
 `failed` and the UI's ⚠ survives a refresh/restart. Transient faults are already retried by the AWS SDK
 before they reach us.
-The **journal is the SSOT for sources** — add/remove via the socket survives restarts (`COLDSTORE_SOURCES`
-is only a one-time seed). The socket is `0600` (owner-only). On macOS the full setup is two task runs:
+The **signed-in user's journal is the SSOT for sources** — add/remove via the socket survives restarts
+(`COLDSTORE_SOURCES` is only a one-time seed, dev-identity only). The socket is `0600` (owner-only).
+On macOS the full setup is two task runs:
 `task tf:coldstorage:creds-export` (in the devcontainer — TF creds → a gitignored handoff file over the bind
 mount) then `task daemon:mac:bootstrap` (seeds the AWS secret into the login Keychain + wires a `coldstorage`
 profile whose `credential_process` reads it, then renders the LaunchAgent plist (RunAtLoad + KeepAlive) and
@@ -69,6 +70,25 @@ readTimeout:)` — pass a `readTimeout` (seconds) for request/response calls so 
 omit it for a live event tail (`watch`), which blocks indefinitely by design. A UI is just a long-lived
 `ControlClient`. **Non-Swift clients** (the Electron UI) speak the same JSONL protocol directly over the
 socket — `ControlProtocol.swift` is the wire contract; see [`../ui/DESIGN.md`](../ui/DESIGN.md).
+
+## Identity + on-disk state (env)
+`coldstored` acts as **exactly one user at a time, or none** (`UserSession` — see
+[`DESIGN.md`](./DESIGN.md) §2), so it has to be *told* who it is. It needs **exactly one** of the two
+identity modes below and **refuses to start** (`exit 2`) with neither — there is no silent fallback,
+because that fallback signed every S3 call as the shared all-access IAM user against a shared key
+prefix. Signed out, the daemon has no journal, no key and no prefix: reads answer empty, mutations
+throw *"not signed in"*.
+
+| Env | What |
+|---|---|
+| `COLDSTORE_COGNITO_IDENTITY_POOL_ID` + `COLDSTORE_COGNITO_USER_POOL_PROVIDER` | **multi-user** (the real product) — starts signed out; the app's `authenticate` opens the session. Optional `COLDSTORE_COGNITO_REGION` (falls back to `AWS_REGION`). |
+| `COLDSTORE_DEV_IDENTITY=<name>` | **local dev / MinIO** — one eager session named for the identity, seeded from the local file KEK so there's no unlock step. `task daemon:run` sets `local`. |
+| `COLDSTORE_DATA_DIR` | the **root** everything persists under: `<root>/users/<sub>/{coldstore.sqlite, staging/, status.json}`, opened at sign-in (dev: `users/dev-<name>/`). There is no machine-wide journal, so there is no journal path to configure — this one root **replaces `COLDSTORE_JOURNAL` / `COLDSTORE_STAGING` / `COLDSTORE_STATUS` / `COLDSTORE_KEK`**. |
+| `COLDSTORE_SOCKET` | the control socket — the one machine-level path (a rendezvous, not user data). |
+
+Also: `COLDSTORE_BUCKET` · `COLDSTORE_ENDPOINT` (MinIO) · `COLDSTORE_SOURCES=dir1:dir2` (one-time
+registry seed) · `COLDSTORE_INTERVAL` (default 300s) · `COLDSTORE_ONCE=1` (one pass, don't loop).
+Inspect the dev journal at `coldstorage/.dev-data/users/dev-local/coldstore.sqlite`.
 
 ## Get a file back (restore)
 ```sh

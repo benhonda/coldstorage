@@ -13,10 +13,15 @@
   AWS creds: NOT in this file. AWS_PROFILE points at the `coldstorage` profile in ~/.aws/config,
   whose `credential_process` reads the IAM-user secret from the Keychain (see `task daemon:mac:creds`).
 
-  Cognito (multi-user prod, PROD.md Phase 2) is opt-in: the two COLDSTORE_COGNITO_* vars are empty unless
-  `task tf:coldstorage:creds-export` has been re-run since Phase 2c landed — an empty value is what
-  `coldstored/main.swift` treats as "not configured", so a stale/pre-2c handoff keeps today's
-  single-operator dogfood behavior unchanged.
+  COLDSTORE_DATA_DIR is a ROOT, not a journal path. Per-user state lives at `<root>/users/<sub>/` and is
+  opened by the daemon at sign-in — at launch nobody is signed in, so there is no journal for launchd to
+  point at. (Handing it a single machine-wide `coldstore.sqlite` is precisely what leaked one account's
+  file tree to the next on 2026-07-13; see ColdStorageCore/UserSession.swift.)
+
+  Cognito (multi-user prod) is REQUIRED here. If the two COLDSTORE_COGNITO_* vars are empty — a stale
+  handoff, or `task tf:coldstorage:creds-export` never re-run — coldstored now REFUSES TO START and says
+  so in coldstored.err.log, rather than falling back to the shared all-access IAM user against a shared
+  key prefix. Re-run the creds export and `task daemon:mac:install` to fix it.
 -->
 <plist version="1.0">
 <dict>
@@ -31,11 +36,8 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>COLDSTORE_BUCKET</key>   <string>__BUCKET__</string>
-        <key>COLDSTORE_JOURNAL</key>  <string>__DATA_DIR__/coldstore.sqlite</string>
-        <key>COLDSTORE_STATUS</key>   <string>__DATA_DIR__/status.json</string>
+        <key>COLDSTORE_DATA_DIR</key> <string>__DATA_DIR__</string>
         <key>COLDSTORE_SOCKET</key>   <string>__SOCKET__</string>
-        <key>COLDSTORE_STAGING</key>  <string>__DATA_DIR__/staging</string>
-        <key>COLDSTORE_KEK</key>      <string>__DATA_DIR__/dev-kek.bin</string>
         <key>COLDSTORE_INTERVAL</key> <string>300</string>
         <key>AWS_REGION</key>        <string>__REGION__</string>
         <key>AWS_PROFILE</key>       <string>__PROFILE__</string>

@@ -99,8 +99,9 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
 ### Billing (Paddle MoR)
 - Paddle-hosted checkout + customer portal (no card data touches us). **Webhooks** drive subscription
   lifecycle → our account backend flips `subscription_active`. Uploads are gated on an active sub.
-- Retrieval fees: the existing `getPricing` rate card stays the quote SSOT; actual charging for restores
-  is a later refinement (subscription-gates-storage first).
+- Retrieval fees: **shipped** (2026-07-13, `RETRIEVAL.md`). The daemon's `getPricing` rate card is DELETED —
+  a restore's price has one source, the backend's `POST /retrieval/quote` (quote → pay → thaw, hard-gated at
+  IAM: the user role has no `s3:RestoreObject`).
 
 ### Account backend (new)
 - Minimal API linking **Cognito identity ↔ Paddle subscription ↔ the encrypted key-blob**. Responsibilities:
@@ -125,7 +126,9 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
    client ids (not secrets) are available via `cd infra/coldstorage/live/production && terragrunt output`;
    they'll flow to the daemon/app through the **gitignored handoff in 2c** — kept OUT of tracked docs
    (public repo).
-2. **Daemon credential seam — DONE ✅ (2026-07-01, all 3 sub-steps landed).** Built in gated sub-steps:
+2. **Daemon credential seam — DONE ✅ (2026-07-01, all 3 sub-steps landed).** Built in gated sub-steps.
+   ⚠️ **Read the "Superseded 2026-07-13" note at the end of this phase before trusting 2a/2b below** — the
+   no-Cognito fallback and the machine-wide journal they describe are both gone.
    - **2a — per-user key as journal SSOT: DONE ✅ (2026-06-30, 71 Core tests green).** `keyPrefix` threads
      `BlobPlan`(`Models.swift`)→`BlobPlanner`→`UploadEngine.run(keyPrefix:)` to the real S3 PUT; it's stored
      as `s3Key`; **`RestoreEngine` reads the stored key** via new `Journal.blobS3Key(_:)` (the keystone fix —
@@ -161,6 +164,25 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      same as unset (`nonEmpty(_:)`) — needed because the plist/config.json always set the keys now, blank
      when not configured, instead of omitting them. Verified: `daemon:build:dev` + `daemon:test` (72 green) +
      `ui:typecheck` + `ui:test` (51 green); all 3 new/changed shell blocks passed `bash -n`.
+
+   - **Superseded 2026-07-13 (security refactor).** Two things described above are no longer true.
+     (i) The "unset ⇒ default credential chain + flat `blobs`" fallback in 2b is **gone**: `coldstored`
+     now requires **exactly one** of Cognito (multi-user) or an explicit `COLDSTORE_DEV_IDENTITY`
+     (local dev/MinIO), and refuses to start (`exit 2`) with neither — that fallback signed S3 calls as
+     the shared all-access IAM user (`blobs/*`) against a shared key prefix. (ii) The per-user state is
+     no longer a machine-wide journal: it lives in a `UserSession` at `<COLDSTORE_DATA_DIR>/users/<sub>/`
+     (journal + staging + status.json), built at `authenticate` and destroyed at `deauthenticate`, and
+     the raw `keyPrefix: String` is now the typed `VaultPrefix`. See CHANGELOG 2026-07-13.
+
+     **Verified (2026-07-13):** 95 Core tests incl. `SessionIsolationTests` (which fails if the fix is
+     reverted — mutation-checked); `coldstored` refuses to start with no identity; two dev identities on
+     one data root keep fully separate journals on disk. **NOT yet verified:** the real Mac path — a live
+     Cognito sign-in as account A, sign-out, sign-in as account B. The tests drive the real
+     `DaemonService` but stub the Cognito token exchange (`beginSession`/`endSession`), so the one thing
+     unproven is `authenticate` deriving `sub` from a real ID token (`IDToken.sub(of:)`) and keying the
+     state dir by it. Ben was running this on his Mac when the session closed — **confirm before trusting
+     this phase as closed.** Anyone re-running must `task daemon:mac:reset:local` first: the pre-refactor
+     machine-wide `coldstore.sqlite` is now orphaned (it holds *both* accounts' rows — it is the leak).
 
    Why **atomic** to actually upload as a user: the IAM policy only grants `blobs/<sub>/*`, so the credential
    swap (2b) and the per-user prefix (2a) must both be live or every PUT is `AccessDenied`. All of 2a/2b/2c
@@ -347,9 +369,11 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      **Architecture decision (2026-07-02):** all ZK crypto stays in Swift/libsodium (daemon-side); the
      app orchestrates + escrows. The daemon's `keys` is now a `SwappableKeyProvider` (lock-guarded
      `@unchecked Sendable`, shared by BOTH engines by reference — same trick as CognitoAuth's resolver):
-     dogfood mode seeds it from the local file KEK (byte-for-byte unchanged), multi-user mode starts
-     LOCKED so `userKEK()` throws `.vaultLocked` and a deposit before unlock fails clean — the crypto
-     analogue of the identity pool gating S3.
+     a real (multi-user) session starts LOCKED so `userKEK()` throws `.vaultLocked` and a deposit before
+     unlock fails clean — the crypto analogue of the identity pool gating S3; only an explicit local-dev
+     daemon (`COLDSTORE_DEV_IDENTITY`) seeds it eagerly from a local file KEK.
+     *(Amended 2026-07-13: the key holder now lives on the `UserSession`, not on `DaemonService`, so it
+     cannot outlive a sign-out; and there is no implicit "dogfood mode" — see the Phase 2 supersede note.)*
      - **5b-1 — daemon vault core: DONE ✅ (2026-07-02, 83 Core tests green + `ui:typecheck`/66 ui
        tests green).** `SwappableKeyProvider` + `.vaultLocked` (`Crypto.swift`); `mintRecoveryOnly`
        (passwordless — recovery code is the sole lock; password slot is a real wrap under a random
@@ -586,7 +610,7 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
   the daemon's new `S3Store.usageBytes(prefix:)` paginates `ListObjectsV2` under the caller's own
   prefix and sums real ciphertext bytes (60s-cached, keyed by `vaultPrefix` so a re-auth to a
   different identity never serves a stale total) — exposed as `StatusDTO.bytesStored` /
-  `Status.bytesStored` (nil in dogfood/unconfigured mode). Byte-quota mapping is a new SSOT,
+  `Status.bytesStored` (`null` only when signed out). Byte-quota mapping is a new SSOT,
   `account-backend/src/plan-sizes.ts` (`{size, bytes, perYearCents}`), imported by both the Paddle
   seed script and `catalog.ts` — `GET /catalog` now returns `quotaBytes` per plan, throwing loud if a
   live Paddle product's size label isn't recognized (never silently unlimited). `GET /entitlement`
@@ -604,6 +628,12 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
   surgical) and cross-checked for exact wire-contract consistency. **Remaining: Ben applies the TF
   change, pushes the schema column, and Mac-verifies the actual gate (approach cap → blocked deposit →
   upgrade path clears it).**
+  **The gate was silently INERT until 2026-07-13.** `usageBytes` was handed the *un-slashed* prefix
+  `blobs/<identityId>`, which does not match the IAM `s3:prefix` condition `blobs/<sub>/*` → every
+  usage listing came back `AccessDenied` → `bytesStored` was always `null` in production → `hasCapacity`
+  failed open, every time. Fixed by the typed `VaultPrefix` (keys unslashed, listings slashed — the
+  slash can no longer be got wrong at a call site). The Mac verify above is still owed, and is now the
+  first thing that would actually exercise the gate.
 - ~~**Encryption password vs auth credential** — with a federated login there is no password to derive
   KEK_pw from.~~ **DECIDED ✅ (2026-07-02), forced universal by going passwordless:** option (b),
   **recovery-code-only** — the recovery code is the sole MK protector (`wrappedMK_rc`; the `wrappedMK_pw`
@@ -657,19 +687,29 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
     checkout for material restores + a small FREE rolling allowance so single-photo/album
     restores cost nothing and need no checkout. A prepaid credit bank was considered and
     deferred (stored-value ledger + balance liability not warranted by bimodal cold-archive
-    retrieval; drops in on the same meter later if usage asks). [open] allowance size — sizing
-    math in `strategy/retrieval-economics.md`; leaning 1 GB/mo paid, 250 MB/mo free. [assumption]
+    retrieval; drops in on the same meter later if usage asks). **Allowance size DECIDED
+    (2026-07-13, Ben): 1 GB per 30-day window paid, 200 MB free** — as already shipped in
+    `retrieval-pricing.ts`; sizing math in `strategy/retrieval-economics.md`. [assumption]
     bulk retrieval tier only at first (48 h, cheapest); standard (12 h) as a priced option later.
-  - **B. Free-tier entitlement flip (small, independent to build — but its LAUNCH gates on A,
-    since until retrieval is billed a free account's restores are our cost).** `FREE_TIER_BYTES`
-    (25 GB) joins `plan-sizes.ts` as a separate export (same SSOT, never a Paddle product);
-    `GET /entitlement` returns it as `quotaBytes` when there's no active subscription. `active`
-    stops gating deposits — quota becomes the deposit gate for every signed-in account; `active`
-    remains as UI signal only (upgrade vs. manage). App: the not-subscribed paywall on deposit
-    becomes the over-quota upsell; AccountCard shows the free plan + usage. Same soft-gate posture
-    as the quota layer above.
-  - **C. Surfaces.** Site pricing section gains the free tier (design-synced upstream per
-    `site/SPEC.md`, not hand-edited); app copy for the cap-reached state (plain-voice rules).
+  - **B. Free-tier entitlement flip — BUILT ✅ (2026-07-13). NOT yet launched: launch still gates on A
+    being exercised end-to-end, since until one real restore has been billed, a free account's
+    restores are our cost.** `FREE_TIER_BYTES` (25 GB) is a separate export in `plan-sizes.ts` — same
+    SSOT, never a Paddle product (`plan-sizes.test.ts` asserts it has no `PLAN_SIZES` row, so the seed
+    script can't sell it, and that it undercuts every paid size, so an upsell always adds room).
+    `GET /entitlement` hands it back as `quotaBytes` whenever there's no active subscription, and the
+    free path never touches the Paddle catalog (`getCatalog()` throws when Paddle is down — the
+    majority path must not depend on a third party). **`active` no longer gates deposits**: the byte
+    quota is the single gate for every signed-in account, extracted pure + unit-tested at
+    `ui/src/renderer/src/state/entitlement.ts` (a gate that wrongly says "no" is indistinguishable
+    from a working paywall — it earned its own tests). `active` survives as a UI signal only, picking
+    which upsell a FULL vault shows: a free account picks a plan, a subscriber resizes theirs.
+    Fails OPEN on unknown usage/quota, as before.
+  - **C. Surfaces — app DONE ✅ (2026-07-13), site REMAINING.** In-app: `SubscribeModal` is now
+    `reason`-aware ("Your free storage is full" when a free vault blocks a deposit vs. a plain "Choose
+    a plan" from Settings), AccountCard + Settings say **"Free"** rather than "No plan", and the
+    Storage row reads *"6 GB of 25 GB"* off the same entitlement (no hardcoded cap anywhere in the
+    app — it's the backend's number). Remaining: the site pricing section gains the free tier
+    (design-synced upstream per `site/SPEC.md`, not hand-edited).
 - **[open] Same-email, two sign-in methods = two Cognito accounts.** A Google-federated user and an
   email-OTP user with the SAME address are separate profiles (separate `sub`s → separate key-blobs,
   separate S3 prefixes — under ZK they can't see each other's data) unless linked server-side

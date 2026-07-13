@@ -17,6 +17,20 @@ export const PLAN_SIZES = [
 ] as const;
 
 /**
+ * The free tier (PROD.md, DECIDED 2026-07-12): 25 GB, every account, forever — no trial.
+ *
+ * It lives in this SSOT beside the paid sizes because it IS a quota like any other, and `GET /entitlement`
+ * hands it out as `quotaBytes` whenever there's no active subscription — which makes the byte quota the
+ * single deposit gate for every signed-in account, free or paid. But it is deliberately NOT a row in
+ * `PLAN_SIZES`: it must never be seeded as a Paddle product, never appear in the plan picker, and never
+ * carry a price. It is an entitlement, not something we sell.
+ *
+ * "Forever" is a promise, so this number can only ever move UP. Deliberately started small (still above
+ * Google's 15 GB); a maxed free account costs ~$0.30/yr on Deep Archive.
+ */
+export const FREE_TIER_BYTES = 25_000_000_000;
+
+/**
  * The Paddle PRODUCT that retrieval charges hang off (root `RETRIEVAL.md`). It deliberately carries NO
  * catalog prices — every restore is billed as a non-catalog (inline) price for its own exact amount,
  * because a restore's cost is a function of its bytes and can't be enumerated in advance. The product

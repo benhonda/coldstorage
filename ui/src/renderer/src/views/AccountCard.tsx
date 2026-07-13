@@ -35,7 +35,10 @@ export const AccountCard = ({
       ) : active ? (
         <Badge tone="success">Active</Badge>
       ) : (
-        <Badge tone="neutral">No plan</Badge>
+        // Not "No plan" — since the free tier landed, no subscription IS a plan: 25 GB, forever, and it
+        // backs up like any other. Naming it "Free" is the honest label AND the one that makes the
+        // Settings usage row ("6 GB of 25 GB") read as a plan filling up rather than a locked account.
+        <Badge tone="neutral">Free</Badge>
       )}
     </span>
   </button>

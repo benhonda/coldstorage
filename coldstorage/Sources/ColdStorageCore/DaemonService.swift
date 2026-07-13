@@ -7,28 +7,23 @@ import Crypto   // SymmetricKey — the vault commands (Phase 5b) decode/return 
 /// `EventBus`. The journal stays the SSOT — this actor holds only transient run state (running, the
 /// loop's wake latch); pause is now persisted per-source in the journal, not a global actor flag.
 public actor DaemonService {
-    let engine: UploadEngine
-    /// Drives get-a-file-back over the same store/keys as the upload engine. Idempotent + self-progressing:
-    /// each `restore` command does the next step (request thaw → report progress → download + verify).
-    let restoreEngine: RestoreEngine
-    let journal: Journal
     let bus: EventBus
-    let statusPath: String
     /// Platform sources that aren't path-based (Photos on macOS); folders come from the registry.
     let platformSources: [IngestSource]
     /// Resolves explicitly-picked Photos assets for `depositPhotos` (Mac PhotoKit); nil off macOS, where
     /// the command reports photos-unavailable. The seam that keeps PhotoKit out of this portable actor.
     let photoResolver: (any PhotoResolver)?
-    /// Cognito credential/identity seam (PROD.md Phase 2); nil in single-operator dogfood mode, where
-    /// every run keeps the default `"blobs"` keyPrefix. Set only once a real multi-user daemon is
-    /// configured — see `coldstored/main.swift`.
+    /// Cognito credential/identity seam; nil only for an explicit local-dev daemon (`COLDSTORE_DEV_IDENTITY`).
     let cognitoAuth: CognitoAuth?
-    /// The runtime-swappable encryption key shared with both engines (PROD.md Phase 5b). In dogfood mode
-    /// it's seeded at startup (behavior unchanged); in a multi-user daemon it starts LOCKED and the
-    /// vault commands below (`mintVault`/`unlockVault*`/`lockVault`) load or clear the MasterKey the app
-    /// derives. Gated on `cognitoAuth != nil` — the same signal as `authenticate`, so "multi-user daemon"
-    /// means one thing throughout.
-    let vaultKey: SwappableKeyProvider
+    /// Builds a ``UserSession`` for whoever signs in.
+    let sessions: SessionFactory
+
+    /// **The only per-user state this actor has.** Nil ⇒ signed out: there is no journal to read, no key to
+    /// encrypt with, and no prefix to upload to. Constructed by `authenticate`, destroyed by
+    /// `deauthenticate`. Everything a command needs about the current user hangs off this one optional, so
+    /// a signed-out daemon cannot serve another account's data — not because every read path remembers to
+    /// filter, but because there is nothing unscoped to read. See ``UserSession``.
+    private var session: UserSession?
 
     private var running = false
     // Blobs that failed *permanently* (config/logic — won't self-heal) this session. Skipped on the next
@@ -37,28 +32,73 @@ public actor DaemonService {
     private var permanentlyFailedBlobs: Set<String> = []
     // Storage-quota usage cache: a fresh S3 listing (`usageBytes`) is cheap but not free, and `getStatus`
     // can be polled rapidly by the UI — a short TTL avoids a listing call on every poll while staying
-    // current enough for a soft deposit gate. Per-vaultPrefix so a mid-session re-auth (different
+    // current enough for a soft deposit gate. Per-VaultPrefix so a mid-session re-auth (different
     // identity) never serves a stale total for the wrong user.
-    private var cachedUsage: (prefix: String, bytes: Int, at: Date)?
+    private var cachedUsage: (prefix: VaultPrefix, bytes: Int, at: Date)?
     private let usageCacheTTL: TimeInterval = 60
     // Wakeable sleep: `trigger()` either resumes a sleeping loop or, if none is sleeping yet, latches
     // so the next sleep returns immediately (coalesces bursts of triggers into one extra run).
     private var sleeper: CheckedContinuation<Void, Never>?
     private var triggerPending = false
 
-    public init(engine: UploadEngine, restoreEngine: RestoreEngine, journal: Journal, bus: EventBus,
-                statusPath: String, platformSources: [IngestSource] = [],
+    /// `initialSession` is set ONLY by an explicit local-dev daemon, which has no sign-in step and so needs
+    /// a session up front. A real (Cognito) daemon starts signed out and gets its session from
+    /// `authenticate`.
+    public init(bus: EventBus, sessions: SessionFactory, platformSources: [IngestSource] = [],
                 photoResolver: (any PhotoResolver)? = nil, cognitoAuth: CognitoAuth? = nil,
-                vaultKey: SwappableKeyProvider = SwappableKeyProvider()) {
-        self.engine = engine; self.restoreEngine = restoreEngine; self.journal = journal; self.bus = bus
-        self.statusPath = statusPath; self.platformSources = platformSources
-        self.photoResolver = photoResolver; self.cognitoAuth = cognitoAuth; self.vaultKey = vaultKey
+                initialSession: UserSession? = nil) {
+        self.bus = bus; self.sessions = sessions; self.platformSources = platformSources
+        self.photoResolver = photoResolver; self.cognitoAuth = cognitoAuth; self.session = initialSession
+    }
+
+    /// The signed-in user's state, or a clean refusal. Every command that touches user data goes through
+    /// here — that's what makes "signed out ⇒ nothing to leak" a property of the code rather than a habit.
+    private func requireSession(_ command: String) throws -> UserSession {
+        guard let session else {
+            throw ColdStorageError.staging("\(command): not signed in")
+        }
+        return session
+    }
+
+    /// Install `new` as the current session, tearing down whatever preceded it. This is the body of
+    /// `authenticate` past the Cognito exchange, and `endSession` is the body of `deauthenticate` past the
+    /// credential drop — factored out because the session LIFECYCLE is the thing that leaked, and it must be
+    /// testable without a network round-trip to Cognito. See `SessionIsolationTests`.
+    ///
+    /// Everything derived from the previous user goes with them: the cached usage total (whose bytes belong
+    /// to their prefix) and the permanently-failed blob set (whose ids mean nothing in another vault).
+    func beginSession(_ new: UserSession) {
+        session?.close()
+        session = new
+        cachedUsage = nil
+        permanentlyFailedBlobs = []
+        bus.publish(DaemonEvent("filesChanged", ["signedIn": new.identity.directoryName]))
+    }
+
+    /// Sign-out: release the session. The journal handle, the staging dir and the MasterKey all go with it.
+    func endSession() {
+        session?.close()
+        session = nil
+        cachedUsage = nil
+        permanentlyFailedBlobs = []
+        bus.publish(DaemonEvent("filesChanged", ["signedOut": "true"]))
+    }
+
+    /// The folders FSEvents should watch (active, non-paused) — same predicate the run loop scans by. Empty
+    /// when signed out, so a signed-out daemon watches nothing.
+    public func watchedFolderPaths() -> [String] {
+        guard let session else { return [] }
+        return ((try? session.journal.listSources()) ?? [])
+            .compactMap { $0.kind == .folder && !$0.paused ? $0.path : nil }
     }
 
     // MARK: - run loop
 
+    /// A signed-out daemon has no vault to sync, so a pass is a clean no-op rather than an error — the loop
+    /// just idles until someone signs in.
     public func runOnce() async throws {
-        try await performRun(source: try currentSource())
+        guard let session else { return }
+        try await performRun(session: session, source: try currentSource(session))
     }
 
     /// Archive an explicit set of dropped paths once — the ad-hoc **deposit** (drop-to-upload / "Choose
@@ -67,9 +107,12 @@ public actor DaemonService {
     /// `listFiles`. Non-throwing so the command can fire-and-forget it — any setup error surfaces as an
     /// `error` event; per-blob upload failures surface as `blobFailed` (same as a scheduled run).
     func deposit(paths: [String], into dir: String, conflicts: [String: ConflictPolicy] = [:]) async {
-        let entries = paths.map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: $0), destDir: dir) }
-        let base = ExplicitPathsSource(entries: entries, exclude: excludeMatcher())
-        do { try await performRun(source: resolveCollisions(base, conflicts)) }
+        do {
+            let session = try requireSession("deposit")
+            let entries = paths.map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: $0), destDir: dir) }
+            let base = ExplicitPathsSource(entries: entries, exclude: excludeMatcher(session))
+            try await performRun(session: session, source: resolveCollisions(session, base, conflicts))
+        }
         catch { bus.publish(DaemonEvent("error", ["message": "deposit: \(error)"])) }
     }
 
@@ -86,7 +129,10 @@ public actor DaemonService {
             return
         }
         let base = PhotoDepositSource(resolver: resolver, assetIds: assetIds, destDir: dir)
-        do { try await performRun(source: resolveCollisions(base, conflicts)) }
+        do {
+            let session = try requireSession("depositPhotos")
+            try await performRun(session: session, source: resolveCollisions(session, base, conflicts))
+        }
         catch let e as ColdStorageError {
             // Photo-access / nothing-resolved are user-recoverable: surface the bare message (already a clean
             // sentence) plus a `code` the UI keys an action off (e.g. `photosAccessDenied` → "Open Photos
@@ -105,9 +151,10 @@ public actor DaemonService {
     /// Wrap a deposit source so the user's collision choices are honored (Keep Both / Replace / Skip). A
     /// no-op pass-through when there's nothing to resolve, so the common (no-collision) deposit is unchanged.
     /// Snapshots `livePaths()` once here — the "taken" set the keepBoth uniquifier avoids.
-    private func resolveCollisions(_ source: any IngestSource, _ conflicts: [String: ConflictPolicy]) -> any IngestSource {
+    private func resolveCollisions(_ session: UserSession, _ source: any IngestSource,
+                                   _ conflicts: [String: ConflictPolicy]) -> any IngestSource {
         guard !conflicts.isEmpty else { return source }
-        let existing = (try? journal.livePaths()) ?? []
+        let existing = (try? session.journal.livePaths()) ?? []
         return CollisionResolvingSource(inner: source, existing: existing, conflicts: conflicts)
     }
 
@@ -123,7 +170,7 @@ public actor DaemonService {
     /// One pass of the pipeline over `source` — the shared core of a scheduled run and an ad-hoc deposit.
     /// Emits runStarted → fileArchived* → (blobFailed*) → runFinished; isolates per-blob failures and
     /// skip-lists permanent ones (so a doomed blob isn't re-attempted every pass).
-    private func performRun(source: IngestSource) async throws {
+    private func performRun(session: UserSession, source: IngestSource) async throws {
         running = true
         bus.publish(DaemonEvent("runStarted"))
         let bus = self.bus
@@ -142,17 +189,17 @@ public actor DaemonService {
         // (e.g. a photo deposit that can't read the library). Otherwise the UI is stuck "syncing" forever and
         // the optimistic rows never reconcile. We re-throw so the caller still surfaces the cause as an
         // `error` event — runFinished just lets the UI leave the running state + re-read the tree.
-        // Single-user dogfood ⇒ "blobs" (unchanged); a signed-in Cognito user ⇒ their own
-        // "blobs/<identity-id>" prefix, the one the IAM role's policy variable actually matches.
-        let keyPrefix = await cognitoAuth?.vaultPrefix ?? "blobs"
+        // The prefix comes from the SESSION — the signed-in user's own `blobs/<identity-id>`, the one the
+        // IAM role's policy variable actually matches. There is no `?? "blobs"` fallback any more: no
+        // session means no run at all, rather than a run that quietly lands in a shared namespace.
         let failures: [BlobFailure]
         do {
-            failures = try await engine.run(source: source,
-                                            skipBlobIds: permanentlyFailedBlobs,
-                                            keyPrefix: keyPrefix,
-                                            onFileArchived: onFile, onProgress: onProgress)
+            failures = try await session.engine.run(source: source,
+                                                    skipBlobIds: permanentlyFailedBlobs,
+                                                    prefix: session.prefix,
+                                                    onFileArchived: onFile, onProgress: onProgress)
         } catch {
-            let s = try? journal.summary()
+            let s = try? session.journal.summary()
             bus.publish(DaemonEvent("runFinished", ["filesArchived": "\(s?.archived ?? 0)",
                                                     "filesTotal": "\(s?.total ?? 0)", "blobsFailed": "0"]))
             throw error
@@ -168,17 +215,19 @@ public actor DaemonService {
                 permanentlyFailedBlobs.insert(f.blobId)
                 // Persist the ⚠ as journal truth (survives refresh + restart). Best-effort: a write hiccup here
                 // must not abort surfacing the remaining failures — the event already reported the fault.
-                try? journal.markFilesFailed(f.files.map(\.id), error: f.kind.message)
+                try? session.journal.markFilesFailed(f.files.map(\.id), error: f.kind.message)
             }
         }
-        try writeStatus()
-        let s = try journal.summary()
+        try writeStatus(session)
+        let s = try session.journal.summary()
         bus.publish(DaemonEvent("runFinished", ["filesArchived": "\(s.archived)", "filesTotal": "\(s.total)",
                                                 "blobsFailed": "\(failures.count)"]))
     }
 
     public func runForever(intervalSeconds: UInt64) async throws {
-        try writeStatus()   // seed status.json so the UI has something on first connect
+        // Seed status.json so the UI has something on first connect — only when signed in; a signed-out
+        // daemon has no user whose status it could write.
+        if let session { try writeStatus(session) }
         while !Task.isCancelled {
             // Pause is per-source now (paused folders are filtered out of `currentSource`), so the loop
             // always runs — a pass over zero unpaused folders is just a cheap no-op.
@@ -192,16 +241,16 @@ public actor DaemonService {
     /// over IPC takes effect on the very next run. Applied *inside* the directory walk (see `LocalDirSource`)
     /// so excluded files are never hashed and excluded folders never descended. (`try?`: a journal read
     /// hiccup must not abort the run — worst case is one pass without the latest filter.)
-    private func excludeMatcher() -> ExcludeMatcher {
-        ExcludeMatcher(patterns: (try? journal.listExcludes()) ?? [])
+    private func excludeMatcher(_ session: UserSession) -> ExcludeMatcher {
+        ExcludeMatcher(patterns: (try? session.journal.listExcludes()) ?? [])
     }
 
     /// Live source set = registered folders + platform sources (Photos). Rebuilt each run so
     /// add/remove via IPC takes effect on the next pass. Folder walks carry the current excludes; Photos
     /// don't (a photo library isn't a filesystem with gitignore-style junk).
-    private func currentSource() throws -> IngestSource {
-        let matcher = excludeMatcher()
-        let folders = try journal.listSources()
+    private func currentSource(_ session: UserSession) throws -> IngestSource {
+        let matcher = excludeMatcher(session)
+        let folders = try session.journal.listSources()
             .filter { $0.kind == .folder && !$0.paused }   // paused folders are skipped (still registered)
             .compactMap { row -> IngestSource? in
                 guard let path = row.path else { return nil }
@@ -212,10 +261,10 @@ public actor DaemonService {
         return MultiSource(folders + platformSources)
     }
 
-    func writeStatus() throws {
-        let s = try journal.summary()
+    func writeStatus(_ session: UserSession) throws {
+        let s = try session.journal.summary()
         let json = "{\"filesTotal\":\(s.total),\"filesArchived\":\(s.archived),\"blobsVerified\":\(s.blobsVerified)}\n"
-        try json.write(toFile: statusPath, atomically: true, encoding: .utf8)
+        try json.write(toFile: session.statusPath, atomically: true, encoding: .utf8)
     }
 
     // MARK: - wakeable sleep (interval, or sooner on trigger)
@@ -247,12 +296,16 @@ public actor DaemonService {
     }
 
     private struct StatusDTO: Encodable {
+        /// Whether a user is signed in. When false, every other field is the empty/zero truth for a
+        /// signed-out daemon — there IS no vault to report on. The UI keys its "signed out" state off the
+        /// auth manager, but this makes the daemon's own answer explicit rather than inferred from zeros.
+        let signedIn: Bool
         let filesTotal, filesArchived, blobsVerified: Int
         let running: Bool
         let permanentlyFailedBlobs: Int   // >0 ⇒ a blob is stuck on a config/logic fault the operator must fix
         let sources: [SourceDTO]
         /// Bytes currently stored in S3 under this user's prefix (storage-quota enforcement's usage
-        /// figure — see `currentUsageBytes`). `nil` in dogfood/unconfigured mode or pre-`authenticate`.
+        /// figure — see `currentUsageBytes`). `nil` when signed out.
         let bytesStored: Int?
     }
     private struct SourceDTO: Encodable { let id, kind: String; let path: String?; let mountPath: String; let paused: Bool }
@@ -281,24 +334,15 @@ public actor DaemonService {
     /// this new device won't need the recovery code again.
     private struct UnlockVaultDTO: Encodable { let ok: Bool; let masterKey: String }
 
-    /// The vault commands are only meaningful on a multi-user daemon (one built with a Cognito identity
-    /// pool). A dogfood daemon's `vaultKey` is seeded from the local file KEK and never swapped — same
-    /// gate as `authenticate`, so the two multi-user seams stay in lockstep.
-    private func requireMultiUser(_ command: String) throws {
-        guard cognitoAuth != nil else { throw ColdStorageError.staging("\(command): this daemon has no Cognito identity pool configured") }
-    }
-
     /// Storage-quota usage: bytes actually stored in S3 under the caller's own prefix (see
-    /// `S3Store.usageBytes` for why this is S3, not the local journal). `nil` in dogfood/unconfigured
-    /// mode (no Cognito identity to scope a listing to) or before `authenticate` has run — matches the
-    /// nil-safety already used for `vaultPrefix` elsewhere in this file. Cached `usageCacheTTL` seconds
-    /// so a UI that polls `getStatus` frequently doesn't trigger a fresh S3 listing on every poll.
-    private func currentUsageBytes() async throws -> Int? {
-        guard let prefix = await cognitoAuth?.vaultPrefix else { return nil }
+    /// `S3Store.usageBytes` for why this is S3, not the local journal). Cached `usageCacheTTL` seconds so a
+    /// UI that polls `getStatus` frequently doesn't trigger a fresh S3 listing on every poll.
+    private func currentUsageBytes(_ session: UserSession) async throws -> Int {
+        let prefix = session.prefix
         if let cached = cachedUsage, cached.prefix == prefix, Date().timeIntervalSince(cached.at) < usageCacheTTL {
             return cached.bytes
         }
-        let bytes = try await restoreEngine.store.usageBytes(prefix: prefix)
+        let bytes = try await session.restoreEngine.store.usageBytes(prefix: prefix)
         cachedUsage = (prefix: prefix, bytes: bytes, at: Date())
         return bytes
     }
@@ -350,8 +394,8 @@ public actor DaemonService {
         let egressBytes: Int?
     }
 
-    private func sourceDTOs() throws -> [SourceDTO] {
-        try journal.listSources().map { SourceDTO(id: $0.id, kind: $0.kind.rawValue, path: $0.path, mountPath: $0.mountPath, paused: $0.paused) }
+    private func sourceDTOs(_ session: UserSession) throws -> [SourceDTO] {
+        try session.journal.listSources().map { SourceDTO(id: $0.id, kind: $0.kind.rawValue, path: $0.path, mountPath: $0.mountPath, paused: $0.paused) }
     }
 
 
@@ -384,24 +428,35 @@ public actor DaemonService {
         switch method {
         case "ping":
             return AnyEncodable(AckDTO(ok: true))
+        // ── Reads. Signed out ⇒ the EMPTY answer, not an error and not someone else's data. Empty is the
+        // literal truth: a signed-out daemon has no vault. These four are the surface that leaked, and they
+        // now physically cannot — there is no journal to reach without a session.
         case "getStatus":
-            let s = try journal.summary()
-            let bytesStored = try await currentUsageBytes()
-            return AnyEncodable(StatusDTO(filesTotal: s.total, filesArchived: s.archived,
+            guard let session else {
+                return AnyEncodable(StatusDTO(signedIn: false, filesTotal: 0, filesArchived: 0, blobsVerified: 0,
+                                              running: false, permanentlyFailedBlobs: 0, sources: [], bytesStored: nil))
+            }
+            let s = try session.journal.summary()
+            return AnyEncodable(StatusDTO(signedIn: true, filesTotal: s.total, filesArchived: s.archived,
                                           blobsVerified: s.blobsVerified, running: running,
-                                          permanentlyFailedBlobs: permanentlyFailedBlobs.count, sources: try sourceDTOs(),
-                                          bytesStored: bytesStored))
+                                          permanentlyFailedBlobs: permanentlyFailedBlobs.count,
+                                          sources: try sourceDTOs(session),
+                                          bytesStored: try await currentUsageBytes(session)))
         case "listSources":
-            return AnyEncodable(try sourceDTOs())
+            guard let session else { return AnyEncodable([SourceDTO]()) }
+            return AnyEncodable(try sourceDTOs(session))
         case "listFiles":
-            // The browsable tree, straight from the journal — paths/sizes/status, no S3, no thaw.
-            return AnyEncodable(try journal.listFiles().map {
+            // The browsable tree, straight from THIS USER'S journal — paths/sizes/status, no S3, no thaw.
+            guard let session else { return AnyEncodable([FileDTO]()) }
+            return AnyEncodable(try session.journal.listFiles().map {
                 FileDTO(id: $0.id, relativePath: $0.relativePath, size: $0.size, status: $0.status.rawValue, blobId: $0.blobId,
                         date: $0.createdAt)
             })
         case "listExcludes":
-            return AnyEncodable(try journal.listExcludes())
+            guard let session else { return AnyEncodable([String]()) }
+            return AnyEncodable(try session.journal.listExcludes())
         case "addSource":
+            let session = try requireSession("addSource")
             guard let raw = p["path"] else { throw ColdStorageError.staging("addSource requires params.path") }
             let abs = URL(fileURLWithPath: raw).standardizedFileURL.path
             // Destination in the drive: where this folder's tree mounts. Default to the basename so a CLI
@@ -410,29 +465,33 @@ public actor DaemonService {
             let rawMount = (p["mountPath"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let mount = rawMount.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             let mountPath = mount.isEmpty ? URL(fileURLWithPath: abs).lastPathComponent : mount
-            try journal.addSource(SourceRow(id: abs, kind: .folder, path: abs, mountPath: mountPath))
+            try session.journal.addSource(SourceRow(id: abs, kind: .folder, path: abs, mountPath: mountPath))
             bus.publish(DaemonEvent("sourcesChanged", ["added": abs]))
             trigger()
             return AnyEncodable(AckDTO(ok: true))
         case "removeSource":
+            let session = try requireSession("removeSource")
             guard let id = p["id"] else { throw ColdStorageError.staging("removeSource requires params.id") }
-            try journal.removeSource(id)
+            try session.journal.removeSource(id)
             bus.publish(DaemonEvent("sourcesChanged", ["removed": id]))
             return AnyEncodable(AckDTO(ok: true))
         case "addExclude":
+            let session = try requireSession("addExclude")
             // Register a gitignore-style pattern; it filters every later scan/deposit. Trim so a stray-space
             // paste doesn't create a pattern that matches nothing.
             let pattern = (p["pattern"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !pattern.isEmpty else { throw ColdStorageError.staging("addExclude requires a non-empty params.pattern") }
-            try journal.addExclude(pattern)
+            try session.journal.addExclude(pattern)
             bus.publish(DaemonEvent("excludesChanged", ["added": pattern]))
             return AnyEncodable(AckDTO(ok: true))
         case "removeExclude":
+            let session = try requireSession("removeExclude")
             guard let pattern = p["pattern"] else { throw ColdStorageError.staging("removeExclude requires params.pattern") }
-            try journal.removeExclude(pattern)
+            try session.journal.removeExclude(pattern)
             bus.publish(DaemonEvent("excludesChanged", ["removed": pattern]))
             return AnyEncodable(AckDTO(ok: true))
         case "restorePlan":
+            let session = try requireSession("restorePlan")
             // What restoring these files would actually COST US to serve — the input to the account
             // backend's `POST /retrieval/quote` (root RETRIEVAL.md). The app calls this BEFORE it shows a
             // price, because a restore is priced on two things the renderer cannot know: the whole BLOB
@@ -448,13 +507,14 @@ public actor DaemonService {
             var seen = Set<String>()
             var egress = 0
             for fileId in raw.split(separator: "\n").map(String.init) {
-                guard let f = try journal.fileMapping(fileId) else { throw ColdStorageError.staging("no archived file '\(fileId)'") }
-                guard let key = try journal.blobS3Key(f.blobId) else { throw ColdStorageError.staging("no S3 key for blob \(f.blobId)") }
+                guard let f = try session.journal.fileMapping(fileId) else { throw ColdStorageError.staging("no archived file '\(fileId)'") }
+                guard let key = try session.journal.blobS3Key(f.blobId) else { throw ColdStorageError.staging("no S3 key for blob \(f.blobId)") }
                 egress += f.length
                 if seen.insert(key).inserted { keys.append(key) }
             }
             return AnyEncodable(RestorePlanDTO(blobKeys: keys, egressBytes: egress))
         case "restore":
+            let session = try requireSession("restore")
             guard let file = p["file"] else { throw ColdStorageError.staging("restore requires params.file (the fileId)") }
             guard let out = p["out"] else { throw ColdStorageError.staging("restore requires params.out (output path)") }
             let tier = try RestoreTier.parse(p["tier"])
@@ -465,9 +525,10 @@ public actor DaemonService {
             } ?? 7
             // One step toward getting the file back. Network I/O is awaited off the actor (reentrancy keeps
             // other commands responsive); a `.ready` download blocks only this call until bytes are verified.
-            let outcome = try await restoreEngine.restore(fileId: file, to: URL(fileURLWithPath: out), tier: tier, days: days)
+            let outcome = try await session.restoreEngine.restore(fileId: file, to: URL(fileURLWithPath: out), tier: tier, days: days)
             return AnyEncodable(restoreResult(file: file, out: out, outcome: outcome))
         case "deposit":
+            _ = try requireSession("deposit")
             // Ad-hoc drop-to-upload: archive these paths once, under the browser folder `dest` ("" = root).
             // `src` is newline-joined absolute paths (one deposit covers a whole multi-file/folder drop).
             guard let raw = p["src"], !raw.isEmpty else { throw ColdStorageError.staging("deposit requires params.src (newline-joined absolute paths)") }
@@ -481,6 +542,7 @@ public actor DaemonService {
             Task { await self.deposit(paths: paths, into: dest, conflicts: conflicts) }
             return AnyEncodable(AckDTO(ok: true))
         case "depositPhotos":
+            _ = try requireSession("depositPhotos")
             // Explicit photo deposit (the photo analogue of `deposit`): archive these PICKED Photos assets
             // once, under browser folder `dest` ("" = root). `assetIds` is newline-joined Photos
             // localIdentifiers. Only the picked assets are read — never the whole library (product decision
@@ -492,6 +554,7 @@ public actor DaemonService {
             Task { await self.depositPhotos(assetIds: assetIds, into: dest, conflicts: conflicts) }
             return AnyEncodable(AckDTO(ok: true))
         case "previewDeposit":
+            let session = try requireSession("previewDeposit")
             // Dry-run a deposit's PLACEMENT (no upload): resolve the target paths the same way the real
             // deposit would (file paths via ExplicitPathsSource, picked photos via PhotoDepositSource — the
             // lazy `open` means no bytes stream), and report which already exist in the vault. The UI shows
@@ -502,64 +565,85 @@ public actor DaemonService {
             let source: any IngestSource
             if let raw = p["src"], !raw.isEmpty {
                 let entries = raw.split(separator: "\n").map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: String($0)), destDir: dest) }
-                source = ExplicitPathsSource(entries: entries, exclude: excludeMatcher())
+                source = ExplicitPathsSource(entries: entries, exclude: excludeMatcher(session))
             } else if let raw = p["assetIds"], !raw.isEmpty {
                 guard let resolver = photoResolver else { throw ColdStorageError.staging("previewDeposit: Photos ingest is unavailable on this platform") }
                 source = PhotoDepositSource(resolver: resolver, assetIds: raw.split(separator: "\n").map(String.init), destDir: dest)
             } else {
                 throw ColdStorageError.staging("previewDeposit requires params.src (paths) or params.assetIds")
             }
-            let live = try journal.livePaths()
+            let live = try session.journal.livePaths()
             let items = try await source.enumerate()
             return AnyEncodable(items.map { DepositPreviewItemDTO(relativePath: $0.relativePath, exists: live.contains($0.relativePath)) })
         case "movePath":
+            let session = try requireSession("movePath")
             // Reorganize: relocate the subtree at `from` → `to` (a file/folder move OR rename). A cheap
             // journal `relativePath` edit — no S3, no thaw, the blob never moves. `filesChanged` tells a live
             // watcher to re-read the tree.
             guard let from = p["from"] else { throw ColdStorageError.staging("movePath requires params.from (a vault-relative path)") }
             guard let to = p["to"] else { throw ColdStorageError.staging("movePath requires params.to (the new vault-relative path)") }
-            try journal.movePath(from: from, to: to)
+            try session.journal.movePath(from: from, to: to)
             bus.publish(DaemonEvent("filesChanged", ["moved": from, "to": to]))
             return AnyEncodable(AckDTO(ok: true))
         case "createFolder":
+            let session = try requireSession("createFolder")
             // Anchor an empty folder so it survives a reload (the tree is derived from file paths, so an
             // empty one otherwise has nothing to imply it). A path-only journal marker — no S3, no thaw.
             // Idempotent on the path. `filesChanged` tells a live watcher to re-read the tree.
             guard let path = p["path"], !path.isEmpty else { throw ColdStorageError.staging("createFolder requires params.path (a vault-relative folder path)") }
-            try journal.createFolder(path: path)
+            try session.journal.createFolder(path: path)
             bus.publish(DaemonEvent("filesChanged", ["created": path]))
             return AnyEncodable(AckDTO(ok: true))
         case "deletePath":
+            let session = try requireSession("deletePath")
             // Tombstone the subtree at `path` (file or folder). The row + blob mapping are kept (bytes
             // reclaim is a deferred repack/GC); the file just drops out of `listFiles`.
             guard let path = p["path"] else { throw ColdStorageError.staging("deletePath requires params.path (a vault-relative path)") }
-            try journal.deletePath(path)
+            try session.journal.deletePath(path)
             bus.publish(DaemonEvent("filesChanged", ["deleted": path]))
             return AnyEncodable(AckDTO(ok: true))
         case "authenticate":
-            // Exchange a Cognito User Pool ID token for real per-user AWS credentials + the identity id
-            // this daemon's uploads will be scoped under. Only meaningful on a daemon built with a Cognito
-            // identity pool configured (main.swift); a dogfood daemon has no `cognitoAuth` to authenticate.
+            // **Sign-in: where a session is born.** Exchange a Cognito User Pool ID token for real per-user
+            // AWS credentials + the identity id our uploads are scoped under, then OPEN THAT USER'S STATE —
+            // their journal, their staging dir, their key holder — and hold it as the one session.
+            //
+            // Idempotent across the app's hourly token refresh: the same `sub` re-authenticates the
+            // credentials but KEEPS the existing session, because re-opening the journal would be pointless
+            // churn and re-creating the key holder would drop an unlocked MasterKey and strand the user
+            // mid-upload. A DIFFERENT `sub` is a different person: the old session is torn down (its key
+            // cleared) before the new one is built, so nothing of theirs survives into this session.
             guard let auth = cognitoAuth else { throw ColdStorageError.staging("authenticate: this daemon has no Cognito identity pool configured") }
             guard let idToken = p["idToken"] else { throw ColdStorageError.staging("authenticate requires params.idToken") }
             let identityId = try await auth.authenticate(idToken: idToken)
+            // Safe to read the token's claims un-verified ONLY here, and only because `auth.authenticate`
+            // above just had Cognito accept this very token (see IDToken).
+            let sub = try IDToken.sub(of: idToken)
+            if let current = session, current.belongs(toSub: sub) {
+                return AnyEncodable(AuthDTO(ok: true, identityId: identityId))
+            }
+            beginSession(try sessions.make(.user(sub: sub, identityId: identityId)))
             return AnyEncodable(AuthDTO(ok: true, identityId: identityId))
         case "deauthenticate":
-            // Sign-out, the credentials half (`lockVault` is the key half): drop the resolver's cached
-            // STS creds + the vault prefix immediately, instead of letting them ride out the ~1h STS
-            // expiry. Same gate as `authenticate` — a dogfood daemon has no Cognito to deauthenticate.
+            // **Sign-out: where a session dies.** Drop the STS creds immediately (rather than letting them
+            // ride out the ~1h expiry) AND release the session — which closes the door on the journal, the
+            // staging dir and the MasterKey in one move.
+            //
+            // This is the fix for the 2026-07-13 cross-account leak: sign-out used to drop only the
+            // credentials and the key, leaving a machine-wide journal that the NEXT account then read as
+            // its own. Now there is no such journal to leave behind.
             guard let auth = cognitoAuth else { throw ColdStorageError.staging("deauthenticate: this daemon has no Cognito identity pool configured") }
             await auth.deauthenticate()
+            endSession()
             return AnyEncodable(AckDTO(ok: true))
         case "mintVault":
             // Signup (first ever sign-in on any device for this account): mint a fresh MasterKey + a
             // one-time recovery code, load the MK live (so this session can deposit immediately), and hand
             // the app the key-blob (to store server-side), the recovery code (to show once), and the MK (to
             // escrow per-device). Multi-user only — same gate as `authenticate`.
-            try requireMultiUser("mintVault")
+            let session = try requireSession("mintVault")
             let recoveryCode = try ZeroKnowledgeKeys.generateRecoveryCode()
             let (blob, mk) = try ZeroKnowledgeKeys.mintRecoveryOnly(recoveryCode: recoveryCode)
-            vaultKey.setMasterKey(mk)
+            session.vaultKey.setMasterKey(mk)
             return AnyEncodable(MintVaultDTO(
                 ok: true,
                 wrappedMKPassword: blob.wrappedMKPassword.base64EncodedString(),
@@ -572,38 +656,44 @@ public actor DaemonService {
         case "unlockVault":
             // Day-to-day unlock from the app's per-device Keychain cache: the app already holds the MK, so
             // it just hands it back after a (re)connect. No crypto here — just load it.
-            try requireMultiUser("unlockVault")
+            let session = try requireSession("unlockVault")
             guard let mk = try decodeKey(p["masterKey"]) else { throw ColdStorageError.staging("unlockVault requires params.masterKey (base64)") }
-            vaultKey.setMasterKey(mk)
+            session.vaultKey.setMasterKey(mk)
             return AnyEncodable(AckDTO(ok: true))
         case "unlockVaultWithRecoveryCode":
             // New device: the app fetched the key-blob from the backend and prompted for the recovery code.
             // Unwrap MK (a wrong code fails closed via the AES-GCM tag), load it live, and return it so the
             // app can escrow it — this device won't need the code again.
-            try requireMultiUser("unlockVaultWithRecoveryCode")
+            let session = try requireSession("unlockVaultWithRecoveryCode")
             let blob = try keyBlob(from: p)
             guard let code = p["recoveryCode"] else { throw ColdStorageError.staging("unlockVaultWithRecoveryCode requires params.recoveryCode") }
             let mk = try ZeroKnowledgeKeys.unlockWithRecoveryCode(blob, recoveryCode: code)
-            vaultKey.setMasterKey(mk)
+            session.vaultKey.setMasterKey(mk)
             return AnyEncodable(UnlockVaultDTO(ok: true, masterKey: mk.withUnsafeBytes { Data($0).base64EncodedString() }))
         case "lockVault":
             // Sign-out: drop the MK. Subsequent deposits/restores fail `.vaultLocked` until the next unlock.
-            try requireMultiUser("lockVault")
-            vaultKey.clear()
+            //
+            // Idempotent, and deliberately NOT session-gated: "ensure locked" is already true when there is
+            // no session (no session ⇒ no key). The app fires `lockVault` and `deauthenticate` concurrently
+            // on sign-out (ui/src/main/index.ts), so whichever lands second must not error — and if
+            // `deauthenticate` wins the race it has already cleared the key via `endSession`.
+            session?.vaultKey.clear()
             return AnyEncodable(AckDTO(ok: true))
         case "triggerNow":
             trigger()
             return AnyEncodable(AckDTO(ok: true))
         case "pauseSource":
+            let session = try requireSession("pauseSource")
             // Per-folder pause: stop auto-syncing this one source (it stays registered). Persisted, so it
             // survives restart. Manual deposits are unaffected. `sourcesChanged` → the UI refetches.
             guard let id = p["id"] else { throw ColdStorageError.staging("pauseSource requires params.id") }
-            try journal.setSourcePaused(id, true)
+            try session.journal.setSourcePaused(id, true)
             bus.publish(DaemonEvent("sourcesChanged", ["paused": id]))
             return AnyEncodable(AckDTO(ok: true))
         case "resumeSource":
+            let session = try requireSession("resumeSource")
             guard let id = p["id"] else { throw ColdStorageError.staging("resumeSource requires params.id") }
-            try journal.setSourcePaused(id, false)
+            try session.journal.setSourcePaused(id, false)
             bus.publish(DaemonEvent("sourcesChanged", ["resumed": id]))
             trigger()   // sync the just-resumed folder soon, don't wait for the next interval
             return AnyEncodable(AckDTO(ok: true))

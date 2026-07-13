@@ -15,10 +15,26 @@ public protocol BlobStore: Sendable {
     func verify(key: String) async throws
 }
 
+/// The other half of the same seam: what the RESTORE path needs (thaw + ranged read), plus the
+/// storage-quota usage listing. `BlobStore` had this seam from the start and `RestoreEngine` did not —
+/// it took the concrete `S3Store` — which meant anything constructing a session had to stand up a real AWS
+/// client, TLS context and all, even for a test that never makes a network call. Now both halves are
+/// injectable, and a fake vault is all a session test needs.
+public protocol VaultStore: Sendable {
+    func thawState(key: String) async throws -> ThawState
+    func requestThaw(key: String, days: Int, tier: RestoreTier) async throws
+    func getRange(key: String, offset: Int, length: Int) async throws -> Data
+    func usageBytes(prefix: VaultPrefix) async throws -> Int
+}
+
+/// Both halves — what a `UserSession` needs to serve a user end-to-end. `S3Store` is the production
+/// conformer of both.
+public typealias Vault = BlobStore & VaultStore
+
 /// Resumable multipart upload of an already-encrypted local blob file to Glacier Deep Archive.
 /// NOTE: AWS SDK for Swift `*Input` initializers are generated — field names below are correct,
 /// argument ORDER may differ by version; reorder if the compiler objects.
-public struct S3Store: BlobStore {
+public struct S3Store: Vault {
     let client: S3Client
     let bucket: String
     let storageClass: S3ClientTypes.StorageClass?   // .deepArchive on real AWS; nil (STANDARD) for MinIO/LocalStack
@@ -66,12 +82,17 @@ public struct S3Store: BlobStore {
     /// caller's own identity prefix, is the one thing already shared across any number of devices for
     /// that identity. Paginated (`ListObjectsV2` returns ≤1,000 keys/call); a LIST call needs no Deep
     /// Archive thaw, so this is cheap even for a large vault.
-    public func usageBytes(prefix: String) async throws -> Int {
+    ///
+    /// Takes a ``VaultPrefix``, not a `String`, and lists on `prefix.listing` — the TRAILING-SLASH form.
+    /// The IAM grant for `s3:ListBucket` is conditioned on `s3:prefix` matching `blobs/<sub>/*`, which the
+    /// bare `blobs/<sub>` does not satisfy; passing it un-slashed earns an `AccessDenied` and silently
+    /// nils out the quota gate. That happened. The type now makes it unsayable.
+    public func usageBytes(prefix: VaultPrefix) async throws -> Int {
         var total = 0
         var token: String? = nil
         repeat {
             let out = try await client.listObjectsV2(input: .init(
-                bucket: bucket, continuationToken: token, prefix: prefix))
+                bucket: bucket, continuationToken: token, prefix: prefix.listing))
             total += (out.contents ?? []).reduce(0) { $0 + ($1.size ?? 0) }
             token = (out.isTruncated == true) ? out.nextContinuationToken : nil
         } while token != nil

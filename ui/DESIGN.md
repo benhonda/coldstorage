@@ -127,9 +127,18 @@ Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-cl
 - **Don't back up (excludes):** friendly removable chips over real gitignore-style globs, seeded with
   smart defaults; daemon is the SSOT (journal-persisted, applied *inside* the directory walk so junk
   is never hashed and node_modules is pruned whole). Per-source extras are a later refinement.
-- **Storage:** plain + factual — *"12 GB stored · ~$0.05/month · encrypted on this Mac"* (no "safe",
-  no privacy over-claim). Both numbers quote the daemon: bytes from the journal tree, rates from
-  `getPricing`.
+- **Storage:** plain + factual (no "safe", no privacy over-claim). **ONE row, one number** —
+  *"In deep storage — 12 GB of 25 GB"* (the `of Y` appears once the plan's quota is known, from the
+  backend's entitlement). The bytes are `getStatus.bytesStored`: a **live S3 listing** under the user's own
+  prefix, so it counts every device they've deposited from and it is the exact figure the quota is enforced
+  against.
+
+  It used to be two rows — a journal-summed "In deep storage" beside an S3-derived "Plan usage" — which is
+  a per-device number and a per-identity number sitting next to each other, both labelled as the truth about
+  the vault. They can legitimately disagree for a multi-device user, and when the 2026-07-13 cross-account
+  leak inflated the journal sum with a second account's files, the two rows disagreeing was the first
+  visible symptom. Don't reintroduce a second storage total. (Selection sizes elsewhere — the request-a-copy
+  dialog, My Files — still sum file rows; that's a different question, about *these files*, not *the vault*.)
 - **No "download location" setting** — destination is chosen per request in the dialog.
 
 ## The one architectural decision (don't re-litigate)
@@ -143,17 +152,27 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   (`{id, method, params?}`); replies carry `id`; pushed events carry `event`. `ui/src/daemon/protocol.ts`
   is the hand-kept TS mirror.
 - **Commands (SSOT = `DaemonService.handle`):** `ping · getStatus · listSources · listFiles ·
-  getPricing · listExcludes · addSource · removeSource · addExclude · removeExclude · restore ·
+  listExcludes · addSource · removeSource · addExclude · removeExclude · restorePlan · restore ·
   deposit · depositPhotos · previewDeposit · movePath · createFolder · deletePath · authenticate ·
   deauthenticate · mintVault · unlockVault · unlockVaultWithRecoveryCode · lockVault · triggerNow ·
-  pauseSource · resumeSource`. (`authenticate`/`deauthenticate` = per-user S3 creds granted/dropped;
-  the `*Vault*` four = the zero-knowledge encryption key, loaded/cleared over the local socket —
-  all multi-user only, see PROD.md Phase 5.)
+  pauseSource · resumeSource`. (`authenticate`/`deauthenticate` = the **session** opened/closed —
+  per-user S3 creds plus the user's journal, staging dir and key holder; the `*Vault*` four = the
+  zero-knowledge encryption key, loaded/cleared over the local socket — all multi-user only, see
+  PROD.md Phase 5.)
+- **Session lifecycle — the daemon serves ONE user, or none.** `authenticate` builds the session
+  (`UserSession`), `deauthenticate` destroys it; a different Cognito `sub` tears the old one down first.
+  **Signed out, the daemon serves nothing:** `getStatus`/`listFiles`/`listSources`/`listExcludes` return
+  the empty answer, everything else errors *"not signed in"*. `getStatus` now carries **`signedIn:
+  boolean`** (and `bytesStored: number | null` — non-null whenever signed in). The renderer must NOT
+  keep rendering the previous account's tree: `authChanged` resets every vault-derived slice
+  (files/status/excludes/run/failures/restores) on sign-out **and** on an account switch, keyed on the
+  account — the daemon's isolation is only half the fix if the UI still holds the last user's state.
 - **Events (SSOT = the `DaemonEvent(...)` call sites):** `runStarted · fileArchived · uploadProgress ·
   runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged · restoreRequested ·
-  restoreInProgress · restoreCompleted · error`. `uploadProgress` carries `{file, path, bytes,
-  totalBytes}`; `blobFailed` carries `{blob, kind, message, paths}` (newline-joined relativePaths);
-  `filesChanged` carries `{moved, to}` / `{created}` / `{deleted}` — the cue to re-read `listFiles`.
+  restoreInProgress · restoreCompleted · restoreNeedsAuthorization · error`. `uploadProgress` carries
+  `{file, path, bytes, totalBytes}`; `blobFailed` carries `{blob, kind, message, paths}` (newline-joined
+  relativePaths); `filesChanged` carries `{moved, to}` / `{created}` / `{deleted}` — the cue to re-read
+  `listFiles` — plus `{signedIn}` / `{signedOut}`, the cue that the tree just changed owner entirely.
 - **Connection model:** one long-lived socket for the event tail (blocks indefinitely by design) +
   bounded request/response for commands (a `readTimeout` so a stalled daemon fails fast); match
   replies by `id`, events interleave. Auto-reconnect covers launchd KeepAlive restarts.
@@ -182,11 +201,17 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   `GET /entitlement`, serves the plan catalog (`getCatalog()` → the backend's live `GET /catalog`),
   and drives `subscribe(priceId)` (POST `/checkout-session` with the chosen plan → open Paddle
   checkout in the system browser → poll until the webhook flips active). Renderer sees only
-  `EntitlementStatus` + `CatalogPlan[]`. A SOFT gate on DEPOSITS (not browse/restore): `MyFilesView`'s
-  deposit paths bail to `views/SubscribeModal.tsx` when unsubscribed — the multi-plan picker
-  (PADDLE.md spec: size cards × term row, fetched live, never hardcoded; the picker itself is the
-  shared `views/PlanPicker.tsx`); Settings shows the state. `coldstorage://checkout-complete` is a
-  check-now nudge. **Manage surface (2026-07-10, PADDLE.md "Managing a subscription"):**
+  `EntitlementStatus` + `CatalogPlan[]`. A SOFT gate on DEPOSITS (not browse/restore) — and since the
+  free tier landed (PROD.md "Free-tier entitlement flip") **the gate is the byte quota, not the
+  subscription**: every signed-in account has a `quotaBytes` (the free tier's 25 GB, or the plan's), and
+  `MyFilesView`'s deposit paths bail only when the vault is FULL. That one rule is `state/entitlement.ts`
+  → `hasCapacity(entitlement, bytesStored)`, pure + unit-tested, failing OPEN on any unknown.
+  `entitlement.active` is a DISPLAY signal only: it picks which upsell a full vault shows — a free account
+  gets `views/SubscribeModal.tsx` (`reason: "quotaReached"`), a subscriber gets the "Storage full" modal →
+  `ChangePlanModal`. The same SubscribeModal opens with `reason: "upgrade"` from Settings when nobody is
+  blocked, which is why it takes a `PaywallReason` rather than inferring the moment. It's the multi-plan
+  picker (PADDLE.md spec: size cards, fetched live, never hardcoded; the picker itself is the shared
+  `views/PlanPicker.tsx`); Settings shows the state. `coldstorage://checkout-complete` is a check-now nudge. **Manage surface (2026-07-10, PADDLE.md "Managing a subscription"):**
   `getSubscription()/previewPlanChange()/changePlan()/openManage()` → the sidebar's pinned
   `views/AccountCard.tsx` (avatar · email · plan badge, click → Settings) + Settings ▸ Account
   (plan row + `views/ChangePlanModal.tsx` with a proration preview; cancel/payment-method open
@@ -222,5 +247,8 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   ship on Node, only `node:net`. Add deps with `bun add <pkg>@latest`.
 - `node_modules` is platform-native — each OS needs its own `bun install` (the container uses a named
   volume; see [`README.md`](./README.md)).
-- There's a `status.json` first-paint seed (`COLDSTORE_STATUS`), but the socket is the live source.
+- **The daemon's state is per-user, under a data ROOT** (`COLDSTORE_DATA_DIR`): journal, staging and
+  `status.json` live at `<root>/users/<sub>/`, opened at sign-in. The old per-file env vars
+  (`COLDSTORE_JOURNAL`/`_STAGING`/`_STATUS`/`_KEK`) are gone; `main/daemon.ts` passes the root.
+  `status.json` is a run summary the daemon writes — the socket is the live source.
 - **Pull current docs via Context7** before deep React/Vite/Electron work.

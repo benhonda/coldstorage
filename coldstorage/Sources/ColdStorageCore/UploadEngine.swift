@@ -47,16 +47,16 @@ public actor UploadEngine {
     @discardableResult
     public func run(source: IngestSource,
                     skipBlobIds: Set<String> = [],
-                    keyPrefix: String = "blobs",
+                    prefix: VaultPrefix = .dev,
                     onFileArchived: (@Sendable (String, String) async -> Void)? = nil,
                     onProgress: (@Sendable (UploadProgress) async -> Void)? = nil) async throws -> [BlobFailure] {
         let items = try await source.enumerate()
         try journal.upsert(items)
         var failures: [BlobFailure] = []
-        // `keyPrefix` lands every blob under the caller's S3 namespace — `"blobs"` for single-user, or
-        // `"blobs/<cognito-identity-id>"` for a signed-in user (per-user isolation). The journal records the
-        // resulting full `s3Key`, which restore reads back (SSOT) — see RestoreEngine.
-        let plan = BlobPlanner().plan(items, keyPrefix: keyPrefix)
+        // `prefix` lands every blob under the caller's own S3 namespace (`blobs/<cognito-identity-id>`) —
+        // the per-user isolation the IAM role enforces. The journal records the resulting full `s3Key`,
+        // which restore reads back (SSOT) — see RestoreEngine.
+        let plan = BlobPlanner().plan(items, prefix: prefix)
         // Diagnostic: the batching shape (how N files map to M blobs) — a single failing blob sinks every file
         // batched into it, so the item-count per blob is exactly what explains an all-or-nothing deposit. Only
         // when there's work to plan, so an idle periodic re-scan stays silent instead of logging every interval.
