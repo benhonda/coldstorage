@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
+import { healthRoute } from "./routes/health.js";
 import { keyBlobRoute } from "./routes/key-blob.js";
 import { entitlementRoute } from "./routes/entitlement.js";
 import { subscriptionRoute } from "./routes/subscription.js";
@@ -12,6 +13,7 @@ import { paddleWebhookRoute } from "./routes/webhooks/paddle.js";
 const app = new Hono();
 
 app.get("/", (c) => c.text("coldstorage-account-backend"));
+app.route("/health", healthRoute);
 app.route("/key-blob", keyBlobRoute);
 app.route("/entitlement", entitlementRoute);
 app.route("/subscription", subscriptionRoute);

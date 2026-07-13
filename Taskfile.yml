@@ -690,6 +690,192 @@ tasks:
         if [ -f "$CREDS" ]; then set -a; . "$CREDS"; set +a; unset DAEMON_AKID DAEMON_SECRET; fi
         bun run dev
 
+  # ====================================================================================================================
+  #  app:mac:* — the whole app, end to end, in one command (compositions of daemon:mac:* + ui:mac:*)
+  #
+  #  These exist because "run the app against staging" was three commands with one silent footgun: the
+  #  INSTALLED launchd daemon is a stale binary until you rebuild it, so a new daemon command (e.g.
+  #  `restorePlan`) fails as unknown-method and the feature looks broken when it isn't. Every task here
+  #  reinstalls the daemon FIRST.
+  #
+  #  ENV IS ALWAYS EXPLICIT — never a default. Staging = sandbox Paddle (test cards, fake money);
+  #  production = LIVE Paddle, where a restore charges a real card. The two are one word apart, so the
+  #  production tasks confirm before they run.
+  # ====================================================================================================================
+
+  app:mac:_require-api-deployed:
+    internal: true
+    # THE GATE. The app talks to the DEPLOYED API over HTTPS — it never runs your local account-backend/
+    # code. So if your working tree's API differs from what Vercel deployed, you are testing the OLD API
+    # while reading the NEW source, and every conclusion you draw is wrong. (That is not hypothetical: it
+    # is exactly how an evening went missing on 2026-07-13.)
+    #
+    # We compare the working tree's account-backend/ against the branch Vercel deploys — NOT "are you on
+    # branch X". Branch is a proxy; code parity is the actual question, and it stays true when you're on
+    # `main` with an identical API. Catches uncommitted edits, staged edits, unpushed commits, and new
+    # untracked files alike, because `git diff <remote>` sees all of them.
+    #
+    # Daemon + UI are deliberately NOT checked: `app:mac:run:*` rebuilds those from source, so local
+    # changes to them ARE what you're running.
+    #
+    # SCOPE = only what Vercel actually ships. `account-backend/src` + `package.json` (deps) + the lockfile.
+    # NOT `scripts/` (local tooling — db:doctor and friends never leave your machine) and not tests. A gate
+    # that cries wolf over files that can't possibly affect the deployed API is a gate people learn to
+    # skip, which is worse than no gate.
+    vars:
+      BRANCH: '{{.BRANCH | default "staging"}}'
+      API: '{{.API | default "https://api-staging.coldstorage.sh"}}'
+      DEPLOYED: "account-backend/src account-backend/package.json account-backend/bun.lock"
+    cmds:
+      # ── CHECK 2: is the DEPLOYED API's DATABASE migrated? ────────────────────────────────────────
+      # Code parity (below) is only half the story. The API can be running your exact code and STILL
+      # 500 on every request, because the database IT opens — from ITS OWN DATABASE_URL on Vercel — is
+      # not necessarily the one you pushed your schema to. Nothing local can answer that, so we ask the
+      # running service: GET /health introspects its own DB against its own Drizzle schema.
+      - |
+        set -e
+        if [ "${SKIP_DEPLOY_CHECK:-0}" = "1" ]; then exit 0; fi
+
+        body="$(curl -sS --max-time 15 "{{.API}}/health" 2>/dev/null || true)"
+        case "$body" in
+          *'"ok":true'*)
+            echo "✓ {{.API}} — its database is migrated to this schema." ;;
+          *'"ok":false'*)
+            echo "─────────────────────────────────────────────────────────────────────────────"
+            echo "✗ THE DEPLOYED API'S DATABASE IS BEHIND ITS CODE — every route will 500."
+            echo "─────────────────────────────────────────────────────────────────────────────"
+            echo "$body" | sed 's/^/  /'
+            echo ""
+            echo "  The API reads a DATABASE_URL set on Vercel — NOT your local .env. Point"
+            echo "  account-backend/.env at THAT database, then: task backend:db:push"
+            echo "  (Override: SKIP_DEPLOY_CHECK=1)"
+            echo "─────────────────────────────────────────────────────────────────────────────"
+            exit 1 ;;
+          "")
+            echo "⚠ {{.API}}/health didn't respond — can't verify its database. Is it deployed?" ;;
+          *)
+            echo "⚠ {{.API}}/health gave an unexpected reply (older deploy without /health?):"
+            echo "$body" | head -c 200 | sed 's/^/    /'; echo "" ;;
+        esac
+
+      # ── CHECK 1: is the deployed API running YOUR code? ──────────────────────────────────────────
+      - |
+        set -e
+        remote="origin/{{.BRANCH}}"
+
+        if [ "${SKIP_DEPLOY_CHECK:-0}" = "1" ]; then
+          echo "⚠ SKIP_DEPLOY_CHECK=1 — not verifying the deployed API matches your tree."
+          exit 0
+        fi
+
+        git fetch --quiet origin {{.BRANCH}} 2>/dev/null || true
+        if ! git rev-parse --verify --quiet "$remote" >/dev/null; then
+          echo "⚠ no $remote to compare against — can't verify what the deployed API is running."
+          exit 0
+        fi
+
+        untracked="$(git ls-files --others --exclude-standard -- {{.DEPLOYED}})"
+        diff="$(git diff --name-only "$remote" -- {{.DEPLOYED}})"
+
+        if [ -z "$untracked" ] && [ -z "$diff" ]; then
+          echo "✓ the deployed API code matches $remote — you're testing what's actually running."
+          exit 0
+        fi
+
+        echo "─────────────────────────────────────────────────────────────────────────────"
+        echo "✗ YOUR API CHANGES ARE NOT DEPLOYED — this run would test the OLD backend."
+        echo "─────────────────────────────────────────────────────────────────────────────"
+        echo "  The app calls the DEPLOYED API (Vercel). It never runs your local account-backend/."
+        echo "  These differ from $remote:"
+        [ -n "$diff" ] && echo "$diff" | sed 's/^/      /'
+        [ -n "$untracked" ] && echo "$untracked" | sed 's/^/      + /'
+        echo ""
+        echo "  Commit + push to {{.BRANCH}} and let Vercel deploy, then re-run."
+        echo "  Or iterate against a LOCAL API instead:  task app:mac:run:local"
+        echo "  (Override, if you know the diff doesn't matter:  SKIP_DEPLOY_CHECK=1 task <task>)"
+        echo "─────────────────────────────────────────────────────────────────────────────"
+        exit 1
+
+  app:mac:run:staging-local:
+    desc: "[SAFE] Local app + daemon (from source) against the DEPLOYED STAGING API (sandbox Paddle — test cards, no real money). The one for testing paid retrieval, since Paddle's webhooks can only reach a public URL. GATED: refuses if your account-backend/ differs from what origin/staging deployed, because the app would silently test the old API."
+    cmds:
+      - task: app:mac:_require-api-deployed
+        vars: { BRANCH: staging, API: "https://api-staging.coldstorage.sh" }
+      # Stale-binary footgun: the launchd daemon keeps running whatever was installed last, so a new daemon
+      # command (e.g. `restorePlan`) would fail as unknown-method and the feature would look broken.
+      - task: daemon:mac:install
+      # The lane goes as a VAR, not `env:` — go-task does not propagate a caller's env into a called task
+      # (verified), so an `env:` here would silently fall through to ui:mac:config's default.
+      - task: ui:mac:config
+        vars:
+          ACCOUNT_API: "https://api-staging.coldstorage.sh"
+      - task: ui:mac:live
+
+  app:mac:run:local:
+    desc: "[SAFE · fastest loop] Everything local: the API runs on your machine (vercel dev, reading account-backend/.env — so YOUR DATABASE_URL is the one in play) and the app points at localhost. Backend edits are live with no deploy. NOTE: Paddle webhooks cannot reach localhost, so the PAID restore path can't complete here — free/allowance restores can. Needs the Vercel CLI (`npm i -g vercel`)."
+    cmds:
+      - task: daemon:mac:install
+      - task: ui:mac:config
+        vars:
+          ACCOUNT_API: "http://localhost:3000"
+      - |
+        # Background the API so the UI can run in the foreground; `task dev:stop` kills it.
+        cd account-backend
+        bun --env-file=.env.vercel --env-file=.env run dev > /tmp/coldstorage-local-api.log 2>&1 &
+        echo $! > /tmp/coldstorage-local-api.pid
+        printf "starting local API on :3000"
+        for _ in $(seq 1 60); do
+          curl -sf http://localhost:3000/ >/dev/null 2>&1 && break
+          printf "."; sleep 1
+        done
+        echo ""
+        if ! curl -sf http://localhost:3000/ >/dev/null 2>&1; then
+          echo "✗ the local API didn't come up. Log: /tmp/coldstorage-local-api.log"
+          echo "  (Vercel CLI installed? `npm i -g vercel` + `vercel login` once.)"
+          exit 1
+        fi
+        echo "✓ local API up — it is reading account-backend/.env, so DATABASE_URL there is the DB in play."
+        echo "  log: /tmp/coldstorage-local-api.log · stop it later with: task dev:stop"
+      - task: ui:mac:live
+
+  app:mac:run:production-local:
+    desc: "[⚠️ LIVE MONEY] Local app + daemon against the DEPLOYED PRODUCTION API (live Paddle): a restore or subscribe charges a REAL card. Confirms first. GATED against origin/main."
+    interactive: true
+    prompt: "This points the app at PRODUCTION — LIVE Paddle. A restore or subscription will charge a REAL card, and a paid restore starts a real Deep Archive thaw you pay AWS for. Continue?"
+    cmds:
+      - task: app:mac:_require-api-deployed
+        vars: { BRANCH: main, API: "https://api.coldstorage.sh" }
+      - task: daemon:mac:install
+      # Passed as a var for the reason above. If this ever silently became staging, a "production" test would
+      # quietly prove nothing — which is precisely the failure the var (not env) exists to prevent.
+      - task: ui:mac:config
+        vars:
+          ACCOUNT_API: "https://api.coldstorage.sh"
+      - task: ui:mac:live
+
+  app:mac:package:staging:
+    desc: "[Mode 3 · SAFE] Build + launch-ready the PACKAGED ColdStorage.app wired to STAGING (sandbox Paddle). Uninstalls the Mode 2 launchd daemon first — Mode 2 and Mode 3 fight over the same socket/data dir, and the packaged app silently hangs on 'Connecting…' if you skip it. Bring Mode 2 back with `task daemon:mac:bootstrap`. GATED against origin/staging (the bundled app calls the DEPLOYED API)."
+    cmds:
+      - task: app:mac:_require-api-deployed
+        vars: { BRANCH: staging, API: "https://api-staging.coldstorage.sh" }
+      # Not optional: the packaged app bundles its OWN daemon, which can't bind a socket Mode 2 still holds.
+      - task: daemon:mac:uninstall
+      # Bundles a freshly-built daemon from current source, and bakes ENV=staging itself.
+      - task: ui:mac:package
+      - echo "→ ui/dist/ColdStorage.app (staging-wired). Mode 2 is uninstalled; 'task daemon:mac:bootstrap' restores it."
+
+  app:mac:package:production:
+    desc: "[Mode 3 · ⚠️ LIVE MONEY, not published] Build the PRODUCTION-wired ColdStorage.app — signed + notarized, but NOT published to GitHub (that's ui:mac:release). Live Paddle: anything you buy in it is a real charge. Uninstalls the Mode 2 daemon first (socket collision). Needs the Developer ID cert + notary creds. GATED against origin/main."
+    interactive: true
+    prompt: "This builds a PRODUCTION-wired app — LIVE Paddle. Anything purchased in it charges a REAL card. (It will NOT be published — that's ui:mac:release.) Continue?"
+    cmds:
+      - task: app:mac:_require-api-deployed
+        vars: { BRANCH: main, API: "https://api.coldstorage.sh" }
+      - task: daemon:mac:uninstall
+      # release:dryrun is the prod-wired local build: bakes ENV=production, signs + notarizes, publishes NOTHING.
+      - task: ui:mac:release:dryrun
+      - echo "→ ui/dist/ColdStorage.app (PRODUCTION-wired, signed, unpublished). 'task daemon:mac:bootstrap' restores Mode 2."
+
   ui:build:
     desc: "Build all three Electron processes (main/preload/renderer) to ui/out."
     dir: ui
@@ -909,6 +1095,11 @@ tasks:
     dir: coldstorage
     vars:
       DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
+      # Which account-backend lane the app talks to. A task VAR (not just the env var below) because
+      # go-task does NOT propagate a caller's `env:` into a called task — only `vars:` — so `app:mac:run:*`
+      # must pass the lane this way or it would silently fall through to the staging default. That is a
+      # dangerous default to fall through to in the PRODUCTION direction, so it's passed explicitly.
+      ACCOUNT_API: '{{.ACCOUNT_API | default ""}}'
     cmds:
       - mkdir -p "{{.DATA_DIR}}"
       - |
@@ -929,7 +1120,12 @@ tasks:
         cognito_client_id="${COLDSTORE_COGNITO_CLIENT_ID:-}"
         # Account-backend base URL (Phase 5b, key-blob + entitlement). Defaults to the staging lane, which
         # accepts production Cognito tokens; the production lane overrides via COLDSTORE_ACCOUNT_API.
-        account_api="${COLDSTORE_ACCOUNT_API:-https://api-staging.coldstorage.sh}"
+        # Precedence: the ACCOUNT_API task var (how app:mac:run:* passes the lane — see the var's note) →
+        # COLDSTORE_ACCOUNT_API from the shell/handoff → the staging default. Staging is the safe fallback:
+        # sandbox Paddle, so a misconfigured run can't charge a real card.
+        account_api='{{.ACCOUNT_API}}'
+        account_api="${account_api:-${COLDSTORE_ACCOUNT_API:-https://api-staging.coldstorage.sh}}"
+        echo "→ account backend: $account_api"
         printf '{\n  "bucket": "%s",\n  "region": "%s",\n  "awsProfile": "%s",\n  "cognitoIdentityPoolId": "%s",\n  "cognitoUserPoolProvider": "%s",\n  "cognitoDomain": "%s",\n  "cognitoClientId": "%s",\n  "accountApiBaseUrl": "%s"\n}\n' \
           "$bucket" "$region" "$profile" "$cognito_pool_id" "$cognito_provider" "$cognito_domain" "$cognito_client_id" "$account_api" > "{{.DATA_DIR}}/config.json"
         echo "wrote {{.DATA_DIR}}/config.json  (bucket=$bucket region=$region profile=$profile cognito=${cognito_pool_id:+configured}${cognito_pool_id:-not configured} sign-in=${cognito_domain:+configured}${cognito_domain:-not configured})"
@@ -1040,9 +1236,16 @@ tasks:
       - task: ui:mac:dev # the UI in the foreground
 
   dev:stop:
-    desc: "Stop the background daemon + MinIO left running by `task ui:mac:demo`."
+    desc: "Stop the background daemon + MinIO left running by `task ui:mac:demo`, and the local API left by `task app:mac:run:local`."
     cmds:
       - 'pkill -f "coldstored$" 2>/dev/null || true'
+      # The local account-backend (vercel dev) that app:mac:run:local backgrounds.
+      - |
+        if [ -f /tmp/coldstorage-local-api.pid ]; then
+          kill "$(cat /tmp/coldstorage-local-api.pid)" 2>/dev/null || true
+          rm -f /tmp/coldstorage-local-api.pid
+          echo "stopped the local API"
+        fi
       - task: daemon:minio:stop
 
   ui:prove:
@@ -1099,12 +1302,73 @@ tasks:
       - bun run scripts/create-paddle-client-token.ts {{.CLI_ARGS}}
 
   backend:db:push:
-    desc: "Push the Drizzle schema to Neon (drizzle-kit push) — NO migration files. Reads DATABASE_URL from account-backend/.env.vercel (or .env override)."
+    desc: "Push the Drizzle schema to Neon (drizzle-kit push) — NO migration files. Target is DATABASE_URL from account-backend/.env (it's loaded last, so it overrides .env.vercel — verified). Prints the host it's pushing to. Verify after with backend:db:doctor."
     dir: account-backend
     interactive: true
     prompt: "Before pushing schema changes, double-check DATABASE_URL — is it correct?"
     cmds:
+      # .env is loaded LAST and wins for DATABASE_URL; .env.vercel still supplies everything else
+      # (PADDLE_*, COGNITO_*, AWS_*). You choose the target in .env — nothing here second-guesses it.
+      # It just says which host it landed on, out loud, because that's the fact that went unnoticed.
+      - bun --env-file=.env.vercel --env-file=.env run scripts/db-target.ts
       - bun --env-file=.env.vercel --env-file=.env run db:push
+
+  backend:db:reset:
+    desc: "⚠️ Wipe the app database's DATA (schema kept) for a clean test slate: 0 accounts, 0 restore jobs. Targets the branch the APP reads. DESTROYS every key-blob — each is the only copy of a user's wrapped MasterKey, so their uploads become permanently unreadable, recovery code or not. Confirm by typing the branch host. Pair with `daemon:reset:vault` (purge the orphaned S3 ciphertext) + `daemon:mac:reset` (clear the Mac's journal + escrowed key)."
+    dir: account-backend
+    interactive: true
+    cmds:
+      # Deliberately NOT a Neon "restore staging from production". That pattern is meaningless here: this is
+      # a ZERO-KNOWLEDGE product, so production's key-blobs are wrapped under recovery codes we do not have —
+      # copying them into staging yields accounts nobody can sign into and vaults nobody can decrypt. The
+      # only testable staging state is an EMPTY one: sign in, no key-blob, mint a fresh vault, go.
+      - bun run scripts/db-reset.ts
+
+  backend:db:doctor:
+    desc: "Does the DB match the code? Compares the live Neon schema against what Drizzle expects and names any missing table/column. The first thing to run when a route returns a bare `http 500` — that's usually Postgres rejecting a column the code is sure exists. READ-ONLY (fixing = backend:db:push)."
+    dir: account-backend
+    cmds:
+      # DATABASE_URL only — deliberately does NOT need the app's full env (which is what you're missing
+      # when you're debugging a half-configured environment in the first place).
+      - bun --env-file=.env.vercel --env-file=.env run scripts/db-doctor.ts
+
+  backend:api:health:
+    desc: "Ask a DEPLOYED backend whether the database IT reads is migrated to the schema ITS code expects — the one question you cannot answer from your laptop (the API's DATABASE_URL lives on Vercel, not in your .env). ENV=staging|production (default staging)."
+    vars:
+      ENV: '{{.ENV | default "staging"}}'
+    cmds:
+      - |
+        case "{{.ENV}}" in
+          production) api="https://api.coldstorage.sh" ;;
+          staging)    api="https://api-staging.coldstorage.sh" ;;
+          *) echo "ENV must be staging|production (got: {{.ENV}})"; exit 1 ;;
+        esac
+        echo "→ $api/health"
+        curl -sS --max-time 15 "$api/health" | (command -v jq >/dev/null && jq . || cat)
+        echo ""
+
+  backend:retrieval:probe:
+    desc: "Is the paid-retrieval API actually deployed? Probes the staging backend's /retrieval routes (unauthenticated). 401 = deployed and guarding correctly; 404 = the deploy hasn't picked up the new routes yet. Read-only, no auth, no money."
+    vars:
+      API: '{{.API | default "https://api-staging.coldstorage.sh"}}'
+    cmds:
+      - |
+        echo "probing {{.API}} …"
+        for route in /retrieval/quote /retrieval/jobs/probe; do
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "{{.API}}$route" -H 'content-type: application/json' -d '{}')
+          case "$code" in
+            401) echo "  ✓ $route → 401 (deployed; correctly refuses an unauthenticated caller)" ;;
+            404) echo "  ✗ $route → 404 (NOT deployed — push/redeploy the backend first)" ;;
+            *)   echo "  ? $route → $code (unexpected — check the deploy logs)" ;;
+          esac
+        done
+
+  backend:retrieval:jobs:
+    desc: "Watch the retrieval hard gate: recent restore jobs (what we charged) next to what S3 actually did (frozen / thawing / ready). The ONE view that proves the gate works — a PAID job whose blobs are still frozen means the webhook never thawed them. Read-only. Pass `-- --limit 30`."
+    dir: account-backend
+    cmds:
+      # Same env pattern as backend:db:push (DATABASE_URL from .env.vercel); AWS comes from your pharmer SSO.
+      - bun --env-file=.env.vercel --env-file=.env run scripts/inspect-retrieval.ts {{.CLI_ARGS}}
 
   # ====================================================================================================================
   #  Vercel (link + env pull — domain namespaced by app, like tf:<component>:*)
