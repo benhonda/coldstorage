@@ -153,7 +153,13 @@ tasks:
     desc: Run the portable Core tests (swift-testing — no XCTest/CFRunLoop hang)
     dir: coldstorage
     deps: [daemon:unlock]
-    cmds: [swift test]
+    # --no-parallel is LOAD-BEARING, not a speed knob. StreamBackpressureTests asserts on this process's
+    # OWN resident memory (the only way to catch an unbounded stream buffer — every functional assertion
+    # passes while it happens). Swift Testing runs suites concurrently by default, and ZeroKnowledgeKeysTests
+    # exercises Argon2id at production tuning — a deliberately memory-HARD KDF. A neighbour allocating
+    # hundreds of MiB inside the process you are measuring makes the measurement meaningless (it reported a
+    # 260 MiB "leak" that was Argon2id's). The whole suite is ~2s serial; the trustworthy number is worth it.
+    cmds: [swift test --no-parallel]
 
   daemon:testdata:
     desc: Generate sample files to archive (coldstorage/testdata)

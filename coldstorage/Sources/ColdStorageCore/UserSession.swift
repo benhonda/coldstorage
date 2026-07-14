@@ -34,7 +34,7 @@ public enum SessionIdentity: Sendable, Equatable {
 /// This type exists because of a real cross-account leak (2026-07-13): the journal was a single
 /// machine-wide SQLite file with no owner column, so signing out and signing in as a second account on the
 /// same Mac showed that account the first one's entire file tree. The credentials, the encryption key, and
-/// the S3 prefix had all been made per-user as multi-user support landed; the journal, the staging dir and
+/// the S3 prefix had all been made per-user as multi-user support landed; the journal, the scratch dir and
 /// `status.json` were simply never brought along, because nothing forced them to be.
 ///
 /// The fix is structural, not a patch. `DaemonService` holds no journal, no engine, and no key of its own —
@@ -44,9 +44,9 @@ public enum SessionIdentity: Sendable, Equatable {
 ///
 /// Layout on disk (`<dataRoot>/users/<sub>/`):
 ///   - `coldstore.sqlite` — the journal (file index, watched-folder registry, excludes)
-///   - `staging/`         — encrypted-blob scratch. **Per-user because it holds plaintext-derived bytes
-///                          mid-upload**: shared, an interrupted upload could be resumed under the next
-///                          account's key, into the next account's vault.
+///   - `scratch/`         — where a PUSH source (PhotoKit) materializes an asset while it streams. **Per-user
+///                          because it holds plaintext bytes.** The upload engine writes nothing here — it
+///                          encrypts straight into the multipart parts. Swept when the session is built.
 ///   - `status.json`      — the run summary this user's app reads
 ///
 /// One-way: a session is CONSTRUCTED at `authenticate` and DESTROYED at `deauthenticate`. It is never
@@ -56,6 +56,11 @@ public final class UserSession: @unchecked Sendable {
     /// Where this user's blobs live in S3. Typed, so the listing-vs-key slash can't be got wrong again.
     public let prefix: VaultPrefix
     public let dir: URL
+    /// Scratch for a source that can only PUSH its bytes at us — today, a Photos asset PhotoKit is streaming
+    /// (`scratchFileStream`). The upload engine itself writes nothing: it encrypts straight into the multipart
+    /// parts. **Per-user because these are plaintext bytes**, and swept when the session is built — nothing in
+    /// here survives a restart by design.
+    public let scratchDir: URL
     public let journal: Journal
     /// The MasterKey holder. Starts LOCKED for a real user (the app sends the MK via `mintVault` /
     /// `unlockVault*`); a dev session is seeded from the local file KEK so MinIO runs need no unlock step.
@@ -74,12 +79,16 @@ public final class UserSession: @unchecked Sendable {
         self.dir = dataRoot.appendingPathComponent("users", isDirectory: true)
                            .appendingPathComponent(identity.directoryName, isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        self.scratchDir = dir.appendingPathComponent("scratch", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratchDir, withIntermediateDirectories: true)
+        // Building a session means this user has nothing in flight yet — so anything still in here is debris
+        // from a killed deposit, and this is the one moment it can be cleared without racing a live one.
+        sweepScratch(scratchDir)
 
         self.journal = try Journal(path: dir.appendingPathComponent("coldstore.sqlite").path)
         self.vaultKey = SwappableKeyProvider(initial: initialKey)
         self.statusPath = dir.appendingPathComponent("status.json").path
-        self.engine = UploadEngine(journal: journal, store: store, keys: vaultKey,
-                                   stagingDir: dir.appendingPathComponent("staging", isDirectory: true))
+        self.engine = UploadEngine(journal: journal, store: store, keys: vaultKey)
         self.restoreEngine = RestoreEngine(journal: journal, store: store, keys: vaultKey,
                                            canSelfThaw: canSelfThaw)
     }

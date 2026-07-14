@@ -13,7 +13,7 @@ import Foundation
     struct FakeResolver: PhotoResolver {
         /// assetId → (originalFilename, plaintext bytes)
         let library: [String: (name: String, data: Data)]
-        func resolve(assetIds: [String]) async -> [IngestItem] {
+        func resolve(assetIds: [String], scratchDir: URL) async -> [IngestItem] {
             assetIds.compactMap { id in
                 guard let a = library[id] else { return nil }
                 return IngestItem(id: id, relativePath: a.name, size: a.data.count, contentHash: id,
@@ -44,8 +44,7 @@ import Foundation
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         let journal = try Journal(path: base.appendingPathComponent("j.sqlite").path)
         let engine = UploadEngine(journal: journal, store: store,
-                                  keys: LocalFileKEK(path: base.appendingPathComponent("kek.bin").path),
-                                  stagingDir: base.appendingPathComponent("staging"))
+                                  keys: LocalFileKEK(path: base.appendingPathComponent("kek.bin").path))
         return (engine, journal)
     }
 
@@ -53,7 +52,7 @@ import Foundation
 
     @Test func picksAreMountedUnderDestAndKeyedByPath() async throws {
         let resolver = FakeResolver(library: ["asset-1": ("IMG_0001.jpg", Data("a".utf8))])
-        let items = try await PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "Photos/2019").enumerate()
+        let items = try await PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "Photos/2019", scratchDir: FileManager.default.temporaryDirectory).enumerate()
         let it = try #require(items.first)
         #expect(items.count == 1)
         #expect(it.relativePath == "Photos/2019/IMG_0001.jpg")  // re-based under the picked folder
@@ -62,13 +61,13 @@ import Foundation
 
     @Test func picksAtRootHaveNoPrefix() async throws {
         let resolver = FakeResolver(library: ["asset-1": ("IMG_0001.jpg", Data("a".utf8))])
-        let items = try await PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "").enumerate()
+        let items = try await PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "", scratchDir: FileManager.default.temporaryDirectory).enumerate()
         #expect(items.first?.relativePath == "IMG_0001.jpg")
     }
 
     @Test func staleOrUnknownPickIsSkippedNotFatal() async throws {
         let resolver = FakeResolver(library: ["asset-1": ("IMG_0001.jpg", Data("a".utf8))])
-        let items = try await PhotoDepositSource(resolver: resolver, assetIds: ["asset-1", "gone"], destDir: "").enumerate()
+        let items = try await PhotoDepositSource(resolver: resolver, assetIds: ["asset-1", "gone"], destDir: "", scratchDir: FileManager.default.temporaryDirectory).enumerate()
         #expect(items.map(\.relativePath) == ["IMG_0001.jpg"])  // the missing id is dropped, the present one survives
     }
 
@@ -78,7 +77,7 @@ import Foundation
     @Test func allPicksUnresolvableSurfacesAsError() async throws {
         let resolver = FakeResolver(library: ["asset-1": ("IMG_0001.jpg", Data("a".utf8))])
         await #expect(throws: ColdStorageError.self) {
-            try await PhotoDepositSource(resolver: resolver, assetIds: ["gone-1", "gone-2"], destDir: "").enumerate()
+            try await PhotoDepositSource(resolver: resolver, assetIds: ["gone-1", "gone-2"], destDir: "", scratchDir: FileManager.default.temporaryDirectory).enumerate()
         }
     }
 
@@ -86,12 +85,13 @@ import Foundation
     /// throw propagates through enumerate unchanged, so the daemon can surface it with an actionable `code`.
     @Test func resolverAccessFailurePropagates() async throws {
         struct DeniedResolver: PhotoResolver {
-            func resolve(assetIds: [String]) async throws -> [IngestItem] {
+            func resolve(assetIds: [String], scratchDir: URL) async throws -> [IngestItem] {
                 throw ColdStorageError.photosAccess("ColdStorage doesn’t have permission to read your photos.")
             }
         }
         await #expect(throws: ColdStorageError.self) {
-            try await PhotoDepositSource(resolver: DeniedResolver(), assetIds: ["asset-1"], destDir: "").enumerate()
+            try await PhotoDepositSource(resolver: DeniedResolver(), assetIds: ["asset-1"], destDir: "",
+                                         scratchDir: FileManager.default.temporaryDirectory).enumerate()
         }
     }
 
@@ -107,7 +107,7 @@ import Foundation
         let (engine, journal) = try tempEngine(store: store)
 
         let failures = try await engine.run(source: PhotoDepositSource(
-            resolver: resolver, assetIds: ["asset-1", "asset-2"], destDir: "Photos/Trip"))
+            resolver: resolver, assetIds: ["asset-1", "asset-2"], destDir: "Photos/Trip", scratchDir: FileManager.default.temporaryDirectory))
 
         #expect(failures.isEmpty)
         let rows = try journal.listFiles()
@@ -130,9 +130,9 @@ import Foundation
         let store = RecordingStore()
         let (engine, journal) = try tempEngine(store: store)
 
-        try await engine.run(source: PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "A"))
-        try await engine.run(source: PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "B"))
-        try await engine.run(source: PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "A"))  // re-pick into A
+        try await engine.run(source: PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "A", scratchDir: FileManager.default.temporaryDirectory))
+        try await engine.run(source: PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "B", scratchDir: FileManager.default.temporaryDirectory))
+        try await engine.run(source: PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "A", scratchDir: FileManager.default.temporaryDirectory))  // re-pick into A
 
         let rows = try journal.listFiles()
         #expect(Set(rows.map(\.relativePath)) == ["A/IMG_0001.jpg", "B/IMG_0001.jpg"])  // two copies, not one moved row

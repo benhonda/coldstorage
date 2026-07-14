@@ -83,7 +83,7 @@ throw *"not signed in"*.
 |---|---|
 | `COLDSTORE_COGNITO_IDENTITY_POOL_ID` + `COLDSTORE_COGNITO_USER_POOL_PROVIDER` | **multi-user** (the real product) — starts signed out; the app's `authenticate` opens the session. Optional `COLDSTORE_COGNITO_REGION` (falls back to `AWS_REGION`). |
 | `COLDSTORE_DEV_IDENTITY=<name>` | **local dev / MinIO** — one eager session named for the identity, seeded from the local file KEK so there's no unlock step. `task daemon:run` sets `local`. |
-| `COLDSTORE_DATA_DIR` | the **root** everything persists under: `<root>/users/<sub>/{coldstore.sqlite, staging/, status.json}`, opened at sign-in (dev: `users/dev-<name>/`). There is no machine-wide journal, so there is no journal path to configure — this one root **replaces `COLDSTORE_JOURNAL` / `COLDSTORE_STAGING` / `COLDSTORE_STATUS` / `COLDSTORE_KEK`**. |
+| `COLDSTORE_DATA_DIR` | the **root** everything persists under: `<root>/users/<sub>/{coldstore.sqlite, scratch/, status.json}`, opened at sign-in (dev: `users/dev-<name>/`). There is no machine-wide journal, so there is no journal path to configure — this one root **replaces `COLDSTORE_JOURNAL` / `COLDSTORE_STAGING` / `COLDSTORE_STATUS` / `COLDSTORE_KEK`**. |
 | `COLDSTORE_SOCKET` | the control socket — the one machine-level path (a rendezvous, not user data). |
 
 Also: `COLDSTORE_BUCKET` · `COLDSTORE_ENDPOINT` (MinIO) · `COLDSTORE_SOURCES=dir1:dir2` (one-time
@@ -111,7 +111,11 @@ be exercised against real AWS (MinIO serves directly).
 
 ## How robustness works (the crown jewel)
 - **Deterministic encryption** — per-blob DEK + AES-GCM frames with counter nonces → a sealed blob is
-  byte-reproducible, so re-staging on resume yields identical parts whose ETags match what's already up.
+  byte-reproducible, so re-encrypting on resume yields identical parts whose ETags match what's already up.
+- **Nothing is written to disk** — the engine encrypts straight into the 64 MiB multipart parts, holding only
+  the part in flight. Backing up a 40 GB video needs 40 GB of *upload*, not 40 GB of free space.
+- **A changed source is rejected, not archived** — the plaintext SHA-256 is re-checked against what the scan
+  measured, so a file edited mid-upload fails its blob instead of silently storing bytes that never existed.
 - **Journal (SQLite/WAL)** — every part/blob/file transition committed; a crash leaves a resumable state.
 - **`ListParts` reconcile** — S3 is the truth on restart; done parts are skipped.
 - **Layered integrity** — plaintext SHA-256 per file + per-part SHA-256 declared at `CreateMultipartUpload`

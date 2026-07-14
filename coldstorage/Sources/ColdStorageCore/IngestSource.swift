@@ -31,6 +31,7 @@ public struct MountedSource: IngestSource {
         return try await base.enumerate().map { it in
             let rel = "\(mountPath)/\(it.relativePath)"
             return IngestItem(id: rel, relativePath: rel, size: it.size, contentHash: it.contentHash,
+                              expectedSha256: it.expectedSha256,
                               createdAt: it.createdAt, isFavorite: it.isFavorite,
                               metadata: it.metadata, open: it.open)
         }

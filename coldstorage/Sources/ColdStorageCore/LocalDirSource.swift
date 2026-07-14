@@ -34,9 +34,11 @@ public struct LocalDirSource: IngestSource {
             }
             guard v.isRegularFile == true else { continue }
             let captured = url
+            let sha = try Self.sha256Hex(of: url)
             items.append(IngestItem(
                 id: rel, relativePath: rel, size: v.fileSize ?? 0,
-                contentHash: try Self.sha256Hex(of: url),
+                contentHash: sha,
+                expectedSha256: sha,          // a file IS hashable ahead of the archive — so the drift guard applies
                 createdAt: v.contentModificationDate, isFavorite: false,
                 open: { Self.stream(captured) }))
         }
@@ -50,13 +52,8 @@ public struct LocalDirSource: IngestSource {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    static func stream(_ url: URL) -> AsyncThrowingStream<Data, Error> {
-        AsyncThrowingStream { cont in
-            do {
-                let h = try FileHandle(forReadingFrom: url)
-                while let c = try h.read(upToCount: 1 << 20), !c.isEmpty { cont.yield(c) }
-                try? h.close(); cont.finish()
-            } catch { cont.finish(throwing: error) }
-        }
-    }
+    /// Plaintext bytes, pulled on demand. A local file is a source we can read at OUR pace, so it needs no
+    /// scratch copy and no buffer — see `ByteStreams.swift` for the unbounded-`AsyncThrowingStream` trap
+    /// this deliberately avoids (it cost a 1k-file deposit on 2026-07-14).
+    static func stream(_ url: URL) -> AsyncThrowingStream<Data, Error> { pullStream(of: url) }
 }

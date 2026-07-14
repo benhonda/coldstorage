@@ -7,7 +7,21 @@ import Crypto
 /// KEK; format unchanged.
 public struct EnvelopeCipher: Sendable {
     public static let frameSize = 4 << 20  // 4 MiB plaintext per frame
+    public static let tagSize = 16         // AES-GCM auth tag appended to every frame (the only expansion)
     public init() {}
+
+    /// Ciphertext size for a given plaintext size. The framing is fixed and the nonce isn't stored, so a
+    /// sealed blob expands by exactly one tag per frame — meaning the encrypted total is KNOWABLE before we
+    /// encrypt a single byte.
+    ///
+    /// That's what lets the engine stream straight into the multipart upload: it used to learn the total by
+    /// encrypting the whole blob to a staging file first and measuring it, which is a poor reason to write
+    /// every byte to disk twice. The determinate progress bar needs a denominator, not a file.
+    public static func encryptedSize(ofPlaintext bytes: Int) -> Int {
+        guard bytes > 0 else { return 0 }
+        let frames = (bytes + frameSize - 1) / frameSize
+        return bytes + frames * tagSize
+    }
 
     public func newDEK() -> SymmetricKey { SymmetricKey(size: .bits256) }
     public func randomPrefix() -> Data { Data((0..<4).map { _ in UInt8.random(in: 0...255) }) }

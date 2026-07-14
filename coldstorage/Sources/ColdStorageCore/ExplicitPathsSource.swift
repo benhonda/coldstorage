@@ -36,6 +36,7 @@ public struct ExplicitPathsSource: IngestSource {
                 for it in try await LocalDirSource(root: e.url, exclude: exclude).enumerate() {
                     let rel = Self.join(e.destDir, "\(base)/\(it.relativePath)")
                     items.append(IngestItem(id: rel, relativePath: rel, size: it.size, contentHash: it.contentHash,
+                                            expectedSha256: it.expectedSha256,
                                             createdAt: it.createdAt, isFavorite: it.isFavorite,
                                             metadata: it.metadata, open: it.open))
                 }
@@ -43,9 +44,11 @@ public struct ExplicitPathsSource: IngestSource {
                 let rel = Self.join(e.destDir, e.url.lastPathComponent)
                 let url = e.url
                 let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+                let sha = try LocalDirSource.sha256Hex(of: url)
                 items.append(IngestItem(
                     id: rel, relativePath: rel, size: v?.fileSize ?? 0,
-                    contentHash: try LocalDirSource.sha256Hex(of: url),
+                    contentHash: sha,
+                    expectedSha256: sha,
                     createdAt: v?.contentModificationDate, isFavorite: false,
                     open: { LocalDirSource.stream(url) }))
             }

@@ -45,8 +45,7 @@ import Foundation
         try fm.createDirectory(at: base, withIntermediateDirectories: true)
         let journal = try Journal(path: base.appendingPathComponent("j.sqlite").path)
         let engine = UploadEngine(journal: journal, store: store,
-                                  keys: LocalFileKEK(path: base.appendingPathComponent("kek.bin").path),
-                                  stagingDir: base.appendingPathComponent("staging"))
+                                  keys: LocalFileKEK(path: base.appendingPathComponent("kek.bin").path))
         return (engine, journal)
     }
 

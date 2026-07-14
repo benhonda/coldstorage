@@ -30,7 +30,7 @@ import Foundation
         let journal = try Journal(path: base.appendingPathComponent("j.sqlite").path)
         let keys = LocalFileKEK(path: base.appendingPathComponent("kek.bin").path)
         let store = RecordingStore()
-        let engine = UploadEngine(journal: journal, store: store, keys: keys, stagingDir: base.appendingPathComponent("staging"))
+        let engine = UploadEngine(journal: journal, store: store, keys: keys)
         return (engine, journal, store, LocalDirSource(root: root), base)
     }
 

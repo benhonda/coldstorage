@@ -11,9 +11,15 @@ public protocol PhotoResolver: Sendable {
     /// silently archiving nothing: `photosAccess` when the daemon lacks (full) Photos access, and
     /// `photosNoneResolved` when access is granted yet none of the picks resolve. Each item's `open`
     /// streams the full-res original, downloading from iCloud if needed (the proven
-    /// `PhotoKitSource.stream(assetId:)` mechanics). `id` is the asset's stable `localIdentifier`;
+    /// `PhotoKitSource.stream(assetId:scratch:)` mechanics). `id` is the asset's stable `localIdentifier`;
     /// `relativePath` is its original filename.
-    func resolve(assetIds: [String]) async throws -> [IngestItem]
+    ///
+    /// `scratchDir` is where an asset may be materialized while it streams. PhotoKit PUSHES bytes at us at
+    /// its own pace (iCloud download speed), so it cannot be pulled lazily like a file can — the bytes have
+    /// to land somewhere, and RAM is the wrong somewhere (see `scratchFileStream`). It is the SESSION's
+    /// scratch dir, passed in rather than chosen here, because these are **plaintext** bytes and must be
+    /// scoped to the signed-in user like everything else they touch.
+    func resolve(assetIds: [String], scratchDir: URL) async throws -> [IngestItem]
 }
 
 /// Ad-hoc ingest of explicitly-picked Photos-library assets — the photo analogue of `ExplicitPathsSource`
@@ -26,9 +32,13 @@ public struct PhotoDepositSource: IngestSource {
     let assetIds: [String]
     /// Destination folder (vault-relative; "" = root) the user picked the photos into.
     let destDir: String
+    /// The signed-in user's scratch dir — where a pushed asset materializes while it streams. See
+    /// `PhotoResolver.resolve`.
+    let scratchDir: URL
 
-    public init(resolver: any PhotoResolver, assetIds: [String], destDir: String) {
-        self.resolver = resolver; self.assetIds = assetIds; self.destDir = destDir
+    public init(resolver: any PhotoResolver, assetIds: [String], destDir: String, scratchDir: URL) {
+        self.resolver = resolver; self.assetIds = assetIds
+        self.destDir = destDir; self.scratchDir = scratchDir
     }
 
     public func enumerate() async throws -> [IngestItem] {
@@ -39,10 +49,11 @@ public struct PhotoDepositSource: IngestSource {
         // same-name collisions in a folder are surfaced to the user via the deposit collision prompt
         // (`CollisionResolvingSource`), never silently merged. Streaming is unaffected — `open` was built by
         // the resolver from the assetId and is carried verbatim here, independent of `id`.
-        let items = try await resolver.resolve(assetIds: assetIds).map { it in
+        let items = try await resolver.resolve(assetIds: assetIds, scratchDir: scratchDir).map { it in
             let rel = ExplicitPathsSource.join(destDir, it.relativePath)
             return IngestItem(id: rel, relativePath: rel,
-                              size: it.size, contentHash: it.contentHash, createdAt: it.createdAt,
+                              size: it.size, contentHash: it.contentHash, expectedSha256: it.expectedSha256,
+                              createdAt: it.createdAt,
                               isFavorite: it.isFavorite, metadata: it.metadata, open: it.open)
         }
         // Nothing resolved → nothing would be archived. Surface it (don't silently no-op) so the picked rows

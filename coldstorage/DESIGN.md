@@ -41,7 +41,7 @@ Target layout (what lives where, how to gate the Mac target): [`README.md`](./RE
 ### The session — the daemon acts as exactly one user, or none
 
 `UserSession` (`ColdStorageCore/UserSession.swift`) owns **all** per-user state: the journal, the
-staging dir, `status.json`, the MasterKey holder (`SwappableKeyProvider`), the `VaultPrefix`, and both
+scratch dir, `status.json`, the MasterKey holder (`SwappableKeyProvider`), the `VaultPrefix`, and both
 engines. `DaemonService` holds a single `private var session: UserSession?` and nothing unscoped.
 
 - **Built at `authenticate`, destroyed at `deauthenticate`.** A session is never re-pointed at another
@@ -86,12 +86,47 @@ file's bytes) — blobs stay bounded for latency sanity, not cost.
   identity-pool `identityId` is a derived S3-addressing detail, and names the vault prefix only):
   ```
   <dataRoot>/users/<sub>/coldstore.sqlite   # journal: file index, watched-folder registry, excludes
-  <dataRoot>/users/<sub>/staging/           # encrypted-blob scratch (plaintext-derived bytes mid-upload)
+  <dataRoot>/users/<sub>/scratch/           # PUSH-source landing zone (a Photos asset mid-stream) — plaintext
   <dataRoot>/users/<sub>/status.json        # run summary this user's app reads
   <dataRoot>/coldstored.sock                # the ONE machine-level file (COLDSTORE_SOCKET)
   ```
   A local-dev identity gets the same layout at `users/dev-<name>/`, so dev exercises the real path.
   Nothing is opened at process start — at launch nobody is signed in yet.
+- **Plaintext is streamed, never buffered — memory tracks the chunk, not the file.** `IngestItem.open()`
+  must yield bytes with real backpressure. The obvious `AsyncThrowingStream { cont in … cont.yield(chunk) }`
+  does the opposite: it runs its producer **synchronously at construction**, its default buffering policy is
+  **`.unbounded`**, and `yield` never suspends — so the whole file lands in RAM before the consumer asks for
+  byte one (measured: a 256 MiB file → 391 MiB of RSS). That, not disk, is what killed a 1k-file deposit on
+  2026-07-14. `ByteStreams.swift` holds the two sanctioned shapes: `pullStream(of:)` for a source we can read
+  on demand (a file — zero buffering, zero disk), and `scratchFileStream(at:write:)` for one that PUSHES at
+  its own pace (PhotoKit — drained to a per-user scratch file at full speed, then pulled back at upload pace,
+  which also decouples an iCloud download from a multi-hour S3 upload). **Never bound such a stream with
+  `bufferingPolicy:`** — every bounded policy DROPS elements, and dropping file bytes is corruption, not
+  throttling. `StreamBackpressureTests` pins this to a number, because every functional test passes while it
+  is broken; it is why `daemon:test` runs `--no-parallel`.
+- **The upload engine writes NOTHING to disk — it encrypts straight into the multipart upload.** It used to
+  encrypt each blob into a staging file and then upload that file part by part, which cost a full second copy
+  of every byte: a 40 GB video demanded 40 GB of free space, and a backup tool that needs as much headroom as
+  the file it is saving fails exactly the user who most needs it. Staging bought nothing that justified it —
+  resume never read those bytes back (a resumed blob re-reads and re-encrypts from the source regardless,
+  because the journal's stored DEK + nonce prefix make the ciphertext deterministic, so re-encrypting
+  reproduces the parts already on S3 byte for byte), it delayed the first byte of upload until the whole blob
+  was encrypted, and a killed run stranded it on disk forever. Now: source → 4 MiB frame → 64 MiB part → S3,
+  with only the part in flight held in memory (`PartShipper`). Peak disk for a file deposit is **zero**,
+  whatever the file's size.
+- **The one thing still written to disk is a PUSH source.** PhotoKit hands us bytes at its own pace and cannot
+  be told to wait, so an asset is drained to `scratch/` at full speed and pulled back at upload pace
+  (`scratchFileStream`). That costs one plaintext copy of the asset — deliberately, because the alternative is
+  throttling an iCloud download to the speed of a multi-hour S3 upload. `sweepScratch` empties the dir when a
+  session is built, so a killed deposit can't strand a full-size copy of someone's video forever.
+- **A source that changed since the scan is REJECTED, not archived.** `archive` re-computes the plaintext
+  SHA-256 as it encrypts and checks it against the `expectedSha256` the scan measured (`nil` for a Photos
+  asset, whose bytes don't exist until PhotoKit streams them — so there is nothing to check). Without this,
+  a file edited mid-upload, or a resumed blob whose source changed since the scan, uploads a mix of old and
+  new bytes that **passes every downstream check** — `verify` is only a HEAD — and gets marked archived. The
+  corruption then surfaces at RESTORE, which is the worst possible moment for a backup product to discover
+  it. A drifted blob fails `permanent`ly and correctly so: its id is derived from the OLD content hash, so
+  that blob can never be archived again — the next scan re-hashes the file and plans it afresh under a new id.
 - **Store:** embedded **SQLite, WAL mode**, via **`libsqlite3` directly** (the `Csqlite3` system module
   + a thin typed wrapper in `Journal.swift` — GRDB was the original sketch; the dep surface was kept
   minimal instead). This *is* the resumability guarantee.
@@ -195,14 +230,14 @@ Secrets live in Keychain, never in the UI.
 | Blob cap | **~1–2 GB**, locality-grouped | PUT-cost vs restore latency |
 | AEAD | **AES-256-GCM (CryptoKit)** | native + HW-accelerated; per-blob DEK |
 | Journal | **SQLite/WAL via libsqlite3 directly** | the resumability + SPOF store |
-| Per-user state | **`<dataRoot>/users/<sub>/`**, owned by a `UserSession` | one journal/staging/status per account, never machine-wide |
+| Per-user state | **`<dataRoot>/users/<sub>/`**, owned by a `UserSession` | one journal/scratch/status per account, never machine-wide |
 | S3 namespace | **`VaultPrefix`** (`blobs/<identityId>`) | typed: keys unslashed, listings slashed — the IAM `s3:prefix` condition needs the slash |
 | Multipart | **Low-level** (`CreateMultipartUpload`/`UploadPart`/`Complete`) | Transfer Manager hides `uploadId`/ETags; we persist them for cross-reboot resume |
 | Abort lifecycle | **14 days** | caps the Deep Archive staging-cost bleed |
 
 ### TL;DR
 A launchd Swift daemon owns ingest→encrypt→upload; Electron is a thin observer. It acts as exactly one
-signed-in user at a time — a `UserSession` (journal, staging, status, key, prefix) built at sign-in and
+signed-in user at a time — a `UserSession` (journal, scratch, status, key, prefix) built at sign-in and
 destroyed at sign-out, so signed out there is nothing to serve. SQLite/WAL journal +
 `ListParts` reconciliation + deterministic parts = crash-safe idempotent resume. Integrity is layered
 (plaintext SHA-256, per-frame GCM tags, per-part SHA-256 validated by S3, verify-after) and "archived"

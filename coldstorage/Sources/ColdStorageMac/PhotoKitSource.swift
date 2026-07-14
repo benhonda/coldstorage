@@ -12,7 +12,10 @@ import ColdStorageCore
 /// photos → archive only those, mirroring `ExplicitPathsSource`) is the intended consumer and should
 /// reuse `stream(assetId:)` for the bytes; until it's built, the daemon never instantiates this.
 public struct PhotoKitSource: IngestSource {
-    public init() {}
+    /// Where a pushed asset materializes while it streams — the signed-in user's scratch dir. See
+    /// `stream(assetId:scratch:)`.
+    let scratchDir: URL
+    public init(scratchDir: URL) { self.scratchDir = scratchDir }
 
     public func enumerate() async throws -> [IngestItem] {
         // The daemon requests Photos authorization at startup (TCC); assume granted here.
@@ -26,6 +29,7 @@ public struct PhotoKitSource: IngestSource {
             // Capture only the Sendable id in `open`; PHAssetResource isn't Sendable, so it can't cross
             // the @Sendable boundary — `stream` re-resolves it on the consuming thread (see below).
             let assetId = asset.localIdentifier
+            let scratch = Self.scratchURL(in: scratchDir, for: assetId)
             items.append(IngestItem(
                 id: assetId,
                 relativePath: res.originalFilename,
@@ -34,7 +38,7 @@ public struct PhotoKitSource: IngestSource {
                 createdAt: asset.creationDate,
                 isFavorite: asset.isFavorite,
                 metadata: ["uti": res.uniformTypeIdentifier],
-                open: { Self.stream(assetId: assetId) }))
+                open: { Self.stream(assetId: assetId, scratch: scratch) }))
         }
         return items
     }
@@ -42,16 +46,36 @@ public struct PhotoKitSource: IngestSource {
     /// Re-resolve the asset's photo resource by stable id, then stream it (incl. iCloud download). We
     /// resolve here rather than capturing the PHAssetResource: it isn't Sendable, so it can't be carried
     /// across the @Sendable `open` boundary onto whatever thread the upload engine pulls bytes on.
-    static func stream(assetId: String) -> AsyncThrowingStream<Data, Error> {
-        AsyncThrowingStream { cont in
-            let fetched = PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil)
-            guard let asset = fetched.firstObject,
-                  let res = PHAssetResource.assetResources(for: asset).first(where: { $0.type == .photo })
-            else { cont.finish(throwing: CocoaError(.fileNoSuchFile)); return }
-            let o = PHAssetResourceRequestOptions(); o.isNetworkAccessAllowed = true   // pull from iCloud if needed
-            PHAssetResourceManager.default().requestData(for: res, options: o,
-                dataReceivedHandler: { cont.yield($0) },
-                completionHandler: { err in err.map { cont.finish(throwing: $0) } ?? cont.finish() })
+    ///
+    /// PhotoKit is a **push** producer: `requestData` hands us chunks as fast as it can read/download them,
+    /// and there is no way to tell it to wait. This used to yield those chunks straight into an
+    /// `AsyncThrowingStream`, whose buffer is unbounded — so a 10 GB video became 10 GB of resident memory
+    /// in the daemon (the 2026-07-14 crash; see `ByteStreams.swift`).
+    ///
+    /// `writeData` is the same download, drained to a file instead of to us. PhotoKit does its own bounded
+    /// buffering, finishes at full speed, and lets go of the iCloud session; we then pull the file back at
+    /// the upload's pace. `scratchFileStream` runs it lazily on first demand and deletes the file on every
+    /// exit path (EOF, throw, cancelled deposit).
+    /// A scratch path for one asset. Derived from the asset id (not random) so a re-run reuses the same
+    /// name instead of littering a fresh file per attempt; the leading `photo-` keeps it clear of the
+    /// engine's blob ids, which share this dir. `/` and `:` appear in Photos localIdentifiers.
+    static func scratchURL(in dir: URL, for assetId: String) -> URL {
+        let safe = assetId.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: ":", with: "_")
+        return dir.appendingPathComponent("photo-\(safe)")
+    }
+
+    static func stream(assetId: String, scratch: URL) -> AsyncThrowingStream<Data, Error> {
+        scratchFileStream(at: scratch) { url in
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                let fetched = PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil)
+                guard let asset = fetched.firstObject,
+                      let res = PHAssetResource.assetResources(for: asset).first(where: { $0.type == .photo })
+                else { cont.resume(throwing: CocoaError(.fileNoSuchFile)); return }
+                let o = PHAssetResourceRequestOptions(); o.isNetworkAccessAllowed = true   // pull from iCloud if needed
+                PHAssetResourceManager.default().writeData(for: res, toFile: url, options: o) { err in
+                    err.map { cont.resume(throwing: $0) } ?? cont.resume(returning: ())
+                }
+            }
         }
     }
 }
@@ -66,7 +90,7 @@ public struct PhotoKitSource: IngestSource {
 public struct PhotoKitResolver: PhotoResolver {
     public init() {}
 
-    public func resolve(assetIds: [String]) async throws -> [IngestItem] {
+    public func resolve(assetIds: [String], scratchDir: URL) async throws -> [IngestItem] {
         // Ensure the DAEMON's own Photos authorization first. `fetchAssets` neither prompts nor errors when
         // unauthorized — it just returns empty — so without this a missing grant silently archives nothing.
         // `requestAuthorization` prompts on first call (a launchd daemon CAN prompt + the grant persists —
@@ -97,6 +121,7 @@ public struct PhotoKitResolver: PhotoResolver {
             // Capture only the Sendable id (PHAssetResource isn't Sendable) — `stream` re-resolves it on the
             // consuming thread, exactly as the background source does.
             let assetId = asset.localIdentifier
+            let scratch = PhotoKitSource.scratchURL(in: scratchDir, for: assetId)
             items.append(IngestItem(
                 id: assetId,
                 relativePath: res.originalFilename,
@@ -105,7 +130,7 @@ public struct PhotoKitResolver: PhotoResolver {
                 createdAt: asset.creationDate,
                 isFavorite: asset.isFavorite,
                 metadata: ["uti": res.uniformTypeIdentifier],
-                open: { PhotoKitSource.stream(assetId: assetId) }))
+                open: { PhotoKitSource.stream(assetId: assetId, scratch: scratch) }))
         }
         // Observability: a count mismatch points at stale picks or (more likely) an id the daemon can't see.
         // The "nothing resolved at all → surface it" policy lives in `PhotoDepositSource.enumerate` (Core), so

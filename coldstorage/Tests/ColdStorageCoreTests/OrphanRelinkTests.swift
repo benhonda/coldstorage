@@ -5,7 +5,7 @@ import Foundation
 /// Idempotency lives at the FILE level, not the blob level. A blob can be verified in S3 while its file rows
 /// were never linked (a prior run died between `markBlobVerified` and the `markFileArchived` loop) — an ORPHAN:
 /// the bytes are safe but the tree shows nothing. These prove the engine RE-LINKS such a blob on the next pass
-/// WITHOUT re-uploading, and that a healthy verified blob is a silent no-op (no wasted re-upload, no re-stage).
+/// WITHOUT re-uploading, and that a healthy verified blob is a silent no-op (no wasted re-upload).
 @Suite struct OrphanRelinkTests {
     /// Object store that always succeeds and records which keys it was asked to START an upload for — so a
     /// "no re-upload" claim is provable (the key must be absent from `createdKeys`).
@@ -32,7 +32,7 @@ import Foundation
         let journal = try Journal(path: base.appendingPathComponent("j.sqlite").path)
         let keys = LocalFileKEK(path: base.appendingPathComponent("kek.bin").path)
         let store = RecordingStore()
-        let engine = UploadEngine(journal: journal, store: store, keys: keys, stagingDir: base.appendingPathComponent("staging"))
+        let engine = UploadEngine(journal: journal, store: store, keys: keys)
         return (engine, journal, keys, store, LocalDirSource(root: root), base)
     }
 

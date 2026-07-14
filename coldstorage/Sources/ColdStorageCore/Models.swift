@@ -5,17 +5,28 @@ public struct IngestItem: Sendable {
     public let id: String                  // stable key (Photos localIdentifier, or relative path)
     public let relativePath: String
     public let size: Int
-    public let contentHash: String         // SHA-256 of plaintext — change/dedupe key
+    public let contentHash: String         // the PLAN's key: change/dedupe, and what the blob id is derived from
+    /// The plaintext SHA-256 the scan actually measured — the value `UploadEngine.archive` re-computes from
+    /// the bytes it uploads and checks against, so a source that changed underneath us can't be archived as
+    /// if it hadn't (see the drift guard there).
+    ///
+    /// `nil` when the source could not measure one, and that is NOT the same as `contentHash`. A file is
+    /// hashed during the walk, so the two coincide. A Photos asset is not: its bytes only exist once PhotoKit
+    /// streams them (possibly down from iCloud), so `contentHash` there is the asset's *identity*, not a hash
+    /// of anything. Comparing that against real bytes would fail on every photo — which is exactly the bug an
+    /// `Optional` prevents the next author from writing.
+    public let expectedSha256: String?
     public let createdAt: Date?
     public let isFavorite: Bool
     public let metadata: [String: String]  // EXIF, album, Live-Photo pairing, …
     public let open: @Sendable () -> AsyncThrowingStream<Data, Error>  // plaintext byte stream
 
     public init(id: String, relativePath: String, size: Int, contentHash: String,
+                expectedSha256: String? = nil,
                 createdAt: Date?, isFavorite: Bool, metadata: [String: String] = [:],
                 open: @escaping @Sendable () -> AsyncThrowingStream<Data, Error>) {
         self.id = id; self.relativePath = relativePath; self.size = size
-        self.contentHash = contentHash; self.createdAt = createdAt
+        self.contentHash = contentHash; self.expectedSha256 = expectedSha256; self.createdAt = createdAt
         self.isFavorite = isFavorite; self.metadata = metadata; self.open = open
     }
 
@@ -23,7 +34,8 @@ public struct IngestItem: Sendable {
     /// captured byte stream + intrinsic metadata. Used to "Keep Both" a colliding deposit under a fresh name.
     func rekeyed(to relativePath: String) -> IngestItem {
         IngestItem(id: relativePath, relativePath: relativePath, size: size, contentHash: contentHash,
-                   createdAt: createdAt, isFavorite: isFavorite, metadata: metadata, open: open)
+                   expectedSha256: expectedSha256, createdAt: createdAt, isFavorite: isFavorite,
+                   metadata: metadata, open: open)
     }
 }
 
@@ -84,11 +96,18 @@ public enum ColdStorageError: Error, CustomStringConvertible {
     /// A photo deposit resolved ZERO of its picked assets (all stale, or the daemon can't see them) even
     /// though access is granted — so nothing would be archived. Surfaced rather than silently no-op'd.
     case photosNoneResolved(String)
+    /// The source changed between the scan that planned this blob and the read that uploaded it — so the
+    /// bytes we just encrypted are not the bytes the plan was made from. Fails the blob instead of archiving
+    /// a file that never existed. Permanent by classification, and correctly so: the blob id is derived from
+    /// the OLD content hash, so *that* blob can never be archived again — the next scan re-hashes the file
+    /// and plans it afresh under a new id.
+    case contentDrift(String)
     /// The bare message — so `"\(error)"` (CLI stderr, daemon wire `error` field) reads cleanly instead
     /// of leaking the case name (`staging("…")`).
     public var description: String {
         switch self {
-        case .s3(let m), .integrity(let m), .staging(let m), .photosAccess(let m), .photosNoneResolved(let m): return m
+        case .s3(let m), .integrity(let m), .staging(let m), .photosAccess(let m),
+             .photosNoneResolved(let m), .contentDrift(let m): return m
         }
     }
 }

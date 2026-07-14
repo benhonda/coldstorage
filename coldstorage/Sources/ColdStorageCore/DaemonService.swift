@@ -128,9 +128,12 @@ public actor DaemonService {
             bus.publish(DaemonEvent("error", ["message": "depositPhotos: Photos ingest is unavailable on this platform"]))
             return
         }
-        let base = PhotoDepositSource(resolver: resolver, assetIds: assetIds, destDir: dir)
         do {
+            // Session FIRST: it owns the scratch dir the resolver materializes pushed assets into, and that
+            // dir is per-user (they're plaintext bytes) — so there is no source to build until we know who.
             let session = try requireSession("depositPhotos")
+            let base = PhotoDepositSource(resolver: resolver, assetIds: assetIds,
+                                          destDir: dir, scratchDir: session.scratchDir)
             try await performRun(session: session, source: resolveCollisions(session, base, conflicts))
         }
         catch let e as ColdStorageError {
@@ -568,7 +571,8 @@ public actor DaemonService {
                 source = ExplicitPathsSource(entries: entries, exclude: excludeMatcher(session))
             } else if let raw = p["assetIds"], !raw.isEmpty {
                 guard let resolver = photoResolver else { throw ColdStorageError.staging("previewDeposit: Photos ingest is unavailable on this platform") }
-                source = PhotoDepositSource(resolver: resolver, assetIds: raw.split(separator: "\n").map(String.init), destDir: dest)
+                source = PhotoDepositSource(resolver: resolver, assetIds: raw.split(separator: "\n").map(String.init),
+                                            destDir: dest, scratchDir: session.scratchDir)
             } else {
                 throw ColdStorageError.staging("previewDeposit requires params.src (paths) or params.assetIds")
             }

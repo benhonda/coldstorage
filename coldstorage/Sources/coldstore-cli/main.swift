@@ -19,8 +19,7 @@ let client = S3Client(config: config)
 let engine = UploadEngine(
     journal: try Journal(path: "coldstore.sqlite"),
     store: S3Store(client: client, bucket: bucket, storageClass: endpoint != nil ? nil : .deepArchive),
-    keys: LocalFileKEK(path: "dev-kek.bin"),
-    stagingDir: URL(fileURLWithPath: ".staging"))
+    keys: LocalFileKEK(path: "dev-kek.bin"))
 
 // Per-blob isolation: a failed blob is reported here, not fatal — the rest still archive.
 let failures = try await engine.run(source: LocalDirSource(root: dir))
