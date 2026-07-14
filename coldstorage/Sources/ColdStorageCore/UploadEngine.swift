@@ -54,7 +54,7 @@ public actor UploadEngine {
     @discardableResult
     public func run(source: IngestSource,
                     skipBlobIds: Set<String> = [],
-                    prefix: VaultPrefix = .dev,
+                    prefix: VaultPrefix,
                     onFileArchived: (@Sendable (String, String) async -> Void)? = nil,
                     onProgress: (@Sendable (UploadProgress) async -> Void)? = nil) async throws -> [BlobFailure] {
         let items = try await source.enumerate()
@@ -118,21 +118,21 @@ public actor UploadEngine {
             try journal.ensureBlob(blob, noncePrefix: prefix, wrappedDEK: try cipher.wrap(dek, kek: kek))
         }
 
-        // Open the multipart upload BEFORE streaming, because resume has to know which parts already landed:
-        // we must still *generate* their ciphertext (it's what advances the frame counter and byte offsets the
-        // spans are measured in) but must not re-send it. Skipped entirely on the orphan-relink path.
-        var uploadId: String?
-        var alreadyOnS3: Set<Int> = []
-        if !alreadyVerified {
-            if let existing = try journal.uploadId(of: blob.id) {
-                uploadId = existing
-            } else {
-                let id = try await store.createUpload(key: blob.s3Key)
-                try journal.setUploadId(blob.id, id)
-                uploadId = id
-            }
-            alreadyOnS3 = try await store.existingParts(key: blob.s3Key, uploadId: uploadId!)
-        }
+        // Resume has to know which parts already landed BEFORE we stream: we must still *generate* their
+        // ciphertext (it's what advances the frame counter and the byte offsets spans are measured in) but
+        // must not re-send it. Only a blob that already has an open upload can have parts on S3.
+        //
+        // **Two sources of truth, and they can disagree.** `ListParts` says what S3 holds; the journal says
+        // what we'll ASK S3 to assemble (`completedParts` feeds `complete`). A part can be on S3 yet missing
+        // from the journal — `uploadPart` returns, then the process dies before the row commits, and there is
+        // one such window per part. Skipping on S3's word alone would then drop that part from the complete
+        // call, and `CompleteMultipartUpload` assembles ONLY the parts it is given: the object silently comes
+        // back 64 MiB short, every later byte shifted, `verify` (a HEAD) none the wiser. So a part is skipped
+        // only when BOTH agree it is done; otherwise we re-upload it, which S3 treats as an overwrite.
+        let existingUploadId = alreadyVerified ? nil : try journal.uploadId(of: blob.id)
+        let alreadyOnS3 = existingUploadId == nil ? []
+            : try await store.existingParts(key: blob.s3Key, uploadId: existingUploadId!)
+        let alreadyRecorded = Set(try journal.completedParts(blob.id).map(\.partNumber))
 
         // The determinate progress bar needs a denominator, which staging used to supply by encrypting the
         // whole blob first and measuring it. It's derivable instead: framing is fixed and the nonce isn't
@@ -145,10 +145,9 @@ public actor UploadEngine {
         var frame: UInt64 = 0
         var offset = 0        // encrypted bytes emitted so far — the coordinate system spans are recorded in
         var spans: [(id: String, off: Int, len: Int, firstFrame: UInt64, sha: String, size: Int)] = []
-        // `uploadId: nil` IS the orphan-relink mode — generate the ciphertext to recompute spans, upload nothing.
-        // Encoding that in the Optional rather than a parallel bool means the two can't disagree (PILLAR4).
         let shipper = PartShipper(blob: blob, store: store, journal: journal,
-                                  uploadId: uploadId, alreadyOnS3: alreadyOnS3,
+                                  uploads: !alreadyVerified, existingUploadId: existingUploadId,
+                                  alreadyOnS3: alreadyOnS3, alreadyRecorded: alreadyRecorded,
                                   solo: solo, encryptedTotal: encryptedTotal, onProgress: onProgress)
 
         // Stream: source → 4 MiB frames → the part buffer → S3. Items go SEQUENTIALLY into the one blob, so if
@@ -186,10 +185,11 @@ public actor UploadEngine {
             //     and the parts we just sent hold the NEW ones, so the object is torn.
             // Fail the blob instead. It's `permanent` and rightly so: this blob's id is derived from the old
             // content hash, so it can never be archived again — the next scan re-hashes the file and plans it
-            // afresh under a new id, which uploads cleanly. `nil` = a source that cannot be hashed ahead of the
-            // read (a Photos asset streams from iCloud), so there is nothing to check against.
-            let sha = hasher.finalize().map { String(format: "%02x", $0) }.joined()
-            if let expected = item.expectedSha256, expected != sha {
+            // afresh under a new id, which uploads cleanly. A `.opaque` content key (a Photos asset, whose
+            // bytes don't exist until PhotoKit streams them) has no hash to check against, so it is exempt —
+            // and the TYPE says so, rather than a comment hoping the next author notices.
+            let sha = hasher.finalize().hex
+            if let expected = item.content.verifiableSha256, expected != sha {
                 throw ColdStorageError.contentDrift(
                     "\(item.relativePath) changed while it was being uploaded — it'll be picked up on the next pass")
             }
@@ -201,10 +201,21 @@ public actor UploadEngine {
 
         // Complete → verify → mark verified. Skipped on the orphan-relink path: the parts are already on S3 and
         // the blob is already verified, so the pass above existed only to recompute spans for the re-link below.
-        if !alreadyVerified, let uid = uploadId {
-            log("UploadEngine: blob \(blob.id) — \(offset) encrypted byte(s) in \(await shipper.partsEmitted) part(s); completing…")
-            try await store.complete(key: blob.s3Key, uploadId: uid, parts: try journal.completedParts(blob.id))
-            try await store.verify(key: blob.s3Key)
+        if !alreadyVerified {
+            if let uid = await shipper.openUploadId {
+                log("UploadEngine: blob \(blob.id) — \(offset) encrypted byte(s) in \(await shipper.partsEmitted) part(s); completing…")
+                try await store.complete(key: blob.s3Key, uploadId: uid, parts: try journal.completedParts(blob.id))
+                try await store.verify(key: blob.s3Key)
+            } else {
+                // EVERY item in this blob is zero bytes (a directory of `.gitkeep`s, say), so there is no
+                // ciphertext and no object to put. S3 has no zero-byte multipart upload: `complete` with an
+                // empty part list is rejected, and the code that rejects it is in `permanentS3Codes` — so this
+                // blob used to fail PERMANENTLY, marking perfectly good (if empty) files as failed forever.
+                // Nothing to upload is not a failure. The shipper never opened an upload (that's why there's no
+                // id here), so nothing leaks either; the spans below record length 0, and `RestoreEngine`
+                // short-circuits on a zero-length span rather than asking S3 for a backwards byte range.
+                log("UploadEngine: blob \(blob.id) — no bytes (every item is empty); nothing to upload")
+            }
             try journal.markBlobVerified(blob.id)
         }
 
@@ -229,24 +240,32 @@ private actor PartShipper {
     let blob: BlobPlan
     let store: any BlobStore
     let journal: Journal
-    /// `nil` ⇒ generate the ciphertext but upload nothing (the orphan-relink pass, which exists only to
+    /// `false` ⇒ generate the ciphertext but upload nothing (the orphan-relink pass, which exists only to
     /// recompute spans against a blob whose bytes are already on S3).
-    let uploadId: String?
-    /// Parts a previous, killed run already landed. We still have to GENERATE their bytes — that's what
-    /// advances the frame counter and the byte offsets spans are measured in — but re-sending them would
-    /// just burn the user's uplink re-uploading what S3 already holds.
+    let uploads: Bool
+    /// Parts a previous, killed run already landed *and recorded*. We still have to GENERATE their bytes —
+    /// that's what advances the frame counter and the byte offsets spans are measured in — but re-sending
+    /// them would just burn the user's uplink re-uploading what S3 already holds. See `archive` for why BOTH
+    /// sets have to agree before a part may be skipped.
     let alreadyOnS3: Set<Int>
+    let alreadyRecorded: Set<Int>
     let solo: IngestItem?
     let encryptedTotal: Int
     let onProgress: (@Sendable (UploadProgress) async -> Void)?
 
     private var buffer = Data()
     private(set) var partsEmitted = 0
+    /// The multipart upload, opened **lazily on the first part that actually has bytes** — so a blob whose
+    /// every item is empty never opens one at all. Eagerly opening it meant a zero-byte blob left a dangling
+    /// multipart upload on S3 that no `complete` could ever close (see `archive`).
+    private(set) var openUploadId: String?
 
-    init(blob: BlobPlan, store: any BlobStore, journal: Journal, uploadId: String?, alreadyOnS3: Set<Int>,
+    init(blob: BlobPlan, store: any BlobStore, journal: Journal,
+         uploads: Bool, existingUploadId: String?, alreadyOnS3: Set<Int>, alreadyRecorded: Set<Int>,
          solo: IngestItem?, encryptedTotal: Int, onProgress: (@Sendable (UploadProgress) async -> Void)?) {
         self.blob = blob; self.store = store; self.journal = journal
-        self.uploadId = uploadId; self.alreadyOnS3 = alreadyOnS3
+        self.uploads = uploads; self.openUploadId = existingUploadId
+        self.alreadyOnS3 = alreadyOnS3; self.alreadyRecorded = alreadyRecorded
         self.solo = solo; self.encryptedTotal = encryptedTotal; self.onProgress = onProgress
     }
 
@@ -267,9 +286,19 @@ private actor PartShipper {
             partsEmitted += 1
             let number = partsEmitted
 
-            guard let uploadId else { continue }   // relink pass: the bytes existed only to move the offsets
+            guard uploads else { continue }   // relink pass: the bytes existed only to move the offsets
 
-            if !alreadyOnS3.contains(number) {
+            // First real part → open the upload (resume reuses the one the journal already holds).
+            if openUploadId == nil {
+                let id = try await store.createUpload(key: blob.s3Key)
+                try journal.setUploadId(blob.id, id)
+                openUploadId = id
+            }
+            let uploadId = openUploadId!
+
+            // Skip ONLY when S3 holds it *and* the journal knows about it — otherwise `complete`, which is fed
+            // from the journal, would leave this part out and S3 would assemble a truncated object.
+            if !(alreadyOnS3.contains(number) && alreadyRecorded.contains(number)) {
                 let r = try await store.uploadPart(key: blob.s3Key, uploadId: uploadId, number: number, data: bytes)
                 try journal.recordPart(PartRow(blobId: blob.id, partNumber: number,
                                                eTag: r.etag, sha256: r.sha, status: .uploaded))
@@ -280,7 +309,7 @@ private actor PartShipper {
                                                 uploaded: min(number * S3Store.partSize, encryptedTotal),
                                                 total: encryptedTotal))
             }
-            // demo aid: slow parts so kill/resume is easy to see against fast local MinIO
+            // demo aid: slow parts so a kill/resume is easy to observe by hand
             if let ms = ProcessInfo.processInfo.environment["COLDSTORE_PART_DELAY_MS"].flatMap(Int.init), ms > 0 {
                 try await Task.sleep(for: .milliseconds(ms))
             }

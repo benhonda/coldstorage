@@ -14,7 +14,7 @@ import Foundation
     }
 
     private func item(_ id: String, path: String, size: Int = 1) -> IngestItem {
-        IngestItem(id: id, relativePath: path, size: size, contentHash: "h-\(id)",
+        IngestItem(id: id, relativePath: path, size: size, content: .sha256("h-\(id)"),
                    createdAt: nil, isFavorite: false,
                    open: { AsyncThrowingStream { $0.finish() } })
     }

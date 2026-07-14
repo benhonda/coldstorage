@@ -46,7 +46,7 @@ public actor CognitoAuth {
         let client = try CognitoIdentityClient(region: identityPoolRegion)
         let output = try await client.getId(input: GetIdInput(identityPoolId: identityPoolId, logins: logins))
         guard let identityId = output.identityId else {
-            throw ColdStorageError.staging("authenticate: Cognito did not return an identity id")
+            throw ColdStorageError.invalidRequest("authenticate: Cognito did not return an identity id")
         }
         vaultPrefix = "blobs/\(identityId)"
         return identityId

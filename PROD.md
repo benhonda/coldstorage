@@ -169,7 +169,9 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      (i) The "unset ⇒ default credential chain + flat `blobs`" fallback in 2b is **gone**: `coldstored`
      now requires **exactly one** of Cognito (multi-user) or an explicit `COLDSTORE_DEV_IDENTITY`
      (local dev/MinIO), and refuses to start (`exit 2`) with neither — that fallback signed S3 calls as
-     the shared all-access IAM user (`blobs/*`) against a shared key prefix. (ii) The per-user state is
+     the shared all-access IAM user (`blobs/*`) against a shared key prefix. *(Update 2026-07-14: the
+     `COLDSTORE_DEV_IDENTITY` half is gone too, retired with the MinIO sandbox — `coldstored` now requires
+     Cognito, full stop. One identity path into the daemon, not two.)* (ii) The per-user state is
      no longer a machine-wide journal: it lives in a `UserSession` at `<COLDSTORE_DATA_DIR>/users/<sub>/`
      (journal + staging + status.json), built at `authenticate` and destroyed at `deauthenticate`, and
      the raw `keyPrefix: String` is now the typed `VaultPrefix`. See CHANGELOG 2026-07-13.
@@ -578,7 +580,7 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      **same infra-outputs handoff** as `ui:mac:config` — SSOT-generated, gitignored (`ui/build/app-config.json`),
      PUBLIC values only (bucket/region/Cognito ids/sign-in domain+client/account-API). **`awsProfile` is
      deliberately omitted** — customers get scoped STS creds via Cognito (`coldstored/main.swift`), not a
-     local profile. The user's `config.json` still overrides per-key, so dogfood/dev/MinIO is byte-for-byte
+     local profile. The user's `config.json` still overrides per-key, so dogfood/dev is byte-for-byte
      unchanged; a handoff-less build bakes `{}` (falls back to `config.json`, the old behavior). All three
      config readers (`daemon.ts` env, `auth/config.ts` sign-in, `vault/config.ts` account-API) consume the
      merged result transparently — **net effect: sign-in is the only customer setup.** The customer

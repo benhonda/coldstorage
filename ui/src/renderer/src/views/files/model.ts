@@ -353,7 +353,6 @@ const STATUS_FROM_JOURNAL: Record<string, FileStatus> = {
   archived: "frozen", // at rest in deep storage — the resting state (a quiet ✓)
   discovered: "uploading",
   planned: "uploading",
-  staging: "uploading",
   uploading: "uploading",
   verifying: "uploading",
   failed: "failed",

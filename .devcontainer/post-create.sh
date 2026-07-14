@@ -31,11 +31,6 @@ curl -fsSL https://claude.ai/install.sh | bash
 # Swift toolchain (for the ColdStorage daemon) — idempotent
 bash "$(dirname "$0")/install-swift.sh"
 
-# MinIO + mc binaries (local S3 for daemon tests — no Docker)
-ARCH=$(uname -m); case "$ARCH" in aarch64) MA=arm64 ;; x86_64) MA=amd64 ;; *) MA=arm64 ;; esac
-sudo curl -fsSL "https://dl.min.io/server/minio/release/linux-${MA}/minio" -o /usr/local/bin/minio
-sudo curl -fsSL "https://dl.min.io/client/mc/release/linux-${MA}/mc" -o /usr/local/bin/mc
-sudo chmod +x /usr/local/bin/minio /usr/local/bin/mc
 
 # Pre-commit leak guard: point git at the tracked .githooks/ dir (gitleaks scans staged
 # changes on every commit). Idempotent; mirrors `task hooks:install`.

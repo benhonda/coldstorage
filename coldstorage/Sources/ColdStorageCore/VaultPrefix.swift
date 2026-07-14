@@ -30,9 +30,10 @@ public struct VaultPrefix: Sendable, Equatable, Hashable, CustomStringConvertibl
     /// `sub`) because that is the value AWS substitutes into the IAM policy variable at evaluation time.
     public static func user(identityId: String) -> VaultPrefix { .init(base: "blobs/\(identityId)") }
 
-    /// Local development only (MinIO / no Cognito): the flat legacy namespace. Reachable solely through an
-    /// explicit `COLDSTORE_DEV_IDENTITY` — never as a fallback when Cognito config is merely absent. See
-    /// `coldstored/main.swift` for why that distinction is load-bearing.
+    /// The flat legacy namespace (`blobs/<blobId>`), with no user in the path. **Tests only.** No production
+    /// caller can reach it: `prefix` is a required argument on `plan`/`run`, and the daemon always passes the
+    /// signed-in `session.prefix`. It used to be their DEFAULT, which meant one forgotten argument silently
+    /// wrote outside the caller's own namespace — leaving IAM to catch what the type system should have.
     public static let dev = VaultPrefix(base: "blobs")
 
     /// The object key for a blob: `<base>/<blobId>`.

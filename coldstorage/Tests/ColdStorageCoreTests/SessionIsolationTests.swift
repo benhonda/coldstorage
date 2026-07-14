@@ -16,23 +16,6 @@ import Foundation
 /// `beginSession`/`endSession` seam that `authenticate`/`deauthenticate` themselves call.
 @Suite struct SessionIsolationTests {
 
-    /// A vault that talks to nothing. None of these tests make a network call — they are about which
-    /// journal the daemon reads — so there is no reason to stand up an AWS client (and its CRT TLS context,
-    /// which under load can fail to initialize at all and would make this suite flaky; a flaky guard on a
-    /// security boundary is worse than no guard).
-    private struct FakeVault: Vault {
-        func createUpload(key: String) async throws -> String { "upload-\(key)" }
-        func existingParts(key: String, uploadId: String) async throws -> Set<Int> { [] }
-        func uploadPart(key: String, uploadId: String, number: Int, data: Data) async throws -> (etag: String, sha: String) {
-            ("etag-\(number)", "sha-\(number)")
-        }
-        func complete(key: String, uploadId: String, parts: [PartRow]) async throws {}
-        func verify(key: String) async throws {}
-        func thawState(key: String) async throws -> ThawState { .ready }
-        func requestThaw(key: String, days: Int, tier: RestoreTier) async throws {}
-        func getRange(key: String, offset: Int, length: Int) async throws -> Data { Data() }
-        func usageBytes(prefix: VaultPrefix) async throws -> Int { 0 }
-    }
 
     /// A daemon wired exactly as production wires it, minus the Cognito network call.
     private func fixture() -> (daemon: DaemonService, sessions: SessionFactory, root: URL) {
@@ -67,7 +50,7 @@ import Foundation
         let a = try f.sessions.make(.user(sub: "sub-alice", identityId: "ca-central-1:alice"))
         await f.daemon.beginSession(a)
         try a.journal.upsert([IngestItem(id: "a1", relativePath: "Taxes/2025-return.pdf", size: 4096,
-                                         contentHash: "hash-a1", createdAt: nil, isFavorite: false,
+                                         content: .sha256("hash-a1"), createdAt: nil, isFavorite: false,
                                          open: { AsyncThrowingStream { $0.finish() } })])
 
         let aFiles = try await reply(f.daemon, "listFiles").result as? [[String: Any]]

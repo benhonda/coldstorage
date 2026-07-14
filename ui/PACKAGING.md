@@ -144,7 +144,7 @@ build — defer it to the signing milestone. Prioritize the two things that bloc
   gitignored (`ui/build/app-config.json`). It carries only PUBLIC config (bucket, region, Cognito ids,
   sign-in domain/client, account-API URL) — **`awsProfile` is deliberately omitted**: a customer has no local
   profile, they sign in and get scoped short-lived STS creds via Cognito (`coldstored/main.swift`). The
-  user's `config.json` (when present) still overrides per-key, so dogfood/dev/MinIO testing is unchanged. Net
+  user's `config.json` (when present) still overrides per-key, so dogfood/dev testing is unchanged. Net
   effect: **sign-in is the only customer setup.**
   - **Two lanes, explicit (no silent default):** the account-backend URL is the ONLY thing that differs
     between a customer and a dogfood build (Cognito + the vault bucket are shared) — and the key-blob lives in

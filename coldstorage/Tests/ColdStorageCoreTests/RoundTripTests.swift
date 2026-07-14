@@ -16,44 +16,6 @@ import Foundation
 /// re-derived that arithmetic, which is precisely why this now exists.
 @Suite struct RoundTripTests {
 
-    /// An S3 that actually behaves like one: assembles the multipart parts into an object and serves ranged
-    /// reads out of it. That's what makes this a real round-trip rather than two mocks agreeing with each other.
-    final class InMemoryVault: Vault, @unchecked Sendable {
-        private let lock = NSLock()
-        private var parts: [String: [Int: Data]] = [:]
-        private var objects: [String: Data] = [:]
-
-        // BlobStore (the upload half)
-        func createUpload(key: String) async throws -> String { "upload-\(key)" }
-        func existingParts(key: String, uploadId: String) async throws -> Set<Int> { [] }
-        func uploadPart(key: String, uploadId: String, number: Int, data: Data) async throws -> (etag: String, sha: String) {
-            lock.withLock { parts[key, default: [:]][number] = data }
-            return ("etag-\(number)", "sha-\(number)")
-        }
-        func complete(key: String, uploadId: String, parts completed: [PartRow]) async throws {
-            lock.withLock {
-                let byNumber = parts[key] ?? [:]
-                objects[key] = byNumber.keys.sorted().reduce(Data()) { $0 + byNumber[$1]! }
-            }
-        }
-        func verify(key: String) async throws {
-            guard lock.withLock({ objects[key] != nil }) else { throw ColdStorageError.s3("no such object \(key)") }
-        }
-
-        // VaultStore (the restore half)
-        func thawState(key: String) async throws -> ThawState { .ready }   // MinIO/Standard: always readable, no thaw
-        func requestThaw(key: String, days: Int, tier: RestoreTier) async throws {}
-        func getRange(key: String, offset: Int, length: Int) async throws -> Data {
-            try lock.withLock {
-                guard let object = objects[key] else { throw ColdStorageError.s3("no such object \(key)") }
-                guard offset >= 0, offset + length <= object.count else {
-                    throw ColdStorageError.s3("range \(offset)..<\(offset + length) outside object of \(object.count)")
-                }
-                return object.subdata(in: offset..<(offset + length))
-            }
-        }
-        func usageBytes(prefix: VaultPrefix) async throws -> Int { lock.withLock { objects.values.reduce(0) { $0 + $1.count } } }
-    }
 
     /// Archive a directory, then restore each file and compare against what went in.
     private func roundTrip(_ files: [String: Data]) async throws {
@@ -68,10 +30,10 @@ import Foundation
 
         let journal = try Journal(path: base.appendingPathComponent("j.sqlite").path)
         let keys = LocalFileKEK(path: base.appendingPathComponent("kek.bin").path)
-        let vault = InMemoryVault()
+        let vault = FakeVault()   // assembles the parts + serves ranged reads, so this is a REAL round trip
 
         let failures = try await UploadEngine(journal: journal, store: vault, keys: keys)
-            .run(source: LocalDirSource(root: root))
+            .run(source: LocalDirSource(root: root), prefix: .dev)
         #expect(failures.isEmpty)
 
         let restore = RestoreEngine(journal: journal, store: vault, keys: keys, canSelfThaw: true)
@@ -110,5 +72,40 @@ import Foundation
     @Test func aMultiPartFileComesBackIntact() async throws {
         let bytes = Data(repeating: 0x5A, count: S3Store.partSize + (4 << 20))   // > one part
         try await roundTrip(["big.bin": bytes])
+    }
+
+    /// **A ZERO-BYTE file.** It has no ciphertext, so its span is `length: 0` — and a ranged read of zero
+    /// bytes is the range `bytes=<offset>-<offset - 1>`, which is backwards and rejected by S3 (416). The file
+    /// showed as archived and could never be recovered. Empty files are not exotic: `.gitkeep`, `__init__.py`,
+    /// anything `touch`ed. Restoring one has to give back an empty file, not an error.
+    @Test func aZeroByteFileComesBackAsAnEmptyFile() async throws {
+        try await roundTrip([
+            "empty.bin": Data(),
+            "beside-it.bin": Data("a non-empty neighbour, batched into the same blob".utf8),
+        ])
+    }
+
+    /// **A blob in which EVERY file is empty** — a directory of nothing but `.gitkeep`s. There are no bytes,
+    /// so there are no parts; S3 has no zero-byte multipart upload, and `complete` with an empty part list is
+    /// rejected with a code we classify as PERMANENT. The blob failed forever and marked those files `failed`.
+    /// Nothing to upload is not a failure: the blob must succeed, having opened no upload at all.
+    @Test func aBlobOfNothingButEmptyFilesSucceedsWithoutOpeningAnUpload() async throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent("cs-rt-\(UUID().uuidString)")
+        let root = base.appendingPathComponent("data")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+        try Data().write(to: root.appendingPathComponent(".gitkeep"))
+        try Data().write(to: root.appendingPathComponent("also-empty"))
+
+        let journal = try Journal(path: base.appendingPathComponent("j.sqlite").path)
+        let vault = FakeVault()
+        let failures = try await UploadEngine(journal: journal, store: vault,
+                                              keys: LocalFileKEK(path: base.appendingPathComponent("kek.bin").path))
+            .run(source: LocalDirSource(root: root), prefix: .dev)
+
+        #expect(failures.isEmpty)                                  // …not a permanent failure
+        #expect(try journal.isFileArchived(".gitkeep") == true)    // …and the files really are archived
+        #expect(vault.createdKeys.isEmpty)                         // …having never opened a multipart upload to dangle
     }
 }

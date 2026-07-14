@@ -15,8 +15,10 @@ imports an Apple-only framework, so it builds and tests on Linux (the devcontain
 supplies the genuinely platform-bound seam.
 
 - **Core (container/CI):** UploadEngine (multipart, resume, concurrency, retry) · Journal (SQLite/WAL) ·
-  Crypto (envelope, AEAD frames) · BlobPlanner · models/state machines · the control plane. Tested
-  against MinIO — fast, offline, scriptable kills/failures. ~80% of the hard logic lives here.
+  Crypto (envelope, AEAD frames) · BlobPlanner · models/state machines · the control plane. Covered by the
+  Swift test suite (`task daemon:test`) against in-process fakes — including a full archive→restore round
+  trip, resume-skips-landed-parts, the drift guard, and the streaming memory bounds. No server, no network,
+  runs on Linux/CI. ~80% of the hard logic lives here.
 - **macOS adapter:** PhotoKit ingest, FSEvents folder watch, TCC/permissions, Keychain, launchd glue,
   codesign/notarize.
 - **The boundary:** `IngestSource` (`enumerate() → [IngestItem]`, each item an openable stream +
@@ -55,10 +57,12 @@ engines. `DaemonService` holds a single `private var session: UserSession?` and 
   file tree, folder paths, sizes and watched-folder registry after a sign-out/sign-in on one Mac. File
   **bytes** never crossed — IAM scopes S3 per identity, MasterKeys are escrowed per `sub` — but the
   index did.)*
-- **Identity is stated, never inferred.** `coldstored` requires **exactly one** of: Cognito configured
-  (multi-user), or an explicit `COLDSTORE_DEV_IDENTITY` (local dev/MinIO). Neither ⇒ it refuses to
-  start (`exit 2`). There is no "no auth configured" fallback: that mode signed every S3 call as the
-  shared all-access IAM user against a shared key prefix.
+- **Identity is stated, never inferred.** `coldstored` requires Cognito to be configured, and refuses to
+  start (`exit 2`) without it. There is no "no auth configured" fallback: that mode signed every S3 call as
+  the shared all-access IAM user against a shared key prefix. *(A `COLDSTORE_DEV_IDENTITY` sandbox mode also
+  lived here, for the local MinIO loop. Both were retired 2026-07-14 — MinIO proved nothing the test suite
+  doesn't prove deterministically, and a second identity path into a security-sensitive daemon is not
+  something to carry for a convenience.)*
 - **`VaultPrefix`** (`VaultPrefix.swift`) is the only way to spell a user's S3 namespace:
   `.key(for: blobId)` (no trailing slash) vs `.listing` (**with** the trailing slash, which
   `ListObjectsV2` and the IAM `s3:prefix` condition `blobs/<sub>/*` both require). A bare
@@ -120,8 +124,10 @@ file's bytes) — blobs stay bounded for latency sanity, not cost.
   throttling an iCloud download to the speed of a multi-hour S3 upload. `sweepScratch` empties the dir when a
   session is built, so a killed deposit can't strand a full-size copy of someone's video forever.
 - **A source that changed since the scan is REJECTED, not archived.** `archive` re-computes the plaintext
-  SHA-256 as it encrypts and checks it against the `expectedSha256` the scan measured (`nil` for a Photos
-  asset, whose bytes don't exist until PhotoKit streams them — so there is nothing to check). Without this,
+  SHA-256 as it encrypts and checks it against the item's `ContentKey`: `.sha256` for a file (hashed during
+  the walk, so it CAN be checked) and `.opaque` for a Photos asset (an identity — its bytes don't exist until
+  PhotoKit streams them, so there is nothing to check). One sum type rather than a hash plus a nullable
+  hash-of-the-hash, so a source cannot state a plan key and a verifiable hash that disagree. Without this,
   a file edited mid-upload, or a resumed blob whose source changed since the scan, uploads a mix of old and
   new bytes that **passes every downstream check** — `verify` is only a HEAD — and gets marked archived. The
   corruption then surfaces at RESTORE, which is the worst possible moment for a backup product to discover
@@ -243,3 +249,14 @@ destroyed at sign-out, so signed out there is nothing to serve. SQLite/WAL journ
 (plaintext SHA-256, per-frame GCM tags, per-part SHA-256 validated by S3, verify-after) and "archived"
 means verified. Locality-grouped ≤2 GB blobs of 4 MiB AEAD frames; per-blob DEK under a KEK that the
 ZK master-key hierarchy (built, wiring pending — PROD.md) will hand to the user without a format change.
+
+- **Empty files and empty blobs are archived, not failed.** A zero-byte file has no ciphertext, so its span is
+  `length: 0`; `RestoreEngine` short-circuits rather than asking S3 for `bytes=N-(N-1)` (backwards → 416, so
+  the file used to be archived-but-unrecoverable). A blob whose items are ALL empty produces no parts at all —
+  S3 has no zero-byte multipart upload and rejects `complete` with an empty part list, which we classify as
+  permanent — so the multipart upload is opened **lazily, on the first part with bytes**: no bytes, no upload,
+  nothing to dangle, and the files still link. A directory of `.gitkeep`s is not a failure.
+- **A part is skipped on resume only when S3 AND the journal agree it landed.** `ListParts` says what S3 holds;
+  `complete` is fed from the journal. `uploadPart` can return and the process die before the row commits — one
+  window per part — and `CompleteMultipartUpload` assembles ONLY the parts it is handed, so trusting S3 alone
+  silently produced an object 64 MiB short with every later byte shifted, past a `verify` that is just a HEAD.

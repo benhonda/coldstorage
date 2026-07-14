@@ -18,13 +18,13 @@ commands. Full plan + decisions: [`DESIGN.md`](./DESIGN.md). Orientation:
 > modal w/ native folder picker) + **Settings** (watched folders, exclude chips, storage). The old 4-tab
 > Vault/Sources/Restore/Browse views are deleted; DS tokens/primitives/fonts + all layer-1/2 plumbing
 > were kept. `task ui:typecheck` + `task ui:test` + `task ui:build` green. **PENDING Ben (macOS): visual
-> verify** (`task ui:mac:demo` / `ui:mac:live` — Electron can't render in the container). The browser tree is
+> verify** (`task ui:mac:live` — Electron can't render in the container). The browser tree is
 > **real journal data** — the daemon's `listFiles` read is built and the fixtures stand-in is deleted
-> (proven vs MinIO, `task ui:prove`); **drop-to-upload / "Choose files" really archive through the daemon**
-> (the `deposit` command, proven vs MinIO); request-a-copy issues the **real `restore` command**;
+> (proven over the daemon socket, `task ui:prove`); **drop-to-upload / "Choose files" really archive through the daemon**
+> (the `deposit` command); request-a-copy issues the **real `restore` command**;
 > **move/rename/delete are real daemon commands** (`movePath`/`deletePath` — the UI applies an optimistic
-> edit, then reconciles to journal truth on the `filesChanged`-triggered `listFiles` refetch; proven vs
-> MinIO, 2026-06-25). Only `newFolder` stays local-only (a virtual path with nothing to persist yet).
+> edit, then reconciles to journal truth on the `filesChanged`-triggered `listFiles` refetch; proven over
+> the daemon socket, 2026-06-25). Only `newFolder` stays local-only (a virtual path with nothing to persist yet).
 >
 > **Error states (UI side, 2026-06-24):** a failed upload shows ⚠ **couldn't upload** on the row (kept
 > visible), a **light-red error toast**, a persistent sidebar **"N couldn't upload"** → `FailuresPanel`
@@ -113,15 +113,11 @@ task ui:typecheck   # strict tsc (node + web projects)
 task ui:test        # headless state-layer tests (no Electron/daemon needed)
 task ui:build       # build main/preload/renderer → ui/out
 
-# dogfood locally — ONE command: MinIO + daemon (bg) + UI (installs minio/mc if missing):
-task ui:mac:demo        # then archive files + restore from the UI; `task dev:stop` to tear down
-
-# or run the pieces yourself (macOS; HMR):
-task daemon:run &   # wait for coldstorage/coldstored.sock
-task ui:mac:dev
-
 # dogfood against the INSTALLED launchd daemon — real prod AWS (needs task daemon:mac:bootstrap done):
-task ui:mac:live        # same UI, COLDSTORE_SOCKET → ~/Library/Application Support/ColdStorage/coldstored.sock
+task ui:mac:live        # the UI with HMR, COLDSTORE_SOCKET → ~/Library/Application Support/ColdStorage/coldstored.sock
+
+# the whole app against the DEPLOYED staging API (sandbox Paddle — test cards, no real money):
+task app:mac:run:staging-local
 
 # prove the layer-1 bridge against a live daemon:
 task ui:prove       # getStatus round-trips + triggerNow streams runStarted→fileArchived→runFinished
@@ -190,7 +186,7 @@ the *tokens*, not the bundle.
   Bun-on-tooling, Electron-on-its-own-Node split only holds *within one OS*.
 - **Bun blocks postinstall scripts → Electron's binary isn't downloaded.** Electron fetches its app
   binary in a `postinstall`, which Bun skips by default (so a bare `bun install` leaves it missing and
-  `electron-vite dev` dies with `Error: Electron uninstall`). **Handled by the Taskfile:** `task ui:mac:dev`
+  `electron-vite dev` dies with `Error: Electron uninstall`). **Handled by the Taskfile:** `task ui:mac:live`
   depends on `ui:_ensure-electron`, which downloads the binary if absent (idempotent — skipped once
   present); `task ui:setup` does it too. No manual step. (`electron` is also in package.json
   `trustedDependencies` for fresh installs.) `build`/`typecheck`/`test` don't need the binary.

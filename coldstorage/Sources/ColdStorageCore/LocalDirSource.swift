@@ -37,8 +37,7 @@ public struct LocalDirSource: IngestSource {
             let sha = try Self.sha256Hex(of: url)
             items.append(IngestItem(
                 id: rel, relativePath: rel, size: v.fileSize ?? 0,
-                contentHash: sha,
-                expectedSha256: sha,          // a file IS hashable ahead of the archive — so the drift guard applies
+                content: .sha256(sha),   // a file IS hashable ahead of the archive — so the drift guard applies
                 createdAt: v.contentModificationDate, isFavorite: false,
                 open: { Self.stream(captured) }))
         }
@@ -49,7 +48,7 @@ public struct LocalDirSource: IngestSource {
         let h = try FileHandle(forReadingFrom: url); defer { try? h.close() }
         var hasher = SHA256()
         while let c = try h.read(upToCount: 1 << 20), !c.isEmpty { hasher.update(data: c) }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return hasher.finalize().hex
     }
 
     /// Plaintext bytes, pulled on demand. A local file is a source we can read at OUR pace, so it needs no

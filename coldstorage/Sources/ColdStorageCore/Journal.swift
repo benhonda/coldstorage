@@ -45,7 +45,7 @@ public final class Journal: @unchecked Sendable {
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK, let h = handle else {
-            throw ColdStorageError.staging("cannot open journal at \(path)")
+            throw ColdStorageError.invalidRequest("cannot open journal at \(path)")
         }
         db = h
         try exec("PRAGMA journal_mode=WAL;")
@@ -111,7 +111,7 @@ public final class Journal: @unchecked Sendable {
         var err: UnsafeMutablePointer<CChar>?
         guard sqlite3_exec(db, sql, nil, nil, &err) == SQLITE_OK else {
             let m = err.map { String(cString: $0) } ?? "unknown"; sqlite3_free(err)
-            throw ColdStorageError.staging("sqlite exec: \(m)")
+            throw ColdStorageError.invalidRequest("sqlite exec: \(m)")
         }
     }
 
@@ -119,7 +119,7 @@ public final class Journal: @unchecked Sendable {
     private func run(_ sql: String, _ binds: [Bind] = []) throws -> [[String: Any]] {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw ColdStorageError.staging("sqlite prepare: \(String(cString: sqlite3_errmsg(db)))")
+            throw ColdStorageError.invalidRequest("sqlite prepare: \(String(cString: sqlite3_errmsg(db)))")
         }
         defer { sqlite3_finalize(stmt) }
         for (i, b) in binds.enumerated() {
@@ -152,7 +152,7 @@ public final class Journal: @unchecked Sendable {
         // real failure — surface it. The journal is the SPOF: a silently-swallowed write is how a marker (or
         // any row) can vanish without a trace, so we refuse to report success on a step that didn't finish.
         guard rc == SQLITE_DONE else {
-            throw ColdStorageError.staging("sqlite step: \(String(cString: sqlite3_errmsg(db)))")
+            throw ColdStorageError.invalidRequest("sqlite step: \(String(cString: sqlite3_errmsg(db)))")
         }
         return rows
     }
@@ -165,7 +165,7 @@ public final class Journal: @unchecked Sendable {
         for it in items {
             let cur = try run("SELECT status, contentHash FROM files WHERE id=?1", [.text(it.id)])
             if let r = cur.first, (r["status"] as? String) == FileStatus.archived.rawValue,
-               (r["contentHash"] as? String) == it.contentHash { continue }
+               (r["contentHash"] as? String) == it.content.planKey { continue }
             // `createdAt` is captured here at discovery (the SSOT moment for intrinsic file metadata).
             // `size` is best-effort here — a Photos asset is size 0 until streamed; `markFileArchived`
             // overwrites it with the exact plaintext byte count once the bytes are sealed.
@@ -173,7 +173,7 @@ public final class Journal: @unchecked Sendable {
                 INSERT INTO files(id, relativePath, size, contentHash, status, createdAt) VALUES(?1,?2,?3,?4,?5,?6)
                 ON CONFLICT(id) DO UPDATE SET relativePath=excluded.relativePath, size=excluded.size,
                     contentHash=excluded.contentHash, status=excluded.status, createdAt=excluded.createdAt
-                """, [.text(it.id), .text(it.relativePath), .int(it.size), .text(it.contentHash), .text(FileStatus.planned.rawValue),
+                """, [.text(it.id), .text(it.relativePath), .int(it.size), .text(it.content.planKey), .text(FileStatus.planned.rawValue),
                       it.createdAt.map { .int(Int($0.timeIntervalSince1970)) } ?? .null])
         }
         try exec("COMMIT;")
@@ -290,7 +290,7 @@ public final class Journal: @unchecked Sendable {
     public func movePath(from: String, to: String) throws {
         guard from != to else { return }
         guard !to.hasPrefix("\(from)/") else {
-            throw ColdStorageError.staging("cannot move '\(from)' into itself")
+            throw ColdStorageError.invalidRequest("cannot move '\(from)' into itself")
         }
         lock.lock(); defer { lock.unlock() }
         // For the exact row, substr(path, length+1) is "" one past the end → maps to `to`; for "from/x" it

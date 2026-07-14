@@ -16,28 +16,16 @@ import Foundation
         func resolve(assetIds: [String], scratchDir: URL) async -> [IngestItem] {
             assetIds.compactMap { id in
                 guard let a = library[id] else { return nil }
-                return IngestItem(id: id, relativePath: a.name, size: a.data.count, contentHash: id,
+                // `.opaque` — exactly what PhotoKit supplies: an asset identity, not a hash of the bytes
+                // (they don't exist until it streams them). A `.sha256(id)` here would be a lie, and the
+                // engine's drift guard would rightly refuse to archive bytes that don't hash to it.
+                return IngestItem(id: id, relativePath: a.name, size: a.data.count, content: .opaque(id),
                                   createdAt: nil, isFavorite: false, metadata: ["uti": "public.jpeg"],
                                   open: { AsyncThrowingStream { c in c.yield(a.data); c.finish() } })
             }
         }
     }
 
-    /// Always-succeed object store that records the bytes it was handed — so a test can prove the photo's
-    /// plaintext was genuinely encrypted (ciphertext on the wire ≠ the original bytes).
-    final class RecordingStore: BlobStore, @unchecked Sendable {
-        private let lock = NSLock()
-        private var _uploaded = Data()
-        var uploaded: Data { lock.withLock { _uploaded } }
-        func createUpload(key: String) async throws -> String { "upload-\(key)" }
-        func existingParts(key: String, uploadId: String) async throws -> Set<Int> { [] }
-        func uploadPart(key: String, uploadId: String, number: Int, data: Data) async throws -> (etag: String, sha: String) {
-            lock.withLock { _uploaded.append(data) }
-            return ("etag-\(number)", "sha-\(number)")
-        }
-        func complete(key: String, uploadId: String, parts: [PartRow]) async throws {}
-        func verify(key: String) async throws {}
-    }
 
     private func tempEngine(store: any BlobStore) throws -> (UploadEngine, Journal) {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent("cs-photo-\(UUID().uuidString)")
@@ -103,11 +91,11 @@ import Foundation
             "asset-1": ("IMG_0001.jpg", plaintext),
             "asset-2": ("IMG_0002.jpg", Data("second photo".utf8)),
         ])
-        let store = RecordingStore()
+        let store = FakeVault()
         let (engine, journal) = try tempEngine(store: store)
 
         let failures = try await engine.run(source: PhotoDepositSource(
-            resolver: resolver, assetIds: ["asset-1", "asset-2"], destDir: "Photos/Trip", scratchDir: FileManager.default.temporaryDirectory))
+            resolver: resolver, assetIds: ["asset-1", "asset-2"], destDir: "Photos/Trip", scratchDir: FileManager.default.temporaryDirectory), prefix: .dev)
 
         #expect(failures.isEmpty)
         let rows = try journal.listFiles()
@@ -127,12 +115,12 @@ import Foundation
     /// row). Cross-folder dedup is now the user's call via the collision prompt, never silent.
     @Test func sameAssetToNewFolderIsACopyButSameFolderIsIdempotent() async throws {
         let resolver = FakeResolver(library: ["asset-1": ("IMG_0001.jpg", Data("a".utf8))])
-        let store = RecordingStore()
+        let store = FakeVault()
         let (engine, journal) = try tempEngine(store: store)
 
-        try await engine.run(source: PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "A", scratchDir: FileManager.default.temporaryDirectory))
-        try await engine.run(source: PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "B", scratchDir: FileManager.default.temporaryDirectory))
-        try await engine.run(source: PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "A", scratchDir: FileManager.default.temporaryDirectory))  // re-pick into A
+        try await engine.run(source: PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "A", scratchDir: FileManager.default.temporaryDirectory), prefix: .dev)
+        try await engine.run(source: PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "B", scratchDir: FileManager.default.temporaryDirectory), prefix: .dev)
+        try await engine.run(source: PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "A", scratchDir: FileManager.default.temporaryDirectory), prefix: .dev)  // re-pick into A
 
         let rows = try journal.listFiles()
         #expect(Set(rows.map(\.relativePath)) == ["A/IMG_0001.jpg", "B/IMG_0001.jpg"])  // two copies, not one moved row

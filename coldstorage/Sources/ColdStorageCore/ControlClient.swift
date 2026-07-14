@@ -18,7 +18,7 @@ public final class ControlClient {
         let ok = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(f, $0, len) }
         }
-        guard ok == 0 else { close(f); throw ColdStorageError.staging("connect(\(path)): errno \(errno)") }
+        guard ok == 0 else { close(f); throw ColdStorageError.invalidRequest("connect(\(path)): errno \(errno)") }
         if let readTimeout { UnixSocket.setReadTimeout(f, seconds: readTimeout) }
         fd = f
     }
@@ -30,7 +30,7 @@ public final class ControlClient {
 
     /// Write bytes verbatim (no framing). For tests/diagnostics that need to send a raw line.
     public func sendRaw(_ data: Data) throws {
-        guard UnixSocket.writeAll(fd, data) else { throw ColdStorageError.staging("write to control socket failed") }
+        guard UnixSocket.writeAll(fd, data) else { throw ColdStorageError.invalidRequest("write to control socket failed") }
     }
 
     /// Read one newline-delimited line (response or pushed event). nil on EOF (or on a read-timeout,

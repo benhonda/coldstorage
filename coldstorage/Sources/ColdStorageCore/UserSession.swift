@@ -10,21 +10,17 @@ import Crypto
 /// the two is how this codebase ended up with four different answers to "who is the current user".
 public enum SessionIdentity: Sendable, Equatable {
     case user(sub: String, identityId: String)
-    /// Local development only (MinIO / no Cognito), and only via an explicit `COLDSTORE_DEV_IDENTITY`.
-    case dev(name: String)
 
     /// The directory name this identity's state lives under. Named for `sub` — see the type doc.
     var directoryName: String {
         switch self {
         case .user(let sub, _): return sub
-        case .dev(let name): return "dev-\(name)"
         }
     }
 
     var vaultPrefix: VaultPrefix {
         switch self {
         case .user(_, let identityId): return .user(identityId: identityId)
-        case .dev: return .dev
         }
     }
 }
@@ -62,18 +58,17 @@ public final class UserSession: @unchecked Sendable {
     /// here survives a restart by design.
     public let scratchDir: URL
     public let journal: Journal
-    /// The MasterKey holder. Starts LOCKED for a real user (the app sends the MK via `mintVault` /
-    /// `unlockVault*`); a dev session is seeded from the local file KEK so MinIO runs need no unlock step.
+    /// The MasterKey holder. Starts LOCKED — the app sends the MasterKey via `mintVault` / `unlockVault*`.
     public let vaultKey: SwappableKeyProvider
     public let engine: UploadEngine
     public let restoreEngine: RestoreEngine
     public let statusPath: String
 
-    /// `initialKey` non-nil ⇒ dev mode (seeded, immediately usable). Real users start locked.
-    /// `canSelfThaw` mirrors what these credentials can actually DO: a dev/dogfood IAM user holds
-    /// `s3:RestoreObject`; a customer's Cognito role deliberately does not (the paid-retrieval gate).
+    /// `canSelfThaw` mirrors what these credentials can actually DO: a customer's Cognito role deliberately
+    /// lacks `s3:RestoreObject` (the paid-retrieval gate), so the daemon can see a thaw's state but never
+    /// start one.
     public init(identity: SessionIdentity, dataRoot: URL, store: any Vault,
-                canSelfThaw: Bool, initialKey: SymmetricKey? = nil) throws {
+                canSelfThaw: Bool) throws {
         self.identity = identity
         self.prefix = identity.vaultPrefix
         self.dir = dataRoot.appendingPathComponent("users", isDirectory: true)
@@ -86,7 +81,7 @@ public final class UserSession: @unchecked Sendable {
         sweepScratch(scratchDir)
 
         self.journal = try Journal(path: dir.appendingPathComponent("coldstore.sqlite").path)
-        self.vaultKey = SwappableKeyProvider(initial: initialKey)
+        self.vaultKey = SwappableKeyProvider(initial: nil)
         self.statusPath = dir.appendingPathComponent("status.json").path
         self.engine = UploadEngine(journal: journal, store: store, keys: vaultKey)
         self.restoreEngine = RestoreEngine(journal: journal, store: store, keys: vaultKey,
@@ -121,8 +116,7 @@ public struct SessionFactory: Sendable {
         self.dataRoot = dataRoot; self.store = store; self.canSelfThaw = canSelfThaw
     }
 
-    public func make(_ identity: SessionIdentity, initialKey: SymmetricKey? = nil) throws -> UserSession {
-        try UserSession(identity: identity, dataRoot: dataRoot, store: store,
-                        canSelfThaw: canSelfThaw, initialKey: initialKey)
+    public func make(_ identity: SessionIdentity) throws -> UserSession {
+        try UserSession(identity: identity, dataRoot: dataRoot, store: store, canSelfThaw: canSelfThaw)
     }
 }

@@ -20,7 +20,7 @@ import Testing
     @Test func ourErrorsArePermanent() {
         // integrity = corruption/hash mismatch; staging/s3 = our precondition or config — none self-heal.
         #expect(FailureKind.classify(ColdStorageError.integrity("hash mismatch")).isPermanent)
-        #expect(FailureKind.classify(ColdStorageError.staging("InvalidStorageClass")).isPermanent)
+        #expect(FailureKind.classify(ColdStorageError.invalidRequest("InvalidStorageClass")).isPermanent)
         #expect(FailureKind.classify(ColdStorageError.s3("createMultipartUpload returned no uploadId")).isPermanent)
     }
 

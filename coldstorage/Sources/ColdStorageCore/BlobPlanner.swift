@@ -14,14 +14,14 @@ public struct BlobPlanner: Sendable {
 
     /// Content-derived, stable blob id — keyed on member identity + content hashes.
     public static func stableId(_ items: [IngestItem]) -> String {
-        let key = items.map { "\($0.id):\($0.contentHash)" }.sorted().joined(separator: "\n")
-        return SHA256.hash(data: Data(key.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
+        let key = items.map { "\($0.id):\($0.content.planKey)" }.sorted().joined(separator: "\n")
+        return SHA256.hash(data: Data(key.utf8)).prefix(16).hex
     }
 
     /// `prefix` namespaces every produced blob's S3 key (a signed-in user's `blobs/<identity-id>`). It does
     /// NOT affect the content-derived blob `id` — only where the object lands — so the same files
     /// resume/dedup identically regardless of which user owns them.
-    public func plan(_ items: [IngestItem], prefix: VaultPrefix = .dev) -> [BlobPlan] {
+    public func plan(_ items: [IngestItem], prefix: VaultPrefix) -> [BlobPlan] {
         let ordered = items.sorted { a, b in
             if a.isFavorite != b.isFavorite { return a.isFavorite }                       // favorites first
             let (ca, cb) = (a.createdAt ?? .distantPast, b.createdAt ?? .distantPast)

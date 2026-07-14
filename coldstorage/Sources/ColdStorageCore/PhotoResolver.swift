@@ -52,8 +52,7 @@ public struct PhotoDepositSource: IngestSource {
         let items = try await resolver.resolve(assetIds: assetIds, scratchDir: scratchDir).map { it in
             let rel = ExplicitPathsSource.join(destDir, it.relativePath)
             return IngestItem(id: rel, relativePath: rel,
-                              size: it.size, contentHash: it.contentHash, expectedSha256: it.expectedSha256,
-                              createdAt: it.createdAt,
+                              size: it.size, content: it.content, createdAt: it.createdAt,
                               isFavorite: it.isFavorite, metadata: it.metadata, open: it.open)
         }
         // Nothing resolved → nothing would be archived. Surface it (don't silently no-op) so the picked rows

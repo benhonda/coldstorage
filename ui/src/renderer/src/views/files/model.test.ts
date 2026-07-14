@@ -147,7 +147,7 @@ describe("aggregates", () => {
     });
 
     test("coarsens in-pipeline statuses to uploading", () => {
-      for (const s of ["planned", "staging", "uploading", "verifying", "discovered"]) {
+      for (const s of ["planned", "uploading", "verifying", "discovered"]) {
         expect(fileFromJournal(row({ status: s })).status).toBe("uploading");
       }
     });

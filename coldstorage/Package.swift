@@ -35,8 +35,6 @@ let package = Package(
             ]
         ),
         .target(name: "ColdStorageMac", dependencies: ["ColdStorageCore"]),
-        .executableTarget(name: "coldstore-cli", dependencies: ["ColdStorageCore"]),
-        .executableTarget(name: "coldstore-restore", dependencies: ["ColdStorageCore"]),
         .executableTarget(name: "coldstorectl", dependencies: ["ColdStorageCore"]),
         // The native Photos picker (UI option B). No deps — it just prints selected asset ids as JSON;
         // AppKit/PhotosUI on macOS, a stub that exits 1 elsewhere. The daemon reads the picked originals.

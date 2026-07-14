@@ -13,7 +13,7 @@ import Foundation
     }
 
     private func item(_ id: String, path: String, size: Int) -> IngestItem {
-        IngestItem(id: id, relativePath: path, size: size, contentHash: "h-\(id)",
+        IngestItem(id: id, relativePath: path, size: size, content: .sha256("h-\(id)"),
                    createdAt: nil, isFavorite: false,
                    open: { AsyncThrowingStream { $0.finish() } })
     }
@@ -63,7 +63,7 @@ import Foundation
         let j = try tempJournal()
         let when = Date(timeIntervalSince1970: 1_700_000_000)
         try j.upsert([
-            IngestItem(id: "dated", relativePath: "a.jpg", size: 1, contentHash: "h1",
+            IngestItem(id: "dated", relativePath: "a.jpg", size: 1, content: .sha256("h1"),
                        createdAt: when, isFavorite: false, open: { AsyncThrowingStream { $0.finish() } }),
             item("undated", path: "b.jpg", size: 1),   // helper passes createdAt: nil
         ])

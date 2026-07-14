@@ -38,10 +38,10 @@ public struct RestoreEngine: Sendable {
     @discardableResult
     public func restore(fileId: String, to outURL: URL,
                         tier: RestoreTier = .standard, days: Int = 7) async throws -> RestoreOutcome {
-        guard let f = try journal.fileMapping(fileId) else { throw ColdStorageError.staging("no archived file '\(fileId)'") }
+        guard let f = try journal.fileMapping(fileId) else { throw ColdStorageError.invalidRequest("no archived file '\(fileId)'") }
         // Read the STORED key (SSOT) rather than recomputing `"blobs/<blobId>"` — a multi-user object lives
         // under its owner's prefix (`blobs/<cognito-identity-id>/<blobId>`), so recomputing would miss it.
-        guard let key = try journal.blobS3Key(f.blobId) else { throw ColdStorageError.staging("no S3 key for blob \(f.blobId)") }
+        guard let key = try journal.blobS3Key(f.blobId) else { throw ColdStorageError.invalidRequest("no S3 key for blob \(f.blobId)") }
         // `thawState` is a HeadObject, which the daemon can always do — in BOTH modes. Only the thaw itself
         // (RestoreObject) is gated, so a multi-user daemon can still see exactly where a restore stands;
         // it just can't be the one to start it. The decision is pure + tested (`RestoreStep.next`).
@@ -69,11 +69,25 @@ public struct RestoreEngine: Sendable {
     /// Ranged-GET the file's ciphertext span, decrypt frame-by-frame, reassemble, hash-verify, write.
     private func download(_ f: (blobId: String, offset: Int, length: Int, firstFrame: Int, plaintextSha256: String),
                           key: String, to outURL: URL, fileId: String) async throws {
-        guard let bc = try journal.blobCrypto(f.blobId) else { throw ColdStorageError.staging("no key material for blob \(f.blobId)") }
+        guard let bc = try journal.blobCrypto(f.blobId) else { throw ColdStorageError.invalidRequest("no key material for blob \(f.blobId)") }
         let dek = try cipher.unwrap(bc.wrappedDEK, kek: try keys.userKEK())
 
+        // A ZERO-BYTE file has no ciphertext — no frames, no bytes, nothing to fetch. Ask S3 for it anyway
+        // and you build the range `bytes=<offset>-<offset - 1>`, which is backwards and rejected (416): the
+        // file would show as archived in the tree and be permanently unrecoverable. Its content is known
+        // without a round trip, so short-circuit — but still check the recorded hash IS the hash of nothing,
+        // so a corrupted journal row can't quietly hand back an empty file in place of real data.
+        guard f.length > 0 else {
+            let shaOfNothing = SHA256.hash(data: Data()).hex
+            guard f.plaintextSha256 == shaOfNothing else {
+                throw ColdStorageError.integrity("restored '\(fileId)' claims 0 bytes but its recorded hash isn't empty's")
+            }
+            try Data().write(to: outURL)
+            return
+        }
+
         let ct = try await store.getRange(key: key, offset: f.offset, length: f.length)
-        let sealedFrame = EnvelopeCipher.frameSize + 16   // full frame = 4 MiB plaintext + 16-byte tag
+        let sealedFrame = EnvelopeCipher.sealedFrameSize
 
         var plain = Data(); var frame = UInt64(f.firstFrame); var pos = 0
         while pos < ct.count {
@@ -82,7 +96,7 @@ public struct RestoreEngine: Sendable {
             pos += n; frame += 1
         }
 
-        let sha = SHA256.hash(data: plain).map { String(format: "%02x", $0) }.joined()
+        let sha = SHA256.hash(data: plain).hex
         guard sha == f.plaintextSha256 else { throw ColdStorageError.integrity("restored '\(fileId)' failed hash check") }
         try plain.write(to: outURL)
     }

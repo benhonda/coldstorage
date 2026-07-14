@@ -8,6 +8,10 @@ import Crypto
 public struct EnvelopeCipher: Sendable {
     public static let frameSize = 4 << 20  // 4 MiB plaintext per frame
     public static let tagSize = 16         // AES-GCM auth tag appended to every frame (the only expansion)
+    /// One sealed frame on the wire. The SSOT for the size the RESTORE path walks the ciphertext in — upload
+    /// and restore must agree on this byte-for-byte or a file decrypts to garbage, so they read it from here
+    /// rather than each re-deriving `frameSize + 16`.
+    public static let sealedFrameSize = frameSize + tagSize
     public init() {}
 
     /// Ciphertext size for a given plaintext size. The framing is fixed and the nonce isn't stored, so a
@@ -41,10 +45,10 @@ public struct EnvelopeCipher: Sendable {
 
     /// Reverse of `seal`: a sealed frame is ciphertext ++ 16-byte tag; nonce re-derived from (prefix, frame).
     public func open(_ sealedFrame: Data, dek: SymmetricKey, prefix: Data, frame: UInt64) throws -> Data {
-        let split = sealedFrame.count - 16
+        let split = sealedFrame.count - Self.tagSize
         let box = try AES.GCM.SealedBox(nonce: try nonce(prefix: prefix, frame: frame),
                                         ciphertext: Data(sealedFrame.prefix(split)),
-                                        tag: Data(sealedFrame.suffix(16)))
+                                        tag: Data(sealedFrame.suffix(Self.tagSize)))
         return try AES.GCM.open(box, using: dek)
     }
 
@@ -62,6 +66,13 @@ public struct EnvelopeCipher: Sendable {
         let box = try AES.GCM.SealedBox(combined: wrapped)
         return SymmetricKey(data: try AES.GCM.open(box, using: kek))
     }
+}
+
+/// Lowercase hex — the on-the-wire form of every digest in the system. Hand-rolled in four places before
+/// this, two of which (`UploadEngine`'s span hash and `RestoreEngine`'s verification hash) must produce
+/// byte-identical output or every restore fails its integrity check. One spelling, one place (PILLAR3).
+extension Sequence where Element == UInt8 {
+    public var hex: String { map { String(format: "%02x", $0) }.joined() }
 }
 
 /// Source of the user's key-encrypting-key. V1 production = server escrow; ZK = user-held.

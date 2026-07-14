@@ -24,7 +24,7 @@ daemon + a private S3 vault, not a Vercel web app.
 | Vercel-OIDC role | **IAM user + access key** | nothing runs on Vercel; the daemon is a launchd process. Multi-user → Cognito later (deferred), an SDK-edge swap. |
 | Vercel env vars + DNS | **none** | no web frontend. Outputs are wired into the daemon's launchd env instead. |
 | `shared` = Route53 zones | **empty placeholder** | no DNS. Kept so the shared-first task surface holds; obvious home for future cross-env resources. |
-| prod + staging default | **production-only** | MinIO is our pipeline staging; a staging Deep Archive bucket = 180-day-min early-deletion fees for zero added coverage. Staging stays a trivial `cp -r` away. |
+| prod + staging default | **production-only** | the pipeline is proven by the Core test suite (in-process, no S3); a staging Deep Archive bucket = 180-day-min early-deletion fees for zero added coverage. Staging stays a trivial `cp -r` away. |
 | R2 / Cloudflare | **deferred** | only the (later) UI browse/thumbnail view needs it; add as a sibling concern then. |
 
 ## Use (all via the Taskfile — no raw commands)

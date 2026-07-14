@@ -2,10 +2,10 @@ import Testing
 @testable import ColdStorageCore
 
 /// The thaw decision is pure (HeadObject storage class + `x-amz-restore` header → state), so it's
-/// fully unit-testable without a live S3 — covering the Deep Archive states we can't exercise vs MinIO.
+/// fully unit-testable without a live S3 — covering the Deep Archive states only real AWS can exercise.
 @Suite struct ThawStateTests {
     @Test func directClassesServeImmediately() {
-        #expect(ThawState.from(storageClassRaw: nil, restoreHeader: nil) == .ready)          // STANDARD/MinIO (no header)
+        #expect(ThawState.from(storageClassRaw: nil, restoreHeader: nil) == .ready)          // STANDARD (no header)
         #expect(ThawState.from(storageClassRaw: "STANDARD", restoreHeader: nil) == .ready)
         #expect(ThawState.from(storageClassRaw: "GLACIER_IR", restoreHeader: nil) == .ready) // instant retrieval
     }

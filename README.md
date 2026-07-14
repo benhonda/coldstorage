@@ -11,7 +11,7 @@ Currently **dogfooding V1**; the multi-user/paid layer is in build — see [`PRO
 
 | Where | What |
 |---|---|
-| [`coldstorage/`](./coldstorage/) | The Swift package: portable `ColdStorageCore` (engine, journal, crypto, control plane) + `ColdStorageMac` adapter (PhotoKit, FSEvents) + executables (`coldstored`, `coldstorectl`, `coldstore-cli`, `coldstore-restore`, `coldstore-photo-picker`). Docs: [`README.md`](./coldstorage/README.md) (run it) · [`DESIGN.md`](./coldstorage/DESIGN.md) (how/why it's built). |
+| [`coldstorage/`](./coldstorage/) | The Swift package: portable `ColdStorageCore` (engine, journal, crypto, control plane) + `ColdStorageMac` adapter (PhotoKit, FSEvents) + executables (`coldstored`, `coldstorectl`, `coldstore-photo-picker`). Docs: [`README.md`](./coldstorage/README.md) (run it) · [`DESIGN.md`](./coldstorage/DESIGN.md) (how/why it's built). |
 | [`ui/`](./ui/) | Electron/React control panel — a thin client over the daemon's control socket. Docs: [`README.md`](./ui/README.md) · [`DESIGN.md`](./ui/DESIGN.md) (UX + contract) · [`PACKAGING.md`](./ui/PACKAGING.md) (the `.app`). |
 | [`account-backend/`](./account-backend/) | Hono API on Vercel + Neon/Drizzle: Cognito ↔ Paddle ↔ zero-knowledge key-blob backend for the paid layer ([`PROD.md`](./PROD.md) Phase 4). |
 | [`site/`](./site/) | Marketing site + checkout page — RR7/adpharm-stack on Vercel, **live at [coldstorage.sh](https://coldstorage.sh)**. Sections designed upstream in Claude cloud design, synced to `site/design-mirror/`. Docs: [`SPEC.md`](./site/SPEC.md) (build + design-sync architecture). |
@@ -40,21 +40,24 @@ Everything runs through the root [`Taskfile.yml`](./Taskfile.yml) (`task --list`
 
 ## Verify locally (no Docker, no Mac)
 ```sh
-task daemon:setup && task daemon:minio && task daemon:build:dev
-task daemon:test               # portable Core tests (swift-testing)
-task daemon:archive            # scan → encrypt → resumable multipart → verify; Ctrl-C + re-run resumes
-
+task daemon:setup && task daemon:build:dev
+task daemon:test               # the Core suite: scan → encrypt → resumable multipart → restore, end to
+                               # end against in-process fakes. Covers the archive→restore round trip,
+                               # resume (skips parts already on S3), the content-drift guard, and the
+                               # streaming memory bounds. No server, no network.
 task ui:setup                  # bun install (once)
-task daemon:run &              # wait for coldstorage/coldstored.sock
-task ui:prove                  # socket round-trip + live event stream
 task ui:test && task ui:typecheck
 ```
+There is no local S3 sandbox — the MinIO "dev sandbox" mode was retired 2026-07-14 (it proved nothing the
+test suite doesn't prove deterministically, and carried a second identity path into the daemon). Run the
+real thing against staging AWS instead: `task app:mac:run:staging-local`.
+
 On a Mac: `task daemon:mac:bootstrap` (creds → Keychain + launchd install), `task daemon:mac:doctor`,
 `task ui:mac:live` to dogfood the UI against the installed daemon, `task ui:mac:package` for the `.app`.
 
 ## Dev environment & gotchas (read before building — saves hours)
-- **No Docker.** Native toolchain: Swift via `swiftly`, MinIO + `mc` as plain binaries
-  (`task daemon:setup` is idempotent). New shells source `~/.local/share/swiftly/env.sh` — if
+- **No Docker.** Native toolchain: Swift via `swiftly` (`task daemon:setup` is idempotent).
+  New shells source `~/.local/share/swiftly/env.sh` — if
   `swift: command not found`, source it or open a new terminal.
 - **SwiftPM build lock — THE footgun:** a killed build can leave `.build/.lock` held and every later
   build blocks at 0% CPU looking "hung." `task daemon:build:dev`/`daemon:test` self-heal via
@@ -68,21 +71,15 @@ On a Mac: `task daemon:mac:bootstrap` (creds → Keychain + launchd install), `t
 - **Builds:** cold ~60s (debug-linking the AWS SDK), incrementals seconds. Don't spawn parallel
   builds — and note `swift run` acquires the build lock too, so on a fresh tree run
   `task daemon:build:dev` once before starting daemon + ctl together.
-- **The daemon states its identity or refuses to start (2026-07-13).** `coldstored` needs *exactly one* of
-  Cognito config (multi-user) or `COLDSTORE_DEV_IDENTITY=<name>` (local dev) — with neither it prints why
-  and exits 2, rather than silently signing S3 calls as the shared all-access IAM user. `task daemon:run`
-  already sets it; `task daemon:mac:install` now fails fast if the Cognito handoff is missing. If you have
+- **The daemon states its identity or refuses to start (2026-07-13).** `coldstored` needs Cognito config —
+  without it it prints why and exits 2, rather than silently signing S3 calls as the shared all-access IAM
+  user. (The `COLDSTORE_DEV_IDENTITY` local-dev alternative was retired 2026-07-14 with the MinIO sandbox:
+  one identity path into the daemon, not two.) `task daemon:mac:install` fails fast if the Cognito handoff
+  is missing. If you have
   a Mac data dir from before this, run **`task daemon:mac:reset:local` once** — the old machine-wide
   `coldstore.sqlite` is orphaned (and is the file that leaked one account's index to the next).
 - **Inspect the journal:** it's **per signed-in user**, under the daemon's data root —
-  `sqlite3 coldstorage/.dev-data/users/dev-local/coldstore.sqlite` for the dev daemon (`task
-  daemon:run`), `~/Library/Application Support/ColdStorage/users/<cognito-sub>/coldstore.sqlite` for
-  the installed one. There is no machine-wide journal. **MinIO console:**
-  http://localhost:9001 (`minioadmin`/`minioadmin`). Storage class is conditional — `DEEP_ARCHIVE` on
-  real AWS, omitted for MinIO.
-- **VS Code port-forward hijack:** VS Code can resurrect a stale 9000/9001 forward that blocks native
-  MinIO (`mc alias set` hangs). `.vscode/settings.json` sets `"remote.restoreForwardedPorts": false`,
-  but `.vscode/` is gitignored — a fresh devcontainer needs it re-applied. Symptom check:
-  `lsof -nP -iTCP:9000 -sTCP:LISTEN` showing `Code Helper`.
+  `~/Library/Application Support/ColdStorage/users/<cognito-sub>/coldstore.sqlite`. There is no
+  machine-wide journal.
 - **libsodium is built from source on Linux** (`task daemon:setup`) — Ubuntu's apt 1.0.18 predates
   symbols swift-sodium needs; Apple platforms use the bundled XCFramework.

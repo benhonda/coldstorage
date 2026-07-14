@@ -33,8 +33,6 @@ extraResources:
     to: bin/coldstored
   - from: ../coldstorage/.build/release/coldstore-photo-picker
     to: bin/coldstore-photo-picker
-  - from: ../coldstorage/.build/release/coldstore-restore
-    to: bin/coldstore-restore
   - from: ../coldstorage/launchd/coldstore-aws-credential-process.sh
     to: bin/coldstore-aws-credential-process.sh
   # Baked PUBLIC config (bucket/region/Cognito ids/sign-in domain+client/account-API) — written at package
@@ -59,7 +57,6 @@ mac:
   binaries:
     - Contents/Resources/bin/coldstored
     - Contents/Resources/bin/coldstore-photo-picker
-    - Contents/Resources/bin/coldstore-restore
   # The app's own Photos usage string — surfaced when the bundled daemon's grant is requested under the app
   # identity (#2). Harmless before then. (NSPhotoLibraryUsageDescription is Info.plist, not an entitlement.)
   extendInfo:

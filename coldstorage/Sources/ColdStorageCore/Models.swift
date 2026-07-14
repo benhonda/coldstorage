@@ -1,41 +1,50 @@
 import Foundation
 
+/// **What the scan knows about an item's content — and, crucially, whether it can be CHECKED.**
+///
+/// One field, not two, and that is the whole point. This started as `contentHash: String` plus an
+/// `expectedSha256: String?`, which for every file source meant assigning the same string to both — two
+/// fields obliged to agree, with nothing making them. A source could set the plan key to one value and the
+/// verifiable hash to another and no type would object. Here, desynchronisation is unrepresentable.
+public enum ContentKey: Sendable, Equatable {
+    /// The plaintext SHA-256, measured during the walk. The archive re-computes it from the bytes it actually
+    /// uploads and refuses to store them if they differ (`UploadEngine`'s drift guard).
+    case sha256(String)
+    /// An identity that is NOT a hash of anything — a Photos `localIdentifier`. The asset's bytes don't exist
+    /// until PhotoKit streams them (possibly down from iCloud), so there is nothing to measure ahead of the
+    /// read and therefore nothing to check against. Comparing this to real bytes would fail on every photo.
+    case opaque(String)
+
+    /// What the PLAN is keyed on: change detection, dedupe, and the content-derived blob id.
+    public var planKey: String { switch self { case .sha256(let s), .opaque(let s): return s } }
+    /// The hash the archive must reproduce — or `nil` when this source cannot be checked (`.opaque`).
+    public var verifiableSha256: String? { if case .sha256(let s) = self { return s }; return nil }
+}
+
 /// A single user file/photo to archive, plus the metadata that drives ordering + change detection.
 public struct IngestItem: Sendable {
     public let id: String                  // stable key (Photos localIdentifier, or relative path)
     public let relativePath: String
     public let size: Int
-    public let contentHash: String         // the PLAN's key: change/dedupe, and what the blob id is derived from
-    /// The plaintext SHA-256 the scan actually measured — the value `UploadEngine.archive` re-computes from
-    /// the bytes it uploads and checks against, so a source that changed underneath us can't be archived as
-    /// if it hadn't (see the drift guard there).
-    ///
-    /// `nil` when the source could not measure one, and that is NOT the same as `contentHash`. A file is
-    /// hashed during the walk, so the two coincide. A Photos asset is not: its bytes only exist once PhotoKit
-    /// streams them (possibly down from iCloud), so `contentHash` there is the asset's *identity*, not a hash
-    /// of anything. Comparing that against real bytes would fail on every photo — which is exactly the bug an
-    /// `Optional` prevents the next author from writing.
-    public let expectedSha256: String?
+    public let content: ContentKey         // the plan's key — and whether the bytes can be checked against it
     public let createdAt: Date?
     public let isFavorite: Bool
     public let metadata: [String: String]  // EXIF, album, Live-Photo pairing, …
     public let open: @Sendable () -> AsyncThrowingStream<Data, Error>  // plaintext byte stream
 
-    public init(id: String, relativePath: String, size: Int, contentHash: String,
-                expectedSha256: String? = nil,
+    public init(id: String, relativePath: String, size: Int, content: ContentKey,
                 createdAt: Date?, isFavorite: Bool, metadata: [String: String] = [:],
                 open: @escaping @Sendable () -> AsyncThrowingStream<Data, Error>) {
         self.id = id; self.relativePath = relativePath; self.size = size
-        self.contentHash = contentHash; self.expectedSha256 = expectedSha256; self.createdAt = createdAt
+        self.content = content; self.createdAt = createdAt
         self.isFavorite = isFavorite; self.metadata = metadata; self.open = open
     }
 
     /// A copy re-keyed to a new vault path (path-keyed sources use id == relativePath), preserving the
     /// captured byte stream + intrinsic metadata. Used to "Keep Both" a colliding deposit under a fresh name.
     func rekeyed(to relativePath: String) -> IngestItem {
-        IngestItem(id: relativePath, relativePath: relativePath, size: size, contentHash: contentHash,
-                   expectedSha256: expectedSha256, createdAt: createdAt, isFavorite: isFavorite,
-                   metadata: metadata, open: open)
+        IngestItem(id: relativePath, relativePath: relativePath, size: size, content: content,
+                   createdAt: createdAt, isFavorite: isFavorite, metadata: metadata, open: open)
     }
 }
 
@@ -47,7 +56,7 @@ public struct BlobPlan: Sendable {
     /// (`blobs/${cognito-identity.amazonaws.com:sub}/*`), so user A's creds can't touch user B's objects.
     /// Supplied per-run from the daemon's live session; the content-derived `id` is unchanged by it.
     public let prefix: VaultPrefix
-    public init(id: String, items: [IngestItem], prefix: VaultPrefix = .dev) {
+    public init(id: String, items: [IngestItem], prefix: VaultPrefix) {
         self.id = id; self.items = items; self.prefix = prefix
     }
     public var s3Key: String { prefix.key(for: id) }
@@ -84,12 +93,19 @@ public struct SourceRow: Sendable {
 /// vanish (the tree is derived from file paths). The marker is excluded from the file count and never
 /// becomes a browsable file; `movePath`/`deletePath` sweep it by path like any other row. Once real files
 /// land under the folder the marker is redundant (the path is implied) but harmless — the UI dedups by name.
-public enum FileStatus: String, Codable, Sendable { case discovered, planned, staging, uploading, verifying, archived, failed, deleted, folder }
+/// `uploading`/`verifying` are declared but never persisted — the journal only ever writes `planned`,
+/// `archived`, `failed`, `deleted` and `folder` (plus `discovered` as the decoder's fallback). They're the
+/// hooks for a future per-file progress state. A `staging` case sat here too until the upload engine stopped
+/// staging (2026-07-14) — it named a step that no longer exists, so it's gone.
+public enum FileStatus: String, Codable, Sendable { case discovered, planned, uploading, verifying, archived, failed, deleted, folder }
 public enum BlobStatus: String, Codable, Sendable { case open, uploading, completed, verified, aborted }
 public enum PartStatus: String, Codable, Sendable { case pending, uploaded, verified }
 
 public enum ColdStorageError: Error, CustomStringConvertible {
-    case s3(String), integrity(String), staging(String)
+    case s3(String), integrity(String)
+    /// The caller asked for something impossible or incoherent: not signed in, a missing parameter, no key
+    /// material for a blob. (Was `.staging` — a name inherited from the staging step, which no longer exists.)
+    case invalidRequest(String)
     /// The daemon lacks (full) Photos access, so a photo deposit can't read the picked assets. Carries a
     /// user-facing, recoverable message — the UI maps this case to an "Open Photos settings" action.
     case photosAccess(String)
@@ -103,10 +119,10 @@ public enum ColdStorageError: Error, CustomStringConvertible {
     /// and plans it afresh under a new id.
     case contentDrift(String)
     /// The bare message — so `"\(error)"` (CLI stderr, daemon wire `error` field) reads cleanly instead
-    /// of leaking the case name (`staging("…")`).
+    /// of leaking the case name (`invalidRequest("…")`).
     public var description: String {
         switch self {
-        case .s3(let m), .integrity(let m), .staging(let m), .photosAccess(let m),
+        case .s3(let m), .integrity(let m), .invalidRequest(let m), .photosAccess(let m),
              .photosNoneResolved(let m), .contentDrift(let m): return m
         }
     }
@@ -145,7 +161,7 @@ public enum RestoreTier: String, Sendable, CaseIterable { case expedited, standa
     public static func parse(_ raw: String?) throws -> RestoreTier {
         guard let raw else { return .standard }
         guard let tier = RestoreTier(rawValue: raw.lowercased()) else {
-            throw ColdStorageError.staging("bad tier '\(raw)' (expected: \(allCases.map(\.rawValue).joined(separator: " | ")))")
+            throw ColdStorageError.invalidRequest("bad tier '\(raw)' (expected: \(allCases.map(\.rawValue).joined(separator: " | ")))")
         }
         return tier
     }
@@ -153,12 +169,12 @@ public enum RestoreTier: String, Sendable, CaseIterable { case expedited, standa
 
 
 /// Whether a blob object can be ranged-GET *right now*. Deep Archive / Glacier Flexible objects must be
-/// thawed (RestoreObject) first; everything else (STANDARD/MinIO, GLACIER_IR) serves directly.
+/// thawed (RestoreObject) first; everything else (STANDARD, GLACIER_IR) serves directly.
 public enum ThawState: Sendable, Equatable { case ready, needed, inProgress
     /// Pure map of a HeadObject's storage class + raw `x-amz-restore` header → state (unit-testable, no I/O).
     public static func from(storageClassRaw: String?, restoreHeader: String?) -> ThawState {
         let needsThaw = storageClassRaw == "DEEP_ARCHIVE" || storageClassRaw == "GLACIER"
-        guard needsThaw else { return .ready }                       // STANDARD (nil on MinIO), GLACIER_IR, …
+        guard needsThaw else { return .ready }                       // STANDARD (nil), GLACIER_IR, …
         guard let restoreHeader else { return .needed }              // archived, never requested
         // `x-amz-restore: ongoing-request="false", expiry-date="…"` once the temporary copy is downloadable.
         return restoreHeader.contains("ongoing-request=\"false\"") ? .ready : .inProgress

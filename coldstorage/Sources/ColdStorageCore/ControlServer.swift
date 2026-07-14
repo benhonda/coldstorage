@@ -51,9 +51,9 @@ public final class ControlServer: @unchecked Sendable {
         let ok = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, len) }
         }
-        guard ok == 0 else { close(fd); throw ColdStorageError.staging("bind(\(path)): errno \(errno)") }
+        guard ok == 0 else { close(fd); throw ColdStorageError.invalidRequest("bind(\(path)): errno \(errno)") }
         chmod(path, 0o600)              // owner-only — the local-peer auth the design asks for
-        guard listen(fd, 16) == 0 else { close(fd); throw ColdStorageError.staging("listen(): errno \(errno)") }
+        guard listen(fd, 16) == 0 else { close(fd); throw ColdStorageError.invalidRequest("listen(): errno \(errno)") }
         listenFD = fd
         bus.subscribe { [weak self] e in self?.broadcast(e) }
         Thread { [weak self] in self?.acceptLoop(fd) }.start()

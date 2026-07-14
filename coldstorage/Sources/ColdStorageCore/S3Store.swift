@@ -37,7 +37,7 @@ public typealias Vault = BlobStore & VaultStore
 public struct S3Store: Vault {
     let client: S3Client
     let bucket: String
-    let storageClass: S3ClientTypes.StorageClass?   // .deepArchive on real AWS; nil (STANDARD) for MinIO/LocalStack
+    let storageClass: S3ClientTypes.StorageClass?   // .deepArchive in prod; nil (STANDARD) leaves it to the bucket
     public static let partSize = 64 << 20   // 64 MiB
 
     public init(client: S3Client, bucket: String, storageClass: S3ClientTypes.StorageClass? = .deepArchive) {
@@ -101,7 +101,7 @@ public struct S3Store: Vault {
 
     /// Ranged GET of an object's byte span (a logical file's ciphertext within its blob).
     /// Assumes the object is downloadable now — Deep Archive callers must `thawState`/`requestThaw` first
-    /// (RestoreEngine orchestrates this); STANDARD/MinIO/GLACIER_IR serve directly.
+    /// (RestoreEngine orchestrates this); STANDARD/GLACIER_IR serve directly.
     public func getRange(key: String, offset: Int, length: Int) async throws -> Data {
         let out = try await client.getObject(input: .init(
             bucket: bucket, key: key, range: "bytes=\(offset)-\(offset + length - 1)"))

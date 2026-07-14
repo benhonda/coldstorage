@@ -77,7 +77,7 @@ import Foundation
     /// A marker is a no-op when a real file already implies the folder — we never stack a redundant marker.
     @Test func createFolderIsNoOpWhenPathAlreadyHasAFile() throws {
         let j = try tempJournal()
-        try j.upsert([IngestItem(id: "f1", relativePath: "Photos/a.jpg", size: 10, contentHash: "h1",
+        try j.upsert([IngestItem(id: "f1", relativePath: "Photos/a.jpg", size: 10, content: .sha256("h1"),
                                  createdAt: nil, isFavorite: false,
                                  open: { AsyncThrowingStream { $0.finish() } })])
         try j.createFolder(path: "Photos")

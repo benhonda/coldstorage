@@ -15,7 +15,7 @@ enum UnixSocket {
     /// Open a SOCK_STREAM unix socket; throws on too-long paths or syscall failure.
     static func openSocket() throws -> Int32 {
         let fd = socket(AF_UNIX, csSockStream, 0)
-        guard fd >= 0 else { throw ColdStorageError.staging("socket(): errno \(errno)") }
+        guard fd >= 0 else { throw ColdStorageError.invalidRequest("socket(): errno \(errno)") }
         return fd
     }
 
@@ -25,7 +25,7 @@ enum UnixSocket {
         addr.sun_family = sa_family_t(AF_UNIX)
         let bytes = Array(path.utf8)
         let cap = MemoryLayout.size(ofValue: addr.sun_path)
-        guard bytes.count < cap else { throw ColdStorageError.staging("socket path too long (\(bytes.count) ≥ \(cap)): \(path)") }
+        guard bytes.count < cap else { throw ColdStorageError.invalidRequest("socket path too long (\(bytes.count) ≥ \(cap)): \(path)") }
         withUnsafeMutablePointer(to: &addr.sun_path) {
             $0.withMemoryRebound(to: CChar.self, capacity: cap) { dst in
                 for (i, b) in bytes.enumerated() { dst[i] = CChar(bitPattern: b) }

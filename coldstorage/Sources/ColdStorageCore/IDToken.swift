@@ -15,12 +15,12 @@ enum IDToken {
     static func sub(of jwt: String) throws -> String {
         let segments = jwt.split(separator: ".")
         guard segments.count == 3 else {
-            throw ColdStorageError.staging("idToken is not a JWT (expected 3 dot-separated segments)")
+            throw ColdStorageError.invalidRequest("idToken is not a JWT (expected 3 dot-separated segments)")
         }
         guard let payload = base64URLDecode(String(segments[1])),
               let claims = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
               let sub = claims["sub"] as? String, !sub.isEmpty else {
-            throw ColdStorageError.staging("idToken payload has no 'sub' claim")
+            throw ColdStorageError.invalidRequest("idToken payload has no 'sub' claim")
         }
         return sub
     }

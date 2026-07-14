@@ -12,26 +12,28 @@ output: prefixed
 # `mac` segment right after their domain — `daemon:mac:*`, `ui:mac:*`. Everything else runs in the
 # devcontainer (or anywhere). `[devcontainer]` desc tags mark tasks that must NOT run on the Mac.
 #
-# THREE WAYS TO RUN `coldstored` — pick the one matching what you're doing, not all three at once:
+# TWO WAYS TO RUN `coldstored` — pick the one matching what you're doing, not both at once:
 #
-#   1. DEV SANDBOX (fake AWS via MinIO — safe to break)
-#        daemon:run (or daemon:run:bg) + ui:mac:dev
-#        For changing Swift/UI code. Its own journal/socket under coldstorage/ — never touches the
-#        real vault; daemon:mac:reset wipes it clean any time.
+#   (There used to be a third: a local "dev sandbox" against a fake AWS (MinIO), with its own identity
+#   mode in coldstored. It's gone — retired 2026-07-14. It proved nothing the test suite doesn't prove
+#   deterministically (`daemon:test` covers the full archive→restore round trip, resume, and the memory
+#   bounds, with no server), while carrying a second identity path into a security-sensitive daemon and
+#   a whole parallel run mode to keep working. Iterate with `daemon:test`; run the app against real
+#   staging AWS with `app:mac:run:staging-local`.)
 #
-#   2. YOUR REAL BACKGROUND DAEMON (real AWS/Deep Archive, always-on)
+#   1. YOUR REAL BACKGROUND DAEMON (real AWS/Deep Archive, always-on)
 #        daemon:mac:bootstrap (once) → then it just runs; drive/watch it via daemon:mac:live / ui:mac:live
 #        A launchd LaunchAgent — starts at login, restarts on crash. This IS your day-to-day backup
 #        service. Leave it running; you don't re-bootstrap it to "start" it.
 #
-#   3. THE PACKAGED APP (what a real future customer downloads)
+#   2. THE PACKAGED APP (what a real future customer downloads)
 #        ui:mac:package (+ ui:mac:package:sign-adhoc) → open the built ColdStorage.app → ui:mac:package:doctor
 #        Bundles + spawns its OWN coldstored, Finder-launched with no shell env — tests the actual
 #        end-user experience (Photos permission grant, etc.), not day-to-day dogfooding.
-#        ⚠ COLLIDES with #2 — both use the SAME ~/Library/Application Support/ColdStorage (same
+#        ⚠ COLLIDES with #1 — both use the SAME ~/Library/Application Support/ColdStorage (same
 #        socket/journal). `task daemon:mac:uninstall` before testing this; `task daemon:mac:bootstrap` again
-#        afterward to bring your real daemon (#2) back. (Temporary: once packaging's background-run/
-#        Tray UX lands, the packaged app replaces #2 outright and this toggle goes away.)
+#        afterward to bring your real daemon (#1) back. (Temporary: once packaging's background-run/
+#        Tray UX lands, the packaged app replaces #1 outright and this toggle goes away.)
 vars:
   AWS_PROFILE: "pharmer"
   # Pinned for reproducibility — bump deliberately. Used by `task scan` (leak guard).
@@ -67,13 +69,12 @@ tasks:
         fi
 
   # ------------------------------------------------------------------ daemon (domain: coldstorage/)
-  # Native — no Docker. Swift toolchain (swiftly) + a standalone MinIO binary.
-  # `task daemon:setup` installs both if missing; the devcontainer post-create does it on rebuild.
+  # Native — no Docker. Swift toolchain (swiftly) + libsodium.
+  # `task daemon:setup` installs them if missing; the devcontainer post-create does it on rebuild.
   daemon:setup:
-    desc: Install the Swift toolchain (Linux) + OS-correct MinIO/mc binaries + libsodium (Linux) if missing (idempotent)
+    desc: Install the Swift toolchain (Linux) + libsodium (Linux) if missing (idempotent)
     cmds:
       - bash .devcontainer/install-swift.sh
-      - task: _minio-binaries
       - task: _libsodium-dev
 
   _libsodium-dev:
@@ -82,7 +83,7 @@ tasks:
     # itself, so this is a no-op there. NOT `apt install libsodium-dev`: Ubuntu 24.04 ships 1.0.18, which
     # predates AEGIS (added 1.0.19) that swift-sodium's Linux binding references — the build fails with
     # "cannot find 'crypto_aead_aegis128l_...' in scope". Build+install a current release from source
-    # instead (same "get current upstream directly" call as _minio-binaries's curl'd binaries). Idempotent
+    # instead ("get current upstream directly", rather than apt's stale build). Idempotent
     # via status (pkg-config version check); a dep of daemon:setup so a fresh devcontainer needs no manual step.
     internal: true
     vars:
@@ -104,35 +105,6 @@ tasks:
         cd /tmp && rm -rf libsodium.tar.gz "libsodium-{{.VERSION}}"
         echo "installed libsodium {{.VERSION}} to /usr/local (was: apt's 1.0.18, too old for AEGIS)"
 
-  _minio-binaries:
-    # Download the minio + mc binaries for THIS OS/arch (macOS or Linux) if missing. Idempotent via
-    # status. A dep of daemon:minio, so the local-S3 loop never needs a manual brew/curl step.
-    internal: true
-    status:
-      - command -v minio
-      - command -v mc
-    cmds:
-      - |
-        os=$(uname -s | tr '[:upper:]' '[:lower:]')          # darwin | linux
-        case "$(uname -m)" in arm64|aarch64) arch=arm64 ;; *) arch=amd64 ;; esac
-        echo "installing minio + mc for ${os}-${arch}"
-        sudo curl -fsSL "https://dl.min.io/server/minio/release/${os}-${arch}/minio" -o /usr/local/bin/minio
-        sudo curl -fsSL "https://dl.min.io/client/mc/release/${os}-${arch}/mc"       -o /usr/local/bin/mc
-        sudo chmod +x /usr/local/bin/minio /usr/local/bin/mc
-
-  daemon:minio:
-    desc: Start a local MinIO (background) + create the coldstorage bucket
-    dir: coldstorage
-    deps: [_minio-binaries]
-    cmds:
-      - "pgrep -x minio >/dev/null || { mkdir -p .minio-data && MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin nohup minio server .minio-data --address :9000 --console-address :9001 > .minio.log 2>&1 & }"
-      - sleep 2
-      - mc alias set local http://localhost:9000 minioadmin minioadmin
-      - mc mb local/coldstorage 2>/dev/null || true
-  daemon:minio:stop:
-    desc: Stop the local MinIO
-    cmds: ["pkill -x minio || true"]
-
   daemon:unlock:
     desc: "Clear a stale SwiftPM build lock (the 0%-CPU 'hung build' footgun) — only if no build/test is live."
     dir: coldstorage
@@ -145,7 +117,7 @@ tasks:
         fi
 
   daemon:build:dev:
-    desc: "Build the Swift core — DEBUG, for the MinIO/test dev loop (any OS). First run fetches deps (a few minutes). For the prod release build, see daemon:mac:install."
+    desc: "Build the Swift core — DEBUG (any OS). First run fetches deps (a few minutes). For the prod release build, see daemon:mac:install."
     dir: coldstorage
     deps: [daemon:unlock] # clear a stale lock left by a previously-killed build
     cmds: [swift build]
@@ -161,90 +133,8 @@ tasks:
     # 260 MiB "leak" that was Argon2id's). The whole suite is ~2s serial; the trustworthy number is worth it.
     cmds: [swift test --no-parallel]
 
-  daemon:testdata:
-    desc: Generate sample files to archive (coldstorage/testdata)
-    dir: coldstorage
-    cmds:
-      - mkdir -p testdata
-      - dd if=/dev/zero    of=testdata/big.bin     bs=1048576 count=400
-      - dd if=/dev/urandom of=testdata/small-1.bin bs=1048576 count=10
-      - dd if=/dev/urandom of=testdata/small-2.bin bs=1048576 count=20
-
-  daemon:archive:
-    desc: "Archive coldstorage/testdata to MinIO (Ctrl-C mid-run, re-run → resumes). DIR= overrides."
-    dir: coldstorage
-    env:
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
-      AWS_REGION: us-east-1
-      COLDSTORE_PART_DELAY_MS: "800" # slows parts so kill/resume is visible; set 0 for full speed
-    cmds:
-      - swift run coldstore-cli {{.DIR | default "testdata"}} coldstorage http://localhost:9000
-
-  daemon:restore:
-    desc: "Restore one archived file from MinIO: FILE=<fileId> [OUT=/tmp/restored.bin] [TIER=standard]. On real AWS the first run thaws (exit 75) — re-run to download."
-    dir: coldstorage
-    env:
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
-      AWS_REGION: us-east-1
-    cmds:
-      - swift run coldstore-restore {{.FILE}} {{.OUT | default "/tmp/restored.bin"}} coldstorage http://localhost:9000 --tier {{.TIER | default "standard"}}
-
-  daemon:run:
-    desc: "[Mode 1: dev sandbox] Run coldstored (loop + control socket) against MinIO. Drive it with `task daemon:ctl`."
-    dir: coldstorage
-    env: &daemon_run_env
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
-      AWS_REGION: us-east-1
-      COLDSTORE_ENDPOINT: http://localhost:9000
-      COLDSTORE_SOURCES: testdata # one-time seed → journal registry (SSOT thereafter)
-      COLDSTORE_SOCKET: coldstored.sock
-      # EXPLICIT local-dev identity. The daemon refuses to start without either this or a Cognito identity
-      # pool — there is no silent "no auth configured" mode any more, because that mode signed S3 calls as
-      # the shared all-access IAM user against a shared key prefix (see coldstored/main.swift). Dev state
-      # lands in `.dev-data/users/dev-local/`, exactly like a real user's, so dev exercises the real path.
-      COLDSTORE_DEV_IDENTITY: local
-      COLDSTORE_DATA_DIR: .dev-data
-      COLDSTORE_INTERVAL: '{{.INTERVAL | default "30"}}' # overridable (fsevents-test bumps it to 600)
-    cmds:
-      - swift run coldstored
-
-  daemon:mac:fsevents-test:
-    desc: "Runtime-test the FSEvents FolderWatcher: runs coldstored vs MinIO with a 600s poll interval (so a prompt re-scan can ONLY be FSEvents, never the poll). Drop a file into coldstorage/testdata in Finder → expect a 'FolderWatcher: FSEvents fired' line + a runStarted→fileArchived→runFinished within ~1-2s. Watch events in another terminal with `task daemon:ctl -- watch`."
-    dir: coldstorage
-    deps: [daemon:minio, daemon:unlock] # unlock: clear a stale .build/.lock so the build can't wedge at 0% CPU
-    vars:
-      INTERVAL: "600" # huge on purpose: a re-scan within seconds of a drop is FSEvents, not the poll
-    env: *daemon_run_env
-    cmds:
-      - mkdir -p testdata # FSEvents needs the watched path to exist before the stream starts
-      - swift run coldstored
-
-  daemon:run:bg:
-    desc: "Start coldstored in the background (logs → coldstorage/.coldstored.log), wait for its socket. Stop: task dev:stop."
-    dir: coldstorage
-    env: *daemon_run_env # same MinIO config as daemon:run (YAML anchor — SSOT)
-    cmds:
-      - 'pgrep -f "coldstored$" >/dev/null || nohup swift run coldstored > .coldstored.log 2>&1 &'
-      - |
-        echo "waiting for the control socket (first run builds, ~1-2 min)…"
-        for _ in $(seq 1 180); do [ -S coldstored.sock ] && { echo "daemon up"; exit 0; }; sleep 1; done
-        echo "timed out — check coldstorage/.coldstored.log" >&2; exit 1
-
-  daemon:ctl:
-    desc: "Send a control command, e.g. `task daemon:ctl -- getStatus` or `-- addSource path=/abs/dir`."
-    dir: coldstorage
-    cmds:
-      - swift run coldstorectl coldstored.sock {{.CLI_ARGS | default "getStatus"}}
-
-  # ── One-time dogfood→multi-user reset (decided 2026-07-02): instead of migrating the pre-auth
-  #    archive (S3 re-prefix + journal rewrite + key rewrap), wipe it — the signed-in identity owns
-  #    everything from day one. Two halves, both confirm-gated. Order: quit the app / uninstall the
-  #    daemon → reset:local (Mac) → reset:vault (devcontainer) → daemon:mac:bootstrap → ui:mac:live. ──
   daemon:mac:reset:local:
-    desc: "DESTRUCTIVE: wipe the local per-user archive state — every signed-in account's journal (file index + watched-folder registry), staging and status, under <data dir>/users/ — plus the dev sandbox. Keeps config.json, the app's sign-in session, the MasterKey escrow (vault.json) and logs. Stop the daemon/app first. Run this once after the UserSession refactor (2026-07-13): the OLD machine-wide coldstore.sqlite is exactly the file that leaked across accounts, and it is now orphaned — this deletes it."
+    desc: "DESTRUCTIVE: wipe the local per-user archive state — every signed-in account's journal (file index + watched-folder registry), scratch and status, under <data dir>/users/. Keeps config.json, the app's sign-in session, the MasterKey escrow (vault.json) and logs. Stop the daemon/app first. Run this once after the UserSession refactor (2026-07-13): the OLD machine-wide coldstore.sqlite is exactly the file that leaked across accounts, and it is now orphaned — this deletes it."
     interactive: true
     vars:
       DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
@@ -254,9 +144,8 @@ tasks:
           echo "✗ coldstored is running — stop it first (quit ColdStorage.app / task daemon:mac:uninstall / task dev:stop)"; exit 1
         fi
         echo "This deletes the LOCAL archive index for EVERY account on this Mac (files list + watched folders start empty):"
-        echo "  {{.DATA_DIR}}/users/            (per-user journals, staging, status — the post-refactor layout)"
+        echo "  {{.DATA_DIR}}/users/            (per-user journals, scratch, status — the post-refactor layout)"
         echo "  {{.DATA_DIR}}/{coldstore.sqlite,status.json,staging/}   (the PRE-refactor machine-wide state — the one that leaked)"
-        echo "  {{.ROOT_DIR}}/coldstorage/{.dev-data,coldstore.sqlite}  (dev sandbox)"
         printf "type 'reset' to continue: "
         read -r answer
         [ "$answer" = "reset" ] || { echo "aborted — nothing deleted"; exit 1; }
@@ -265,7 +154,6 @@ tasks:
         # copy of one account's file index sitting on disk.
         rm -f "{{.DATA_DIR}}/coldstore.sqlite" "{{.DATA_DIR}}/status.json" "{{.DATA_DIR}}/kek.bin"
         rm -rf "{{.DATA_DIR}}/staging"
-        rm -rf "{{.ROOT_DIR}}/coldstorage/.dev-data"
         rm -f "{{.ROOT_DIR}}/coldstorage/coldstore.sqlite"
         echo "✓ local archive state wiped. Re-add watched folders in Settings after the next launch."
 
@@ -359,17 +247,16 @@ tasks:
         aws s3 rm "s3://$bucket/blobs/" --recursive --profile {{.AWS_PROFILE}} --only-show-errors
         echo "✓ vault emptied (blobs/)."
 
-  daemon:restore-ipc:
-    desc: "Restore a file *over the running daemon's socket*: FILE=<fileId> [OUT=/tmp/restored.bin] [TIER=standard]. Idempotent — on real AWS re-run until state=restored (thaw takes hours)."
+  # ── daemon:mac:*-ipc — drive the INSTALLED daemon over its control socket, i.e. the same commands the
+  #    UI issues, without the UI. ⚠ These now hit your REAL vault: the MinIO dev sandbox they used to talk
+  #    to is gone (retired 2026-07-14), so there is no safe fake to point them at any more.
+  daemon:mac:deposit-ipc:
+    desc: 'Deposit (ad-hoc drop-to-upload) over the running daemon''s socket: SRC=/abs/path [DEST=folder] [CONFLICTS=''{"dest/name":"keepBoth"}'']. Archives the path(s) once, NO watched source — the same command the UI''s drag-drop issues. CONFLICTS is the JSON Keep Both / Replace / Skip map (see daemon:mac:preview-deposit-ipc). Fire-and-forget; check `daemon:mac:live -- listFiles`.'
     dir: coldstorage
+    vars:
+      SOCK: '{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock'
     cmds:
-      - swift run coldstorectl coldstored.sock restore file={{.FILE}} out={{.OUT | default "/tmp/restored.bin"}} tier={{.TIER | default "standard"}}
-
-  daemon:deposit-ipc:
-    desc: 'Deposit (ad-hoc drop-to-upload) over the running daemon''s socket: SRC=/abs/path [DEST=folder] [CONFLICTS=''{"dest/name":"keepBoth"}'']. Archives the path(s) once, NO watched source — the same command the UI''s drag-drop issues. CONFLICTS is the JSON Keep Both / Replace / Skip map (see daemon:preview-deposit-ipc). Fire-and-forget; check `daemon:ctl -- listFiles`.'
-    dir: coldstorage
-    cmds:
-      - swift run coldstorectl coldstored.sock deposit src={{.SRC}} dest={{.DEST | default ""}} {{if .CONFLICTS}}'conflicts={{.CONFLICTS}}'{{end}}
+      - swift run coldstorectl {{.SOCK}} deposit src={{.SRC}} dest={{.DEST | default ""}} {{if .CONFLICTS}}'conflicts={{.CONFLICTS}}'{{end}}
 
   daemon:mac:logs:
     desc: "Tail the installed daemon's stdout+stderr logs (live). Shows PhotoKitResolver auth/resolve diagnostics, deposit errors, etc."
@@ -410,40 +297,50 @@ tasks:
     cmds:
       - swift run coldstore-photo-picker
 
-  daemon:deposit-photos-ipc:
-    desc: "Explicit photo deposit over the running daemon's socket: IDS='id1\\nid2' (newline-joined Photos localIdentifiers) [DEST=folder] [CONFLICTS='{\"dest/name\":\"keepBoth\"}']. Archives ONLY those picked photos (never the whole library) — the same command the UI's photo picker issues. CONFLICTS is the JSON collision-resolution map. macOS only (PhotoKit); off-Mac the daemon emits an error event. Check `daemon:ctl -- listFiles`."
+  daemon:mac:deposit-photos-ipc:
+    desc: "Explicit photo deposit over the running daemon's socket: IDS='id1\\nid2' (newline-joined Photos localIdentifiers) [DEST=folder] [CONFLICTS='{\"dest/name\":\"keepBoth\"}']. Archives ONLY those picked photos (never the whole library) — the same command the UI's photo picker issues. CONFLICTS is the JSON collision-resolution map. macOS only (PhotoKit); off-Mac the daemon emits an error event. Check `daemon:mac:live -- listFiles`."
     dir: coldstorage
+    vars:
+      SOCK: '{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock'
     cmds:
-      - swift run coldstorectl coldstored.sock depositPhotos assetIds={{.IDS}} dest={{.DEST | default ""}} {{if .CONFLICTS}}'conflicts={{.CONFLICTS}}'{{end}}
+      - swift run coldstorectl {{.SOCK}} depositPhotos assetIds={{.IDS}} dest={{.DEST | default ""}} {{if .CONFLICTS}}'conflicts={{.CONFLICTS}}'{{end}}
 
-  daemon:preview-deposit-ipc:
+  daemon:mac:preview-deposit-ipc:
     desc: "Dry-run a deposit's placement over the running daemon's socket (no upload): SRC=/abs/path OR IDS='id1\\nid2', plus [DEST=folder]. Prints each target's vault relativePath + whether it already EXISTS (a collision the UI prompts on). The same `previewDeposit` the UI runs before showing Keep Both / Replace / Skip."
     dir: coldstorage
+    vars:
+      SOCK: '{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock'
     cmds:
-      - swift run coldstorectl coldstored.sock previewDeposit dest={{.DEST | default ""}} {{if .SRC}}src={{.SRC}}{{end}} {{if .IDS}}assetIds={{.IDS}}{{end}}
+      - swift run coldstorectl {{.SOCK}} previewDeposit dest={{.DEST | default ""}} {{if .SRC}}src={{.SRC}}{{end}} {{if .IDS}}assetIds={{.IDS}}{{end}}
 
-  daemon:move-ipc:
-    desc: "Reorganize over the running daemon's socket — move OR rename: FROM=<vault/path> TO=<new/vault/path>. A cheap journal relativePath edit (no S3, no thaw); the same command the UI's move/rename issues. Check `daemon:ctl -- listFiles`."
+  daemon:mac:move-ipc:
+    desc: "Reorganize over the running daemon's socket — move OR rename: FROM=<vault/path> TO=<new/vault/path>. A cheap journal relativePath edit (no S3, no thaw); the same command the UI's move/rename issues. Check `daemon:mac:live -- listFiles`."
     dir: coldstorage
+    vars:
+      SOCK: '{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock'
     cmds:
-      - swift run coldstorectl coldstored.sock movePath from={{.FROM}} to={{.TO}}
+      - swift run coldstorectl {{.SOCK}} movePath from={{.FROM}} to={{.TO}}
 
-  daemon:delete-ipc:
-    desc: "Delete (tombstone) over the running daemon's socket: PATH=<vault/path> (file or folder). Drops from listFiles; bytes aren't reclaimed (deferred repack/GC). Check `daemon:ctl -- listFiles`."
+  daemon:mac:delete-ipc:
+    desc: "Delete (tombstone) over the running daemon's socket: PATH=<vault/path> (file or folder). Drops from listFiles; bytes aren't reclaimed (deferred repack/GC). Check `daemon:mac:live -- listFiles`."
     dir: coldstorage
+    vars:
+      SOCK: '{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock'
     cmds:
-      - swift run coldstorectl coldstored.sock deletePath path={{.PATH}}
+      - swift run coldstorectl {{.SOCK}} deletePath path={{.PATH}}
 
-  daemon:exclude-ipc:
+  daemon:mac:exclude-ipc:
     desc: "Manage scan exclude patterns over the running daemon's socket: ADD=<glob> or REMOVE=<glob> (omit both to just list). gitignore-style — bare names match at any depth, globs use */?. The next scan/deposit skips matches. Quote globs so the shell doesn't expand them, e.g. ADD='*.log'."
     dir: coldstorage
+    vars:
+      SOCK: '{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock'
     cmds:
-      - "{{if .ADD}}swift run coldstorectl coldstored.sock addExclude pattern={{.ADD}}{{end}}"
-      - "{{if .REMOVE}}swift run coldstorectl coldstored.sock removeExclude pattern={{.REMOVE}}{{end}}"
-      - swift run coldstorectl coldstored.sock listExcludes
+      - "{{if .ADD}}swift run coldstorectl {{.SOCK}} addExclude pattern={{.ADD}}{{end}}"
+      - "{{if .REMOVE}}swift run coldstorectl {{.SOCK}} removeExclude pattern={{.REMOVE}}{{end}}"
+      - swift run coldstorectl {{.SOCK}} listExcludes
 
   daemon:mac:live:
-    desc: "[Mode 2: your real daemon] Drive the INSTALLED launchd daemon (real prod AWS / Deep Archive), e.g. `task daemon:mac:live -- getStatus` · `-- addSource path=/abs/dir` · `-- triggerNow` · `-- watch`. (daemon:ctl targets the dev/MinIO daemon instead.) Uses the release binary built by daemon:mac:install."
+    desc: "Drive the INSTALLED launchd daemon (real prod AWS / Deep Archive), e.g. `task daemon:mac:live -- getStatus` · `-- addSource path=/abs/dir` · `-- triggerNow` · `-- watch`. Uses the release binary built by daemon:mac:install."
     dir: coldstorage
     vars:
       SOCK: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
@@ -472,7 +369,7 @@ tasks:
     dir: coldstorage
     vars:
       SOCK: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
-      OUT: '{{.OUT | default "/tmp/coldstore-restore-test.out"}}'
+      OUT: '{{.OUT | default "/tmp/coldstorage-restore-test.out"}}'
       TIER: '{{.TIER | default "standard"}}'
       INTERVAL: '{{.INTERVAL | default "900"}}'
     cmds:
@@ -523,7 +420,7 @@ tasks:
       - mkdir -p "{{.DATA_DIR}}" "{{.HOME}}/Library/LaunchAgents"
       - |
         # Bucket/region come from the handoff file (written by `task tf:coldstorage:creds-export` in the
-        # devcontainer — the SSOT is the infra outputs). Env vars still override (e.g. a MinIO test).
+        # devcontainer — the SSOT is the infra outputs). Env vars still override.
         CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
         [ -f "$CREDS" ] && { set -a; . "$CREDS"; set +a; }
         bucket="${COLDSTORE_BUCKET:-coldstorage}"
@@ -596,7 +493,7 @@ tasks:
         echo "  health check: task daemon:mac:doctor"
 
   daemon:mac:bootstrap:
-    desc: "[Mode 2: your real daemon] One-shot daemon setup: seed creds (Keychain + profile) → build + install the LaunchAgent. Run once, after `task tf:coldstorage:creds-export` in the devcontainer. After this, launchd keeps the daemon running (RunAtLoad/KeepAlive) — you don't re-run it to start it."
+    desc: "[Mode 1: your real daemon] One-shot daemon setup: seed creds (Keychain + profile) → build + install the LaunchAgent. Run once, after `task tf:coldstorage:creds-export` in the devcontainer. After this, launchd keeps the daemon running (RunAtLoad/KeepAlive) — you don't re-run it to start it."
     cmds:
       - task: daemon:mac:creds
       - task: daemon:mac:install
@@ -616,7 +513,7 @@ tasks:
       - test -S "{{.SOCK}}" && ./.build/release/coldstorectl "{{.SOCK}}" getStatus || echo "no control socket at {{.SOCK}} — last errors:" && tail -n 20 "{{.ERRLOG}}" 2>/dev/null || true
 
   daemon:mac:uninstall:
-    desc: "Stop + remove the coldstored LaunchAgent. Needed before testing Mode 3 (ui:mac:package) — it and Mode 2 share the same socket/data dir; `task daemon:mac:bootstrap` brings Mode 2 back afterward."
+    desc: "Stop + remove the coldstored LaunchAgent. Needed before testing Mode 2 (ui:mac:package) — it and Mode 1 share the same socket/data dir; `task daemon:mac:bootstrap` brings Mode 1 back afterward."
     vars:
       PLIST: "{{.HOME}}/Library/LaunchAgents/com.theadpharm.coldstored.plist"
     cmds:
@@ -625,7 +522,7 @@ tasks:
       - 'echo "removed {{.PLIST}}"'
 
   daemon:mac:reset:
-    desc: "DESTRUCTIVE — wipe the installed daemon's local state for a clean slate: stop it, delete the journal (the tree SSOT) + status + staged blobs + logs, restart empty. Comes back with NO files and NO watched folders. KEEPS the encryption key (dev-kek.bin) and does NOT touch S3 — old blobs in the prod vault are left orphaned (harmless; purge with an admin profile if you care). Re-deposits re-upload from scratch (the journal no longer marks anything verified)."
+    desc: "DESTRUCTIVE — wipe the installed daemon's local state for a clean slate: stop it, delete the journal (the tree SSOT) + status + scratch + logs, restart empty. Comes back with NO files and NO watched folders. Does NOT touch S3 — old blobs in the prod vault are left orphaned (harmless; purge with an admin profile if you care) — nor the app's sign-in / MasterKey escrow. Re-deposits re-upload from scratch (the journal no longer marks anything verified)."
     dir: coldstorage
     vars:
       DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
@@ -636,11 +533,11 @@ tasks:
       - launchctl bootout "gui/$(id -u)/com.theadpharm.coldstored" 2>/dev/null || true
       # 2. Delete the journal + its WAL sidecars (the tree/sources/excludes SSOT) and the status cache.
       - rm -f "{{.DATA_DIR}}/coldstore.sqlite" "{{.DATA_DIR}}/coldstore.sqlite-wal" "{{.DATA_DIR}}/coldstore.sqlite-shm" "{{.DATA_DIR}}/status.json"
-      # 3. Clear any half-staged blobs (orphaned once the journal is gone), then recreate the empty dir.
-      - rm -rf "{{.DATA_DIR}}/staging" && mkdir -p "{{.DATA_DIR}}/staging"
+      # 3. Clear the scratch dir (a killed photo deposit's plaintext), then recreate it empty.
+      - rm -rf "{{.DATA_DIR}}/scratch" && mkdir -p "{{.DATA_DIR}}/scratch"
       # 4. Fresh logs (the daemon will append to these on restart).
       - ': > "{{.DATA_DIR}}/coldstored.out.log"; : > "{{.DATA_DIR}}/coldstored.err.log"'
-      # 5. Restart — the daemon recreates an empty journal on boot (RunAtLoad). dev-kek.bin is untouched.
+      # 5. Restart — the daemon recreates an empty journal at the next sign-in (RunAtLoad).
       - launchctl bootstrap "gui/$(id -u)" "{{.PLIST}}"
       - 'echo "✓ reset — empty tree, no watched folders, fresh logs. Verify: task daemon:mac:live -- listFiles (expect [])"'
 
@@ -657,8 +554,8 @@ tasks:
 
   ui:_ensure-electron:
     # Bun skips postinstall scripts by default, so Electron's binary download (its postinstall) never
-    # runs → `task ui:mac:dev` dies with "Electron uninstall". This runs the downloader directly, and is
-    # idempotent: the `status` check skips it once the binary is present. A dep of ui:mac:dev so launching
+    # runs → `task ui:mac:live` dies with "Electron uninstall". This runs the downloader directly, and is
+    # idempotent: the `status` check skips it once the binary is present. A dep of ui:mac:live so launching
     # self-heals. (We also list electron in package.json trustedDependencies for fresh installs.)
     internal: true
     dir: ui
@@ -681,37 +578,17 @@ tasks:
     cmds:
       - bun run test
 
-  ui:mac:dev:
-    desc: "[Mode 1: dev sandbox] Run the Electron app with HMR (electron-vite dev). Start `task daemon:run` first."
-    dir: ui
-    deps: [ui:_ensure-electron]
-    env:
-      # Electron runs with cwd=ui/, so the DaemonClient's relative default would miss the daemon's
-      # socket. Point at it explicitly (same path daemon:run creates). Mirrors ui:prove.
-      COLDSTORE_SOCKET: "{{.ROOT_DIR}}/coldstorage/coldstored.sock"
-      # Absolute path to the native Photos-picker helper (built by daemon:build:dev/install) — the "Add photos…"
-      # entry spawns it. Absolute so it resolves regardless of Electron's cwd.
-      COLDSTORE_PHOTO_PICKER: "{{.ROOT_DIR}}/coldstorage/.build/release/coldstore-photo-picker"
-    cmds:
-      - |
-        # Sign-in config (Phase 5): dev has no config.json, so the app reads COLDSTORE_COGNITO_DOMAIN/
-        # _CLIENT_ID from env — sourced from the same infra-outputs handoff ui:mac:config uses. Secrets are
-        # stripped: the UI process must never carry the dogfood daemon's long-lived key.
-        CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
-        if [ -f "$CREDS" ]; then set -a; . "$CREDS"; set +a; unset DAEMON_AKID DAEMON_SECRET; fi
-        bun run dev
-
   ui:mac:live:
-    desc: "[Mode 2: your real daemon] Run the UI against the INSTALLED launchd daemon (real prod AWS), not the dev/MinIO one — dogfood the real thing. Needs task daemon:mac:bootstrap done."
+    desc: "Run the UI against the INSTALLED launchd daemon (real prod AWS) — dogfood the real thing. Needs task daemon:mac:bootstrap done."
     dir: ui
     deps: [ui:_ensure-electron]
     env:
-      # The launchd daemon's socket (daemon:mac:install path), NOT the dev socket ui:mac:dev/ui:mac:demo use.
+      # The launchd daemon's socket (daemon:mac:install path).
       COLDSTORE_SOCKET: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
       COLDSTORE_PHOTO_PICKER: "{{.ROOT_DIR}}/coldstorage/.build/release/coldstore-photo-picker"
     cmds:
       - |
-        # Same sign-in-config sourcing as ui:mac:dev (see there for why); secrets stripped.
+        # Sign-in config sourced from the local creds file; secrets stripped.
         CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
         if [ -f "$CREDS" ]; then set -a; . "$CREDS"; set +a; unset DAEMON_AKID DAEMON_SECRET; fi
         bun run dev
@@ -880,18 +757,18 @@ tasks:
       - task: ui:mac:live
 
   app:mac:package:staging:
-    desc: "[Mode 3 · SAFE] Build + launch-ready the PACKAGED ColdStorage.app wired to STAGING (sandbox Paddle). Uninstalls the Mode 2 launchd daemon first — Mode 2 and Mode 3 fight over the same socket/data dir, and the packaged app silently hangs on 'Connecting…' if you skip it. Bring Mode 2 back with `task daemon:mac:bootstrap`. GATED against origin/staging (the bundled app calls the DEPLOYED API)."
+    desc: "[Mode 2 · SAFE] Build + launch-ready the PACKAGED ColdStorage.app wired to STAGING (sandbox Paddle). Uninstalls the Mode 1 launchd daemon first — Mode 1 and Mode 2 fight over the same socket/data dir, and the packaged app silently hangs on 'Connecting…' if you skip it. Bring Mode 1 back with `task daemon:mac:bootstrap`. GATED against origin/staging (the bundled app calls the DEPLOYED API)."
     cmds:
       - task: app:mac:_require-api-deployed
         vars: { BRANCH: staging, API: "https://api-staging.coldstorage.sh" }
-      # Not optional: the packaged app bundles its OWN daemon, which can't bind a socket Mode 2 still holds.
+      # Not optional: the packaged app bundles its OWN daemon, which can't bind a socket Mode 1 still holds.
       - task: daemon:mac:uninstall
       # Bundles a freshly-built daemon from current source, and bakes ENV=staging itself.
       - task: ui:mac:package
-      - echo "→ ui/dist/ColdStorage.app (staging-wired). Mode 2 is uninstalled; 'task daemon:mac:bootstrap' restores it."
+      - echo "→ ui/dist/ColdStorage.app (staging-wired). Mode 1 is uninstalled; 'task daemon:mac:bootstrap' restores it."
 
   app:mac:package:production:
-    desc: "[Mode 3 · ⚠️ LIVE MONEY, not published] Build the PRODUCTION-wired ColdStorage.app — signed + notarized, but NOT published to GitHub (that's ui:mac:release). Live Paddle: anything you buy in it is a real charge. Uninstalls the Mode 2 daemon first (socket collision). Needs the Developer ID cert + notary creds. GATED against origin/main."
+    desc: "[Mode 2 · ⚠️ LIVE MONEY, not published] Build the PRODUCTION-wired ColdStorage.app — signed + notarized, but NOT published to GitHub (that's ui:mac:release). Live Paddle: anything you buy in it is a real charge. Uninstalls the Mode 1 daemon first (socket collision). Needs the Developer ID cert + notary creds. GATED against origin/main."
     interactive: true
     prompt: "This builds a PRODUCTION-wired app — LIVE Paddle. Anything purchased in it charges a REAL card. (It will NOT be published — that's ui:mac:release.) Continue?"
     cmds:
@@ -900,7 +777,7 @@ tasks:
       - task: daemon:mac:uninstall
       # release:dryrun is the prod-wired local build: bakes ENV=production, signs + notarizes, publishes NOTHING.
       - task: ui:mac:release:dryrun
-      - echo "→ ui/dist/ColdStorage.app (PRODUCTION-wired, signed, unpublished). 'task daemon:mac:bootstrap' restores Mode 2."
+      - echo "→ ui/dist/ColdStorage.app (PRODUCTION-wired, signed, unpublished). 'task daemon:mac:bootstrap' restores Mode 1."
 
   ui:build:
     desc: "Build all three Electron processes (main/preload/renderer) to ui/out."
@@ -909,7 +786,7 @@ tasks:
       - bun run build
 
   ui:mac:package:
-    desc: "[Mode 3: packaged app] Package a distributable ColdStorage.app (+ dmg/zip) via electron-builder. Bundles the release Swift binaries. Unsigned unless a Developer ID + notary creds are set — see ui/PACKAGING.md."
+    desc: "[Mode 2: packaged app] Package a distributable ColdStorage.app (+ dmg/zip) via electron-builder. Bundles the release Swift binaries. Unsigned unless a Developer ID + notary creds are set — see ui/PACKAGING.md."
     dir: ui
     deps: [ui:_ensure-electron]
     cmds:
@@ -940,7 +817,7 @@ tasks:
         : "${APPLE_APP_SPECIFIC_PASSWORD:?missing — an app-specific password from appleid.apple.com (see ui/PACKAGING.md)}"
 
   ui:mac:release:
-    desc: "[Mode 3: packaged app] Build + SIGN + NOTARIZE ColdStorage.app, then PUBLISH the .dmg/.zip + `latest-mac.yml` update feed to a GitHub Release (PROD.md Phase 6 — the auto-updater reads this feed). Bump `ui/package.json` version first. REFUSES unless you're on a clean, pushed `main`: GitHub tags main's latest REMOTE commit, so a dirty / wrong-branch / unpushed tree would ship a binary no tag reproduces (bypass with RELEASE_FORCE=1). For a signed build WITHOUT publishing, use ui:mac:release:dryrun. Needs the Developer ID cert + notary creds + GH_TOKEN (env or .env). See ui/PACKAGING.md."
+    desc: "[Mode 2: packaged app] Build + SIGN + NOTARIZE ColdStorage.app, then PUBLISH the .dmg/.zip + `latest-mac.yml` update feed to a GitHub Release (PROD.md Phase 6 — the auto-updater reads this feed). Bump `ui/package.json` version first. REFUSES unless you're on a clean, pushed `main`: GitHub tags main's latest REMOTE commit, so a dirty / wrong-branch / unpushed tree would ship a binary no tag reproduces (bypass with RELEASE_FORCE=1). For a signed build WITHOUT publishing, use ui:mac:release:dryrun. Needs the Developer ID cert + notary creds + GH_TOKEN (env or .env). See ui/PACKAGING.md."
     dir: ui
     deps: [ui:_ensure-electron, ui:_require-apple-creds]
     vars:
@@ -1021,7 +898,7 @@ tasks:
       - bunx electron-builder --mac --publish always -c.mac.notarize=true
 
   ui:mac:release:dryrun:
-    desc: "[Mode 3: packaged app] Full signed-artifact rehearsal of ui:mac:release: build + SIGN + NOTARIZE ColdStorage.app locally but DON'T publish (no GitHub release, no git tag, no GH_TOKEN — hence no provenance guard, run it dirty/any-branch freely). Output: ui/dist/. Needs the Developer ID cert + notary creds (APPLE_ID/APPLE_TEAM_ID/APPLE_APP_SPECIFIC_PASSWORD). See ui/PACKAGING.md."
+    desc: "[Mode 2: packaged app] Full signed-artifact rehearsal of ui:mac:release: build + SIGN + NOTARIZE ColdStorage.app locally but DON'T publish (no GitHub release, no git tag, no GH_TOKEN — hence no provenance guard, run it dirty/any-branch freely). Output: ui/dist/. Needs the Developer ID cert + notary creds (APPLE_ID/APPLE_TEAM_ID/APPLE_APP_SPECIFIC_PASSWORD). See ui/PACKAGING.md."
     dir: ui
     deps: [ui:_ensure-electron, ui:_require-apple-creds]
     cmds:
@@ -1099,7 +976,7 @@ tasks:
         echo "── coldstored signature ──"; codesign -dv --verbosity=2 "$app/Contents/Resources/bin/coldstored" 2>&1 | grep -Ei 'Identifier|Authority|Runtime' || echo "(unsigned — nested binary not signed)"
 
   ui:mac:package:sign-adhoc:
-    desc: "[Mode 3: packaged app] Ad-hoc sign the built ColdStorage.app so it (+ its bundled arm64 helpers) will LAUNCH locally on Apple Silicon — a smoke-test stopgap. Ad-hoc is per-build (no stable TCC grant); real Developer/Apple-Development signing lands with #2. NOT for distribution. Run `task daemon:mac:uninstall` first — this collides with the Mode 2 launchd daemon's socket/data dir."
+    desc: "[Mode 2: packaged app] Ad-hoc sign the built ColdStorage.app so it (+ its bundled arm64 helpers) will LAUNCH locally on Apple Silicon — a smoke-test stopgap. Ad-hoc is per-build (no stable TCC grant); real Developer/Apple-Development signing lands with the packaged app. NOT for distribution. Run `task daemon:mac:uninstall` first — this collides with the Mode 1 launchd daemon's socket/data dir."
     dir: ui
     cmds:
       - |
@@ -1108,8 +985,7 @@ tasks:
         # Sign the nested helpers FIRST (inside-out), then the app — codesign requires nested code be sealed
         # before the outer bundle. `-s -` = ad-hoc (no cert needed, just enough for AMFI to let arm64 run).
         for b in "$app/Contents/Resources/bin/coldstored" \
-                 "$app/Contents/Resources/bin/coldstore-photo-picker" \
-                 "$app/Contents/Resources/bin/coldstore-restore"; do
+                 "$app/Contents/Resources/bin/coldstore-photo-picker"; do
           codesign --force --sign - "$b" && echo "ad-hoc signed: $(basename "$b")"
         done
         codesign --force --sign - "$app"
@@ -1130,7 +1006,7 @@ tasks:
       - mkdir -p "{{.DATA_DIR}}"
       - |
         # Same SSOT + defaults as daemon:mac:install: bucket/region/profile come from the handoff file written
-        # by `task tf:coldstorage:creds-export` in the devcontainer. Env vars still override (e.g. MinIO test).
+        # by `task tf:coldstorage:creds-export` in the devcontainer. Env vars still override.
         CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
         [ -f "$CREDS" ] && { set -a; . "$CREDS"; set +a; }
         bucket="${COLDSTORE_BUCKET:-coldstorage}"
@@ -1228,7 +1104,7 @@ tasks:
         fi
 
   ui:mac:package:doctor:
-    desc: "[Mode 3: packaged app] Diagnose a packaged app stuck on 'Connecting…': did the bundled coldstored spawn, bind its socket, and what did it log? If the process path it finds is coldstorage/.build/release/coldstored (not Contents/Resources/bin/coldstored), that's actually the Mode 2 launchd daemon still holding the shared socket — run `task daemon:mac:uninstall` and re-launch the app."
+    desc: "[Mode 2: packaged app] Diagnose a packaged app stuck on 'Connecting…': did the bundled coldstored spawn, bind its socket, and what did it log? If the process path it finds is coldstorage/.build/release/coldstored (not Contents/Resources/bin/coldstored), that's actually the Mode 1 launchd daemon still holding the shared socket — run `task daemon:mac:uninstall` and re-launch the app."
     cmds:
       - |
         echo "── data dir (auto-discovered) ──"
@@ -1254,17 +1130,9 @@ tasks:
         fi
         echo "── coldstored.err.log (last 25) ──"; tail -n 25 "$dir/coldstored.err.log" 2>/dev/null || echo "(no err log — coldstored likely never spawned)"
 
-  ui:mac:demo:
-    desc: "One command to dogfood locally: MinIO + daemon (background) + the UI. Ctrl-C stops the UI; `task dev:stop` stops the rest."
-    deps: [daemon:minio] # MinIO (bg) + bucket + OS-correct binaries
-    cmds:
-      - task: daemon:run:bg # daemon in the background, waits for its socket
-      - task: ui:mac:dev # the UI in the foreground
-
   dev:stop:
-    desc: "Stop the background daemon + MinIO left running by `task ui:mac:demo`, and the local API left by `task app:mac:run:local`."
+    desc: "Stop the local API left running by `task app:mac:run:local`."
     cmds:
-      - 'pkill -f "coldstored$" 2>/dev/null || true'
       # The local account-backend (vercel dev) that app:mac:run:local backgrounds.
       - |
         if [ -f /tmp/coldstorage-local-api.pid ]; then
@@ -1272,13 +1140,12 @@ tasks:
           rm -f /tmp/coldstorage-local-api.pid
           echo "stopped the local API"
         fi
-      - task: daemon:minio:stop
 
   ui:prove:
-    desc: "Prove the layer-1 IPC bridge against a running daemon. Start `task daemon:run` first."
+    desc: "Prove the layer-1 IPC bridge against the INSTALLED daemon (task daemon:mac:bootstrap first)."
     dir: ui
     env:
-      COLDSTORE_SOCKET: "{{.ROOT_DIR}}/coldstorage/coldstored.sock"
+      COLDSTORE_SOCKET: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
     cmds:
       - bun run prove
 

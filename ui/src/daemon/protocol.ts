@@ -68,7 +68,7 @@ export interface Source {
 /**
  * `FileDTO` — one browsable file from `listFiles`: the journal IS the tree SSOT (paths/sizes/status),
  * NOT S3 keys. A pure metadata read — no R2, no thaw. `status` is the RAW journal `FileStatus`
- * (`discovered | planned | staging | uploading | verifying | archived | failed`); the renderer coarsens
+ * (`discovered | planned | uploading | verifying | archived | failed`); the renderer coarsens
  * it to its own browse states. `id` doubles as the `file` param of the `restore` command.
  */
 export interface ListedFile {

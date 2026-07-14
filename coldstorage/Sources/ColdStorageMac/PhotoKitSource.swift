@@ -34,7 +34,7 @@ public struct PhotoKitSource: IngestSource {
                 id: assetId,
                 relativePath: res.originalFilename,
                 size: 0,                                    // unknown until streamed
-                contentHash: assetId,                       // TODO: real plaintext SHA-256 via a hashing pre-pass
+                content: .opaque(assetId),                  // an identity, NOT a hash — nothing to verify against
                 createdAt: asset.creationDate,
                 isFavorite: asset.isFavorite,
                 metadata: ["uti": res.uniformTypeIdentifier],
@@ -85,8 +85,9 @@ public struct PhotoKitSource: IngestSource {
 /// `PhotoKitSource.stream(assetId:)` for the bytes (full-res original incl. iCloud download). Unlike
 /// `PhotoKitSource.enumerate()` (the whole library — DO NOT background-wire), this touches ONLY the picked
 /// assets, mirroring `ExplicitPathsSource`. A missing/denied/stale id is skipped (a stale pick from the UI
-/// must not abort the deposit). Size is left 0 here — unknown until streamed, and the integrity SHA-256 is
-/// computed from the real bytes at archive time (`UploadEngine.archive`), so `contentHash` is metadata only.
+/// must not abort the deposit). Size is left 0 here — unknown until streamed — and the content key is
+/// `.opaque`: a Photos asset's bytes don't exist until PhotoKit produces them, so there is nothing to hash
+/// ahead of the read and nothing for the engine's drift guard to check against.
 public struct PhotoKitResolver: PhotoResolver {
     public init() {}
 
@@ -126,7 +127,7 @@ public struct PhotoKitResolver: PhotoResolver {
                 id: assetId,
                 relativePath: res.originalFilename,
                 size: 0,                                    // unknown until streamed; real hash computed at archive time
-                contentHash: assetId,                       // metadata key only (see UploadEngine.archive)
+                content: .opaque(assetId),                  // an identity, NOT a hash — nothing to verify against
                 createdAt: asset.creationDate,
                 isFavorite: asset.isFavorite,
                 metadata: ["uti": res.uniformTypeIdentifier],

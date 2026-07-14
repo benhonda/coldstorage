@@ -41,21 +41,18 @@ public actor DaemonService {
     private var sleeper: CheckedContinuation<Void, Never>?
     private var triggerPending = false
 
-    /// `initialSession` is set ONLY by an explicit local-dev daemon, which has no sign-in step and so needs
-    /// a session up front. A real (Cognito) daemon starts signed out and gets its session from
-    /// `authenticate`.
+    /// The daemon always starts SIGNED OUT — it gets its session from `authenticate`, never at construction.
     public init(bus: EventBus, sessions: SessionFactory, platformSources: [IngestSource] = [],
-                photoResolver: (any PhotoResolver)? = nil, cognitoAuth: CognitoAuth? = nil,
-                initialSession: UserSession? = nil) {
+                photoResolver: (any PhotoResolver)? = nil, cognitoAuth: CognitoAuth? = nil) {
         self.bus = bus; self.sessions = sessions; self.platformSources = platformSources
-        self.photoResolver = photoResolver; self.cognitoAuth = cognitoAuth; self.session = initialSession
+        self.photoResolver = photoResolver; self.cognitoAuth = cognitoAuth; self.session = nil
     }
 
     /// The signed-in user's state, or a clean refusal. Every command that touches user data goes through
     /// here — that's what makes "signed out ⇒ nothing to leak" a property of the code rather than a habit.
     private func requireSession(_ command: String) throws -> UserSession {
         guard let session else {
-            throw ColdStorageError.staging("\(command): not signed in")
+            throw ColdStorageError.invalidRequest("\(command): not signed in")
         }
         return session
     }
@@ -355,7 +352,7 @@ public actor DaemonService {
     private func decodeKey(_ raw: String?) throws -> SymmetricKey? {
         guard let raw else { return nil }
         guard let data = Data(base64Encoded: raw), data.count == 32 else {
-            throw ColdStorageError.staging("masterKey must be base64 of exactly 32 bytes")
+            throw ColdStorageError.invalidRequest("masterKey must be base64 of exactly 32 bytes")
         }
         return SymmetricKey(data: data)
     }
@@ -365,12 +362,12 @@ public actor DaemonService {
     private func keyBlob(from p: [String: String]) throws -> KeyBlob {
         func b64(_ key: String) throws -> Data {
             guard let raw = p[key], let d = Data(base64Encoded: raw) else {
-                throw ColdStorageError.staging("keyBlob field '\(key)' missing or not base64")
+                throw ColdStorageError.invalidRequest("keyBlob field '\(key)' missing or not base64")
             }
             return d
         }
         func int(_ key: String) throws -> Int {
-            guard let raw = p[key], let v = Int(raw) else { throw ColdStorageError.staging("keyBlob field '\(key)' missing or not an integer") }
+            guard let raw = p[key], let v = Int(raw) else { throw ColdStorageError.invalidRequest("keyBlob field '\(key)' missing or not an integer") }
             return v
         }
         return KeyBlob(wrappedMKPassword: try b64("wrappedMKPassword"), saltPassword: try b64("saltPassword"),
@@ -460,7 +457,7 @@ public actor DaemonService {
             return AnyEncodable(try session.journal.listExcludes())
         case "addSource":
             let session = try requireSession("addSource")
-            guard let raw = p["path"] else { throw ColdStorageError.staging("addSource requires params.path") }
+            guard let raw = p["path"] else { throw ColdStorageError.invalidRequest("addSource requires params.path") }
             let abs = URL(fileURLWithPath: raw).standardizedFileURL.path
             // Destination in the drive: where this folder's tree mounts. Default to the basename so a CLI
             // add (or any caller omitting it) still namespaces the source rather than dumping at root.
@@ -474,7 +471,7 @@ public actor DaemonService {
             return AnyEncodable(AckDTO(ok: true))
         case "removeSource":
             let session = try requireSession("removeSource")
-            guard let id = p["id"] else { throw ColdStorageError.staging("removeSource requires params.id") }
+            guard let id = p["id"] else { throw ColdStorageError.invalidRequest("removeSource requires params.id") }
             try session.journal.removeSource(id)
             bus.publish(DaemonEvent("sourcesChanged", ["removed": id]))
             return AnyEncodable(AckDTO(ok: true))
@@ -483,13 +480,13 @@ public actor DaemonService {
             // Register a gitignore-style pattern; it filters every later scan/deposit. Trim so a stray-space
             // paste doesn't create a pattern that matches nothing.
             let pattern = (p["pattern"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !pattern.isEmpty else { throw ColdStorageError.staging("addExclude requires a non-empty params.pattern") }
+            guard !pattern.isEmpty else { throw ColdStorageError.invalidRequest("addExclude requires a non-empty params.pattern") }
             try session.journal.addExclude(pattern)
             bus.publish(DaemonEvent("excludesChanged", ["added": pattern]))
             return AnyEncodable(AckDTO(ok: true))
         case "removeExclude":
             let session = try requireSession("removeExclude")
-            guard let pattern = p["pattern"] else { throw ColdStorageError.staging("removeExclude requires params.pattern") }
+            guard let pattern = p["pattern"] else { throw ColdStorageError.invalidRequest("removeExclude requires params.pattern") }
             try session.journal.removeExclude(pattern)
             bus.publish(DaemonEvent("excludesChanged", ["removed": pattern]))
             return AnyEncodable(AckDTO(ok: true))
@@ -504,26 +501,26 @@ public actor DaemonService {
             // Blob keys are DEDUPED: several files usually share one blob, and that blob is thawed — and
             // billed — exactly once. Charging per-file here would overcharge the common case badly.
             guard let raw = p["files"], !raw.isEmpty else {
-                throw ColdStorageError.staging("restorePlan requires params.files (newline-joined fileIds)")
+                throw ColdStorageError.invalidRequest("restorePlan requires params.files (newline-joined fileIds)")
             }
             var keys: [String] = []
             var seen = Set<String>()
             var egress = 0
             for fileId in raw.split(separator: "\n").map(String.init) {
-                guard let f = try session.journal.fileMapping(fileId) else { throw ColdStorageError.staging("no archived file '\(fileId)'") }
-                guard let key = try session.journal.blobS3Key(f.blobId) else { throw ColdStorageError.staging("no S3 key for blob \(f.blobId)") }
+                guard let f = try session.journal.fileMapping(fileId) else { throw ColdStorageError.invalidRequest("no archived file '\(fileId)'") }
+                guard let key = try session.journal.blobS3Key(f.blobId) else { throw ColdStorageError.invalidRequest("no S3 key for blob \(f.blobId)") }
                 egress += f.length
                 if seen.insert(key).inserted { keys.append(key) }
             }
             return AnyEncodable(RestorePlanDTO(blobKeys: keys, egressBytes: egress))
         case "restore":
             let session = try requireSession("restore")
-            guard let file = p["file"] else { throw ColdStorageError.staging("restore requires params.file (the fileId)") }
-            guard let out = p["out"] else { throw ColdStorageError.staging("restore requires params.out (output path)") }
+            guard let file = p["file"] else { throw ColdStorageError.invalidRequest("restore requires params.file (the fileId)") }
+            guard let out = p["out"] else { throw ColdStorageError.invalidRequest("restore requires params.out (output path)") }
             let tier = try RestoreTier.parse(p["tier"])
             // Reject a bad `days` rather than silently defaulting (same reason as tier — surface the typo).
             let days = try p["days"].map { raw -> Int in
-                guard let d = Int(raw), d > 0 else { throw ColdStorageError.staging("bad days '\(raw)' (expected a positive integer)") }
+                guard let d = Int(raw), d > 0 else { throw ColdStorageError.invalidRequest("bad days '\(raw)' (expected a positive integer)") }
                 return d
             } ?? 7
             // One step toward getting the file back. Network I/O is awaited off the actor (reentrancy keeps
@@ -534,7 +531,7 @@ public actor DaemonService {
             _ = try requireSession("deposit")
             // Ad-hoc drop-to-upload: archive these paths once, under the browser folder `dest` ("" = root).
             // `src` is newline-joined absolute paths (one deposit covers a whole multi-file/folder drop).
-            guard let raw = p["src"], !raw.isEmpty else { throw ColdStorageError.staging("deposit requires params.src (newline-joined absolute paths)") }
+            guard let raw = p["src"], !raw.isEmpty else { throw ColdStorageError.invalidRequest("deposit requires params.src (newline-joined absolute paths)") }
             let paths = raw.split(separator: "\n").map(String.init)
             let dest = p["dest"] ?? ""
             // Optional collision resolutions from the UI's Keep Both / Replace / Skip prompt (JSON map,
@@ -550,7 +547,7 @@ public actor DaemonService {
             // once, under browser folder `dest` ("" = root). `assetIds` is newline-joined Photos
             // localIdentifiers. Only the picked assets are read — never the whole library (product decision
             // 2026-06-26). Fire-and-forget: progress/outcome flow as run*/fileArchived/blobFailed events.
-            guard let raw = p["assetIds"], !raw.isEmpty else { throw ColdStorageError.staging("depositPhotos requires params.assetIds (newline-joined Photos localIdentifiers)") }
+            guard let raw = p["assetIds"], !raw.isEmpty else { throw ColdStorageError.invalidRequest("depositPhotos requires params.assetIds (newline-joined Photos localIdentifiers)") }
             let assetIds = raw.split(separator: "\n").map(String.init)
             let dest = p["dest"] ?? ""
             let conflicts = parseConflicts(p["conflicts"])
@@ -570,11 +567,11 @@ public actor DaemonService {
                 let entries = raw.split(separator: "\n").map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: String($0)), destDir: dest) }
                 source = ExplicitPathsSource(entries: entries, exclude: excludeMatcher(session))
             } else if let raw = p["assetIds"], !raw.isEmpty {
-                guard let resolver = photoResolver else { throw ColdStorageError.staging("previewDeposit: Photos ingest is unavailable on this platform") }
+                guard let resolver = photoResolver else { throw ColdStorageError.invalidRequest("previewDeposit: Photos ingest is unavailable on this platform") }
                 source = PhotoDepositSource(resolver: resolver, assetIds: raw.split(separator: "\n").map(String.init),
                                             destDir: dest, scratchDir: session.scratchDir)
             } else {
-                throw ColdStorageError.staging("previewDeposit requires params.src (paths) or params.assetIds")
+                throw ColdStorageError.invalidRequest("previewDeposit requires params.src (paths) or params.assetIds")
             }
             let live = try session.journal.livePaths()
             let items = try await source.enumerate()
@@ -584,8 +581,8 @@ public actor DaemonService {
             // Reorganize: relocate the subtree at `from` → `to` (a file/folder move OR rename). A cheap
             // journal `relativePath` edit — no S3, no thaw, the blob never moves. `filesChanged` tells a live
             // watcher to re-read the tree.
-            guard let from = p["from"] else { throw ColdStorageError.staging("movePath requires params.from (a vault-relative path)") }
-            guard let to = p["to"] else { throw ColdStorageError.staging("movePath requires params.to (the new vault-relative path)") }
+            guard let from = p["from"] else { throw ColdStorageError.invalidRequest("movePath requires params.from (a vault-relative path)") }
+            guard let to = p["to"] else { throw ColdStorageError.invalidRequest("movePath requires params.to (the new vault-relative path)") }
             try session.journal.movePath(from: from, to: to)
             bus.publish(DaemonEvent("filesChanged", ["moved": from, "to": to]))
             return AnyEncodable(AckDTO(ok: true))
@@ -594,7 +591,7 @@ public actor DaemonService {
             // Anchor an empty folder so it survives a reload (the tree is derived from file paths, so an
             // empty one otherwise has nothing to imply it). A path-only journal marker — no S3, no thaw.
             // Idempotent on the path. `filesChanged` tells a live watcher to re-read the tree.
-            guard let path = p["path"], !path.isEmpty else { throw ColdStorageError.staging("createFolder requires params.path (a vault-relative folder path)") }
+            guard let path = p["path"], !path.isEmpty else { throw ColdStorageError.invalidRequest("createFolder requires params.path (a vault-relative folder path)") }
             try session.journal.createFolder(path: path)
             bus.publish(DaemonEvent("filesChanged", ["created": path]))
             return AnyEncodable(AckDTO(ok: true))
@@ -602,7 +599,7 @@ public actor DaemonService {
             let session = try requireSession("deletePath")
             // Tombstone the subtree at `path` (file or folder). The row + blob mapping are kept (bytes
             // reclaim is a deferred repack/GC); the file just drops out of `listFiles`.
-            guard let path = p["path"] else { throw ColdStorageError.staging("deletePath requires params.path (a vault-relative path)") }
+            guard let path = p["path"] else { throw ColdStorageError.invalidRequest("deletePath requires params.path (a vault-relative path)") }
             try session.journal.deletePath(path)
             bus.publish(DaemonEvent("filesChanged", ["deleted": path]))
             return AnyEncodable(AckDTO(ok: true))
@@ -616,8 +613,8 @@ public actor DaemonService {
             // churn and re-creating the key holder would drop an unlocked MasterKey and strand the user
             // mid-upload. A DIFFERENT `sub` is a different person: the old session is torn down (its key
             // cleared) before the new one is built, so nothing of theirs survives into this session.
-            guard let auth = cognitoAuth else { throw ColdStorageError.staging("authenticate: this daemon has no Cognito identity pool configured") }
-            guard let idToken = p["idToken"] else { throw ColdStorageError.staging("authenticate requires params.idToken") }
+            guard let auth = cognitoAuth else { throw ColdStorageError.invalidRequest("authenticate: this daemon has no Cognito identity pool configured") }
+            guard let idToken = p["idToken"] else { throw ColdStorageError.invalidRequest("authenticate requires params.idToken") }
             let identityId = try await auth.authenticate(idToken: idToken)
             // Safe to read the token's claims un-verified ONLY here, and only because `auth.authenticate`
             // above just had Cognito accept this very token (see IDToken).
@@ -635,7 +632,7 @@ public actor DaemonService {
             // This is the fix for the 2026-07-13 cross-account leak: sign-out used to drop only the
             // credentials and the key, leaving a machine-wide journal that the NEXT account then read as
             // its own. Now there is no such journal to leave behind.
-            guard let auth = cognitoAuth else { throw ColdStorageError.staging("deauthenticate: this daemon has no Cognito identity pool configured") }
+            guard let auth = cognitoAuth else { throw ColdStorageError.invalidRequest("deauthenticate: this daemon has no Cognito identity pool configured") }
             await auth.deauthenticate()
             endSession()
             return AnyEncodable(AckDTO(ok: true))
@@ -661,7 +658,7 @@ public actor DaemonService {
             // Day-to-day unlock from the app's per-device Keychain cache: the app already holds the MK, so
             // it just hands it back after a (re)connect. No crypto here — just load it.
             let session = try requireSession("unlockVault")
-            guard let mk = try decodeKey(p["masterKey"]) else { throw ColdStorageError.staging("unlockVault requires params.masterKey (base64)") }
+            guard let mk = try decodeKey(p["masterKey"]) else { throw ColdStorageError.invalidRequest("unlockVault requires params.masterKey (base64)") }
             session.vaultKey.setMasterKey(mk)
             return AnyEncodable(AckDTO(ok: true))
         case "unlockVaultWithRecoveryCode":
@@ -670,7 +667,7 @@ public actor DaemonService {
             // app can escrow it — this device won't need the code again.
             let session = try requireSession("unlockVaultWithRecoveryCode")
             let blob = try keyBlob(from: p)
-            guard let code = p["recoveryCode"] else { throw ColdStorageError.staging("unlockVaultWithRecoveryCode requires params.recoveryCode") }
+            guard let code = p["recoveryCode"] else { throw ColdStorageError.invalidRequest("unlockVaultWithRecoveryCode requires params.recoveryCode") }
             let mk = try ZeroKnowledgeKeys.unlockWithRecoveryCode(blob, recoveryCode: code)
             session.vaultKey.setMasterKey(mk)
             return AnyEncodable(UnlockVaultDTO(ok: true, masterKey: mk.withUnsafeBytes { Data($0).base64EncodedString() }))
@@ -690,19 +687,19 @@ public actor DaemonService {
             let session = try requireSession("pauseSource")
             // Per-folder pause: stop auto-syncing this one source (it stays registered). Persisted, so it
             // survives restart. Manual deposits are unaffected. `sourcesChanged` → the UI refetches.
-            guard let id = p["id"] else { throw ColdStorageError.staging("pauseSource requires params.id") }
+            guard let id = p["id"] else { throw ColdStorageError.invalidRequest("pauseSource requires params.id") }
             try session.journal.setSourcePaused(id, true)
             bus.publish(DaemonEvent("sourcesChanged", ["paused": id]))
             return AnyEncodable(AckDTO(ok: true))
         case "resumeSource":
             let session = try requireSession("resumeSource")
-            guard let id = p["id"] else { throw ColdStorageError.staging("resumeSource requires params.id") }
+            guard let id = p["id"] else { throw ColdStorageError.invalidRequest("resumeSource requires params.id") }
             try session.journal.setSourcePaused(id, false)
             bus.publish(DaemonEvent("sourcesChanged", ["resumed": id]))
             trigger()   // sync the just-resumed folder soon, don't wait for the next interval
             return AnyEncodable(AckDTO(ok: true))
         default:
-            throw ColdStorageError.staging("unknown method: \(method)")
+            throw ColdStorageError.invalidRequest("unknown method: \(method)")
         }
     }
 }
