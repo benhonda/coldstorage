@@ -218,8 +218,10 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   but the real ceiling lives in the daemon's `UploadEngine.run(quota:)`, which refuses any blob that would
   cross it. That's what makes it un-bypassable — it covers the periodic auto-run the renderer never sees,
   and a non-UI client can't sidestep it. The app pushes the number down with `setQuota` (on auth + every
-  entitlement change); the daemon reports a refusal as `blobFailed` kind `overQuota`, which surfaces in the
-  "couldn't upload" panel and retries once there's room. The client check is **size-aware**: `usedBytes` is
+  entitlement change); the daemon reports a refusal as `blobFailed` kind `overQuota`, which opens the SAME
+  paywall the client gate would have (so the experience is identical whichever layer catches it — this is
+  what covers the fail-open path: a drop that slipped the client gate while its inputs were still null, or a
+  background auto-run) and surfaces in the "couldn't upload" panel, retrying once there's room. The client check is **size-aware**: `usedBytes` is
   `bytesStored` (the lagging S3 listing) PLUS the bytes of the still-`uploading` optimistic rows (in-flight,
   not yet in S3), and the deposit's own size is weighed too — so neither a single oversized drop nor a burst
   slips past a stored total that hasn't caught up. Photo picks contribute 0 to the client-side size math

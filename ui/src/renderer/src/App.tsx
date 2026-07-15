@@ -9,7 +9,7 @@
  * plain storage line, a quiet status line only when the background uploader isn't running, and a
  * clickable getting-back indicator that opens the restore queue.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon, IconButton, Modal, Button } from "./ui/primitives.tsx";
 import { Sidebar, type NavItem } from "./ui/layout.tsx";
 import type { Store } from "./state/store.ts";
@@ -159,6 +159,21 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   }, [state.failures]);
 
   const retryFailures = (): void => exec(() => api.request("triggerNow"));
+
+  // A quota refusal from the DAEMON opens the SAME paywall the client gate would have — so the experience is
+  // identical whichever layer catches an over-quota deposit. This is the fail-open path: a drop slipped past
+  // the client gate while its inputs were still null (e.g. the first seconds after launch, before entitlement
+  // + usage land) and the daemon caught it, or the background auto-run hit the ceiling. Without this, those
+  // refusals only showed a "couldn't upload" row, never the upsell. Deduped by blob via a ref, so a refusal
+  // retried across auto-run passes doesn't re-pop after the user has dismissed it; a genuinely new blob does.
+  const shownQuotaBlocks = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const fresh = state.failures.some((f) => f.kind === "overQuota" && !shownQuotaBlocks.current.has(f.blob));
+    if (!fresh) return;
+    for (const f of state.failures) if (f.kind === "overQuota") shownQuotaBlocks.current.add(f.blob);
+    if (subscribed) setOverCapacityOpen(true);
+    else setPaywallReason("quotaReached");
+  }, [state.failures, subscribed]);
 
   const footer = (
     <>

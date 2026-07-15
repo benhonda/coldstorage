@@ -87,6 +87,11 @@ public actor DaemonService {
         bus.publish(DaemonEvent("filesChanged", ["signedIn": new.identity.directoryName]))
     }
 
+    /// Set (or clear, with `nil`) the storage quota the engine enforces on every run. The wire handler
+    /// (`setQuota`) is a thin parse over this; factored out so the enforcement can be tested without the
+    /// control socket.
+    func setQuota(_ bytes: Int?) { quotaBytes = bytes }
+
     /// Sign-out: release the session. The journal handle, the staging dir and the MasterKey all go with it.
     func endSession() {
         session?.close()
@@ -285,6 +290,12 @@ public actor DaemonService {
                 permanentlyFailedBlobs.insert(f.blobId)
                 // Persist the ⚠ as journal truth (survives refresh + restart). Best-effort: a write hiccup here
                 // must not abort surfacing the remaining failures — the event already reported the fault.
+                try? session.journal.markFilesFailed(f.files.map(\.id), error: f.kind.message)
+            } else if f.kind.isOverQuota {
+                // Mark the files `failed` too, so their rows leave "uploading" — an over-quota file was upserted
+                // (status `discovered` = "uploading" in the UI) but never archived, and would otherwise sit
+                // pending FOREVER after the refusal. But do NOT skip-list the blob: unlike a permanent fault,
+                // this heals the moment there's room — a folder re-scan resets it to `discovered` and retries.
                 try? session.journal.markFilesFailed(f.files.map(\.id), error: f.kind.message)
             }
         }
@@ -719,7 +730,7 @@ public actor DaemonService {
             // ceiling it has no other way to learn (the daemon doesn't talk to the account backend). Absent
             // or unparseable `quotaBytes` CLEARS it → don't enforce (a subscriber whose plan the app couldn't
             // resolve, or dogfood mode) — the same fail-open the app-side gate uses. Cheap, no session needed.
-            quotaBytes = p["quotaBytes"].flatMap(Int.init)
+            setQuota(p["quotaBytes"].flatMap(Int.init))
             return AnyEncodable(AckDTO(ok: true))
         case "mintVault":
             // Signup (first ever sign-in on any device for this account): mint a fresh MasterKey + a

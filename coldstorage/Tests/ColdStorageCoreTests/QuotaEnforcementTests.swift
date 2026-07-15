@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Crypto
 @testable import ColdStorageCore
 
 /// **The storage-quota ceiling, enforced where it can't be bypassed.** The app-side gate is fast UX, but
@@ -90,5 +91,31 @@ import Foundation
 
         #expect(failures.isEmpty)
         #expect(try journal.isFileArchived("huge.bin") == true)
+    }
+
+    /// **The stuck-pending fix, end-to-end through `DaemonService`.** A refused file was `upsert`ed (status
+    /// `discovered`, which the UI paints as "uploading") but never archived — so without marking it `failed`
+    /// its row sits pending FOREVER. This drives a real deposit through the daemon with a tiny quota and
+    /// asserts the file lands in the journal as `.failed`, not `.discovered` — the row leaves "uploading".
+    @Test func anOverQuotaDepositMarksTheFileFailedNotStuckPending() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("cs-quota-daemon-\(UUID().uuidString)")
+        let drop = root.appendingPathComponent("drop")
+        try fm.createDirectory(at: drop, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        try Data(repeating: 0x42, count: 200_000).write(to: drop.appendingPathComponent("big.bin"))
+
+        let sessions = SessionFactory(dataRoot: root.appendingPathComponent("data"), store: FakeVault(), canSelfThaw: false)
+        let daemon = DaemonService(bus: EventBus(), sessions: sessions)
+        let session = try sessions.make(.user(sub: "sub-1", identityId: "ca-central-1:1"))
+        session.vaultKey.setMasterKey(SymmetricKey(size: .bits256))
+        await daemon.beginSession(session)
+        await daemon.setQuota(50_000)   // 200 KB deposit into a 50 KB ceiling → refused
+
+        await daemon.deposit(paths: [drop.path], into: "")
+
+        let row = try session.journal.listFiles().first { $0.relativePath.hasSuffix("big.bin") }
+        #expect(row != nil)                          // it's IN the tree (listFiles returns it)…
+        #expect(row?.status == .failed)              // …as `.failed`, not `.discovered` → the row leaves "uploading"
     }
 }
