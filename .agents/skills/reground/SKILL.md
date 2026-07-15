@@ -1,6 +1,6 @@
 ---
 name: reground
-description: Reread every CLAUDE.md governing this session — global user instructions, the project root, any nested/per-package ones, and anything they @-import — so pillars and rules that have scrolled out of context (or gotten fuzzy after a long session) are back at full strength. Explicitly invoke on "/reground", "reground yourself", "reread your CLAUDE.md files", "recheck your instructions", or "are you still following the guidelines". Just as important — self-invoke proactively, without being asked, whenever the conversation has gone long and deep — heavy back-and-forth, many tool calls, a context compaction happened, or it's simply been a good while since instructions were last read in full. Err toward regrounding too often rather than too rarely; it's cheap insurance against drift.
+description: Reread every CLAUDE.md governing this session — global user instructions, the project root, any nested/per-package ones, and anything they @-import — so pillars and rules that have scrolled out of context (or gotten fuzzy after a long session) are back at full strength. Explicitly invoke on "/reground", "reground yourself", "reread your CLAUDE.md files", "recheck your instructions", or "are you still following the guidelines". Just as important — self-invoke proactively, without being asked, whenever the conversation has gone long and deep — heavy back-and-forth, many tool calls, a context compaction happened, or it's simply been a good while since instructions were last read in full. Err toward regrounding too often rather than too rarely; it's cheap insurance against drift. This is a re-read only, not an audit — it does not review or fix work already done this session; for that, use audit-code-quality.
 ---
 
 Reread the CLAUDE.md files that govern this session, in full, using the Read tool — not from memory, and not from a compacted summary, since compaction is exactly the kind of event that quietly erodes fidelity to the original wording.
@@ -18,4 +18,6 @@ Use Glob/Read to locate these rather than assuming a fixed set — the point is 
 
 ## After reading
 
-Briefly tell the user you reground — which files, in one line — then carry on with the task. This is invisible work otherwise, and a one-line note costs nothing. No need to summarize the contents back or restate the pillars; just confirm you refreshed them and continue.
+Briefly tell the user you reground — which files, in one line — then carry on with whatever you were already doing. This is invisible work otherwise, and a one-line note costs nothing. No need to summarize the contents back or restate the pillars; just confirm you refreshed them and continue.
+
+Reground only refreshes context — it never audits or fixes work already done this session against the pillars. If the user wants that, point them to `audit-code-quality`.
