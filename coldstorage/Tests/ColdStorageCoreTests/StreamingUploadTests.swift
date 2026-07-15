@@ -2,10 +2,6 @@ import Testing
 import Foundation
 @testable import ColdStorageCore
 
-#if canImport(Darwin)
-import Darwin
-#endif
-
 /// The engine encrypts straight into the multipart upload — no staging file, nothing on disk. These pin the
 /// three claims that change makes, because each one is invisible to the other tests:
 ///
@@ -187,58 +183,42 @@ import Darwin
         func enumerate() async throws -> [IngestItem] { items }
     }
 
-    /// **The headline claim, pinned to a number: memory holds the part in flight, not the blob.**
+    /// **The headline claim, pinned to a number: memory holds the parts in flight, not the blob.**
     ///
-    /// This is the whole point of streaming into the multipart upload, and no functional test can see it —
-    /// a blob buffered entirely in RAM produces byte-identical output to one shipped part by part. So measure
-    /// it: archiving a file must cost roughly a part (64 MiB) plus change, whatever the file's size.
-    @Test func archivingALargeFileHoldsAPartInMemoryNotTheBlob() async throws {
+    /// No functional test can see this — a blob buffered entirely in RAM produces byte-identical output to one
+    /// shipped part by part. So measure it: archiving a file must cost roughly the concurrency window (a few
+    /// 64 MiB parts), NOT the file size. The bound is `maxInFlight` parts, not one — uploads now run in
+    /// parallel — but it is still a small constant, wildly under the blob.
+    @Test func archivingALargeFileHoldsTheInFlightPartsInMemoryNotTheBlob() async throws {
         let fm = FileManager.default
         let base = fm.temporaryDirectory.appendingPathComponent("cs-mem-\(UUID().uuidString)")
         let root = base.appendingPathComponent("data")
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: base) }
 
-        // 512 MiB — eight parts' worth. If the engine held the blob, this would be unmissable.
+        // 768 MiB — twelve parts. If the engine held the blob, or failed to bound concurrency, this is unmissable.
         let big = root.appendingPathComponent("big.bin")
         _ = fm.createFile(atPath: big.path, contents: nil)
         let fh = try FileHandle(forWritingTo: big)
         let mib = Data(repeating: 0x5A, count: 1 << 20)
-        for _ in 0..<512 { try fh.write(contentsOf: mib) }
+        for _ in 0..<768 { try fh.write(contentsOf: mib) }
         try fh.close()
 
         let journal = try Journal(path: base.appendingPathComponent("j.sqlite").path)
-        // retainParts: false — a fake that KEPT every part would hold the whole blob in memory itself and
-        // swamp the very measurement this test exists to take.
-        let engine = UploadEngine(journal: journal, store: FakeVault(retainParts: false),
+        // A store that HOLDS each part briefly, so parts genuinely overlap in flight — otherwise an instant
+        // fake drains each part before the next is dispatched and the concurrency bound is never exercised.
+        // retainParts: false so the fake itself doesn't accumulate the blob and swamp the measurement.
+        let engine = UploadEngine(journal: journal, store: FakeVault(retainParts: false, delayMs: 15),
                                   keys: LocalFileKEK(path: base.appendingPathComponent("kek.bin").path))
 
-        let before = currentRSS()
+        let before = ProcessMemory.residentBytes()
         _ = try await engine.run(source: LocalDirSource(root: root), prefix: .dev)
-        let peak = currentRSS() - before
+        let peak = ProcessMemory.residentBytes() - before
 
-        // One 64 MiB part, plus the copy handed to the store, plus a frame — generous, but nowhere near 512.
-        #expect(peak < 224 << 20,
-                "archiving a 512 MiB file grew RSS by \(peak >> 20) MiB — it buffered the blob instead of shipping parts")
-    }
-
-    private func currentRSS() -> Int {
-        #if canImport(Darwin)
-        var info = mach_task_basic_info()
-        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
-        let kr = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
-            }
-        }
-        return kr == KERN_SUCCESS ? Int(info.resident_size) : 0
-        #else
-        guard let status = try? String(contentsOfFile: "/proc/self/status", encoding: .utf8) else { return 0 }
-        for line in status.split(separator: "\n") where line.hasPrefix("VmRSS:") {
-            if let kb = line.split(separator: " ").compactMap({ Int($0) }).first { return kb * 1024 }
-        }
-        return 0
-        #endif
+        // Bound = maxInFlight (4) parts + the buffer + a frame + the copies handed to the tasks ≈ 6 parts.
+        // 384 MiB is generous headroom for that and still less than the 768 MiB blob by half.
+        #expect(peak < 384 << 20,
+                "archiving a 768 MiB file grew RSS by \(peak >> 20) MiB — it isn't bounding parts in flight")
     }
 
     /// The scratch dir holds a PLAINTEXT asset while PhotoKit pushes it. A SIGKILL skips every cleanup path

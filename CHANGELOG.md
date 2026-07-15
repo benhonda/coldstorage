@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-07-15
+
+- fix(daemon): **blob planner groups by FOLDER, then recency** — it sorted by date and broke the batch on every folder change, so a 100-file/4-folder deposit produced **100 blobs** (four sequential S3 round trips each = minutes of latency); blob ids change, so already-archived files re-upload once. `BlobBatchingTests`.
+- feat(daemon): **parts upload concurrently**, bounded to `UploadTuning.maxPartsInFlight` (default 4, `COLDSTORE_MAX_PARTS_INFLIGHT`) — fills a link with headroom; memory stays `N × 64 MiB`, each part's `recordPart` drained serially back on the `PartShipper` actor. `ConcurrentUploadTests`.
+- feat: **live deposit progress** — new `runProgress` daemon event (files/bytes/`currentPath`, encrypted bytes so the bar hits 100%) → reducer `throughput`/`etaSeconds` → a `DepositProgress` banner atop My Files, so a batched many-small-file deposit is no longer a black box.
+- fix(daemon): `previewDeposit` walks names only (`LocalDirSource.walk` + `previewPaths`) instead of SHA-256'ing the whole drop — a 1000-file preview stopped blowing the UI's 10s timeout and looking hung.
+- fix(daemon): **one pipeline at a time via `withRunLock`** — a scheduled scan skips when busy, a user deposit waits-then-runs; stops the 300s scan timer and a deposit each starting a run on the shared journal (a reentrant actor let them stack). `ConcurrentRunTests`.
+- fix(daemon): `autoreleasepool` around every `FileHandle` read loop — macOS autoreleased read buffers piled up (**841 MB resident** hashing 2 GB before any upload); a Linux no-op, so the Core memory tests can't see it. New `ProcessMemory` + `task daemon:mac:memory` (the daemon logs its own RSS per part).
+- chore(build): the Linux devcontainer builds into a `.build-linux` scratch path — the Mac's `.build/release` symlink (launchd resolves it) is the same folder over the bind mount and must not be repointed.
+
 ## 2026-07-14
 
 - feat(daemon): **the upload engine writes nothing to disk — it encrypts straight into the multipart upload.** Staging is gone (`UploadEngine.init` drops `stagingDir`, `UserSession` swaps `staging/` → `scratch/`): ciphertext now flows source → 4 MiB frame → 64 MiB part → S3 via a new `PartShipper` actor holding only the part in flight, so backing up a 40 GB video needs 40 GB of *upload*, not 40 GB of free space. `EnvelopeCipher.encryptedSize(ofPlaintext:)` supplies the progress-bar denominator staging used to measure.

@@ -54,6 +54,32 @@ public struct ExplicitPathsSource: IngestSource {
         return items
     }
 
+    /// Where these drops WOULD land, without reading a byte of them.
+    ///
+    /// The collision preview only ever needed names. Getting them from `enumerate` meant SHA-256'ing the
+    /// user's entire drop first — a full read of every byte before the UI could draw a single row, which on a
+    /// 1000-file deposit blew straight through the UI's 10-second timeout and looked like a hang.
+    ///
+    /// It reuses the SAME placement arithmetic as `enumerate` (`LocalDirSource.walk` + `join`), so a preview
+    /// can never disagree with the deposit it is previewing.
+    public func previewPaths() async throws -> [String] {
+        let fm = FileManager.default
+        var paths: [String] = []
+        for e in entries {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: e.url.path, isDirectory: &isDir) else { continue }
+            if isDir.boolValue {
+                let base = e.url.lastPathComponent
+                for entry in try LocalDirSource(root: e.url, exclude: exclude).walk() {
+                    paths.append(Self.join(e.destDir, "\(base)/\(entry.relativePath)"))
+                }
+            } else {
+                paths.append(Self.join(e.destDir, e.url.lastPathComponent))
+            }
+        }
+        return paths
+    }
+
     /// Join a vault dir + a sub-path ("" + "a/b" → "a/b"; "x" + "a/b" → "x/a/b").
     static func join(_ dir: String, _ sub: String) -> String { dir.isEmpty ? sub : "\(dir)/\(sub)" }
 }

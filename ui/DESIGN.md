@@ -82,9 +82,14 @@ Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-cl
 
 ## Deposit flow (the hero)
 1. **Drop** anywhere (or ⊕ Add) → *"Drop to upload"*; items land in the currently-viewed folder.
-2. **Encrypt + upload** — daemon-owned, non-blocking: browse/close the app, it continues. Aggregate
-   headline + per-file badges updating live. Uploading rows show a **determinate** % bar for large
-   solo-blob files (the daemon's `uploadProgress`); small batched files keep the indeterminate stripe.
+2. **Encrypt + upload** — daemon-owned, non-blocking: browse/close the app, it continues. The
+   **deposit banner** (`DepositProgress`) at the top of the browser is the aggregate: a determinate bar
+   driven by the daemon's `runProgress` (bytes uploaded / total across every file and blob), the file
+   currently uploading, files done / total, throughput, and a rough ETA — all derived from the
+   `runProgress` stream, so a deposit of many small BATCHED files shows real motion instead of silence
+   then a burst of green. A Photos deposit (sizes unknown until streamed → `bytesTotal` 0) falls back to
+   count progress + an indeterminate sheen rather than a fake byte bar. Individual uploading rows still
+   show a determinate % for large solo-blob files (the daemon's per-file `uploadProgress`).
 3. **Done = quiet inline confirmation** (no celebration): *"240 photos uploaded. Skipped 1,203 files
    in node_modules and caches. see what →"*. The skip line is cost-protection made factual — name the
    junk, no salesy "saved you $X," no "safe." *(Needs skipped-count reporting — still open, below.)*
@@ -168,8 +173,11 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   (files/status/excludes/run/failures/restores) on sign-out **and** on an account switch, keyed on the
   account — the daemon's isolation is only half the fix if the UI still holds the last user's state.
 - **Events (SSOT = the `DaemonEvent(...)` call sites):** `runStarted · fileArchived · uploadProgress ·
-  runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged · restoreRequested ·
-  restoreInProgress · restoreCompleted · restoreNeedsAuthorization · error`. `uploadProgress` carries
+  runProgress · runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged ·
+  restoreRequested · restoreInProgress · restoreCompleted · restoreNeedsAuthorization · error`.
+  `runProgress` carries `{filesTotal, bytesTotal, filesArchived, bytesUploaded, currentPath}` — the
+  whole-run aggregate the deposit banner draws from (all ENCRYPTED bytes; `bytesTotal` 0 ⇒ unknown, e.g.
+  Photos; ETA/throughput are derived UI-side, never sent). `uploadProgress` carries
   `{file, path, bytes, totalBytes}`; `blobFailed` carries `{blob, kind, message, paths}` (newline-joined
   relativePaths); `filesChanged` carries `{moved, to}` / `{created}` / `{deleted}` — the cue to re-read
   `listFiles` — plus `{signedIn}` / `{signedOut}`, the cue that the tree just changed owner entirely.

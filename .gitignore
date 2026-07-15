@@ -109,3 +109,7 @@ scripts/tmp/*
 
 mobile/*.md
 NEXT.md
+
+# The devcontainer's Swift build dir — kept OFF the Mac's .build, which is the same folder over the
+# bind mount and whose release symlink launchd resolves (see Taskfile daemon:build:dev).
+coldstorage/.build-linux/

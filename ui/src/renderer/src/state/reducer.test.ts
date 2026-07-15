@@ -3,7 +3,7 @@
  * real reducer against real wire-shaped (string-valued) event payloads; nothing is mocked away.
  */
 import { describe, expect, test } from "bun:test";
-import { initialState, reducer, type AppState } from "./reducer.ts";
+import { etaSeconds, initialState, reducer, throughput, type AppState } from "./reducer.ts";
 
 /** Apply a sequence of actions from the initial state. */
 const run = (...actions: Parameters<typeof reducer>[1][]): AppState =>
@@ -197,5 +197,62 @@ describe("failures, pause, restore, error", () => {
   test("sourcesChanged is a no-op in the reducer (controller refetches)", () => {
     const base = run({ type: "statusLoaded", status });
     expect(reducer(base, { type: "event", name: "sourcesChanged", data: { added: "/c" } })).toBe(base);
+  });
+});
+
+describe("run progress (the deposit bar / throughput / ETA)", () => {
+  const progress = (d: Record<string, string>): Parameters<typeof reducer>[1] =>
+    ({ type: "event", name: "runProgress", data: {
+      filesTotal: "0", bytesTotal: "0", filesArchived: "0", bytesUploaded: "0", currentPath: "", ...d,
+    } });
+
+  test("the denominators are known from the first tick (not just at runFinished)", () => {
+    const s = run(progress({ filesTotal: "100", bytesTotal: "2000000", bytesUploaded: "0" }));
+    expect(s.run?.filesTotal).toBe(100);
+    expect(s.run?.bytesTotal).toBe(2_000_000);
+    expect(s.run?.active).toBe(true);
+  });
+
+  test("bytesTotal of 0 (a Photos deposit) is treated as UNKNOWN, not a real 0-byte total", () => {
+    const s = run(progress({ filesTotal: "5", bytesTotal: "0", filesArchived: "2" }));
+    expect(s.run?.bytesTotal).toBeNull(); // → UI shows count progress, not a 0-byte bar
+    expect(s.run?.filesTotal).toBe(5);
+  });
+
+  test("currentPath carries the now-uploading file, and clears at runFinished", () => {
+    const mid = run(progress({ currentPath: "Photos/IMG_1.jpg", bytesUploaded: "500" }));
+    expect(mid.run?.currentPath).toBe("Photos/IMG_1.jpg");
+    const done = reducer(mid, {
+      type: "event", name: "runFinished",
+      data: { filesArchived: "3", filesTotal: "3", blobsFailed: "0" },
+    });
+    expect(done.run?.currentPath).toBeNull();
+    expect(done.run?.active).toBe(false);
+  });
+
+  test("runFinished snaps the bar to 100% (uploaded == the known total)", () => {
+    const mid = run(progress({ bytesTotal: "1000", bytesUploaded: "640", filesTotal: "3" }));
+    const done = reducer(mid, {
+      type: "event", name: "runFinished",
+      data: { filesArchived: "3", filesTotal: "3", blobsFailed: "0" },
+    });
+    expect(done.run?.bytesUploaded).toBe(1000);
+    expect(done.run?.bytesTotal).toBe(1000);
+  });
+
+  test("throughput averages the sample window; needs ≥2 samples with forward progress", () => {
+    expect(throughput([])).toBeNull();
+    expect(throughput([{ t: 0, bytes: 100 }])).toBeNull();
+    // 8 MB over 2 s = 4 MB/s.
+    expect(throughput([{ t: 1000, bytes: 0 }, { t: 3000, bytes: 8_000_000 }])).toBe(4_000_000);
+    // No forward progress → no rate (rather than 0, which reads as "stalled forever").
+    expect(throughput([{ t: 1000, bytes: 5 }, { t: 2000, bytes: 5 }])).toBeNull();
+  });
+
+  test("etaSeconds divides the remaining bytes by the smoothed rate", () => {
+    const samples = [{ t: 0, bytes: 0 }, { t: 1000, bytes: 1_000_000 }]; // 1 MB/s
+    expect(etaSeconds(samples, 1_000_000, 5_000_000)).toBe(4); // 4 MB left ÷ 1 MB/s
+    expect(etaSeconds(samples, 5_000_000, 5_000_000)).toBeNull(); // already done
+    expect(etaSeconds(samples, 0, null)).toBeNull(); // unknown total (photos)
   });
 });

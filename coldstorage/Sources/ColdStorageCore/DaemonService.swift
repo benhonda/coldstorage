@@ -25,7 +25,15 @@ public actor DaemonService {
     /// filter, but because there is nothing unscoped to read. See ``UserSession``.
     private var session: UserSession?
 
+    // **At most one pipeline runs at a time — the mutual exclusion the journal's integrity depends on.**
+    // `performRun` awaits S3 for minutes, and a Swift actor is REENTRANT across `await`, so without this the
+    // 300s scan timer AND every user deposit could each start a pipeline on top of one already in flight —
+    // two passes planning the same blob, racing its upload id and part rows. A plain bool couldn't express
+    // what's needed, because the two callers want opposite things when busy: a scheduled scan should SKIP
+    // (the next tick re-scans anyway), a user deposit must WAIT then run (dropping the files someone just
+    // dragged in would be a bug). `running` + a waiter queue gives both — see `withRunLock`.
     private var running = false
+    private var runWaiters: [CheckedContinuation<Void, Never>] = []
     // Blobs that failed *permanently* (config/logic — won't self-heal) this session. Skipped on the next
     // pass so we don't re-stage+re-attempt a doomed blob every interval. In-memory by design: a restart
     // retries once (maybe the operator fixed the config). Persisting it would need a journal schema change.
@@ -91,11 +99,36 @@ public actor DaemonService {
 
     // MARK: - run loop
 
+    /// Run `body` under the one-pipeline-at-a-time lock (see `running`). `skipIfBusy` distinguishes the two
+    /// callers: a scheduled scan passes `true` (drop this tick — the next one re-scans anyway); a user
+    /// deposit passes `false` (WAIT for the in-flight run, then go — never drop the dropped files). At most
+    /// one `body` executes at a time, which is what stops two passes racing the shared journal.
+    private func withRunLock(skipIfBusy: Bool, _ body: () async throws -> Void) async rethrows {
+        if skipIfBusy {
+            if running { return }
+        } else {
+            // Suspend until the current run finishes; loop because several waiters wake together and only one
+            // may hold the lock. No `await` sits between the final `running` check and the set below, so the
+            // acquire is atomic on the actor — no reentrancy gap.
+            while running { await withCheckedContinuation { runWaiters.append($0) } }
+        }
+        running = true
+        defer {
+            running = false
+            let waiters = runWaiters; runWaiters = []
+            for w in waiters { w.resume() }   // wake all; they re-check `running` and one wins
+        }
+        try await body()
+    }
+
     /// A signed-out daemon has no vault to sync, so a pass is a clean no-op rather than an error — the loop
-    /// just idles until someone signs in.
+    /// just idles until someone signs in. A scheduled pass is SKIPPED while a run is already in flight (the
+    /// next tick re-scans and picks up whatever's left); it never stacks a second pipeline on the journal.
     public func runOnce() async throws {
         guard let session else { return }
-        try await performRun(session: session, source: try currentSource(session))
+        try await withRunLock(skipIfBusy: true) {
+            try await performRun(session: session, source: try currentSource(session))
+        }
     }
 
     /// Archive an explicit set of dropped paths once — the ad-hoc **deposit** (drop-to-upload / "Choose
@@ -108,7 +141,11 @@ public actor DaemonService {
             let session = try requireSession("deposit")
             let entries = paths.map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: $0), destDir: dir) }
             let base = ExplicitPathsSource(entries: entries, exclude: excludeMatcher(session))
-            try await performRun(session: session, source: resolveCollisions(session, base, conflicts))
+            // WAIT for any run in flight, then go — a deposit is the user's explicit action and must not be
+            // dropped, but it also must not race a concurrent pass over the same journal.
+            try await withRunLock(skipIfBusy: false) {
+                try await performRun(session: session, source: resolveCollisions(session, base, conflicts))
+            }
         }
         catch { bus.publish(DaemonEvent("error", ["message": "deposit: \(error)"])) }
     }
@@ -131,7 +168,9 @@ public actor DaemonService {
             let session = try requireSession("depositPhotos")
             let base = PhotoDepositSource(resolver: resolver, assetIds: assetIds,
                                           destDir: dir, scratchDir: session.scratchDir)
-            try await performRun(session: session, source: resolveCollisions(session, base, conflicts))
+            try await withRunLock(skipIfBusy: false) {   // wait-then-run, like `deposit` — never dropped
+                try await performRun(session: session, source: resolveCollisions(session, base, conflicts))
+            }
         }
         catch let e as ColdStorageError {
             // Photo-access / nothing-resolved are user-recoverable: surface the bare message (already a clean
@@ -169,9 +208,10 @@ public actor DaemonService {
 
     /// One pass of the pipeline over `source` — the shared core of a scheduled run and an ad-hoc deposit.
     /// Emits runStarted → fileArchived* → (blobFailed*) → runFinished; isolates per-blob failures and
-    /// skip-lists permanent ones (so a doomed blob isn't re-attempted every pass).
+    /// skip-lists permanent ones (so a doomed blob isn't re-attempted every pass). **Must be called through
+    /// `withRunLock`** — it does not manage the run lock itself, so calling it bare would defeat the mutual
+    /// exclusion. Every call site does.
     private func performRun(session: UserSession, source: IngestSource) async throws {
-        running = true
         bus.publish(DaemonEvent("runStarted"))
         let bus = self.bus
         let onFile: @Sendable (String, String) async -> Void = { id, blob in
@@ -184,7 +224,17 @@ public actor DaemonService {
             bus.publish(DaemonEvent("uploadProgress", ["file": p.fileId, "path": p.path,
                                                        "bytes": "\(p.uploaded)", "totalBytes": "\(p.total)"]))
         }
-        defer { running = false }
+        // Whole-run progress — the aggregate the UI turns into a bar, a byte readout, throughput and ETA.
+        // Fires on every meaningful tick (run start with the denominators, each item as it starts, each part
+        // as it ships, each file as it links), so a 1000-file batched deposit is no longer a black box. The
+        // UI derives rate + ETA from the stream; the daemon only reports ground truth.
+        let onRunProgress: @Sendable (RunProgress) async -> Void = { p in
+            bus.publish(DaemonEvent("runProgress", [
+                "filesTotal": "\(p.filesTotal)", "bytesTotal": "\(p.bytesTotal)",
+                "filesArchived": "\(p.filesArchived)", "bytesUploaded": "\(p.bytesUploaded)",
+                "currentPath": p.currentPath ?? "",
+            ]))
+        }
         // Always close out a `runStarted` with a `runFinished`, even when the run THROWS before any blob
         // (e.g. a photo deposit that can't read the library). Otherwise the UI is stuck "syncing" forever and
         // the optimistic rows never reconcile. We re-throw so the caller still surfaces the cause as an
@@ -197,7 +247,8 @@ public actor DaemonService {
             failures = try await session.engine.run(source: source,
                                                     skipBlobIds: permanentlyFailedBlobs,
                                                     prefix: session.prefix,
-                                                    onFileArchived: onFile, onProgress: onProgress)
+                                                    onFileArchived: onFile, onProgress: onProgress,
+                                                    onRunProgress: onRunProgress)
         } catch {
             let s = try? session.journal.summary()
             bus.publish(DaemonEvent("runFinished", ["filesArchived": "\(s?.archived ?? 0)",
@@ -562,20 +613,23 @@ public actor DaemonService {
             // `conflicts` map. Reusing the real source gives the EXACT resolved names — essential for photos,
             // whose filenames the UI can't know until the daemon resolves them.
             let dest = p["dest"] ?? ""
-            let source: any IngestSource
+            // `previewPaths`, NOT `enumerate`. Enumerating SHA-256s every file — a full read of every byte in
+            // the drop — and the preview throws all of that away, keeping only the names. On a 1000-file
+            // deposit that read is minutes of work in front of a UI that gives up after 10 seconds, so the
+            // whole thing looked hung before a single row appeared. The preview is now a stat-only walk.
+            let paths: [String]
             if let raw = p["src"], !raw.isEmpty {
                 let entries = raw.split(separator: "\n").map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: String($0)), destDir: dest) }
-                source = ExplicitPathsSource(entries: entries, exclude: excludeMatcher(session))
+                paths = try await ExplicitPathsSource(entries: entries, exclude: excludeMatcher(session)).previewPaths()
             } else if let raw = p["assetIds"], !raw.isEmpty {
                 guard let resolver = photoResolver else { throw ColdStorageError.invalidRequest("previewDeposit: Photos ingest is unavailable on this platform") }
-                source = PhotoDepositSource(resolver: resolver, assetIds: raw.split(separator: "\n").map(String.init),
-                                            destDir: dest, scratchDir: session.scratchDir)
+                paths = try await PhotoDepositSource(resolver: resolver, assetIds: raw.split(separator: "\n").map(String.init),
+                                                     destDir: dest, scratchDir: session.scratchDir).previewPaths()
             } else {
                 throw ColdStorageError.invalidRequest("previewDeposit requires params.src (paths) or params.assetIds")
             }
             let live = try session.journal.livePaths()
-            let items = try await source.enumerate()
-            return AnyEncodable(items.map { DepositPreviewItemDTO(relativePath: $0.relativePath, exists: live.contains($0.relativePath)) })
+            return AnyEncodable(paths.map { DepositPreviewItemDTO(relativePath: $0, exists: live.contains($0)) })
         case "movePath":
             let session = try requireSession("movePath")
             // Reorganize: relocate the subtree at `from` → `to` (a file/folder move OR rename). A cheap

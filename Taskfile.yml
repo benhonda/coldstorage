@@ -116,11 +116,19 @@ tasks:
           rm -f .build/.lock && echo "removed stale .build/.lock"
         fi
 
+  # ── `.build` IS SHARED WITH THE MAC. The workspace is bind-mounted from the macOS host, so
+  #    `coldstorage/.build/` is literally the same directory in here and out there. SwiftPM keeps per-triple
+  #    subdirs, but `.build/release` and `.build/debug` are SYMLINKS it repoints at whichever platform built
+  #    last — so a container build swings them at an `aarch64-unknown-linux-gnu` ELF, and the Mac's launchd
+  #    then refuses to exec what it thinks is the daemon (`Bootstrap failed: 5`, 2026-07-14). Same class of
+  #    bug the devcontainer already solves for `ui/node_modules` by giving it a container-only volume.
+  #    So: on Linux, build into our OWN scratch path and leave the Mac's `.build` alone entirely.
   daemon:build:dev:
     desc: "Build the Swift core — DEBUG (any OS). First run fetches deps (a few minutes). For the prod release build, see daemon:mac:install."
     dir: coldstorage
     deps: [daemon:unlock] # clear a stale lock left by a previously-killed build
-    cmds: [swift build]
+    cmds:
+      - swift build $(if [ "$(uname -s)" = "Linux" ]; then echo "--scratch-path .build-linux"; fi)
   daemon:test:
     desc: Run the portable Core tests (swift-testing — no XCTest/CFRunLoop hang)
     dir: coldstorage
@@ -131,7 +139,10 @@ tasks:
     # exercises Argon2id at production tuning — a deliberately memory-HARD KDF. A neighbour allocating
     # hundreds of MiB inside the process you are measuring makes the measurement meaningless (it reported a
     # 260 MiB "leak" that was Argon2id's). The whole suite is ~2s serial; the trustworthy number is worth it.
-    cmds: [swift test --no-parallel]
+    cmds:
+      # See the `.build` note above daemon:build:dev — on Linux we build into our own scratch path so the
+      # container never touches the Mac's `.build` (whose `release` symlink launchd depends on).
+      - swift test --no-parallel $(if [ "$(uname -s)" = "Linux" ]; then echo "--scratch-path .build-linux"; fi)
 
   daemon:mac:reset:local:
     desc: "DESTRUCTIVE: wipe the local per-user archive state — every signed-in account's journal (file index + watched-folder registry), scratch and status, under <data dir>/users/. Keeps config.json, the app's sign-in session, the MasterKey escrow (vault.json) and logs. Stop the daemon/app first. Run this once after the UserSession refactor (2026-07-13): the OLD machine-wide coldstore.sqlite is exactly the file that leaked across accounts, and it is now orphaned — this deletes it."
@@ -265,6 +276,31 @@ tasks:
       DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
     cmds:
       - tail -n 40 -f "{{.DATA_DIR}}/coldstored.out.log" "{{.DATA_DIR}}/coldstored.err.log"
+
+  daemon:mac:memory:
+    desc: "Watch the installed daemon's memory while it uploads — the SHAPE is the diagnosis. It should stay FLAT (~100-200 MB) no matter how many files or how big; the engine holds one 64 MiB part at a time and writes nothing to disk. A 1000-file deposit peaked at 1.7 GB on 2026-07-14, which is what this exists to explain. Reads the RSS the daemon logs after the scan and after every part, so you never have to squint at Activity Monitor. Ctrl-C to stop."
+    dir: coldstorage
+    vars:
+      DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
+      LIMIT: '{{.LIMIT | default "600"}}' # MB — above this, memory is tracking the upload rather than bounding it
+    cmds:
+      - |
+        echo "── coldstored memory (limit {{.LIMIT}} MB) ─────────────────────────────"
+        echo "   flat across parts = bounded (what we want)"
+        echo "   climbing with each part = something is retaining every part"
+        echo "   climbing during the scan = the hashing pass is holding the reads"
+        echo "──────────────────────────────────────────────────────────────────────"
+        # The daemon reports its OWN RSS (ProcessMemory) — no sampling race, one line per part.
+        tail -n 200 -f "{{.DATA_DIR}}/coldstored.err.log" \
+          | grep --line-buffered -E "RSS [0-9]+ MB" \
+          | while IFS= read -r line; do
+              mb=$(printf '%s' "$line" | sed -n 's/.*RSS \([0-9]*\) MB.*/\1/p')
+              if [ -n "$mb" ] && [ "$mb" -gt {{.LIMIT}} ]; then
+                printf "\033[31m%s   ⚠ above {{.LIMIT}} MB\033[0m\n" "$line"
+              else
+                printf "%s\n" "$line"
+              fi
+            done
 
   daemon:mac:logs:clear:
     desc: "Truncate the installed daemon's logs in place — a clean slate before reproducing an issue, WITHOUT reinstalling. (daemon:mac:install also resets them.) The daemon keeps writing to the same files."
@@ -415,8 +451,17 @@ tasks:
         # Photos grant to this identifier (NOT the embedded CFBundleIdentifier); without pinning, codesign
         # defaults it to the basename "coldstored", so `tccutil reset Photos com.theadpharm.coldstored`
         # wouldn't match. Pinning makes the grant + reset + launchd label all consistent.
-        codesign --force --sign "$identity" --identifier com.theadpharm.coldstored .build/release/coldstored
+        # NOT `.build/release/coldstored`. That is a SYMLINK, and SwiftPM repoints it at whichever platform
+        # built last — while this repo's `.build/` is SHARED with the Linux devcontainer over the bind mount.
+        # A container-side `swift build` swings it at an `aarch64-unknown-linux-gnu` ELF, and then launchd is
+        # handed a path that resolves to a Linux binary: `Bootstrap failed: 5: Input/output error`, which is
+        # launchd's opaque way of saying "invalid or missing Program/ProgramArguments" (2026-07-14).
+        # `--show-bin-path` reports the REAL platform-specific directory, with no symlink to race over.
+        bin="$(swift build -c release --show-bin-path)/coldstored"
+        [ -x "$bin" ] || { echo "✗ no release binary at $bin — the build didn't produce it"; exit 1; }
+        codesign --force --sign "$identity" --identifier com.theadpharm.coldstored "$bin"
         echo "signed coldstored as com.theadpharm.coldstored with: $identity  (keep this identity STABLE — TCC keys the Photos grant to it)"
+        echo "  binary: $bin"
       - mkdir -p "{{.DATA_DIR}}" "{{.HOME}}/Library/LaunchAgents"
       - |
         # Bucket/region come from the handoff file (written by `task tf:coldstorage:creds-export` in the
@@ -438,7 +483,8 @@ tasks:
           echo "  Then re-run: task daemon:mac:install"
           exit 1
         fi
-        sed -e "s#__BINARY__#$(pwd)/.build/release/coldstored#g" \
+        # Same reason as the codesign step: resolve the REAL bin dir, never the shared `.build/release` symlink.
+        sed -e "s#__BINARY__#$(swift build -c release --show-bin-path)/coldstored#g" \
             -e "s#__DATA_DIR__#{{.DATA_DIR}}#g" \
             -e "s#__SOCKET__#{{.DATA_DIR}}/coldstored.sock#g" \
             -e "s#__BUCKET__#${bucket}#g" \
@@ -448,13 +494,58 @@ tasks:
             -e "s#__COGNITO_USER_POOL_PROVIDER__#${cognito_provider}#g" \
             launchd/com.theadpharm.coldstored.plist.template > "{{.PLIST}}"
         echo "wired: bucket=${bucket} region=${region} profile=${profile} cognito=${cognito_pool_id:+configured}${cognito_pool_id:-not configured}"
-      - launchctl bootout "gui/$(id -u)/com.theadpharm.coldstored" 2>/dev/null || true
+      # `bootout` is ASYNCHRONOUS — it returns before launchd has finished tearing the job down, and with
+      # KeepAlive set the old instance may still be respawning. Bootstrapping into that window fails with
+      # launchd's famously unhelpful `Bootstrap failed: 5: Input/output error`. So: ask it to go, then WAIT
+      # until it's actually gone before putting the new one in its place.
+      - |
+        launchctl bootout "gui/$(id -u)/com.theadpharm.coldstored" 2>/dev/null || true
+        for _ in $(seq 1 25); do
+          launchctl print "gui/$(id -u)/com.theadpharm.coldstored" >/dev/null 2>&1 || exit 0
+          sleep 0.2
+        done
+        echo "⚠ the old daemon is still registered after 5s — bootstrap may fail; continuing anyway"
       # Fresh logs each install: launchd APPENDS to StandardOut/ErrorPath (never truncates across
       # restarts), so a debugging run would otherwise be read against stale lines from prior runs. The old
       # daemon is booted out above, so its log fd is closed — safe to truncate before the new one starts.
       - ': > "{{.DATA_DIR}}/coldstored.out.log"; : > "{{.DATA_DIR}}/coldstored.err.log"'
-      - launchctl bootstrap "gui/$(id -u)" "{{.PLIST}}"
-      - 'echo "installed → {{.PLIST}}  (socket: {{.DATA_DIR}}/coldstored.sock; logs reset)"'
+      # DON'T just die on a launchd error. `Bootstrap failed: 5: Input/output error` is launchd's generic
+      # noise for "I could not validate or execute your Program/ProgramArguments" — it names neither the
+      # program nor the problem, and there is nothing in it to act on. So when it fails, ASK the three
+      # questions that actually distinguish the causes, right here, while the context is in hand.
+      - |
+        if launchctl bootstrap "gui/$(id -u)" "{{.PLIST}}"; then
+          echo "installed → {{.PLIST}}  (socket: {{.DATA_DIR}}/coldstored.sock; logs reset)"
+          exit 0
+        fi
+        bin="$(swift build -c release --show-bin-path)/coldstored"
+        echo ""
+        echo "─────────────────────────────────────────────────────────────────────────────"
+        echo "✗ launchd refused to load the daemon. Its error code means 'invalid or missing"
+        echo "  Program/ProgramArguments' — i.e. it could not use the binary it was pointed at."
+        echo "─────────────────────────────────────────────────────────────────────────────"
+        echo "1. Is the plist valid?"
+        plutil -lint "{{.PLIST}}" 2>&1 | sed 's/^/     /'
+        echo "2. Is the binary there, and executable?"
+        if [ -x "$bin" ]; then
+          ls -l "$bin" | sed 's/^/     /'
+          codesign -dv "$bin" 2>&1 | grep -E "Identifier|Signature" | sed 's/^/     /'
+        else
+          echo "     ✗ MISSING or not executable: $bin"
+          echo "       → the release build didn't produce it. Re-run: task daemon:mac:install"
+        fi
+        echo "3. Is it still registered from a previous run?"
+        if launchctl print "gui/$(id -u)/com.theadpharm.coldstored" >/dev/null 2>&1; then
+          echo "     ✗ YES — still loaded. Clear it, then re-run this task:"
+          echo "       task daemon:mac:uninstall"
+        else
+          echo "     ✓ no — the domain is clean, so this isn't a stale-registration race."
+        fi
+        echo ""
+        echo "  Daemon log (it may have started and exited):"
+        tail -n 15 "{{.DATA_DIR}}/coldstored.err.log" 2>/dev/null | sed 's/^/     /' || echo "     (empty)"
+        echo "─────────────────────────────────────────────────────────────────────────────"
+        exit 1
 
   daemon:mac:creds:
     desc: "Seed the daemon's IAM-user creds into the login Keychain + wire the `coldstorage` AWS profile. Needs the handoff file — run `task tf:coldstorage:creds-export` in the devcontainer first."

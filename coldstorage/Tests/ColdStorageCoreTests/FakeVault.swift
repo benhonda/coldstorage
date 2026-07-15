@@ -27,9 +27,18 @@ final class FakeVault: Vault, @unchecked Sendable {
     let alreadyOnS3: Set<Int>
     /// Keep the uploaded bytes? Off when a test is measuring the engine's OWN memory.
     let retainParts: Bool
+    /// Hold each `uploadPart` this long, so uploads genuinely overlap in flight — the knob the concurrency
+    /// and run-overlap tests need. 0 = instant (the default; parts drain before the next dispatches).
+    let delayMs: Int
 
-    init(failKeys: Set<String> = [], alreadyOnS3: Set<Int> = [], retainParts: Bool = true) {
-        self.failKeys = failKeys; self.alreadyOnS3 = alreadyOnS3; self.retainParts = retainParts
+    private var _current = 0
+    /// High-water mark of concurrent `uploadPart` calls — how the concurrency tests prove parallelism is real
+    /// and stays within the cap, without timing.
+    private(set) var maxConcurrentParts = 0
+
+    init(failKeys: Set<String> = [], alreadyOnS3: Set<Int> = [], retainParts: Bool = true, delayMs: Int = 0) {
+        self.failKeys = failKeys; self.alreadyOnS3 = alreadyOnS3
+        self.retainParts = retainParts; self.delayMs = delayMs
     }
 
     // What the store was ASKED to do.
@@ -51,7 +60,12 @@ final class FakeVault: Vault, @unchecked Sendable {
     func existingParts(key: String, uploadId: String) async throws -> Set<Int> { alreadyOnS3 }
     func uploadPart(key: String, uploadId: String, number: Int, data: Data) async throws -> (etag: String, sha: String) {
         if failKeys.contains(key) { throw ColdStorageError.s3("InvalidStorageClass (simulated permanent)") }
-        if retainParts { lock.withLock { _parts[key, default: [:]][number] = data } }
+        lock.withLock { _current += 1; maxConcurrentParts = max(maxConcurrentParts, _current) }
+        if delayMs > 0 { try await Task.sleep(for: .milliseconds(delayMs)) }
+        lock.withLock {
+            _current -= 1
+            if retainParts { _parts[key, default: [:]][number] = data }
+        }
         return ("etag-\(number)", "sha-\(number)")
     }
     func complete(key: String, uploadId: String, parts: [PartRow]) async throws {

@@ -2,30 +2,9 @@ import Testing
 import Foundation
 @testable import ColdStorageCore
 
-#if canImport(Darwin)
-import Darwin
-#endif
-
-/// Resident memory of THIS process, right now (not a high-water mark — the suite shares a process, so a
-/// mark would carry other tests' allocations into ours).
-private func currentRSSBytes() -> Int {
-    #if canImport(Darwin)
-    var info = mach_task_basic_info()
-    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
-    let kr = withUnsafeMutablePointer(to: &info) {
-        $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-            task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
-        }
-    }
-    return kr == KERN_SUCCESS ? Int(info.resident_size) : 0
-    #else
-    guard let status = try? String(contentsOfFile: "/proc/self/status", encoding: .utf8) else { return 0 }
-    for line in status.split(separator: "\n") where line.hasPrefix("VmRSS:") {
-        if let kb = line.split(separator: " ").compactMap({ Int($0) }).first { return kb * 1024 }
-    }
-    return 0
-    #endif
-}
+/// Resident memory of THIS process, right now — the SSOT lives in `ProcessMemory` (the daemon logs from the
+/// same routine), so tests read it rather than each carrying a `mach_task_basic_info` copy.
+private func currentRSSBytes() -> Int { ProcessMemory.residentBytes() }
 
 /// **A byte stream must cost bytes, not files.**
 ///

@@ -295,6 +295,21 @@ export interface DaemonEvents {
    * part for a solo (large-file) blob. `file` is the journal id, `path` the relativePath — the UI matches
    * a row by either (they diverge for Photos / not-yet-archived drops). */
   uploadProgress: { file: string; path: string; bytes: string; totalBytes: string };
+  /** Whole-run aggregate progress — the source for the deposit bar, byte readout, throughput and ETA.
+   * Unlike `uploadProgress` (one solo file's own bar), this spans every file and blob in the run, so a
+   * deposit of many small batched files shows real progress instead of silence. Emitted on each meaningful
+   * tick: run start (with the denominators), each item as it begins, each 64 MiB part, each file linked.
+   * All bytes are ENCRYPTED bytes, so `bytesUploaded / bytesTotal` reaches exactly 1. `bytesTotal` can be
+   * "0" for a Photos deposit (sizes unknown until streamed) — the UI falls back to file-count progress.
+   * `currentPath` is the file currently streaming ("" between items). ETA/throughput are NOT here: the UI
+   * derives them by differencing these snapshots over time. */
+  runProgress: {
+    filesTotal: string;
+    bytesTotal: string;
+    filesArchived: string;
+    bytesUploaded: string;
+    currentPath: string;
+  };
   runFinished: { filesArchived: string; filesTotal: string; blobsFailed: string };
   /** A blob that failed to archive this pass. `paths` is the newline-joined relativePaths of the files it
    * batched (named in the failures panel + used to flip their rows); permanent failures are also persisted

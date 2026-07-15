@@ -24,8 +24,20 @@ export interface RunProgress {
   active: boolean;
   /** Files archived so far (live count while active; final total when finished). */
   filesArchived: number;
-  /** Total in scope — unknown until `runFinished` reports it. */
+  /** Total in scope. Known from the FIRST `runProgress` tick now (the daemon reports it at plan time), not
+   * only at `runFinished` — which is what lets the bar have a denominator the instant a deposit starts. */
   filesTotal: number | null;
+  /** Encrypted bytes shipped so far this run, across every file and blob — the aggregate the bar is drawn
+   * from. Advances for batched small files too, not just solo large ones. */
+  bytesUploaded: number;
+  /** Encrypted bytes the whole run will ship. `null` when unknown — a Photos deposit, whose sizes aren't
+   * known until streamed; the UI shows file-count progress there instead of a byte bar. */
+  bytesTotal: number | null;
+  /** The file currently streaming — the "now uploading …" line. `null` between files / when idle. */
+  currentPath: string | null;
+  /** Recent `(timestamp, bytesUploaded)` samples, bounded — the raw signal `throughput`/`etaSeconds` smooth
+   * into a rate and a time estimate. Kept in state (not recomputed) so the math stays pure + testable. */
+  samples: { t: number; bytes: number }[];
   /** Blobs that failed this run — known only at `runFinished`. */
   blobsFailed: number | null;
   /** Most-recent-first, capped — for a live "now archiving…" feed. */
@@ -134,6 +146,10 @@ export const eventAction = <E extends DaemonEventName>(name: E, data: DaemonEven
 
 const RECENT_CAP = 50;
 const FAILURE_CAP = 100;
+/** Recent progress samples kept for the rate/ETA window. Small on purpose: a short window tracks a
+ * changing upload speed, a long one lags it. ~20 ticks is a few seconds of dense small-file progress or a
+ * couple of minutes of 64 MiB parts — smoothed either way. */
+const SAMPLE_CAP = 20;
 
 /** A fresh run-progress record — used at `runStarted` and as a defensive fallback if a `fileArchived`
  * arrives before one (counts/total become known as events flow / at `runFinished`). */
@@ -141,10 +157,39 @@ const startedRun = (): RunProgress => ({
   active: true,
   filesArchived: 0,
   filesTotal: null,
+  bytesUploaded: 0,
+  bytesTotal: null,
+  currentPath: null,
+  samples: [],
   blobsFailed: null,
   recent: [],
   uploadProgress: {},
 });
+
+/** Smoothed throughput (bytes/sec) over the sample window, or `null` when there isn't enough signal yet
+ * (fewer than two samples, no elapsed time, or no forward progress). Pure — takes samples, returns a rate. */
+export const throughput = (samples: RunProgress["samples"]): number | null => {
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  if (!first || !last || first === last) return null;
+  const dtSec = (last.t - first.t) / 1000;
+  const dBytes = last.bytes - first.bytes;
+  if (dtSec <= 0 || dBytes <= 0) return null;
+  return dBytes / dtSec;
+};
+
+/** Seconds remaining, or `null` when it can't be estimated (unknown total, already done, or no rate yet).
+ * Derived from the smoothed `throughput` — deliberately rough, since real upload speed wobbles. */
+export const etaSeconds = (
+  samples: RunProgress["samples"],
+  bytesUploaded: number,
+  bytesTotal: number | null,
+): number | null => {
+  if (!bytesTotal || bytesTotal <= bytesUploaded) return null;
+  const rate = throughput(samples);
+  if (!rate) return null;
+  return (bytesTotal - bytesUploaded) / rate;
+};
 
 /** Parse a wire string to a non-negative integer, defaulting to 0 (never NaN). */
 const num = (s: string | undefined): number => {
@@ -249,16 +294,43 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
       };
     }
 
+    case "runProgress": {
+      const d = action.data;
+      const prev = state.run ?? startedRun();
+      const bytesUploaded = num(d.bytesUploaded);
+      const bytesTotal = num(d.bytesTotal);
+      return {
+        ...state,
+        run: {
+          ...prev,
+          active: true,
+          filesArchived: num(d.filesArchived),
+          filesTotal: num(d.filesTotal),
+          bytesUploaded,
+          // 0 means "unknown" (a Photos deposit) — keep it null so the UI shows count progress, not a 0-byte bar.
+          bytesTotal: bytesTotal > 0 ? bytesTotal : null,
+          currentPath: d.currentPath || null,
+          samples: [...prev.samples, { t: Date.now(), bytes: bytesUploaded }].slice(-SAMPLE_CAP),
+        },
+      };
+    }
+
     case "runFinished": {
       const d = action.data;
+      const prev = state.run;
       return {
         ...state,
         run: {
           active: false,
           filesArchived: num(d.filesArchived),
           filesTotal: num(d.filesTotal),
+          // Snap the bar to 100%: the run is done, so uploaded == total by definition (carry the known total).
+          bytesUploaded: prev?.bytesTotal ?? prev?.bytesUploaded ?? 0,
+          bytesTotal: prev?.bytesTotal ?? null,
+          currentPath: null,
+          samples: [],
           blobsFailed: num(d.blobsFailed),
-          recent: state.run?.recent ?? [],
+          recent: prev?.recent ?? [],
           uploadProgress: {}, // run's over — no live bars
         },
       };

@@ -96,9 +96,15 @@ final class ChunkReader: @unchecked Sendable {
     deinit { close() }
 
     /// One chunk, or `nil` at EOF. A throw ends the stream too, so close on both paths.
+    ///
+    /// The `autoreleasepool` is the same load-bearing one as in `LocalDirSource.sha256Hex` — on macOS,
+    /// `FileHandle.read(upToCount:)` returns autoreleased Objective-C buffers, and a read loop without a pool
+    /// accumulates every one of them. It is a no-op on Linux, so the Core's memory tests cannot see its
+    /// absence; the daemon's own RSS log is what caught it.
     func next() throws -> Data? {
         do {
-            guard let chunk = try handle.read(upToCount: Self.chunkSize), !chunk.isEmpty else { close(); return nil }
+            let chunk = try autoreleasepool { try handle.read(upToCount: Self.chunkSize) }
+            guard let chunk, !chunk.isEmpty else { close(); return nil }
             return chunk
         } catch { close(); throw error }
     }

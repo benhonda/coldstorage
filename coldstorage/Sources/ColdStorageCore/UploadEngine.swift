@@ -20,6 +20,56 @@ public struct UploadProgress: Sendable, Equatable {
     }
 }
 
+/// A whole-run progress snapshot — enough for the UI to draw a bar, a byte readout, and (by differencing
+/// snapshots over time) a throughput and ETA. Distinct from `UploadProgress`, which is one large file's own
+/// determinate bar; this is the aggregate across every file and blob in the run, which is what a 1000-file
+/// deposit needs (batched small files emit no per-file bar at all — that's the visibility gap this closes).
+///
+/// **Bytes are ENCRYPTED bytes.** Both `bytesUploaded` and `bytesTotal` count what actually crosses the wire,
+/// so the bar reaches exactly 100% — the ~4-parts-per-million tag overhead vs the user's plaintext file sizes
+/// is not worth a second unit. `bytesTotal` is derived at plan time from item sizes; for a Photos deposit
+/// those are 0 until streamed, so `bytesTotal` can be 0 there — the UI falls back to file-count progress.
+/// ETA is deliberately NOT here: it's a smoothed presentation value the UI computes from the snapshot stream.
+public struct RunProgress: Sendable, Equatable {
+    public let filesTotal: Int
+    public let bytesTotal: Int
+    public let filesArchived: Int
+    public let bytesUploaded: Int
+    /// The item currently streaming — the "now uploading …" line. `nil` before the first item / between runs.
+    public let currentPath: String?
+    public init(filesTotal: Int, bytesTotal: Int, filesArchived: Int, bytesUploaded: Int, currentPath: String?) {
+        self.filesTotal = filesTotal; self.bytesTotal = bytesTotal
+        self.filesArchived = filesArchived; self.bytesUploaded = bytesUploaded; self.currentPath = currentPath
+    }
+}
+
+/// Accumulates run-wide progress and emits a fresh `RunProgress` on every change. An actor because the
+/// updates arrive from two isolation domains — the engine (item start, file archived) and each blob's
+/// `PartShipper` (bytes shipped) — so the tallies must be serialised, and the compiler proves it here rather
+/// than us promising it.
+actor RunProgressReporter {
+    let filesTotal: Int
+    let bytesTotal: Int
+    private var filesArchived = 0
+    private var bytesUploaded = 0
+    private var currentPath: String?
+    private let emit: @Sendable (RunProgress) async -> Void
+
+    init(filesTotal: Int, bytesTotal: Int, emit: @escaping @Sendable (RunProgress) async -> Void) {
+        self.filesTotal = filesTotal; self.bytesTotal = bytesTotal; self.emit = emit
+    }
+
+    private var snapshot: RunProgress {
+        RunProgress(filesTotal: filesTotal, bytesTotal: bytesTotal,
+                    filesArchived: filesArchived, bytesUploaded: bytesUploaded, currentPath: currentPath)
+    }
+    /// The opening 0-of-N tick, so the UI has a denominator the instant the run starts.
+    func begin() async { await emit(snapshot) }
+    func itemStarted(_ path: String) async { currentPath = path; await emit(snapshot) }
+    func bytesShipped(_ n: Int) async { bytesUploaded += n; await emit(snapshot) }
+    func fileArchived() async { filesArchived += 1; await emit(snapshot) }
+}
+
 /// Orchestrates: scan → plan → (per blob) stream-encrypt straight into a resumable multipart upload →
 /// verify → journal. V1 processes one blob at a time in newest-first order (correct + simple; cross-blob
 /// concurrency is a tunable later). Resumability comes from deterministic encryption + the journal + ListParts.
@@ -56,8 +106,14 @@ public actor UploadEngine {
                     skipBlobIds: Set<String> = [],
                     prefix: VaultPrefix,
                     onFileArchived: (@Sendable (String, String) async -> Void)? = nil,
-                    onProgress: (@Sendable (UploadProgress) async -> Void)? = nil) async throws -> [BlobFailure] {
+                    onProgress: (@Sendable (UploadProgress) async -> Void)? = nil,
+                    onRunProgress: (@Sendable (RunProgress) async -> Void)? = nil) async throws -> [BlobFailure] {
+        // RSS is logged at the three points that tell the hypotheses apart (see `ProcessMemory`): after the
+        // SCAN (which hashes every byte), after each PART, and at the END. A climb in the first points at the
+        // scan; a step per part that never comes back down points at per-request retention; flat at both says
+        // the memory is going somewhere we haven't looked.
         let items = try await source.enumerate()
+        log("UploadEngine: scanned \(items.count) item(s) — RSS \(ProcessMemory.resident)")
         try journal.upsert(items)
         var failures: [BlobFailure] = []
         // `prefix` lands every blob under the caller's own S3 namespace (`blobs/<cognito-identity-id>`) —
@@ -70,8 +126,19 @@ public actor UploadEngine {
         if !items.isEmpty {
             log("UploadEngine: \(items.count) item(s) → \(plan.count) blob(s) [\(plan.map { "\($0.items.count)" }.joined(separator: ","))]")
         }
-        for blob in plan where !skipBlobIds.contains(blob.id) {
-            do { try await archive(blob, onFileArchived: onFileArchived, onProgress: onProgress) }
+        // Run-wide progress. `bytesTotal` is what the plan will actually ship: each item is sealed into its own
+        // frames (the carry resets per item), so the blob's ciphertext is the sum of its items' encrypted
+        // sizes, and the run's is the sum over all items. Skipped blobs (`skipBlobIds` — permanently failed
+        // last pass) are excluded so the bar's denominator is only work we'll attempt.
+        let planned = plan.filter { !skipBlobIds.contains($0.id) }
+        let reporter: RunProgressReporter? = onRunProgress.map { emit in
+            let filesTotal = planned.reduce(0) { $0 + $1.items.count }
+            let bytesTotal = planned.flatMap(\.items).reduce(0) { $0 + EnvelopeCipher.encryptedSize(ofPlaintext: $1.size) }
+            return RunProgressReporter(filesTotal: filesTotal, bytesTotal: bytesTotal, emit: emit)
+        }
+        await reporter?.begin()
+        for blob in planned {
+            do { try await archive(blob, onFileArchived: onFileArchived, onProgress: onProgress, reporter: reporter) }
             catch {
                 let files = blob.items.map { BlobFailure.File(id: $0.id, path: $0.relativePath) }
                 let kind = FailureKind.classify(error)
@@ -83,6 +150,7 @@ public actor UploadEngine {
                 // open multipart upload on S3, which the bucket's 14-day abort lifecycle reaps (see DESIGN.md).
             }
         }
+        log("UploadEngine: run finished — RSS \(ProcessMemory.resident)")
         return failures
     }
 
@@ -92,7 +160,8 @@ public actor UploadEngine {
     /// near-instantly, so they keep the indeterminate bar. Bounded to one event per part per large file.
     private func archive(_ blob: BlobPlan,
                          onFileArchived: (@Sendable (String, String) async -> Void)?,
-                         onProgress: (@Sendable (UploadProgress) async -> Void)? = nil) async throws {
+                         onProgress: (@Sendable (UploadProgress) async -> Void)? = nil,
+                         reporter: RunProgressReporter? = nil) async throws {
         // Idempotency is at the FILE level, not the blob level. A verified blob whose files are ALL linked is a
         // healthy no-op (the common case on every periodic re-scan) → return silently. But a verified blob with
         // any UNLINKED file is an orphan: a prior run died between `markBlobVerified` and the `markFileArchived`
@@ -148,8 +217,13 @@ public actor UploadEngine {
         let shipper = PartShipper(blob: blob, store: store, journal: journal,
                                   uploads: !alreadyVerified, existingUploadId: existingUploadId,
                                   alreadyOnS3: alreadyOnS3, alreadyRecorded: alreadyRecorded,
-                                  solo: solo, encryptedTotal: encryptedTotal, onProgress: onProgress)
+                                  solo: solo, encryptedTotal: encryptedTotal,
+                                  onProgress: onProgress, reporter: reporter)
 
+        // Any throw below (a drift-guard rejection, a part-upload failure surfacing through the backpressure
+        // drain) abandons this blob — so cancel its still-running part uploads rather than leave them running
+        // detached with their results dropped. Resume re-derives correctly from the journal either way.
+        do {
         // Stream: source → 4 MiB frames → the part buffer → S3. Items go SEQUENTIALLY into the one blob, so if
         // a stream stalls (an iCloud download, a PhotoKit callback that never fires) the per-item log pinpoints
         // WHICH item it parked on — a "→ uploading" with no matching "✓" is the culprit.
@@ -165,6 +239,7 @@ public actor UploadEngine {
                 return sealed
             }
             log("UploadEngine: → uploading item [\(i + 1)/\(blob.items.count)] \(item.relativePath)")
+            await reporter?.itemStarted(item.relativePath)   // the "now uploading …" line
             for try await chunk in item.open() {
                 hasher.update(data: chunk); carry.append(chunk); plaintextBytes += chunk.count
                 while carry.count >= EnvelopeCipher.frameSize {
@@ -198,6 +273,10 @@ public actor UploadEngine {
             spans.append((item.id, start, offset - start, itemFirstFrame, sha, plaintextBytes))
         }
         try await shipper.finish()
+        } catch {
+            await shipper.cancelInFlight()
+            throw error
+        }
 
         // Complete → verify → mark verified. Skipped on the orphan-relink path: the parts are already on S3 and
         // the blob is already verified, so the pass above existed only to recompute spans for the re-link below.
@@ -224,18 +303,35 @@ public actor UploadEngine {
         for s in spans {
             try journal.markFileArchived(s.id, blobId: blob.id, offset: s.off, length: s.len, firstFrame: Int(s.firstFrame), plaintextSha256: s.sha, size: s.size)
             await onFileArchived?(s.id, blob.id)
+            await reporter?.fileArchived()
         }
         log("UploadEngine: ✓ blob \(blob.id) — \(spans.count) file(s) \(alreadyVerified ? "re-linked" : "archived")")
     }
 }
 
-/// Turns the blob's ciphertext stream into S3 multipart parts, holding **at most one part** in memory
-/// (≤ 64 MiB + the frame being sealed) — never the blob, and never a copy on disk.
+/// Turns the blob's ciphertext stream into S3 multipart parts, uploading **up to `maxInFlight` parts
+/// concurrently** while it keeps encrypting — so a link with headroom is actually filled, instead of one
+/// part at a time with the pipe idle between round trips. Memory stays bounded by construction: at most
+/// `maxInFlight` parts are in flight (each ≤ 64 MiB) plus the ~64 MiB buffer, never the blob and never disk.
 ///
-/// An `actor` rather than a nested function over `archive`'s locals, and not for style: the flush `await`s
-/// S3, and mutable locals captured across a suspension point are precisely what Swift 6's concurrency
-/// checking rejects. An actor lets the COMPILER prove the buffer is only ever touched serially, instead of us
-/// promising it with `@unchecked Sendable` (PILLAR4 — let the type system carry the burden).
+/// **Why the parts can go up in parallel but the journal writes cannot.** S3 multipart parts are numbered and
+/// independent, so their PUTs are order-free — that's the concurrency. But `complete` is assembled from the
+/// journal (`completedParts`), and SQLite writes are not concurrency-safe, so each part's `recordPart` must be
+/// serialised. The split: the **upload** runs in a detached `Task` off the actor (the parallel, slow, network
+/// part); the **record** happens back on the actor when that task is drained (serial, fast). The compiler
+/// enforces it — `journal` is only ever touched in actor-isolated context.
+///
+/// **Backpressure = the memory bound.** The producer (`archive`'s encrypt loop) awaits each `push` fully
+/// before sealing the next frame, so it is strictly sequential; when `maxInFlight` parts are already
+/// uploading, `flush` drains one before dispatching the next, which suspends `push` and therefore the
+/// producer. Nothing accumulates.
+/// Upload-concurrency tuning, in one place so the engine and its tests agree on it.
+enum UploadTuning {
+    /// Parts uploaded at once. 4 fills a typical link without a large memory footprint (~4 × 64 MiB in
+    /// flight); override with `COLDSTORE_MAX_PARTS_INFLIGHT` (1 = the old strictly-sequential behaviour).
+    static let maxPartsInFlight = max(1, ProcessInfo.processInfo.environment["COLDSTORE_MAX_PARTS_INFLIGHT"].flatMap(Int.init) ?? 4)
+}
+
 private actor PartShipper {
     let blob: BlobPlan
     let store: any BlobStore
@@ -252,6 +348,9 @@ private actor PartShipper {
     let solo: IngestItem?
     let encryptedTotal: Int
     let onProgress: (@Sendable (UploadProgress) async -> Void)?
+    /// Run-wide progress: every part that becomes DONE reports its bytes here, so the aggregate bar advances
+    /// for batched small-file blobs too — not just the solo `onProgress` case.
+    let reporter: RunProgressReporter?
 
     private var buffer = Data()
     private(set) var partsEmitted = 0
@@ -260,25 +359,47 @@ private actor PartShipper {
     /// multipart upload on S3 that no `complete` could ever close (see `archive`).
     private(set) var openUploadId: String?
 
+    /// Parts whose PUT is running concurrently, keyed by part number; the byte count rides along so progress
+    /// can be reported (and the bar advanced) when the part is drained.
+    private var inFlight: [Int: (task: Task<(etag: String, sha: String), Error>, bytes: Int)] = [:]
+    /// Cumulative encrypted bytes actually DONE — monotonic even though parts finish out of order, so the
+    /// solo determinate bar never jumps backwards.
+    private var shippedBytes = 0
+
     init(blob: BlobPlan, store: any BlobStore, journal: Journal,
          uploads: Bool, existingUploadId: String?, alreadyOnS3: Set<Int>, alreadyRecorded: Set<Int>,
-         solo: IngestItem?, encryptedTotal: Int, onProgress: (@Sendable (UploadProgress) async -> Void)?) {
+         solo: IngestItem?, encryptedTotal: Int, onProgress: (@Sendable (UploadProgress) async -> Void)?,
+         reporter: RunProgressReporter?) {
         self.blob = blob; self.store = store; self.journal = journal
         self.uploads = uploads; self.openUploadId = existingUploadId
         self.alreadyOnS3 = alreadyOnS3; self.alreadyRecorded = alreadyRecorded
         self.solo = solo; self.encryptedTotal = encryptedTotal; self.onProgress = onProgress
+        self.reporter = reporter
     }
 
-    /// Take one sealed frame and ship out any whole part it just completed.
+    /// Take one sealed frame and dispatch any whole part it just completed.
     func push(_ sealedFrame: Data) async throws {
         buffer.append(sealedFrame)
         try await flush(final: false)
     }
 
-    /// End of blob: ship the remainder (S3's minimum part size doesn't apply to the last part).
-    func finish() async throws { try await flush(final: true) }
+    /// End of blob: dispatch the remainder (S3's minimum part size doesn't apply to the last part), then wait
+    /// for every in-flight upload to land — `complete` reads the journal, so all `recordPart`s must be done.
+    func finish() async throws {
+        try await flush(final: true)
+        while !inFlight.isEmpty { try await drainOne() }
+    }
 
-    /// Ship whole 64 MiB parts as they fill; on `final`, ship whatever is left. An empty blob emits nothing.
+    /// Cancel every still-running part upload and forget them. Called when `archive` abandons the blob — a
+    /// drift-guard throw, a part failure surfacing through the backpressure drain, any error — so detached
+    /// PUTs don't run on to completion with their results dropped. Safe to call more than once.
+    func cancelInFlight() {
+        for (_, part) in inFlight { part.task.cancel() }
+        inFlight.removeAll()
+    }
+
+    /// Dispatch whole 64 MiB parts as they fill; on `final`, dispatch whatever is left. An empty blob emits
+    /// nothing. Uploads run concurrently up to `maxInFlight`; this only blocks to enforce that bound.
     private func flush(final: Bool) async throws {
         while buffer.count >= S3Store.partSize || (final && !buffer.isEmpty) {
             let bytes = Data(buffer.prefix(min(buffer.count, S3Store.partSize)))
@@ -286,7 +407,10 @@ private actor PartShipper {
             partsEmitted += 1
             let number = partsEmitted
 
-            guard uploads else { continue }   // relink pass: the bytes existed only to move the offsets
+            // Relink pass (uploads=false): the bytes exist only to recompute spans and are already on S3 —
+            // so nothing is dispatched, but they ARE done, and counting them keeps the aggregate bar honest
+            // (bytesTotal includes this blob, so not counting it would leave the bar short for a relink pass).
+            guard uploads else { await reportShipped(number: number, bytes: bytes.count); continue }
 
             // First real part → open the upload (resume reuses the one the journal already holds).
             if openUploadId == nil {
@@ -297,22 +421,48 @@ private actor PartShipper {
             let uploadId = openUploadId!
 
             // Skip ONLY when S3 holds it *and* the journal knows about it — otherwise `complete`, which is fed
-            // from the journal, would leave this part out and S3 would assemble a truncated object.
-            if !(alreadyOnS3.contains(number) && alreadyRecorded.contains(number)) {
-                let r = try await store.uploadPart(key: blob.s3Key, uploadId: uploadId, number: number, data: bytes)
-                try journal.recordPart(PartRow(blobId: blob.id, partNumber: number,
-                                               eTag: r.etag, sha256: r.sha, status: .uploaded))
+            // from the journal, would leave this part out and S3 would assemble a truncated object. A skipped
+            // part is instantly done: count it toward progress, dispatch nothing.
+            if alreadyOnS3.contains(number) && alreadyRecorded.contains(number) {
+                await reportShipped(number: number, bytes: bytes.count)
+                continue
             }
-            // Determinate progress for a solo (large-file) blob: encrypted bytes shipped over encrypted total.
-            if let solo, encryptedTotal > 0, let onProgress {
-                await onProgress(UploadProgress(fileId: solo.id, path: solo.relativePath,
-                                                uploaded: min(number * S3Store.partSize, encryptedTotal),
-                                                total: encryptedTotal))
+
+            // Bound the memory: never more than `maxInFlight` parts uploading at once. Draining suspends this
+            // method — and therefore the strictly-sequential producer awaiting our `push` — so nothing piles up.
+            while inFlight.count >= UploadTuning.maxPartsInFlight { try await drainOne() }
+
+            let key = blob.s3Key   // capture the Sendable bits; the Task must not touch actor state
+            let store = self.store
+            let task = Task { () throws -> (etag: String, sha: String) in
+                // demo aid: slow parts so a kill/resume is easy to observe by hand
+                if let ms = ProcessInfo.processInfo.environment["COLDSTORE_PART_DELAY_MS"].flatMap(Int.init), ms > 0 {
+                    try await Task.sleep(for: .milliseconds(ms))
+                }
+                return try await store.uploadPart(key: key, uploadId: uploadId, number: number, data: bytes)
             }
-            // demo aid: slow parts so a kill/resume is easy to observe by hand
-            if let ms = ProcessInfo.processInfo.environment["COLDSTORE_PART_DELAY_MS"].flatMap(Int.init), ms > 0 {
-                try await Task.sleep(for: .milliseconds(ms))
-            }
+            inFlight[number] = (task, bytes.count)
         }
+    }
+
+    /// Await the lowest-numbered in-flight upload, record it (serialised here on the actor), and count it
+    /// toward progress. Order of draining doesn't matter to S3 — this just keeps it deterministic.
+    private func drainOne() async throws {
+        guard let number = inFlight.keys.min(), let part = inFlight.removeValue(forKey: number) else { return }
+        let r = try await part.task.value
+        try journal.recordPart(PartRow(blobId: blob.id, partNumber: number,
+                                       eTag: r.etag, sha256: r.sha, status: .uploaded))
+        await reportShipped(number: number, bytes: part.bytes)
+    }
+
+    /// A part is done (uploaded or already on S3): advance the aggregate bar and the solo determinate bar.
+    private func reportShipped(number: Int, bytes: Int) async {
+        shippedBytes += bytes
+        if let solo, encryptedTotal > 0, let onProgress {
+            await onProgress(UploadProgress(fileId: solo.id, path: solo.relativePath,
+                                            uploaded: min(shippedBytes, encryptedTotal), total: encryptedTotal))
+        }
+        await reporter?.bytesShipped(bytes)
+        log("UploadEngine: part \(number) shipped (\(bytes / 1_048_576) MiB) — RSS \(ProcessMemory.resident)")
     }
 }

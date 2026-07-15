@@ -78,10 +78,21 @@ engines. `DaemonService` holds a single `private var session: UserSession?` and 
 | **Frame** | fixed 4 MiB plaintext chunk, AEAD-sealed individually | the **integrity + encryption granularity** |
 | **Part** | S3 multipart part (64 MiB = 16 frames) | the **upload + resume + ETag granularity** |
 
-**Blob sizing:** small files batch into blobs **capped ~1–2 GB**, grouped by locality (same
-folder/album) so a folder-restore pulls few blobs; large files get their own blob. Over-retrieval from
-batching is economically negligible (Deep Archive retrieval is $0.0025/GB and egress is ranged to the
-file's bytes) — blobs stay bounded for latency sanity, not cost.
+**Blob sizing:** small files batch into blobs **capped ~1 GB**, grouped by locality (same folder/album) so a
+folder-restore pulls few blobs; large files get their own blob. Over-retrieval from batching is economically
+negligible (Deep Archive retrieval is $0.0025/GB and egress is ranged to the file's bytes) — blobs stay
+bounded for latency sanity, not cost.
+
+**Group by FOLDER first, then order by recency — never the other way round.** The planner originally sorted by
+date and broke the batch whenever the folder changed. That sounds like locality grouping and isn't: dates
+interleave folders, so the check fired on nearly every item and the bucket flushed before it ever filled. A
+real 100-file deposit across four folders produced **100 blobs** (2026-07-14). This is not tidiness — it is
+the upload's speed. **Every blob costs four SEQUENTIAL S3 round trips** (`CreateMultipartUpload` →
+`UploadPart` → `CompleteMultipartUpload` → a `HEAD` to verify), so a fragmented plan turns a deposit into a
+latency queue that takes minutes no matter how fast the link is. Recency is a property of the ORDER blobs go
+up in (the blob holding the newest file goes first), not of who batches with whom. `BlobBatchingTests` pins
+both, because the failure is invisible to every other test — the bytes all arrive, there are just far too many
+objects carrying them.
 
 ## 4. The journal — per-user, durable, crash-safe (the heart)
 
@@ -116,8 +127,18 @@ file's bytes) — blobs stay bounded for latency sanity, not cost.
   because the journal's stored DEK + nonce prefix make the ciphertext deterministic, so re-encrypting
   reproduces the parts already on S3 byte for byte), it delayed the first byte of upload until the whole blob
   was encrypted, and a killed run stranded it on disk forever. Now: source → 4 MiB frame → 64 MiB part → S3,
-  with only the part in flight held in memory (`PartShipper`). Peak disk for a file deposit is **zero**,
+  with only the parts in flight held in memory (`PartShipper`). Peak disk for a file deposit is **zero**,
   whatever the file's size.
+- **Parts upload CONCURRENTLY, bounded to `UploadTuning.maxPartsInFlight` (default 4).** One-part-at-a-time
+  left the link idle between round trips; a link with headroom is now actually filled. The bound is what keeps
+  it safe — memory is `maxPartsInFlight × 64 MiB` plus the buffer, never the blob (proven by
+  `ConcurrentUploadTests` + the memory test). The parts' PUTs are order-free (S3 numbers them), so they run in
+  detached tasks off the actor; but `complete` is assembled from the journal and SQLite writes aren't
+  concurrency-safe, so each part's `recordPart` is drained back ON the `PartShipper` actor, serialised. The
+  producer (`archive`'s encrypt loop) awaits each `push`, so it's strictly sequential and backpressures
+  naturally: at the cap, `flush` drains one before dispatching the next, which suspends the producer. Override
+  with `COLDSTORE_MAX_PARTS_INFLIGHT` (1 = the old sequential behaviour). *(Whether it speeds a given deposit
+  depends on the link: a slow saturated uplink sees little; a link with spare capacity sees up to ~Nx.)*
 - **The one thing still written to disk is a PUSH source.** PhotoKit hands us bytes at its own pace and cannot
   be told to wait, so an asset is drained to `scratch/` at full speed and pulled back at upload pace
   (`scratchFileStream`). That costs one plaintext copy of the asset — deliberately, because the alternative is
@@ -260,3 +281,21 @@ ZK master-key hierarchy (built, wiring pending — PROD.md) will hand to the use
   `complete` is fed from the journal. `uploadPart` can return and the process die before the row commits — one
   window per part — and `CompleteMultipartUpload` assembles ONLY the parts it is handed, so trusting S3 alone
   silently produced an object 64 MiB short with every later byte shifted, past a `verify` that is just a HEAD.
+
+- **`autoreleasepool` around every `FileHandle` read loop — load-bearing, and invisible to our own tests.**
+  On macOS `FileHandle.read(upToCount:)` returns autoreleased Objective-C buffers; a tight read loop with no
+  pool accumulates every one of them until the enclosing task ends. Hashing 2 GB left **841 MB resident before
+  a byte was uploaded** (2026-07-14), and every later measurement sat on that baseline. Apple's guidance is
+  explicit that such a loop needs a pool on macOS and not on Linux — which is exactly why the Core's memory
+  tests, which run on Linux, cannot see its absence. `Autorelease.swift` supplies the Linux no-op. **A green
+  suite is not evidence the pools are unnecessary**; `task daemon:mac:memory` is the only thing that can tell.
+- **One pipeline at a time — via `withRunLock`, not a bare bool.** `performRun` awaits S3 for minutes while a
+  Swift actor stays REENTRANT across `await`, so the 300s scan timer AND every user deposit could each start a
+  run on top of one already in flight (observed: a second run's log interleaved between parts 18 and 19 of the
+  first). Both passes plan from the same journal, so they race a shared blob's upload id and part rows. The
+  fix has to serve two OPPOSITE needs when busy: a **scheduled scan skips** (`skipIfBusy: true` — the next
+  tick re-scans, nothing lost), a **user deposit waits then runs** (`skipIfBusy: false` — dropping the files
+  someone just dragged in would be a bug). A plain `running` bool can't express "wait"; `withRunLock` adds a
+  `runWaiters` continuation queue that suspends a deposit until the in-flight run finishes, then lets exactly
+  one waiter proceed. `ConcurrentRunTests` pins both directions AND the invariant underneath — max concurrent
+  runs is 1 (proven by counting overlap through the event stream, not by timing).

@@ -10,6 +10,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ColdstoreApi, ConflictPolicy, DepositPreviewItem, RetrievalQuote } from "../../../shared/ipc.ts";
 import type { Exec } from "./types.ts";
 import type { FilesApi } from "./files/useFiles.ts";
+import type { RunProgress } from "../state/reducer.ts";
+import { DepositProgress } from "./DepositProgress.tsx";
 import {
   type ArchivedFile,
   type Row,
@@ -51,6 +53,9 @@ interface Props {
   /** Live per-file upload progress (store `run.uploadProgress`), keyed by daemon file id — drives the
    * determinate bar on an uploading row. Empty between runs. */
   uploadProgress: Record<string, UploadProgress>;
+  /** The whole run, for the aggregate deposit banner at the top of the browser (files done, bytes,
+   * throughput, ETA). `null` when no run has happened yet. */
+  run: RunProgress | null;
   /** Whether NEW deposits are allowed (Phase 5c). False = signed in but no active subscription; a deposit
    * attempt calls {@link onDepositBlocked} (→ the paywall) instead of uploading. True in dogfood mode. */
   canDeposit: boolean;
@@ -71,6 +76,7 @@ export const MyFilesView = ({
   virtualFolders,
   filesApi,
   uploadProgress,
+  run,
   canDeposit,
   onDepositBlocked,
 }: Props): React.JSX.Element => {
@@ -514,6 +520,7 @@ export const MyFilesView = ({
           onClick={(e) => e.target === e.currentTarget && clearSelection()}
           onContextMenu={(e) => e.target === e.currentTarget && openMenu(e)}
         >
+          <DepositProgress run={run} />
           {/* FirstRun (the drop-zone hero) is the onboarding state for a genuinely empty vault — root with
               nothing in it. A drilled-into empty folder just shows the empty file list, not the hero. */}
           {rows.length === 0 && dir === "" ? (
