@@ -53,6 +53,13 @@
       "skillPath": "skills/vendor/product-brainstorming/SKILL.md",
       "computedHash": "9037034b9c938b44d00a4dad6d889b0aa4d3941393616f982bd531fa9c949b16"
     },
+    "reground": {
+      "source": "git@github.com:adpharm/adpharm-skills.git",
+      "sourceUrl": "git@github.com:adpharm/adpharm-skills.git",
+      "sourceType": "git",
+      "skillPath": "skills/engineering/reground/SKILL.md",
+      "computedHash": "9b3ff6d7f2ae907f5d5abde2ba42c21fd61709c06ff069becbd86349e1bdb8e8"
+    },
     "skill-creator": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",

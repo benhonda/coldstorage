@@ -2,6 +2,7 @@
 
 ## 2026-07-15
 
+- chore(skills): vendor the `reground` skill (rereads every governing CLAUDE.md to counter mid-session drift); `skills-lock.json`.
 - fix(daemon): **blob planner groups by FOLDER, then recency** — it sorted by date and broke the batch on every folder change, so a 100-file/4-folder deposit produced **100 blobs** (four sequential S3 round trips each = minutes of latency); blob ids change, so already-archived files re-upload once. `BlobBatchingTests`.
 - feat(daemon): **parts upload concurrently**, bounded to `UploadTuning.maxPartsInFlight` (default 4, `COLDSTORE_MAX_PARTS_INFLIGHT`) — fills a link with headroom; memory stays `N × 64 MiB`, each part's `recordPart` drained serially back on the `PartShipper` actor. `ConcurrentUploadTests`.
 - feat: **live deposit progress** — new `runProgress` daemon event (files/bytes/`currentPath`, encrypted bytes so the bar hits 100%) → reducer `throughput`/`etaSeconds` → a `DepositProgress` banner atop My Files, so a batched many-small-file deposit is no longer a black box.
