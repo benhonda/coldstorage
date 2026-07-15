@@ -44,6 +44,12 @@ public actor DaemonService {
     // identity) never serves a stale total for the wrong user.
     private var cachedUsage: (prefix: VaultPrefix, bytes: Int, at: Date)?
     private let usageCacheTTL: TimeInterval = 60
+    // The storage quota this account is allowed, pushed down by the app from its entitlement fetch
+    // (`setQuota`). `nil` ⇒ DON'T enforce — dogfood mode, or an entitlement the app hasn't resolved — which
+    // fails open exactly like the app-side gate. Every run (deposit, photo deposit, the periodic auto-run)
+    // is checked against it in `UploadEngine`, so the ceiling holds on paths the UI never sees. Reset with
+    // the session: a quota is one user's, and must never carry into the next.
+    private var quotaBytes: Int?
     // Wakeable sleep: `trigger()` either resumes a sleeping loop or, if none is sleeping yet, latches
     // so the next sleep returns immediately (coalesces bursts of triggers into one extra run).
     private var sleeper: CheckedContinuation<Void, Never>?
@@ -77,6 +83,7 @@ public actor DaemonService {
         session = new
         cachedUsage = nil
         permanentlyFailedBlobs = []
+        quotaBytes = nil   // the app re-pushes this user's quota right after authenticate; never inherit the last user's
         bus.publish(DaemonEvent("filesChanged", ["signedIn": new.identity.directoryName]))
     }
 
@@ -86,6 +93,7 @@ public actor DaemonService {
         session = nil
         cachedUsage = nil
         permanentlyFailedBlobs = []
+        quotaBytes = nil
         bus.publish(DaemonEvent("filesChanged", ["signedOut": "true"]))
     }
 
@@ -242,11 +250,22 @@ public actor DaemonService {
         // The prefix comes from the SESSION — the signed-in user's own `blobs/<identity-id>`, the one the
         // IAM role's policy variable actually matches. There is no `?? "blobs"` fallback any more: no
         // session means no run at all, rather than a run that quietly lands in a shared namespace.
+        // Storage-quota ceiling for this run, resolved from the pushed `quotaBytes` + a fresh usage listing.
+        // If either is missing — no quota pushed (dogfood), or the S3 usage read hiccups — we pass `nil` and
+        // the engine doesn't enforce: failing open rather than blocking a backup over a number we couldn't
+        // read mirrors the app-side gate. When set, the engine refuses any blob that would cross it.
+        let quota: QuotaLimit?
+        if let limit = quotaBytes, let usage = try? await currentUsageBytes(session) {
+            quota = QuotaLimit(limitBytes: limit, usedBytes: usage)
+        } else {
+            quota = nil
+        }
         let failures: [BlobFailure]
         do {
             failures = try await session.engine.run(source: source,
                                                     skipBlobIds: permanentlyFailedBlobs,
                                                     prefix: session.prefix,
+                                                    quota: quota,
                                                     onFileArchived: onFile, onProgress: onProgress,
                                                     onRunProgress: onRunProgress)
         } catch {
@@ -259,7 +278,7 @@ public actor DaemonService {
             // Name the affected files by path (newline-joined) so a live watcher flips their rows + lists them
             // in the failures panel without waiting for the next listFiles read.
             bus.publish(DaemonEvent("blobFailed", ["blob": f.blobId,
-                                                   "kind": f.kind.isPermanent ? "permanent" : "transient",
+                                                   "kind": f.kind.wireKind,
                                                    "message": f.kind.message,
                                                    "paths": f.files.map(\.path).joined(separator: "\n")]))
             if f.kind.isPermanent {
@@ -270,6 +289,10 @@ public actor DaemonService {
             }
         }
         try writeStatus(session)
+        // A run just changed what's in S3, so the cached usage total is now stale — drop it. The next read
+        // (a getStatus poll, or the NEXT run's quota ceiling) then does a fresh listing rather than enforcing
+        // against, or showing, a pre-deposit number for up to the cache TTL.
+        cachedUsage = nil
         let s = try session.journal.summary()
         bus.publish(DaemonEvent("runFinished", ["filesArchived": "\(s.archived)", "filesTotal": "\(s.total)",
                                                 "blobsFailed": "\(failures.count)"]))
@@ -689,6 +712,14 @@ public actor DaemonService {
             guard let auth = cognitoAuth else { throw ColdStorageError.invalidRequest("deauthenticate: this daemon has no Cognito identity pool configured") }
             await auth.deauthenticate()
             endSession()
+            return AnyEncodable(AckDTO(ok: true))
+        case "setQuota":
+            // The app pushes the signed-in account's storage quota here (from its `/entitlement` fetch),
+            // right after authenticate and whenever the entitlement changes — so the engine can enforce a
+            // ceiling it has no other way to learn (the daemon doesn't talk to the account backend). Absent
+            // or unparseable `quotaBytes` CLEARS it → don't enforce (a subscriber whose plan the app couldn't
+            // resolve, or dogfood mode) — the same fail-open the app-side gate uses. Cheap, no session needed.
+            quotaBytes = p["quotaBytes"].flatMap(Int.init)
             return AnyEncodable(AckDTO(ok: true))
         case "mintVault":
             // Signup (first ever sign-in on any device for this account): mint a fresh MasterKey + a

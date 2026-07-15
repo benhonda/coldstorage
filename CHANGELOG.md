@@ -2,6 +2,8 @@
 
 ## 2026-07-15
 
+- feat: **storage quota enforced in the daemon, not just the app** — `UploadEngine.run(quota:)` refuses any blob that would cross the ceiling (`.overQuota` `BlobFailure`, retryable), so the periodic auto-run + non-UI clients can't slip past the UI gate. App pushes the number via a new `setQuota` command (on auth + every entitlement change); `QuotaEnforcementTests`.
+- fix(ui): **the deposit gate is size-aware and counts in-flight bytes** — `hasCapacity` → `bytesAvailable`/`hasCapacityFor`; "used" is now `bytesStored` + optimistic uploading rows, and a drop is weighed against its own size, so a burst of deposits (or one oversized drop) can't sail past a stored total that hasn't caught up. Uploading rows carry `size`; `overQuota` failures surface in the panel like permanent ones.
 - chore(skills): vendor the `reground` skill (rereads every governing CLAUDE.md to counter mid-session drift); `skills-lock.json`.
 - fix(daemon): **blob planner groups by FOLDER, then recency** — it sorted by date and broke the batch on every folder change, so a 100-file/4-folder deposit produced **100 blobs** (four sequential S3 round trips each = minutes of latency); blob ids change, so already-archived files re-upload once. `BlobBatchingTests`.
 - feat(daemon): **parts upload concurrently**, bounded to `UploadTuning.maxPartsInFlight` (default 4, `COLDSTORE_MAX_PARTS_INFLIGHT`) — fills a link with headroom; memory stays `N × 64 MiB`, each part's `recordPart` drained serially back on the `PartShipper` actor. `ConcurrentUploadTests`.

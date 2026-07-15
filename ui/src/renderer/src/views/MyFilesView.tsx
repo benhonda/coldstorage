@@ -56,9 +56,11 @@ interface Props {
   /** The whole run, for the aggregate deposit banner at the top of the browser (files done, bytes,
    * throughput, ETA). `null` when no run has happened yet. */
   run: RunProgress | null;
-  /** Whether NEW deposits are allowed (Phase 5c). False = signed in but no active subscription; a deposit
-   * attempt calls {@link onDepositBlocked} (→ the paywall) instead of uploading. True in dogfood mode. */
-  canDeposit: boolean;
+  /** Would depositing `incomingBytes` more still fit under the quota? (Phase 5c, size-aware.) The gate
+   * weighs what's already stored PLUS what's mid-upload PLUS this deposit's own size, so one oversized
+   * drop can't slip past a stored total that hasn't caught up yet. A blocked deposit calls
+   * {@link onDepositBlocked} (→ the paywall) instead of uploading. Fails open on unknown usage/quota. */
+  hasRoomFor: (incomingBytes: number) => boolean;
   onDepositBlocked: () => void;
 }
 
@@ -77,7 +79,7 @@ export const MyFilesView = ({
   filesApi,
   uploadProgress,
   run,
-  canDeposit,
+  hasRoomFor,
   onDepositBlocked,
 }: Props): React.JSX.Element => {
   const [dir, setDir] = useState("");
@@ -321,11 +323,13 @@ export const MyFilesView = ({
     wire: string; // newline-joined absolute paths (files) or Photos localIdentifiers (photos)
     dest: string;
     srcByBase: Map<string, string>; // basename → local srcPath (files only) so a failed upload can retry
+    sizeByBase: Map<string, number>; // basename → byte size (files only; empty for photos) for the quota gate
     fallback: string[]; // target relativePaths to assume if preview is unavailable
   }): Promise<void> => {
-    // Subscription gate (Phase 5c): backing up NEW files needs an active sub. Bail to the paywall before
-    // any preview/optimistic rows so a blocked drop leaves the tree untouched.
-    if (!canDeposit) {
+    // Quota gate, pass 1 (Phase 5c): if the vault is already full, bail to the paywall before any
+    // preview/optimistic rows so a blocked drop leaves the tree untouched. The size-aware pass 2 (below,
+    // once we know which files land and how big they are) is what stops a single drop that would overflow.
+    if (!hasRoomFor(0)) {
       onDepositBlocked();
       return;
     }
@@ -346,11 +350,23 @@ export const MyFilesView = ({
       policies = chosen;
     }
     const { rows, conflicts } = planDeposit(preview, policies, new Set(files.map((f) => f.relativePath)));
+    // Quota gate, pass 2: now we know which files actually land (post-collision-resolution) and — for a
+    // file drop — how big they are, so refuse the drop if it would overflow the quota. Bytes are 0 for a
+    // photo pick (unknown until the daemon resolves it), so photo deposits fall back to the coarse pass-1
+    // guard; the daemon's usage read catches them up on the next refresh.
+    const incomingBytes = rows.reduce((sum, r) => sum + (opts.sizeByBase.get(baseName(r.original)) ?? 0), 0);
+    if (!hasRoomFor(incomingBytes)) {
+      onDepositBlocked();
+      return;
+    }
     // Optimistic "uploading" rows for what will land — names carry their full vault path (so intoDir is "").
+    // Each carries its srcPath (for retry) and byte size (for the in-flight half of the quota gate).
     const optimisticIds = filesApi.deposit(
       rows.map((r) => {
-        const srcPath = opts.srcByBase.get(baseName(r.original));
-        return srcPath ? { name: r.relativePath, srcPath } : { name: r.relativePath };
+        const base = baseName(r.original);
+        const srcPath = opts.srcByBase.get(base);
+        const size = opts.sizeByBase.get(base);
+        return { name: r.relativePath, ...(srcPath ? { srcPath } : {}), ...(size != null ? { size } : {}) };
       }),
       "",
     );
@@ -369,7 +385,10 @@ export const MyFilesView = ({
   // ── deposit (hero) — REAL drop-to-upload ──
   const depositFiles = (dropped: File[]): void => {
     if (dropped.length === 0) return;
-    const items = dropped.map((f) => ({ name: f.name, srcPath: api.pathForFile(f) }));
+    // `File.size` is the plaintext byte count — the figure the quota gate compares against `bytesStored`
+    // (ciphertext is within a rounding error of it for the free-tier check; the exact billed size is the
+    // daemon's S3 usage read, which reconciles once the run lands).
+    const items = dropped.map((f) => ({ name: f.name, srcPath: api.pathForFile(f), size: f.size }));
     const paths = items.map((i) => i.srcPath).filter(Boolean);
     if (paths.length === 0) {
       // Couldn't resolve any local paths → show ⚠ rows rather than vanishing.
@@ -378,12 +397,14 @@ export const MyFilesView = ({
       return;
     }
     const srcByBase = new Map(items.filter((i) => i.srcPath).map((i) => [i.name, i.srcPath]));
+    const sizeByBase = new Map(items.map((i) => [i.name, i.size]));
     exec(() =>
       runDeposit({
         kind: "files",
         wire: paths.join("\n"),
         dest: dir,
         srcByBase,
+        sizeByBase,
         fallback: items.map((i) => joinPath(dir, i.name)),
       }),
     );
@@ -392,7 +413,8 @@ export const MyFilesView = ({
   // No preview/prompt — a retry targets the same path it already owns (overwrite-self is a no-op upsert).
   const retryDeposit = (file: ArchivedFile): void => {
     if (!file.srcPath) return;
-    if (!canDeposit) {
+    // Re-uploading bytes that never landed (the failed row) — count them as incoming against the quota.
+    if (!hasRoomFor(file.size)) {
       onDepositBlocked();
       return;
     }
@@ -419,6 +441,7 @@ export const MyFilesView = ({
         wire: picks.map((p) => p.id).join("\n"),
         dest: dir,
         srcByBase: new Map(),
+        sizeByBase: new Map(), // photo sizes aren't known until the daemon resolves them — see runDeposit pass 2
         fallback: picks.map((p) => joinPath(dir, p.name)),
       });
     });

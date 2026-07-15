@@ -16,7 +16,7 @@ import type { AppEnv } from "../hono-env.js";
  * exception: it IS hard-gated, at IAM — see root `RETRIEVAL.md`.)
  *
  * **`quotaBytes` is the deposit gate. `active` is not** (PROD.md "Free-tier entitlement flip"):
- * every signed-in account gets a byte quota — the free tier (25 GB, forever; see
+ * every signed-in account gets a byte quota — the free tier (its size is {@link FREE_TIER_BYTES}; see
  * {@link resolveFreeTierBytes}) with no subscription, the plan's allowance with one — and deposits are
  * gated on that ONE number. `active`
  * survives only as a UI signal, telling the app which upsell to show (subscribe vs. change plan);

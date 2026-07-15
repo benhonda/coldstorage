@@ -10,9 +10,22 @@ import AWSClientRuntime   // AWSServiceError.errorCode — to read the S3 error 
 public enum FailureKind: Sendable, Equatable {
     case transient(String)
     case permanent(String)
+    /// The vault is full: this blob was REFUSED before upload because storing it would cross the user's
+    /// quota (`UploadEngine` enforces it — the one place the periodic auto-run can't slip past). Not the
+    /// blob's fault and not doomed: it retries the moment there's room (a plan change, or freed space), so
+    /// it is NOT permanent. Distinct from `transient` so the daemon can flag it on the wire and the UI can
+    /// upsell (show the plan picker) instead of a generic ⚠.
+    case overQuota(String)
 
-    public var message: String { switch self { case .transient(let m), .permanent(let m): return m } }
+    public var message: String { switch self { case .transient(let m), .permanent(let m), .overQuota(let m): return m } }
     public var isPermanent: Bool { if case .permanent = self { return true }; return false }
+    public var isOverQuota: Bool { if case .overQuota = self { return true }; return false }
+
+    /// The kind as it travels on the `blobFailed` event, so the UI can tell an out-of-room refusal from a
+    /// real fault. One SSOT for the wire spelling.
+    public var wireKind: String {
+        switch self { case .permanent: return "permanent"; case .transient: return "transient"; case .overQuota: return "overQuota" }
+    }
 
     /// S3/Glacier error codes that won't self-heal — re-attempting just burns cycles. Conservative on
     /// purpose: anything *not* listed defaults to `.transient` (keep trying) rather than silently giving

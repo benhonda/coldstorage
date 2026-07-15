@@ -51,7 +51,10 @@ export interface RunProgress {
 
 export interface BlobFailure {
   blob: string;
-  kind: "permanent" | "transient";
+  /** `overQuota` = refused because it would cross the storage quota (the daemon's `UploadEngine` ceiling).
+   * Not a fault and not permanent — it uploads once there's room (freed space / a bigger plan) — but from
+   * the user's view it's "stuck", so it surfaces alongside permanent failures. */
+  kind: "permanent" | "transient" | "overQuota";
   message: string;
   /** relativePaths of the files in the failed blob — for naming them in the panel + flipping their rows. */
   files: string[];

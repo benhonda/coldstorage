@@ -36,9 +36,11 @@ export interface FilesApi {
   /** Just-created, still-empty folders (virtual paths) to surface alongside the derived tree. */
   virtualFolders: string[];
   /** Add optimistic "uploading" rows for dropped items in `intoDir` (each carrying its local `srcPath` for
-   * retry); returns their ids so the caller can flip status ({@link setDepositStatus}) as the real
-   * `deposit` command resolves. */
-  deposit: (items: { name: string; srcPath?: string }[], intoDir: string) => string[];
+   * retry, and its byte `size` where known — file drops know it up front, photo picks don't until the
+   * daemon resolves them); returns their ids so the caller can flip status ({@link setDepositStatus}) as
+   * the real `deposit` command resolves. The `size` feeds the deposit gate's in-flight accounting, so an
+   * uploading row counts against the quota before its bytes ever land in S3 (see `state/entitlement.ts`). */
+  deposit: (items: { name: string; srcPath?: string; size?: number }[], intoDir: string) => string[];
   /** Set optimistic deposit rows' status (uploading ⇄ failed) by id — drives the retry cycle and keeps a
    * failed upload visible ON the file (⚠ couldn't upload) rather than vanishing or stuck on "uploading". */
   setDepositStatus: (ids: string[], status: FileStatus) => void;
@@ -86,12 +88,15 @@ export const useFiles = (
   // Overlay live restore status by file id — keeps the tree truthful as a real thaw progresses.
   const files = useMemo(() => base.map((file) => applyRestore(file, restores[file.id])), [base, restores]);
 
-  const deposit = useCallback((items: { name: string; srcPath?: string }[], intoDir: string): string[] => {
+  const deposit = useCallback((items: { name: string; srcPath?: string; size?: number }[], intoDir: string): string[] => {
     const stamp = ++depositSeq;
     const added: ArchivedFile[] = items.map((it, i) => ({
       id: `dep-${stamp}-${i}`,
       relativePath: joinPath(intoDir, it.name),
-      size: 0, // real size lands with the daemon's deposit; unknown at drop time
+      // Real size where the caller knows it (a file drop) so this row counts against the quota while it
+      // uploads; 0 when unknown (a photo pick, resolved daemon-side) — the daemon's usage read catches
+      // those up on the next refresh. The authoritative size replaces this on the post-runFinished reread.
+      size: it.size ?? 0,
       status: "uploading",
       kind: kindFromName(it.name),
       date: null,

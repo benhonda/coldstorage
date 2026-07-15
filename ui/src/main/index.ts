@@ -151,9 +151,23 @@ const focusMainWindow = (): void => {
 //    sequence. Fires on every fresh ID token (sign-in + hourly refresh) and on daemon (re)connect, since
 //    a freshly-connected daemon starts unauthenticated AND locked. Failures are logged, not fatal — a
 //    dogfood daemon rejects `authenticate` and provision never proceeds. ──
+// Push the signed-in account's storage quota to the daemon so it enforces the ceiling on EVERY run —
+// including its own periodic auto-run, which the renderer's gate never sees. A null quota (dogfood, or a
+// plan the app couldn't resolve) sends no `quotaBytes`, which CLEARS enforcement — failing open, exactly
+// like the app-side gate; a missing number must never masquerade as "you're full".
+const pushQuota = (): void => {
+  const { quotaBytes } = entitlement.entitlementStatus();
+  void client
+    .request("setQuota", quotaBytes != null ? { quotaBytes: String(quotaBytes) } : {})
+    .catch((e: unknown) => console.error("setQuota failed:", e));
+};
+
 const provisionDaemon = async (idToken: string): Promise<void> => {
   await client.request("authenticate", { idToken });
   await vault.provision(idToken);
+  // `authenticate` resets the daemon's quota (a quota belongs to one user), so re-push it after every
+  // provision — this covers a daemon (re)connect, where the entitlement is already known and won't re-fire.
+  pushQuota();
 };
 // A failure here that ISN'T just "the daemon isn't connected yet" (which the reconnect handler below
 // retries) means authenticate itself failed — surface it in the vault status so the UI shows a real
@@ -168,6 +182,9 @@ const offIdToken = auth.onIdToken((idToken) => {
   // Re-check the subscription on every fresh token (sign-in + refresh) — independent of the daemon.
   void entitlement.refresh();
 });
+// Whenever the entitlement changes (a checkout lands, a cancellation takes effect, the first fetch
+// resolves), re-push the quota so the daemon's ceiling tracks the plan the user is actually on.
+const offEntitlementQuota = entitlement.onStatus(() => pushQuota());
 const offClientConnect = client.on("connect", () => {
   void auth
     .getFreshIdToken()
@@ -270,6 +287,7 @@ app.on("will-quit", () => {
   disposeEntitlementIpc();
   disposeUpdateIpc();
   offIdToken();
+  offEntitlementQuota();
   offClientConnect();
   offAuthFocus();
   auth.dispose();

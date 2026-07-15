@@ -9,7 +9,7 @@
  * plain storage line, a quiet status line only when the background uploader isn't running, and a
  * clickable getting-back indicator that opens the restore queue.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Icon, IconButton, Modal, Button } from "./ui/primitives.tsx";
 import { Sidebar, type NavItem } from "./ui/layout.tsx";
 import type { Store } from "./state/store.ts";
@@ -22,7 +22,7 @@ import { fileFromJournal, isFolderMarker } from "./views/files/model.ts";
 import { GettingBackPanel } from "./views/files/GettingBackPanel.tsx";
 import { FailuresPanel } from "./views/files/FailuresPanel.tsx";
 import type { BlobFailure } from "./state/reducer.ts";
-import { hasCapacity } from "./state/entitlement.ts";
+import { bytesAvailable } from "./state/entitlement.ts";
 import { MyFilesView } from "./views/MyFilesView.tsx";
 import { SettingsView, type SettingsApi } from "./views/SettingsView.tsx";
 import { SignInView } from "./views/SignInView.tsx";
@@ -66,9 +66,37 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   const [paywallReason, setPaywallReason] = useState<PaywallReason | null>(null);
   const { width: sidebarWidth, onResizeStart } = useResizable("cs-sidebar-width", 232, 200, 360);
 
-  // THE deposit gate — is there room? Nothing else (see `state/entitlement.ts`). "No subscription" stopped
-  // being a reason to refuse a deposit when the free tier landed; only a full vault is one.
-  const canDeposit = hasCapacity(state.entitlement, state.status?.bytesStored ?? null);
+  // Cross-view state: the file tree (daemon `listFiles`, mapped to the browser model; live restore
+  // status overlaid inside useFiles) + local settings.
+  // Folder markers (empty-folder anchors) aren't files — split them out and feed their paths into useFiles'
+  // virtualFolders channel, so an empty folder persists across reloads while the tree derivation stays simple.
+  const daemonFiles = useMemo(() => state.files.filter((r) => !isFolderMarker(r)).map(fileFromJournal), [state.files]);
+  const persistedFolders = useMemo(
+    () => state.files.filter(isFolderMarker).map((r) => r.relativePath),
+    [state.files],
+  );
+  const filesApi = useFiles(daemonFiles, persistedFolders, state.restores);
+
+  // THE deposit gate — is there room for what's being deposited? (see `state/entitlement.ts`). "No
+  // subscription" stopped being a reason to refuse a deposit when the free tier landed; only a FULL vault
+  // is. "Used" is what's already in S3 (`bytesStored`) PLUS what's mid-upload but not yet counted there
+  // (the optimistic "uploading" rows). Without the in-flight half, a burst of deposits all measure against
+  // the same stale stored total and every one passes — the vault sails past its quota before it catches up.
+  const inFlightBytes = useMemo(
+    () => filesApi.files.reduce((sum, f) => (f.status === "uploading" ? sum + f.size : sum), 0),
+    [filesApi.files],
+  );
+  const bytesStored = state.status?.bytesStored ?? null;
+  const usedBytes = bytesStored == null ? null : bytesStored + inFlightBytes;
+  const roomLeft = bytesAvailable(state.entitlement, usedBytes);
+  // Coarse "is there ANY room left" — drives the paywall-reset effect + the retry guard. A specific deposit
+  // is checked against its real size via `hasRoomFor` (handed to the browser), which is what stops the one
+  // oversized drop a stale stored total would otherwise wave through. Both fail OPEN on unknown usage/quota.
+  const canDeposit = roomLeft == null || roomLeft > 0;
+  const hasRoomFor = useCallback(
+    (incomingBytes: number): boolean => roomLeft == null || incomingBytes <= roomLeft,
+    [roomLeft],
+  );
   // Which upsell a full vault shows: a free account picks a plan (paywall), a subscriber resizes theirs.
   const subscribed = state.entitlement.active;
   useEffect(() => {
@@ -108,16 +136,6 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
     void fn().catch((e: unknown) => setCmdError(e instanceof Error ? e.message : String(e)));
   };
 
-  // Cross-view state: the file tree (daemon `listFiles`, mapped to the browser model; live restore
-  // status overlaid inside useFiles) + local settings.
-  // Folder markers (empty-folder anchors) aren't files — split them out and feed their paths into useFiles'
-  // virtualFolders channel, so an empty folder persists across reloads while the tree derivation stays simple.
-  const daemonFiles = useMemo(() => state.files.filter((r) => !isFolderMarker(r)).map(fileFromJournal), [state.files]);
-  const persistedFolders = useMemo(
-    () => state.files.filter(isFolderMarker).map((r) => r.relativePath),
-    [state.files],
-  );
-  const filesApi = useFiles(daemonFiles, persistedFolders, state.restores);
   // Excludes are daemon-backed now (the SSOT): list comes from the store, add/remove issue commands and
   // the `excludesChanged` refetch reconciles. No local state to drift.
   const settings: SettingsApi = {
@@ -129,11 +147,14 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   const gettingBack = filesApi.files.filter((f) => f.status === "gettingBack");
   const notRunning = NOT_RUNNING[state.connection];
 
-  // Only PERMANENT (stuck) failures surface — transient blips stay "uploading" and self-heal. Dedup by
-  // blob (the event log can record the same blob across runs; newest-first, so first seen wins).
+  // Stuck uploads surface here — the ones that won't self-heal on their own: PERMANENT faults, and
+  // `overQuota` refusals (they stay stuck until there's room, but a retry lands them once there is).
+  // Transient blips stay "uploading" and self-heal, so they don't. Dedup by blob (the event log can record
+  // the same blob across runs; newest-first, so first seen wins).
   const stuckFailures = useMemo<BlobFailure[]>(() => {
     const byBlob = new Map<string, BlobFailure>();
-    for (const f of state.failures) if (f.kind === "permanent" && !byBlob.has(f.blob)) byBlob.set(f.blob, f);
+    for (const f of state.failures)
+      if ((f.kind === "permanent" || f.kind === "overQuota") && !byBlob.has(f.blob)) byBlob.set(f.blob, f);
     return [...byBlob.values()];
   }, [state.failures]);
 
@@ -286,7 +307,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           filesApi={filesApi}
           uploadProgress={state.run?.uploadProgress ?? {}}
           run={state.run}
-          canDeposit={canDeposit}
+          hasRoomFor={hasRoomFor}
           onDepositBlocked={() => (subscribed ? setOverCapacityOpen(true) : setPaywallReason("quotaReached"))}
         />
       )}

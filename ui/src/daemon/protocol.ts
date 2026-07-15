@@ -243,6 +243,13 @@ export interface Commands {
    * of the ~1h STS expiry. Errors on a daemon with no Cognito identity pool configured (dogfood mode —
    * which never calls it: the auth UI doesn't exist there). */
   deauthenticate: { params: Record<string, never>; result: Ack };
+  /** Push the signed-in account's storage quota (bytes) to the daemon so `UploadEngine` can enforce the
+   * ceiling on every run — including the periodic auto-run the renderer never sees. The app owns the
+   * `/entitlement` fetch; the daemon can't reach the account backend, so it learns the number from here.
+   * Sent right after `authenticate` and whenever the entitlement changes. OMIT `quotaBytes` (or send it
+   * empty) to CLEAR enforcement — dogfood mode, or a subscriber whose plan the app couldn't resolve — which
+   * fails open, matching the app-side gate. Value is a string on the wire (the daemon re-parses with Int()). */
+  setQuota: { params: { quotaBytes?: string }; result: Ack };
   /** Zero-knowledge vault (PROD.md Phase 5b) — all multi-user only (error on a dogfood daemon), all
    * carrying key material over the LOCAL control socket, never the network:
    * - `mintVault` (signup): mint MK + one-time recovery code, load it live, return the blob to store +
@@ -314,7 +321,7 @@ export interface DaemonEvents {
   /** A blob that failed to archive this pass. `paths` is the newline-joined relativePaths of the files it
    * batched (named in the failures panel + used to flip their rows); permanent failures are also persisted
    * as a per-file `failed` status in the journal, so the ⚠ survives the next `listFiles` read. */
-  blobFailed: { blob: string; kind: "permanent" | "transient"; message: string; paths: string };
+  blobFailed: { blob: string; kind: "permanent" | "transient" | "overQuota"; message: string; paths: string };
   sourcesChanged: { added?: string; removed?: string; paused?: string; resumed?: string };
   /** The exclude registry changed via add/removeExclude (carries the affected pattern for logging). The
    * controller's response is to re-read `listExcludes`; it also means the *next* scan applies the change. */

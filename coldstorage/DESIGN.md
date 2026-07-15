@@ -223,6 +223,15 @@ writing, so a restored file is byte-identical by construction.
 - Every error is categorized and surfaced honestly — **no silent failure, ever** (that's the
   catastrophe mode the product guards against). Permanent blob failures mark their files `failed` in
   the journal and go on a skip list (in-memory today; persisting it needs a schema change, deferred).
+- **Storage-quota enforcement lives HERE, in `UploadEngine.run(quota:)` — not only in the app.** The
+  renderer's gate is fast UX; the daemon is the ceiling of record, because it's the one path a UI bug,
+  a non-UI client, or the daemon's own periodic auto-run can't slip past. Each run carries a `QuotaLimit`
+  (the account's `limitBytes`, pushed down by the app via `setQuota` from its `/entitlement` fetch, + the
+  S3 usage read at run start); the engine refuses — before uploading a byte — any blob that would cross it,
+  as a `.overQuota` `BlobFailure` (retryable, not permanent: it lands once there's room). A running total
+  grows by each stored blob's measured bytes, so a Photos deposit (plan-time size 0) is still enforced —
+  overshoot bounded to the one crossing blob. `nil` quota ⇒ don't enforce (dogfood / unresolved plan),
+  failing open exactly like the app gate — never block a backup over a number we couldn't read.
 
 ## 10. IPC contract (daemon ↔ Electron)
 
@@ -232,8 +241,8 @@ Secrets live in Keychain, never in the UI.
 - **Commands — SSOT is `DaemonService.handle`:** `ping · getStatus · listSources · listFiles ·
   listExcludes · addSource · removeSource · addExclude · removeExclude · restorePlan · restore ·
   deposit · depositPhotos · previewDeposit · movePath · createFolder · deletePath · authenticate ·
-  deauthenticate · mintVault · unlockVault · unlockVaultWithRecoveryCode · lockVault · triggerNow ·
-  pauseSource · resumeSource`.
+  deauthenticate · setQuota · mintVault · unlockVault · unlockVaultWithRecoveryCode · lockVault ·
+  triggerNow · pauseSource · resumeSource`.
 - **Events — SSOT is the `DaemonEvent(...)` call sites:** `runStarted · fileArchived · uploadProgress ·
   runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged · restoreRequested ·
   restoreInProgress · restoreCompleted · restoreNeedsAuthorization · error`.

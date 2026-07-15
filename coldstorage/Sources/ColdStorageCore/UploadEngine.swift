@@ -70,6 +70,19 @@ actor RunProgressReporter {
     func fileArchived() async { filesArchived += 1; await emit(snapshot) }
 }
 
+/// The storage-quota ceiling a run must stay under, as the engine sees it: the account's `limitBytes`
+/// (the free tier, or the plan's — pushed down from the app's entitlement) and the `usedBytes` already in
+/// S3 at the moment the run starts (a live listing under the user's own prefix). The engine enforces this
+/// at the blob boundary so a deposit — from the UI, a photo pick, OR the periodic auto-run — can't cross
+/// the ceiling. `nil` (the `run` default) means DON'T enforce: dogfood mode, or an entitlement/usage the
+/// app couldn't resolve — failing open there mirrors the app-side gate (never refuse over a missing number).
+/// Bytes are ciphertext, matching `usedBytes` (S3 object sizes) and the plaintext quota within ~4 ppm.
+public struct QuotaLimit: Sendable, Equatable {
+    public let limitBytes: Int
+    public let usedBytes: Int
+    public init(limitBytes: Int, usedBytes: Int) { self.limitBytes = limitBytes; self.usedBytes = usedBytes }
+}
+
 /// Orchestrates: scan → plan → (per blob) stream-encrypt straight into a resumable multipart upload →
 /// verify → journal. V1 processes one blob at a time in newest-first order (correct + simple; cross-blob
 /// concurrency is a tunable later). Resumability comes from deterministic encryption + the journal + ListParts.
@@ -105,6 +118,7 @@ public actor UploadEngine {
     public func run(source: IngestSource,
                     skipBlobIds: Set<String> = [],
                     prefix: VaultPrefix,
+                    quota: QuotaLimit? = nil,
                     onFileArchived: (@Sendable (String, String) async -> Void)? = nil,
                     onProgress: (@Sendable (UploadProgress) async -> Void)? = nil,
                     onRunProgress: (@Sendable (RunProgress) async -> Void)? = nil) async throws -> [BlobFailure] {
@@ -137,8 +151,26 @@ public actor UploadEngine {
             return RunProgressReporter(filesTotal: filesTotal, bytesTotal: bytesTotal, emit: emit)
         }
         await reporter?.begin()
+        // Storage-quota enforcement (see `QuotaLimit`). `used` tracks ciphertext bytes stored under this
+        // user's prefix — seeded from the run-start S3 listing and grown by each blob we actually store.
+        // A NEW blob that would cross the ceiling is REFUSED before a byte ships (`.overQuota`), and the run
+        // continues past it (later blobs might be small enough to fit, and it retries once there's room).
+        // Already-stored blobs (resume / relink no-ops) are never re-checked or re-counted — their bytes are
+        // already in `used` via the listing. For a Photos deposit the plan-time size is 0 (the asset streams
+        // its true size), so the crossing blob's real bytes only land in `used` AFTER it archives — bounding
+        // any overshoot to that one blob, still authoritatively, which the client gate can't do at all.
+        var used = quota?.usedBytes ?? 0
         for blob in planned {
-            do { try await archive(blob, onFileArchived: onFileArchived, onProgress: onProgress, reporter: reporter) }
+            if let quota, !((try? journal.isBlobVerified(blob.id)) ?? false) {
+                let incoming = blob.items.reduce(0) { $0 + EnvelopeCipher.encryptedSize(ofPlaintext: $1.size) }
+                if used + incoming > quota.limitBytes {
+                    let files = blob.items.map { BlobFailure.File(id: $0.id, path: $0.relativePath) }
+                    log("UploadEngine: blob \(blob.id) REFUSED — over quota (used \(used) + \(incoming) > \(quota.limitBytes)) — \(files.count) file(s): \(files.map(\.path).joined(separator: ", "))")
+                    failures.append(BlobFailure(blobId: blob.id, kind: .overQuota("Not enough storage left to back this up."), files: files))
+                    continue
+                }
+            }
+            do { used += try await archive(blob, onFileArchived: onFileArchived, onProgress: onProgress, reporter: reporter) }
             catch {
                 let files = blob.items.map { BlobFailure.File(id: $0.id, path: $0.relativePath) }
                 let kind = FailureKind.classify(error)
@@ -158,10 +190,12 @@ public actor UploadEngine {
     /// emitted once per uploaded 64 MiB part. **Solo-blob only:** a determinate bar is only meaningful for a
     /// large file (always its own blob); small files are batched into one blob and flip to `archived`
     /// near-instantly, so they keep the indeterminate bar. Bounded to one event per part per large file.
+    /// Returns the ciphertext bytes it NEWLY stored — what the caller adds to the running quota total. Zero
+    /// on a no-op (already verified + linked), a relink (bytes already on S3), or an all-empty blob.
     private func archive(_ blob: BlobPlan,
                          onFileArchived: (@Sendable (String, String) async -> Void)?,
                          onProgress: (@Sendable (UploadProgress) async -> Void)? = nil,
-                         reporter: RunProgressReporter? = nil) async throws {
+                         reporter: RunProgressReporter? = nil) async throws -> Int {
         // Idempotency is at the FILE level, not the blob level. A verified blob whose files are ALL linked is a
         // healthy no-op (the common case on every periodic re-scan) → return silently. But a verified blob with
         // any UNLINKED file is an orphan: a prior run died between `markBlobVerified` and the `markFileArchived`
@@ -170,7 +204,7 @@ public actor UploadEngine {
         let alreadyVerified = try journal.isBlobVerified(blob.id)
         if alreadyVerified {
             let orphaned = try blob.items.contains { try !journal.isFileArchived($0.id) }
-            if !orphaned { return }   // bytes in S3 and every file linked — nothing to do, no noise
+            if !orphaned { return 0 }   // bytes in S3 and every file linked — nothing to do, no noise, no new bytes
             log("UploadEngine: blob \(blob.id) verified but has unlinked file(s) — recomputing spans to re-link (no re-upload)")
         }
         let kek = try keys.userKEK()
@@ -306,6 +340,9 @@ public actor UploadEngine {
             await reporter?.fileArchived()
         }
         log("UploadEngine: ✓ blob \(blob.id) — \(spans.count) file(s) \(alreadyVerified ? "re-linked" : "archived")")
+        // NEW ciphertext stored this pass = `offset` for a fresh blob; a relink re-encrypted but uploaded
+        // nothing (its bytes are already counted in the run's starting usage), so it adds nothing.
+        return alreadyVerified ? 0 : offset
     }
 }
 

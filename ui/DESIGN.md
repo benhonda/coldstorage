@@ -209,11 +209,22 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   `GET /entitlement`, serves the plan catalog (`getCatalog()` → the backend's live `GET /catalog`),
   and drives `subscribe(priceId)` (POST `/checkout-session` with the chosen plan → open Paddle
   checkout in the system browser → poll until the webhook flips active). Renderer sees only
-  `EntitlementStatus` + `CatalogPlan[]`. A SOFT gate on DEPOSITS (not browse/restore) — and since the
+  `EntitlementStatus` + `CatalogPlan[]`. A gate on DEPOSITS (not browse/restore) — and since the
   free tier landed (PROD.md "Free-tier entitlement flip") **the gate is the byte quota, not the
-  subscription**: every signed-in account has a `quotaBytes` (the free tier's 25 GB, or the plan's), and
-  `MyFilesView`'s deposit paths bail only when the vault is FULL. That one rule is `state/entitlement.ts`
-  → `hasCapacity(entitlement, bytesStored)`, pure + unit-tested, failing OPEN on any unknown.
+  subscription**: every signed-in account has a `quotaBytes` (the free tier, or the plan's), and a deposit
+  that would OVERFLOW it is refused. **Enforced in TWO places, and the daemon is the one of record:** the
+  renderer's `state/entitlement.ts` → `hasCapacityFor(entitlement, usedBytes, incomingBytes)` (pure +
+  unit-tested, fails OPEN on any unknown) is fast UX — it shows the paywall before a doomed upload starts;
+  but the real ceiling lives in the daemon's `UploadEngine.run(quota:)`, which refuses any blob that would
+  cross it. That's what makes it un-bypassable — it covers the periodic auto-run the renderer never sees,
+  and a non-UI client can't sidestep it. The app pushes the number down with `setQuota` (on auth + every
+  entitlement change); the daemon reports a refusal as `blobFailed` kind `overQuota`, which surfaces in the
+  "couldn't upload" panel and retries once there's room. The client check is **size-aware**: `usedBytes` is
+  `bytesStored` (the lagging S3 listing) PLUS the bytes of the still-`uploading` optimistic rows (in-flight,
+  not yet in S3), and the deposit's own size is weighed too — so neither a single oversized drop nor a burst
+  slips past a stored total that hasn't caught up. Photo picks contribute 0 to the client-side size math
+  (unknown until the daemon resolves them) — but the daemon enforces them precisely against measured bytes,
+  so the ceiling still holds; file drops carry `File.size` and are exact on both sides.
   `entitlement.active` is a DISPLAY signal only: it picks which upsell a full vault shows — a free account
   gets `views/SubscribeModal.tsx` (`reason: "quotaReached"`), a subscriber gets the "Storage full" modal →
   `ChangePlanModal`. The same SubscribeModal opens with `reason: "upgrade"` from Settings when nobody is

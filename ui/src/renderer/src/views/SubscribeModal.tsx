@@ -2,7 +2,7 @@
  * Plan picker (PROD.md "Free-tier entitlement flip" · PADDLE.md "Multi-plan picker"). Two moments,
  * one modal — hence {@link PaywallReason}:
  *
- *  - `quotaReached` — a free account has filled its 25 GB and a deposit was blocked. Since the free tier
+ *  - `quotaReached` — a free account has filled its free-tier quota and a deposit was blocked. Since the free tier
  *    landed this is the ONLY blocking case, and it's a full vault, not an unsubscribed one: a plan raises
  *    the cap. Never gate on "you haven't paid".
  *  - `upgrade` — nobody is blocked; they chose "Subscribe" in Settings with room to spare.
