@@ -48,9 +48,22 @@ const api: ColdstoreApi = {
     return () => ipcRenderer.removeListener(IPC.authStatusChanged, handler);
   },
 
+  getAccount: () => ipcRenderer.invoke(IPC.accountStatus),
+  setDisplayName: (name: string) => ipcRenderer.invoke(IPC.accountSetDisplayName, name),
+  submitSurvey: (answers) => ipcRenderer.invoke(IPC.accountSubmitSurvey, answers),
+  completeOnboarding: () => ipcRenderer.invoke(IPC.accountCompleteOnboarding),
+  confirmRecoveryCode: () => ipcRenderer.invoke(IPC.accountConfirmRecoveryCode),
+  onAccount: (listener) => {
+    const handler = (_e: IpcRendererEvent, status: unknown): void =>
+      (listener as (s: unknown) => void)(status);
+    ipcRenderer.on(IPC.accountStatusChanged, handler);
+    return () => ipcRenderer.removeListener(IPC.accountStatusChanged, handler);
+  },
+
   getVaultStatus: () => ipcRenderer.invoke(IPC.vaultStatus),
   submitRecoveryCode: (code: string) => ipcRenderer.invoke(IPC.vaultSubmitRecoveryCode, code),
   acknowledgeRecoveryCode: () => ipcRenderer.invoke(IPC.vaultAckRecoveryCode),
+  reissueRecoveryCode: () => ipcRenderer.invoke(IPC.vaultReissueRecoveryCode),
   onVaultStatus: (listener) => {
     const handler = (_e: IpcRendererEvent, status: unknown): void =>
       (listener as (s: unknown) => void)(status);

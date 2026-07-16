@@ -93,9 +93,11 @@ resource "aws_cognito_identity_provider" "google" {
   provider_type = "Google"
 
   provider_details = {
-    client_id        = data.aws_ssm_parameter.google_client_id[0].value
-    client_secret    = data.aws_ssm_parameter.google_client_secret[0].value
-    authorize_scopes = "email"
+    client_id     = data.aws_ssm_parameter.google_client_id[0].value
+    client_secret = data.aws_ssm_parameter.google_client_secret[0].value
+    # "profile" brings the user's name into the ID token via the attribute mapping below — the
+    # onboarding wizard prefills from it. Google's basic profile scope is non-sensitive (no re-verify).
+    authorize_scopes = "profile email"
     # AWS computes + backfills these six for provider_type=Google after the first apply; without them
     # in config every later plan wants to strip them (perpetual harmless drift — surfaced 2026-07-02
     # by the Phase 5 callback-URL plan). Pinning the values AWS itself wrote keeps plans surgical.
@@ -110,6 +112,10 @@ resource "aws_cognito_identity_provider" "google" {
   attribute_mapping = {
     email    = "email"
     username = "sub"
+    # Standard pool attribute `name` ← Google's full name. Re-applied at EVERY federated sign-in
+    # (Cognito overwrites it), which is why the user-owned display name lives in the account
+    # backend — this mapping only seeds the onboarding prefill via the ID token claim.
+    name = "name"
   }
 }
 

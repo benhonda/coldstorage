@@ -75,6 +75,18 @@ public enum ZeroKnowledgeKeys {
         return try mintReturningKey(password: throwaway, recoveryCode: recoveryCode, opsLimit: opsLimit, memLimit: memLimit)
     }
 
+    /// Recovery-code reissue (PROD.md §ZK hierarchy): any signed-in device holds the unlocked MK, so it
+    /// can wrap the SAME MK under a fresh code — DEKs untouched, no re-encryption, and the old code is
+    /// dead the moment the returned blob replaces the server copy. Mints a complete fresh KeyBlob
+    /// (including a new throwaway password slot) rather than patching the old one, so the caller needs
+    /// no prior blob and can never produce a half-coherent mix of two MKs' wraps.
+    public static func reissueRecoveryOnly(masterKey: SymmetricKey, recoveryCode: String,
+                                           opsLimit: Int = defaultOpsLimit, memLimit: Int = defaultMemLimit) throws -> KeyBlob {
+        let throwaway = try randomSalt().base64EncodedString()
+        return try wrap(mk: masterKey, password: throwaway, recoveryCode: recoveryCode,
+                        opsLimit: opsLimit, memLimit: memLimit)
+    }
+
     /// A cryptographically-random, transcription-safe recovery code: 25 chars of Crockford base32
     /// (no I/L/O/U), grouped `XXXXX-XXXXX-XXXXX-XXXXX-XXXXX`. `byte & 0x1F` is uniform over the 32-char
     /// alphabet (256 = 8×32), so this is a flat ~125 bits — enough to be the vault's sole lock.
@@ -89,6 +101,13 @@ public enum ZeroKnowledgeKeys {
     private static func mintReturningKey(password: String, recoveryCode: String,
                                          opsLimit: Int, memLimit: Int) throws -> (blob: KeyBlob, masterKey: SymmetricKey) {
         let mk = SymmetricKey(size: .bits256)
+        return (try wrap(mk: mk, password: password, recoveryCode: recoveryCode,
+                         opsLimit: opsLimit, memLimit: memLimit), mk)
+    }
+
+    /// Wrap an existing MK under both secrets — the one place a KeyBlob is ever assembled.
+    private static func wrap(mk: SymmetricKey, password: String, recoveryCode: String,
+                             opsLimit: Int, memLimit: Int) throws -> KeyBlob {
         let saltPassword = try randomSalt()
         let saltRecovery = try randomSalt()
         let cipher = EnvelopeCipher()
@@ -96,9 +115,9 @@ public enum ZeroKnowledgeKeys {
                                                                    opsLimit: opsLimit, memLimit: memLimit))
         let wrappedRecovery = try cipher.wrap(mk, kek: try derive(secret: recoveryCode, salt: saltRecovery,
                                                                    opsLimit: opsLimit, memLimit: memLimit))
-        return (KeyBlob(wrappedMKPassword: wrappedPassword, saltPassword: saltPassword,
-                        wrappedMKRecovery: wrappedRecovery, saltRecovery: saltRecovery,
-                        opsLimit: opsLimit, memLimit: memLimit), mk)
+        return KeyBlob(wrappedMKPassword: wrappedPassword, saltPassword: saltPassword,
+                       wrappedMKRecovery: wrappedRecovery, saltRecovery: saltRecovery,
+                       opsLimit: opsLimit, memLimit: memLimit)
     }
 
     /// Unwrap MK via the password path.

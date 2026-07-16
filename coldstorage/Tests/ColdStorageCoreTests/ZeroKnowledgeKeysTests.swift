@@ -121,6 +121,36 @@ import Crypto   // SymmetricKey — the Phase 5b SwappableKeyProvider tests seed
         }
     }
 
+    /// Recovery-code reissue (the onboarding "didn't finish saving your code" re-show + future Settings
+    /// reissue): the fresh blob's NEW code unlocks to the SAME MK — so every existing DEK stays valid —
+    /// and the OLD code is dead against the new blob (fails closed, not silently accepted).
+    @Test func reissueRecoveryOnlyWrapsSameMKAndKillsTheOldCode() throws {
+        let oldCode = "AB3DE-FG4HJ-KM5NP-QR6ST-VW7XZ"
+        let (oldBlob, mk) = try ZeroKnowledgeKeys.mintRecoveryOnly(recoveryCode: oldCode, opsLimit: fastOps, memLimit: fastMem)
+
+        let newCode = "ZX7WV-TS6RQ-PN5MK-JH4GF-ED3BA"
+        let newBlob = try ZeroKnowledgeKeys.reissueRecoveryOnly(masterKey: mk, recoveryCode: newCode,
+                                                                opsLimit: fastOps, memLimit: fastMem)
+
+        // Same MK under the new code — a DEK wrapped before the reissue still unwraps after it.
+        let mkViaNewCode = try ZeroKnowledgeKeys.unlockWithRecoveryCode(newBlob, recoveryCode: newCode)
+        #expect(mkViaNewCode.withUnsafeBytes { Data($0) } == mk.withUnsafeBytes { Data($0) })
+        let cipher = EnvelopeCipher()
+        let dek = cipher.newDEK()
+        let wrappedDEK = try cipher.wrap(dek, kek: mk)
+        #expect(try cipher.unwrap(wrappedDEK, kek: mkViaNewCode).withUnsafeBytes { Data($0) } == dek.withUnsafeBytes { Data($0) })
+
+        // The old code opens only the old blob; against the new blob it fails closed.
+        #expect(throws: ZeroKnowledgeError.wrongSecret) {
+            _ = try ZeroKnowledgeKeys.unlockWithRecoveryCode(newBlob, recoveryCode: oldCode)
+        }
+        // And the fresh throwaway password slot is unreachable, same as mint's.
+        #expect(throws: ZeroKnowledgeError.wrongSecret) {
+            _ = try ZeroKnowledgeKeys.unlock(newBlob, password: newCode)
+        }
+        _ = oldBlob
+    }
+
     @Test func generateRecoveryCodeIsWellFormedAndUnique() throws {
         let a = try ZeroKnowledgeKeys.generateRecoveryCode()
         let b = try ZeroKnowledgeKeys.generateRecoveryCode()

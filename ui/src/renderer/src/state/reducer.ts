@@ -7,6 +7,7 @@
  * (the `[String:String]` wire) — numbers are parsed here, the one place that knows the wire shape.
  */
 import type {
+  AccountStatus,
   AuthStatus,
   ConnectionState,
   DaemonEventName,
@@ -85,6 +86,8 @@ export interface AppState {
   /** Zero-knowledge vault status (Phase 5b), pushed from main. Starts locked; only gates the app once
    * the user is signed in (a dogfood install never signs in, so it never matters). */
   vault: VaultStatus;
+  /** Account profile + onboarding facts, pushed from main — what the first-run wizard derives from. */
+  account: AccountStatus;
   /** Subscription entitlement (Phase 5c), pushed from main. Gates deposits (not browse/restore). */
   entitlement: EntitlementStatus;
   /** Auto-update status (Phase 6), pushed from main. Packaged app only — stays `idle` in dev. Drives the
@@ -110,8 +113,9 @@ export interface AppState {
 export const initialState: AppState = {
   initializing: true,
   connection: "connecting",
-  auth: { configured: false, state: "signedOut", email: null, error: null, emailAvailable: false },
+  auth: { configured: false, state: "signedOut", email: null, name: null, error: null, emailAvailable: false },
   vault: { state: "locked", recoveryCode: null, error: null },
+  account: { known: false, displayName: null, onboarded: false, recoveryCodeConfirmed: false, error: null },
   entitlement: { known: false, active: false, checkingOut: false, quotaBytes: null, error: null },
   update: { state: "idle", version: null, percent: null, error: null },
   status: null,
@@ -135,6 +139,7 @@ export type Action =
   | { type: "initialized" }
   | { type: "authChanged"; auth: AuthStatus }
   | { type: "vaultChanged"; vault: VaultStatus }
+  | { type: "accountChanged"; account: AccountStatus }
   | { type: "entitlementChanged"; entitlement: EntitlementStatus }
   | { type: "updateChanged"; update: UpdateStatus }
   | { type: "statusLoaded"; status: Status }
@@ -242,6 +247,9 @@ export const reducer = (state: AppState, action: Action): AppState => {
 
     case "vaultChanged":
       return { ...state, vault: action.vault };
+
+    case "accountChanged":
+      return { ...state, account: action.account };
 
     case "entitlementChanged":
       return { ...state, entitlement: action.entitlement };

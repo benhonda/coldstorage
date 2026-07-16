@@ -73,13 +73,23 @@ export class AuthManager {
 
   /** Serializable snapshot for the renderer (pushed on every change; pulled once at first paint). */
   status(): AuthStatus {
-    if (!this.cfg) return { configured: false, state: "signedOut", email: null, error: null, emailAvailable: false };
+    if (!this.cfg) return { configured: false, state: "signedOut", email: null, name: null, error: null, emailAvailable: false };
     const emailAvailable = this.emailAvailable();
     // Still checking a saved session — don't reveal signed-in/out yet (that's the login-flash).
-    if (!this.settled) return { configured: true, state: "restoring", email: null, error: null, emailAvailable };
+    if (!this.settled) return { configured: true, state: "restoring", email: null, name: null, error: null, emailAvailable };
     const state = this.tokens ? "signedIn" : this.pending ? "signingIn" : "signedOut";
-    const email = this.tokens ? decodeJwtClaims(this.tokens.idToken)?.email : null;
-    return { configured: true, state, email: typeof email === "string" ? email : null, error: this.lastError, emailAvailable };
+    const claims = this.tokens ? decodeJwtClaims(this.tokens.idToken) : null;
+    const email = claims?.email;
+    // Google lane only (the IdP attribute mapping) — the onboarding name-step prefill, nothing more.
+    const name = claims?.name;
+    return {
+      configured: true,
+      state,
+      email: typeof email === "string" ? email : null,
+      name: typeof name === "string" ? name : null,
+      error: this.lastError,
+      emailAvailable,
+    };
   }
 
   /** Subscribe to status changes. Returns an unsubscribe fn. */

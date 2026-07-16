@@ -160,6 +160,45 @@ Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-cl
   dialog, My Files — still sum file rows; that's a different question, about *these files*, not *the vault*.)
 - **No "download location" setting** — destination is chosen per request in the dialog.
 
+## Onboarding — the first-run wizard (2026-07-16)
+After sign-up, one wizard in the same `.cs-signin` gate-card frame, progress dots on top, one idea
+per screen: **name → tour ×3 → recovery code → 2 skippable questions → done**
+(`views/OnboardingWizard.tsx`; gated in `App.tsx` between `RecoveryCodeEnter` and the vault gates).
+
+- **Name** — shown on BOTH lanes; Google arrives prefilled from the ID token's `name` claim (the
+  `cognito.tf` attribute mapping). The durable name is the backend's `displayName` column, NOT the
+  Cognito attribute — Cognito re-applies the Google mapping at every federated sign-in, which would
+  clobber an in-app edit. Required, no skip; a FAILED save offers "continue without saving" (fail
+  open — the name is cosmetic; it stays editable in Settings and re-asks next launch).
+- **Tour** — the three load-bearing expectations, in plain uploader voice: deep archive = cheap to
+  keep / hours-not-seconds to bring back (+ big restores priced upfront); explicit ingest (nothing
+  auto-uploads, originals stay); zero-knowledge ("Your data is only ever visible to you"), which
+  sets up the very next screen. Not skippable — three clicks, no timers.
+- **Recovery code** — the existing `RecoveryCodeShow`, now with dots + a recorded
+  `recoveryCodeConfirmed` fact. If the fact is missing but the vault is unlocked (app died
+  mid-signup), the app **reissues** a fresh code (daemon `reissueRecoveryCode` wraps the LIVE MK;
+  the new key-blob is PUT server-side BEFORE the code is shown, so a shown code always works and
+  the old one is dead).
+- **Questions** — data collection, honestly labeled optional: "What are you keeping cold?"
+  (multi-select) + "How did you find ColdStorage?" (single). Full-width option ROWS, not centered
+  chips (long labels wrap raggedly). Answers → `survey` jsonb as option IDS (catalog mirrored from
+  `account-backend/src/survey.ts`); Skip records nothing, and nothing ever re-asks after the wizard.
+- **Done** — names the free tier from the backend's `quotaBytes` (never hardcoded) and lands on the
+  empty-vault drop zone.
+
+**Resume rules (derive, don't record):** every step's done-ness is a server-side fact on
+`accountsTable` — `displayName`, `onboardedAt`, `recoveryCodeConfirmedAt` (+ key-blob existence for
+the vault). The step LIST is frozen at wizard mount from those facts; only the index is local. An
+interrupted run resumes with exactly the steps still owed; `onboardedAt` is per-ACCOUNT, so a second
+device gets recovery-code entry, never a tour re-run. The wizard fails OPEN when `GET /account`
+hasn't landed (`known: false`) — the plain vault gates carry the session.
+
+**Terms are sign-in-wrap**, not a wizard step: the agreement line lives under the sign-in card's
+actions, and continuing IS acceptance — recorded by the main-process `AccountManager` as
+`termsVersion` + `termsAcceptedAt` whenever the stored version is absent/stale (versioned so a
+material change can gate a re-agree later). Deliberately NOT in the wizard: notification permission,
+Photos access (asked contextually when first relevant), any plan pitch (the free tier covers day one).
+
 ## The one architectural decision (don't re-litigate)
 **Electron's main process speaks the daemon's JSONL protocol directly over the unix socket** — a Node
 `net.Socket` to `COLDSTORE_SOCKET`. **Not** by spawning `coldstorectl`, **not** via a Swift/native

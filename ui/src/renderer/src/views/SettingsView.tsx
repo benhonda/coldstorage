@@ -13,7 +13,7 @@
  * If a cost figure ever returns here, it must be the one we actually bill.
  */
 import { useState } from "react";
-import type { AuthStatus, EntitlementStatus, Source, SubscriptionInfo } from "../../../shared/ipc.ts";
+import type { AccountStatus, AuthStatus, EntitlementStatus, Source, SubscriptionInfo } from "../../../shared/ipc.ts";
 import { ChangePlanModal } from "./ChangePlanModal.tsx";
 import type { ViewProps } from "./types.ts";
 import type { ArchivedFile } from "./files/model.ts";
@@ -51,6 +51,7 @@ export const SettingsView = ({
   files,
   virtualFolders,
   auth,
+  account,
   entitlement,
   onSubscribe,
   subscription,
@@ -59,6 +60,8 @@ export const SettingsView = ({
   /** Sign-in status (Phase 5). The account card renders only for a configured (multi-user) install —
    * dogfood mode has no account to show. */
   auth: AuthStatus;
+  /** Account profile (display name + onboarding facts) — the Name row + its inline edit. */
+  account: AccountStatus;
   /** Subscription status (Phase 5c) + a subscribe entry point (non-deposit path to checkout). */
   entitlement: EntitlementStatus;
   onSubscribe: () => void;
@@ -82,6 +85,21 @@ export const SettingsView = ({
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuEntry[] } | null>(null);
   const [removing, setRemoving] = useState<Source | null>(null);
   const [changingPlan, setChangingPlan] = useState(false);
+  // The Name row's inline edit (null = read mode). Also the durable override for a Google user who
+  // wants something other than their Google name — our copy is never clobbered by the next sign-in.
+  const [editingName, setEditingName] = useState<string | null>(null);
+  const [savingName, setSavingName] = useState(false);
+  const saveName = (): void => {
+    const value = (editingName ?? "").trim();
+    if (!value || savingName) return;
+    setSavingName(true);
+    exec(() =>
+      api.setDisplayName(value).finally(() => {
+        setSavingName(false);
+        setEditingName(null);
+      }),
+    );
+  };
 
   /** Shorten a macOS home path for display: /Users/ben/Downloads/x → ~/Downloads/x (full path on hover). */
   const tildify = (p: string): string => p.replace(/^\/Users\/[^/]+\//, "~/");
@@ -299,6 +317,35 @@ export const SettingsView = ({
             </Button>
           }
         >
+          <KeyValueRow
+            label="Name"
+            value={
+              editingName !== null ? (
+                <span className="cs-plan-row">
+                  <Field
+                    label="Name"
+                    value={editingName}
+                    autoFocus
+                    onChange={(e) => setEditingName(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && saveName()}
+                  />
+                  <Button size="sm" icon="check" onClick={saveName}>
+                    {savingName ? "Saving…" : "Save"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setEditingName(null)}>
+                    Cancel
+                  </Button>
+                </span>
+              ) : (
+                <span className="cs-plan-row">
+                  {account.displayName ?? "—"}
+                  <Button size="sm" icon="edit" onClick={() => setEditingName(account.displayName ?? "")}>
+                    Edit
+                  </Button>
+                </span>
+              )
+            }
+          />
           <KeyValueRow label="Signed in as" value={auth.email ?? "—"} />
           {subscription && (
             <KeyValueRow

@@ -33,6 +33,8 @@ export class VaultManager {
     private readonly client: DaemonClient,
     private readonly store: VaultStore,
     private readonly keyBlob: KeyBlobClient,
+    /** A fresh ID token for backend writes outside `provision` (the reissue's key-blob PUT). */
+    private readonly getIdToken: () => Promise<string | null> = () => Promise.resolve(null),
   ) {}
 
   vaultStatus(): VaultStatus {
@@ -121,6 +123,21 @@ export class VaultManager {
   markProvisionError(message: string): void {
     if (this.status.state === "unlocked") return;
     this.setStatus({ state: "error", recoveryCode: null, error: message });
+  }
+
+  /**
+   * Mint a FRESH one-time recovery code for the already-unlocked vault — the onboarding "didn't
+   * finish saving your code" re-show (the account's `recoveryCodeConfirmed` fact is false but this
+   * device holds the MK). Order matters: the new blob is PUT server-side FIRST, so a code is only
+   * ever shown once it's the one that actually works — if the PUT fails, nothing is shown and the
+   * old code remains valid. The daemon wraps its LIVE MK, so every existing DEK stays valid.
+   */
+  async reissueRecoveryCode(): Promise<void> {
+    const idToken = await this.getIdToken();
+    if (!idToken) throw new Error("sign in first");
+    const minted = await this.client.request("reissueRecoveryCode");
+    await this.keyBlob.put(idToken, minted);
+    this.setStatus({ ...this.status, recoveryCode: minted.recoveryCode });
   }
 
   /** The user acknowledged saving their one-time recovery code — clear it from the status. */

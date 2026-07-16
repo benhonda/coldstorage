@@ -1,4 +1,4 @@
-import { pgTable, text, integer, boolean, bigint, index } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, boolean, bigint, index, jsonb, timestamp } from "drizzle-orm/pg-core";
 import { timestamps } from "./schema-utils.js";
 
 /**
@@ -40,6 +40,26 @@ export const accountsTable = pgTable("accounts", {
    * first request that needs it, not at signup. See `identity.server.ts`.
    */
   cognitoIdentityId: text("cognito_identity_id"),
+
+  // ── Onboarding (first-run wizard — see routes/account.ts) ──────────────────────────────────
+  // The user-owned display name. Deliberately OURS, not Cognito's `name` attribute: Cognito
+  // re-applies the Google attribute mapping at every federated sign-in, which would clobber an
+  // in-app edit — this column is the durable SSOT, seeded from the ID token's `name` claim.
+  displayName: text("display_name"),
+  // Sign-in-wrap agreement ("By continuing, you agree…" on the sign-in card), recorded with the
+  // account's first authenticated write. Versioned: bump TERMS_VERSION (routes/account.ts) on a
+  // material terms change and stale accounts get a re-agree gate at next sign-in.
+  termsVersion: text("terms_version"),
+  termsAcceptedAt: timestamp("terms_accepted_at", { withTimezone: true, mode: "string" }),
+  // The two facts the wizard's resume rules run on (derive-don't-record: no local flags in the app).
+  // onboardedAt = tour + questions seen (per-ACCOUNT — a second device never re-runs the tour);
+  // recoveryCodeConfirmedAt = the user actually ticked "I've saved my recovery code" (null + an
+  // unlocked vault ⇒ the app reissues a fresh code and re-shows it until confirmed).
+  onboardedAt: timestamp("onboarded_at", { withTimezone: true, mode: "string" }),
+  recoveryCodeConfirmedAt: timestamp("recovery_code_confirmed_at", { withTimezone: true, mode: "string" }),
+  // Skippable survey answers as option IDS (see survey.ts) — analytics, not logic, hence one
+  // versioned jsonb column rather than per-question columns that churn the schema as questions evolve.
+  survey: jsonb(),
 });
 
 /**

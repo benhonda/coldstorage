@@ -73,22 +73,25 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
   // Sign-in + vault + entitlement status are push-driven from main (no daemon involved); plain replaces.
   const offAuth = api.onAuthStatus((auth) => store.dispatch({ type: "authChanged", auth }));
   const offVault = api.onVaultStatus((vault) => store.dispatch({ type: "vaultChanged", vault }));
+  const offAccount = api.onAccount((account) => store.dispatch({ type: "accountChanged", account }));
   const offEntitlement = api.onEntitlement((entitlement) => store.dispatch({ type: "entitlementChanged", entitlement }));
   const offUpdate = api.onUpdateStatus((update) => store.dispatch({ type: "updateChanged", update }));
 
   // First paint: read the current connection + sign-in state and, if already connected, the snapshot
   // + tree + excludes.
   void (async () => {
-    const [state, auth, vault, entitlement, update] = await Promise.all([
+    const [state, auth, vault, account, entitlement, update] = await Promise.all([
       api.getConnectionState(),
       api.getAuthStatus(),
       api.getVaultStatus(),
+      api.getAccount(),
       api.getEntitlement(),
       api.getUpdateStatus(),
     ]);
     store.dispatch({ type: "connection", state });
     store.dispatch({ type: "authChanged", auth });
     store.dispatch({ type: "vaultChanged", vault });
+    store.dispatch({ type: "accountChanged", account });
     store.dispatch({ type: "entitlementChanged", entitlement });
     store.dispatch({ type: "updateChanged", update });
     // We now know the real sign-in/vault state — drop the "checking…" gate. Done before the (slower)
@@ -104,6 +107,7 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
     offLifecycle();
     offAuth();
     offVault();
+    offAccount();
     offEntitlement();
     offUpdate();
   };

@@ -1140,6 +1140,57 @@ button.cs-kv:hover { background: var(--surface-hover); }
 }
 .cs-linkbtn:hover { color: var(--text-primary); }
 
+/* ── First-run onboarding wizard — reuses the .cs-signin gate frame. ── */
+/* Progress dots: one per step still owed at mount, filled through the current one. */
+.cs-onb-dots { display: flex; gap: 7px; justify-content: center; }
+.cs-onb-dot { width: 7px; height: 7px; border-radius: var(--radius-pill); background: var(--border-subtle); }
+.cs-onb-dot--on { background: var(--accent); }
+/* Tour-pane pictogram: one icon in an accent-subtle circle — a visual anchor, not decoration-noise. */
+.cs-onb-pict {
+  width: 64px; height: 64px;
+  border-radius: var(--radius-pill);
+  margin: var(--space-1) auto 0;
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+  display: grid;
+  place-items: center;
+}
+/* Survey options as full-width ROWS, not floating chips — long labels ("Finished work and creative
+   projects") wrap-break centered pills into ragged lines; a stacked row never wraps weird, reads
+   faster, and gives a bigger tap target. Label left, check right. */
+.cs-qrows { display: flex; flex-direction: column; gap: var(--space-2); }
+.cs-qrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--control-sm);
+  padding: var(--space-2) var(--space-4);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--btn-secondary-bg);
+  color: var(--text-primary);
+  font: var(--type-button);
+  letter-spacing: var(--tracking-tight);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
+}
+.cs-qrow:hover { background: var(--btn-secondary-bg-hover); }
+.cs-qrow:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.cs-qrow--on {
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.cs-qrow--on:hover { background: var(--accent-subtle); }
+.cs-qrow .csf-icon { flex: none; }
+
+/* Sign-in-wrap agreement line under the sign-in card's actions. Quiet (tertiary), links accent. */
+.cs-signin-legal { font: var(--type-label); font-size: var(--text-xs); color: var(--text-tertiary); margin: 0; }
+.cs-signin-legal a { color: var(--accent-text); text-decoration: underline; }
+.cs-signin-legal a:hover { color: var(--text-primary); }
+
 /* ── subscribe plan picker (SubscribeModal — PADDLE.md multi-plan spec) ── */
 .cs-plans { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-2); margin: var(--space-3) 0; }
 .cs-plan {

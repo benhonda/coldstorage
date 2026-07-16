@@ -143,3 +143,48 @@ describe("VaultManager.provision", () => {
     expect(t.last().state).toBe("locked");
   });
 });
+
+describe("VaultManager.reissueRecoveryCode", () => {
+  const MINTED = {
+    ok: true,
+    ...BLOB,
+    recoveryCode: "ZX7WV-TS6RQ-PN5MK-JH4GF-ED3BA",
+    masterKey: "SAMEMK",
+  };
+
+  test("PUTs the fresh blob server-side BEFORE showing the code", async () => {
+    const calls: Array<[string, unknown]> = [];
+    const puts: KeyBlobFields[] = [];
+    const vault = new VaultManager(
+      makeClient({ reissueRecoveryCode: MINTED }, calls),
+      makeStore(),
+      makeKeyBlob(BLOB, puts),
+      () => Promise.resolve("idtok"),
+    );
+    const t = track(vault);
+
+    await vault.reissueRecoveryCode();
+    expect(calls).toEqual([["reissueRecoveryCode", undefined]]);
+    expect(puts).toHaveLength(1); // the server copy was replaced…
+    expect(t.last().recoveryCode).toBe("ZX7WV-TS6RQ-PN5MK-JH4GF-ED3BA"); // …and only then is the code shown
+  });
+
+  test("a failed PUT shows NO code (the old one must stay valid)", async () => {
+    const failing = {
+      get: () => Promise.resolve(BLOB),
+      put: () => Promise.reject(new Error("network down")),
+    } as unknown as KeyBlobClient;
+    const vault = new VaultManager(makeClient({ reissueRecoveryCode: MINTED }, []), makeStore(), failing, () => Promise.resolve("idtok"));
+    const t = track(vault);
+
+    await expect(vault.reissueRecoveryCode()).rejects.toThrow(/network down/);
+    expect(t.last().recoveryCode).toBeNull();
+  });
+
+  test("signed out → rejects without touching the daemon", async () => {
+    const calls: Array<[string, unknown]> = [];
+    const vault = new VaultManager(makeClient({}, calls), makeStore(), makeKeyBlob(null, []));
+    await expect(vault.reissueRecoveryCode()).rejects.toThrow(/sign in/);
+    expect(calls).toHaveLength(0);
+  });
+});

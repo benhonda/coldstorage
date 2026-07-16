@@ -4,7 +4,7 @@
  * real store correctly: initial fetch, refetch-on-(re)connect, and sourcesChanged → listSources.
  */
 import { describe, expect, test } from "bun:test";
-import type { AuthStatus, ColdstoreApi, ConnectionState, EntitlementStatus, ListedFile, Source, Status, UpdateStatus, VaultStatus } from "../../../shared/ipc.ts";
+import type { AccountStatus, AuthStatus, ColdstoreApi, ConnectionState, EntitlementStatus, ListedFile, Source, Status, UpdateStatus, VaultStatus } from "../../../shared/ipc.ts";
 import { connectController } from "./controller.ts";
 import { createStore } from "./store.ts";
 
@@ -29,6 +29,7 @@ const makeApi = (initial: ConnectionState) => {
   let lifeCb: ((s: ConnectionState) => void) | null = null;
   let authCb: ((s: AuthStatus) => void) | null = null;
   let vaultCb: ((s: VaultStatus) => void) | null = null;
+  let accountCb: ((s: AccountStatus) => void) | null = null;
   let entCb: ((s: EntitlementStatus) => void) | null = null;
   let updateCb: ((s: UpdateStatus) => void) | null = null;
 
@@ -52,7 +53,7 @@ const makeApi = (initial: ConnectionState) => {
     chooseFolder: () => Promise.resolve(null),
     getDownloadsDir: () => Promise.resolve("/tmp/Downloads"),
     pathForFile: () => "",
-    getAuthStatus: () => Promise.resolve({ configured: false, state: "signedOut", email: null, error: null, emailAvailable: false }),
+    getAuthStatus: () => Promise.resolve({ configured: false, state: "signedOut", email: null, name: null, error: null, emailAvailable: false }),
     signIn: () => Promise.resolve(),
     signOut: () => Promise.resolve(),
     startEmailSignIn: () => Promise.resolve(),
@@ -65,9 +66,19 @@ const makeApi = (initial: ConnectionState) => {
     getVaultStatus: () => Promise.resolve({ state: "locked", recoveryCode: null, error: null }),
     submitRecoveryCode: () => Promise.resolve(),
     acknowledgeRecoveryCode: () => Promise.resolve(),
+    reissueRecoveryCode: () => Promise.resolve(),
     onVaultStatus: (cb) => {
       vaultCb = cb;
       return () => (vaultCb = null);
+    },
+    getAccount: () => Promise.resolve({ known: false, displayName: null, onboarded: false, recoveryCodeConfirmed: false, error: null }),
+    setDisplayName: () => Promise.resolve(),
+    submitSurvey: () => Promise.resolve(),
+    completeOnboarding: () => Promise.resolve(),
+    confirmRecoveryCode: () => Promise.resolve(),
+    onAccount: (cb) => {
+      accountCb = cb;
+      return () => (accountCb = null);
     },
     getEntitlement: () => Promise.resolve({ known: false, active: false, checkingOut: false, quotaBytes: null, error: null }),
     subscribe: () => Promise.resolve(),
@@ -97,6 +108,7 @@ const makeApi = (initial: ConnectionState) => {
       eventCb?.(name as never, data as never),
     fireAuth: (s: AuthStatus) => authCb?.(s),
     fireVault: (s: VaultStatus) => vaultCb?.(s),
+    fireAccount: (s: AccountStatus) => accountCb?.(s),
     fireEntitlement: (s: EntitlementStatus) => entCb?.(s),
     fireUpdate: (s: UpdateStatus) => updateCb?.(s),
   };

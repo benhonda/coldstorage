@@ -262,6 +262,10 @@ export interface Commands {
    *   user typed; returns the MK to escrow.
    * - `lockVault` (sign-out): drop the MK; later deposits/restores fail until the next unlock. */
   mintVault: { params: Record<string, never>; result: MintVault };
+  /** Fresh one-time recovery code wrapping the session's LIVE MK (vault must be unlocked): the
+   * onboarding "didn't finish saving your code" re-show. Same result shape as `mintVault`; the old
+   * code is dead once the returned blob is PUT over the server copy. */
+  reissueRecoveryCode: { params: Record<string, never>; result: MintVault };
   unlockVault: { params: { masterKey: string }; result: Ack };
   // The control wire is [String:String] (like restore's `days`), so the key-blob's numeric opsLimit/
   // memLimit must go as strings — the daemon re-parses them with Int(...). Sending them as JSON numbers

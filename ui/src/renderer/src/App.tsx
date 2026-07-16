@@ -27,6 +27,7 @@ import { MyFilesView } from "./views/MyFilesView.tsx";
 import { SettingsView, type SettingsApi } from "./views/SettingsView.tsx";
 import { SignInView } from "./views/SignInView.tsx";
 import { RecoveryCodeShow, RecoveryCodeEnter, VaultGate } from "./views/RecoveryCodeView.tsx";
+import { OnboardingWizard, onboardingPending } from "./views/OnboardingWizard.tsx";
 import { SubscribeModal, type PaywallReason } from "./views/SubscribeModal.tsx";
 import { ChangePlanModal } from "./views/ChangePlanModal.tsx";
 import { AccountCard } from "./views/AccountCard.tsx";
@@ -116,6 +117,12 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   // a fetch failure just leaves the badge on its entitlement fallback — never an error surface here.
   const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
   const signedIn = state.auth.configured && state.auth.state === "signedIn";
+
+  // Session-local "the wizard's final Continue was clicked" — the fail-open half of onboarding: the
+  // server facts are what really end it (onboardingPending), but if the final write failed we still
+  // let the user through this session and re-derive next launch. Reset per account.
+  const [onboardingDone, setOnboardingDone] = useState(false);
+  useEffect(() => setOnboardingDone(false), [state.auth.email]);
   useEffect(() => {
     if (!signedIn) {
       setSubscription(null);
@@ -262,19 +269,43 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
     const v = state.vault;
     const email = state.auth.email;
     const signOut = (): void => void api.signOut();
-    // The one-time recovery code (fresh signup) takes precedence — show it before anything else.
+    // Existing account on a NEW device: recovery-code entry comes before anything else (the wizard is
+    // for first-run setup; a device handoff isn't one — though an unfinished account will still get
+    // the wizard's remaining steps right after this unlock).
+    if (v.state === "needsRecoveryCode") {
+      return <RecoveryCodeEnter email={email} onSubmit={(code) => api.submitRecoveryCode(code)} onSignOut={signOut} />;
+    }
+    // The first-run wizard — active while the account still owes onboarding facts (name, tour,
+    // confirmed recovery code). Fails OPEN: if the account fetch never landed (`known: false`), the
+    // wizard stays out of the way and the plain vault gates below carry the session.
+    if (!onboardingDone && onboardingPending(state.account)) {
+      return (
+        <OnboardingWizard
+          api={api}
+          auth={state.auth}
+          vault={v}
+          account={state.account}
+          quotaBytes={state.entitlement.quotaBytes}
+          subscribed={subscribed}
+          onSignOut={signOut}
+          onDone={() => setOnboardingDone(true)}
+        />
+      );
+    }
+    // Fallback (account facts unknown — e.g. the account server was unreachable while a fresh mint
+    // still produced a one-time code): the pre-wizard behavior, so the code is never lost unseen.
     if (v.recoveryCode) {
       return (
         <RecoveryCodeShow
           code={v.recoveryCode}
           email={email}
-          onAcknowledge={() => void api.acknowledgeRecoveryCode()}
+          onAcknowledge={() => {
+            void api.acknowledgeRecoveryCode();
+            void api.confirmRecoveryCode().catch(() => undefined);
+          }}
           onSignOut={signOut}
         />
       );
-    }
-    if (v.state === "needsRecoveryCode") {
-      return <RecoveryCodeEnter email={email} onSubmit={(code) => api.submitRecoveryCode(code)} onSignOut={signOut} />;
     }
     if (v.state !== "unlocked") {
       return <VaultGate state={v.state} error={v.error} email={email} onSignOut={signOut} />;
@@ -292,6 +323,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           signedIn && state.auth.email ? (
             <AccountCard
               email={state.auth.email}
+              displayName={state.account.displayName}
               subscription={subscription}
               active={state.entitlement.active}
               usedBytes={usedBytes}
@@ -346,6 +378,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           files={filesApi.files}
           virtualFolders={filesApi.virtualFolders}
           auth={state.auth}
+          account={state.account}
           entitlement={state.entitlement}
           onSubscribe={() => setPaywallReason("upgrade")}
           subscription={subscription}

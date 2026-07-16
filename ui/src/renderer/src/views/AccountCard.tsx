@@ -14,6 +14,7 @@ const shortDate = (iso: string): string =>
 
 export const AccountCard = ({
   email,
+  displayName,
   subscription,
   active,
   usedBytes,
@@ -21,6 +22,9 @@ export const AccountCard = ({
   onClick,
 }: {
   email: string;
+  /** The user-owned display name (onboarding) — the primary line + avatar initial when present;
+   * the card degrades to the email alone while it's still null. */
+  displayName: string | null;
   subscription: SubscriptionInfo | null;
   /** The entitlement flag (webhook-fed) — the badge's fallback when the plan is unknown. */
   active: boolean;
@@ -38,11 +42,11 @@ export const AccountCard = ({
   return (
     <button type="button" className="cs-account" onClick={onClick} title="Account & plan settings">
       <span className="cs-account-avatar" aria-hidden="true">
-        {email.charAt(0).toUpperCase()}
+        {(displayName ?? email).charAt(0).toUpperCase()}
       </span>
       <span className="cs-account-info">
         <span className="cs-account-head">
-          <span className="cs-account-email">{email}</span>
+          <span className="cs-account-email">{displayName ?? email}</span>
           {subscription?.cancelsAt ? (
             <Badge tone="warning">Ends {shortDate(subscription.cancelsAt)}</Badge>
           ) : subscription?.plan ? (

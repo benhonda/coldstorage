@@ -28,11 +28,17 @@ export const RecoveryCodeShow = ({
   email,
   onAcknowledge,
   onSignOut,
+  header,
+  intro,
 }: {
   code: string;
   email: string | null;
   onAcknowledge: () => void;
   onSignOut: () => void;
+  /** Optional slot above the card content — the onboarding wizard puts its progress dots here. */
+  header?: React.ReactNode;
+  /** Copy override for the intro line — the reissue re-show explains itself differently. */
+  intro?: string;
 }): React.JSX.Element => {
   const [copied, setCopied] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
@@ -44,11 +50,12 @@ export const RecoveryCodeShow = ({
   return (
     <div className="cs-signin">
       <div className="cs-signin-card">
+        {header}
         <AccountLine email={email} onSignOut={onSignOut} />
         <h1 className="cs-signin-title">Save your recovery code</h1>
         <p className="cs-signin-text">
-          This code is how you get back into your files on another computer. It&apos;s shown once and
-          can&apos;t be looked up later — keep it somewhere you won&apos;t lose it.
+          {intro ??
+            "This code is how you get back into your files on another computer. It's shown once and can't be looked up later — keep it somewhere you won't lose it."}
         </p>
         <code className="cs-recovery-code">{code}</code>
         <Button variant="secondary" full icon={copied ? "check" : "content_copy"} onClick={copy}>

@@ -10,6 +10,7 @@ export const registerVaultIpc = (vault: VaultManager): (() => void) => {
   ipcMain.handle(IPC.vaultStatus, () => vault.vaultStatus());
   ipcMain.handle(IPC.vaultSubmitRecoveryCode, (_e, code: string) => vault.submitRecoveryCode(code));
   ipcMain.handle(IPC.vaultAckRecoveryCode, () => vault.acknowledgeRecoveryCode());
+  ipcMain.handle(IPC.vaultReissueRecoveryCode, () => vault.reissueRecoveryCode());
 
   const offStatus = vault.onStatus((s) => {
     for (const win of BrowserWindow.getAllWindows()) win.webContents.send(IPC.vaultStatusChanged, s);
@@ -19,6 +20,7 @@ export const registerVaultIpc = (vault: VaultManager): (() => void) => {
     ipcMain.removeHandler(IPC.vaultStatus);
     ipcMain.removeHandler(IPC.vaultSubmitRecoveryCode);
     ipcMain.removeHandler(IPC.vaultAckRecoveryCode);
+    ipcMain.removeHandler(IPC.vaultReissueRecoveryCode);
     offStatus();
   };
 };

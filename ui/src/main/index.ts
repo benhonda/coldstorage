@@ -33,6 +33,8 @@ import { resolveAccountApiBaseUrl } from "./vault/config.ts";
 import { registerVaultIpc } from "./vault/ipc.ts";
 import { EntitlementManager } from "./entitlement/manager.ts";
 import { registerEntitlementIpc } from "./entitlement/ipc.ts";
+import { AccountManager } from "./account/manager.ts";
+import { registerAccountIpc } from "./account/ipc.ts";
 import { UpdateManager, type UpdaterPort } from "./updater/manager.ts";
 import { registerUpdateIpc } from "./updater/ipc.ts";
 
@@ -59,18 +61,23 @@ const disposeAuthIpc = registerAuthIpc(auth);
 // in userData/vault.json (safeStorage), fetches/stores the key-blob at the account backend, and drives
 // the daemon's mint/unlock/lock commands. Only ever exercised in multi-user mode (its provision runs
 // after a successful `authenticate`, which only happens when sign-in is configured).
+const accountApiBaseUrl = resolveAccountApiBaseUrl();
 const vault = new VaultManager(
   client,
   new VaultStore(join(app.getPath("userData"), "vault.json")),
-  new KeyBlobClient(resolveAccountApiBaseUrl()),
+  new KeyBlobClient(accountApiBaseUrl),
+  () => auth.getFreshIdToken(),
 );
 const disposeVaultIpc = registerVaultIpc(vault);
 
 // Subscription entitlement (billing gate on deposits). Shares the account backend + the signed-in ID
 // token; drives Paddle checkout in the system browser and polls until the webhook flips it active.
-const accountApiBaseUrl = resolveAccountApiBaseUrl();
 const entitlement = new EntitlementManager(accountApiBaseUrl, () => auth.getFreshIdToken());
 const disposeEntitlementIpc = registerEntitlementIpc(entitlement);
+
+// The account profile + onboarding facts (first-run wizard). Same backend, same token plumbing.
+const account = new AccountManager(accountApiBaseUrl, () => auth.getFreshIdToken());
+const disposeAccountIpc = registerAccountIpc(account);
 
 // ── Auto-update (PROD.md Phase 6) — packaged app only. electron-updater checks the GitHub Releases feed
 //    (electron-builder.yml `publish`), background-downloads a newer SIGNED + notarized build, and installs
@@ -179,8 +186,10 @@ const onProvisionFailure = (e: unknown): void => {
 };
 const offIdToken = auth.onIdToken((idToken) => {
   void provisionDaemon(idToken).catch(onProvisionFailure);
-  // Re-check the subscription on every fresh token (sign-in + refresh) — independent of the daemon.
+  // Re-check the subscription + account profile on every fresh token (sign-in + refresh) —
+  // independent of the daemon. The account refresh also records terms acceptance (sign-in-wrap).
   void entitlement.refresh();
+  void account.refresh();
 });
 // Whenever the entitlement changes (a checkout lands, a cancellation takes effect, the first fetch
 // resolves), re-push the quota so the daemon's ceiling tracks the plan the user is actually on.
@@ -205,6 +214,7 @@ const offAuthFocus = auth.onStatus((s) => {
     // daemon-may-be-down tolerance as relock — the daemon drops everything on exit anyway.
     void client.request("deauthenticate").catch((e: unknown) => console.error("deauthenticate failed:", e));
     entitlement.reset();
+    account.reset();
   }
   prevAuthState = s.state;
 });
@@ -285,6 +295,7 @@ app.on("will-quit", () => {
   disposeAuthIpc();
   disposeVaultIpc();
   disposeEntitlementIpc();
+  disposeAccountIpc();
   disposeUpdateIpc();
   offIdToken();
   offEntitlementQuota();
@@ -293,6 +304,7 @@ app.on("will-quit", () => {
   auth.dispose();
   vault.dispose();
   entitlement.dispose();
+  account.dispose();
   updater.dispose();
   client.close();
   stopDaemon(); // terminate the supervised child (no-op in dev)

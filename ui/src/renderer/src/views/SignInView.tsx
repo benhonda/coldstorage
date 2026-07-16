@@ -151,6 +151,22 @@ export const SignInView = ({ auth, onSignIn, onEmailStart, onEmailSubmit, onEmai
       <div className="cs-signin-card">
         <h1 className="cs-signin-title">ColdStorage</h1>
         {body()}
+        {/* Sign-in-wrap agreement: continuing IS the acceptance (recorded server-side, versioned —
+            see account-backend TERMS_VERSION). Shown on every step of the card so it always sits
+            with the action it governs; links open the site in the system browser. */}
+        {!checking && (
+          <p className="cs-signin-legal">
+            By continuing, you agree to the{" "}
+            <a href="https://www.coldstorage.sh/terms" target="_blank" rel="noreferrer">
+              Terms of Service
+            </a>{" "}
+            and{" "}
+            <a href="https://www.coldstorage.sh/privacy" target="_blank" rel="noreferrer">
+              Privacy Policy
+            </a>
+            .
+          </p>
+        )}
       </div>
     </div>
   );

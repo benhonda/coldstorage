@@ -404,8 +404,9 @@ public actor DaemonService {
     /// (`blobs/<identityId>`) — surfaced mainly for the UI/logs, since the daemon itself just reads
     /// `cognitoAuth.vaultPrefix` on the next run.
     private struct AuthDTO: Encodable { let ok: Bool; let identityId: String }
-    /// `mintVault`'s result (signup): the key-blob to store server-side (base64 ciphertexts + salts), the
-    /// one-time recovery code to show the user ONCE, and the freshly-minted MasterKey (base64) for the app
+    /// `mintVault`'s result (signup) — and `reissueRecoveryCode`'s, which returns the same shape with a
+    /// re-wrap of the EXISTING MK: the key-blob to store server-side (base64 ciphertexts + salts), the
+    /// one-time recovery code to show the user ONCE, and the MasterKey (base64) for the app
     /// to escrow in its per-device Keychain so day-to-day launches never re-prompt. All three cross only
     /// the local unix socket; the recovery code + MK never touch the network from here.
     private struct MintVaultDTO: Encodable {
@@ -767,6 +768,25 @@ public actor DaemonService {
             let mk = try ZeroKnowledgeKeys.unlockWithRecoveryCode(blob, recoveryCode: code)
             session.vaultKey.setMasterKey(mk)
             return AnyEncodable(UnlockVaultDTO(ok: true, masterKey: mk.withUnsafeBytes { Data($0).base64EncodedString() }))
+        case "reissueRecoveryCode":
+            // A fresh one-time recovery code for an ALREADY-UNLOCKED vault — the "you didn't finish saving
+            // your code" onboarding re-show (ui/DESIGN.md), and later any Settings-driven reissue. Wraps the
+            // session's LIVE MK (never a client-supplied key, so the new blob can't drift from what this
+            // session actually encrypts with); DEKs untouched. The old code is dead once the app PUTs the
+            // returned blob over the server copy. Locked vault ⇒ `.vaultLocked`, same as a deposit would.
+            let session = try requireSession("reissueRecoveryCode")
+            let mk = try session.vaultKey.userKEK()
+            let recoveryCode = try ZeroKnowledgeKeys.generateRecoveryCode()
+            let blob = try ZeroKnowledgeKeys.reissueRecoveryOnly(masterKey: mk, recoveryCode: recoveryCode)
+            return AnyEncodable(MintVaultDTO(
+                ok: true,
+                wrappedMKPassword: blob.wrappedMKPassword.base64EncodedString(),
+                saltPassword: blob.saltPassword.base64EncodedString(),
+                wrappedMKRecovery: blob.wrappedMKRecovery.base64EncodedString(),
+                saltRecovery: blob.saltRecovery.base64EncodedString(),
+                opsLimit: blob.opsLimit, memLimit: blob.memLimit,
+                recoveryCode: recoveryCode,
+                masterKey: mk.withUnsafeBytes { Data($0).base64EncodedString() }))
         case "lockVault":
             // Sign-out: drop the MK. Subsequent deposits/restores fail `.vaultLocked` until the next unlock.
             //

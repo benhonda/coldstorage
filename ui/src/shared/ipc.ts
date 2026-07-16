@@ -63,12 +63,27 @@ export const IPC = {
   authEmailCancel: "auth:emailCancel",
   /** push: the auth status changed, `(status)`. */
   authStatusChanged: "auth:statusChanged",
+  /** invoke: current {@link AccountStatus} — the onboarding facts + display name. */
+  accountStatus: "account:status",
+  /** invoke: set the display name `(name)` (trimmed, 1–64 chars; the wizard + Settings edit). */
+  accountSetDisplayName: "account:setDisplayName",
+  /** invoke: record the onboarding survey answers `(answers)` — skipped questions simply absent. */
+  accountSubmitSurvey: "account:submitSurvey",
+  /** invoke: the wizard finished — records `onboardedAt` server-side so it never re-runs. */
+  accountCompleteOnboarding: "account:completeOnboarding",
+  /** invoke: the user ticked "I've saved my recovery code" — records the fact server-side. */
+  accountConfirmRecoveryCode: "account:confirmRecoveryCode",
+  /** push: the account status changed, `(status)`. */
+  accountStatusChanged: "account:statusChanged",
   /** invoke: current {@link VaultStatus} — for first paint before any push arrives. */
   vaultStatus: "vault:status",
   /** invoke: submit a recovery code to unlock the vault on a new device. */
   vaultSubmitRecoveryCode: "vault:submitRecoveryCode",
   /** invoke: acknowledge the one-time recovery code was saved (clears it from status). */
   vaultAckRecoveryCode: "vault:ackRecoveryCode",
+  /** invoke: mint a FRESH one-time recovery code for the unlocked vault (the old one stops working) —
+   * the onboarding "didn't finish saving your code" re-show. Surfaces via {@link VaultStatus.recoveryCode}. */
+  vaultReissueRecoveryCode: "vault:reissueRecoveryCode",
   /** push: the vault status changed, `(status)`. */
   vaultStatusChanged: "vault:statusChanged",
   /** invoke: current {@link EntitlementStatus}. */
@@ -123,6 +138,10 @@ export interface AuthStatus {
   state: "restoring" | "signedOut" | "signingIn" | "signedIn";
   /** From the ID token's email claim — display only (verification happens daemon/backend-side). */
   email: string | null;
+  /** From the ID token's `name` claim (Google lane, via the IdP attribute mapping) — used ONLY to
+   * prefill the onboarding name step. The durable display name is {@link AccountStatus.displayName};
+   * this claim is Google-owned and re-overwritten at every federated sign-in. Null on the email lane. */
+  name: string | null;
   /** The most recent sign-in failure, for the sign-in screen. Null when none (including a plain
    * user-cancelled attempt, which isn't an error worth showing). */
   error: string | null;
@@ -147,6 +166,34 @@ export interface VaultStatus {
    * Never persisted, never re-derivable. Cleared as soon as the user acknowledges saving it. */
   recoveryCode: string | null;
   error: string | null;
+}
+
+/**
+ * The account profile + onboarding facts (backend `GET /account`) — what the first-run wizard's
+ * resume rules derive from. Server-side facts, never local flags: an interrupted wizard re-derives
+ * its position on the next launch from exactly this.
+ */
+export interface AccountStatus {
+  /** Whether the account has been fetched at least once for the signed-in user. */
+  known: boolean;
+  /** The user-owned display name (backend column — durable, never clobbered by Google). */
+  displayName: string | null;
+  /** The wizard (tour + questions) was completed on SOME device for this account. */
+  onboarded: boolean;
+  /** The user explicitly ticked "I've saved my recovery code" at some point. False + an unlocked
+   * vault ⇒ the app reissues a fresh code and re-shows it until confirmed. */
+  recoveryCodeConfirmed: boolean;
+  error: string | null;
+}
+
+/**
+ * Onboarding survey answers (both questions skippable — a skipped question is simply absent).
+ * Option ids mirror the backend catalog in `account-backend/src/survey.ts` (the validation SSOT);
+ * the wizard view owns the id → label copy.
+ */
+export interface SurveyAnswers {
+  keeping?: string[];
+  foundVia?: string;
 }
 
 /**
@@ -324,6 +371,18 @@ export interface ColdstoreApi {
   cancelEmailSignIn(): Promise<void>;
   /** Subscribe to sign-in status changes. */
   onAuthStatus(listener: (status: AuthStatus) => void): () => void;
+  /** Current account status (display name + onboarding facts) — for first paint before any push. */
+  getAccount(): Promise<AccountStatus>;
+  /** Set the display name (wizard + Settings edit). Rejects with a message on failure. */
+  setDisplayName(name: string): Promise<void>;
+  /** Record the onboarding survey answers. Skipped questions are simply absent. */
+  submitSurvey(answers: SurveyAnswers): Promise<void>;
+  /** The wizard finished — records the fact server-side so it never re-runs for this account. */
+  completeOnboarding(): Promise<void>;
+  /** The user ticked "I've saved my recovery code" — records the fact server-side. */
+  confirmRecoveryCode(): Promise<void>;
+  /** Subscribe to account status changes. */
+  onAccount(listener: (status: AccountStatus) => void): () => void;
   /** Current vault status — for first paint before any {@link onVaultStatus} push arrives. */
   getVaultStatus(): Promise<VaultStatus>;
   /** Submit a recovery code to unlock the vault on a new device. Rejects (with a message) on a wrong
@@ -331,6 +390,9 @@ export interface ColdstoreApi {
   submitRecoveryCode(code: string): Promise<void>;
   /** Acknowledge the one-time recovery code was saved — clears it from the vault status. */
   acknowledgeRecoveryCode(): Promise<void>;
+  /** Mint a FRESH one-time recovery code for the unlocked vault (the old code stops working the moment
+   * the new blob lands server-side). The code arrives via {@link onVaultStatus}, like a mint's. */
+  reissueRecoveryCode(): Promise<void>;
   /** Subscribe to vault status changes. */
   onVaultStatus(listener: (status: VaultStatus) => void): () => void;
   /** Current subscription entitlement — for first paint before any push arrives. */

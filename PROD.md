@@ -505,6 +505,19 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      fix: the runtime `PADDLE_API_KEY` needed Subscriptions **read+write**, not just read (mirrors the
      Transactions-scope lesson above). **Open: Mac-verify an existing subscriber actually changing plans**
      end-to-end (preview → confirm → webhook reflects the new plan).
+   - **5d — first-run onboarding wizard + display name + terms + survey: BUILT ✅ (2026-07-16; all
+     four layers green — TF plan 0/1/0, backend typecheck+45 tests, 134 Core tests, ui:typecheck+149
+     tests). NOT yet Mac-verified.** Name (Google-prefilled via new `cognito.tf` `profile` scope +
+     `name` mapping — **apply pending, Ben**) → 3-pane tour → recovery code (now a recorded fact,
+     with a daemon `reissueRecoveryCode` re-show for the "minted but never confirmed saved" hole) →
+     2 skippable survey questions → done. New backend `GET/PATCH /account` + 6 `accountsTable`
+     columns (schema-only — **push pending, Ben**: displayName/termsVersion/termsAcceptedAt/
+     onboardedAt/recoveryCodeConfirmedAt/survey); terms recorded sign-in-wrap (line on the sign-in
+     card → versioned server-side stamp). Resume rules derive from server facts only (no local
+     flags); per-account, so existing accounts (Ben's) see the wizard ONCE at next sign-in. Spec:
+     `ui/DESIGN.md` §Onboarding; screens signed off via the design artifact 2026-07-16.
+     *Gate (Ben, Mac):* fresh email-code signup walks the full 8-step wizard; a Google sign-in
+     arrives name-prefilled; quitting mid-wizard resumes at the right step; Settings edits the name.
 6. **Sign + notarize + ship — IN PROGRESS.** Developer ID signing + notarization + auto-update + download
    page. *Gate:* a notarized build launches Gatekeeper-clean on a non-dev Mac and self-updates. Scoped
    hardest-first into 6a/6b/6c/6d (2026-07-04; 6d added 2026-07-05):
