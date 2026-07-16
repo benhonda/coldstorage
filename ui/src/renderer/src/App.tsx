@@ -320,7 +320,6 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           files={filesApi.files}
           virtualFolders={filesApi.virtualFolders}
           filesApi={filesApi}
-          uploadProgress={state.run?.uploadProgress ?? {}}
           run={state.run}
           hasRoomFor={hasRoomFor}
           onDepositBlocked={() => (subscribed ? setOverCapacityOpen(true) : setPaywallReason("quotaReached"))}

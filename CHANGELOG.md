@@ -1,6 +1,9 @@
 # Changelog
 
-## 2026-07-15
+## 2026-07-16
+
+- feat(ui): **drag-to-move in My Files** — drag rows/tiles onto a folder or an ancestor breadcrumb crumb (same `movePath` op as "Move to…"), Finder semantics: multi-select drags together, spring-loading (hold ~1.5s over a folder/crumb → it opens under the drag), no-op put-back, and a private dataTransfer type so an internal move never triggers drop-to-upload. New `useMoveDrag.ts` + pure `canMoveInto`/`moveIsNoop` (tested).
+- fix(ui): **deposit progress no longer sits on "Preparing…" until a file is nearly done** — the daemon now reports a part's bytes the instant S3 confirms it (not at the lazy journal-drain), the banner shows an honest indeterminate "Preparing…" until the first part lands, and the ETA reads in coarse buckets (`etaLabel`) instead of a lurching stopwatch. Per-row upload bars drop to a quiet spinner (the byte/%/ETA detail lives in the banner).
 
 - feat: **storage quota enforced in the daemon, not just the app** — `UploadEngine.run(quota:)` refuses any blob that would cross the ceiling (`.overQuota` `BlobFailure`, retryable), so the periodic auto-run + non-UI clients can't slip past the UI gate. App pushes the number via a new `setQuota` command (on auth + every entitlement change); `QuotaEnforcementTests`.
 - fix(ui): **the deposit gate is size-aware and counts in-flight bytes** — `hasCapacity` → `bytesAvailable`/`hasCapacityFor`; "used" is now `bytesStored` + optimistic uploading rows, and a drop is weighed against its own size, so a burst of deposits (or one oversized drop) can't sail past a stored total that hasn't caught up. Uploading rows carry `size`; `overQuota` failures surface in the panel like permanent ones.

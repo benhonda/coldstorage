@@ -189,6 +189,18 @@ export const parentOf = (path: string): string => segments(path).slice(0, -1).jo
 export const isUnder = (path: string, dir: string): boolean =>
   dir === "" || path === dir || path.startsWith(`${dir}/`);
 
+/** Can `targets` legally land under `toDir`? A folder can't move into itself or its own subtree
+ * (mirrors the daemon's own `movePath` guard); files can go anywhere. Shared by the drag-to-move
+ * gesture and the "Move to…" picker so both offer exactly the same destinations. */
+export const canMoveInto = (targets: readonly RowTarget[], toDir: string): boolean =>
+  !targets.some((t) => t.kind === "folder" && isUnder(toDir, t.path));
+
+/** Would moving `targets` under `toDir` change nothing — every target already lives directly in it?
+ * A no-op drop isn't offered as a drag target (Finder-style: dropping back where it came from does
+ * nothing, so it never lights up). */
+export const moveIsNoop = (targets: readonly RowTarget[], toDir: string): boolean =>
+  targets.every((t) => parentOf(t.path) === toDir);
+
 /**
  * Rollup for a folder's aggregate status. `failed` wins first — a stuck upload inside is the thing that
  * won't resolve itself, so the folder flags it so the user can drill in and find it. Then active states

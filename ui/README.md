@@ -24,7 +24,12 @@ commands. Full plan + decisions: [`DESIGN.md`](./DESIGN.md). Orientation:
 > (the `deposit` command); request-a-copy issues the **real `restore` command**;
 > **move/rename/delete are real daemon commands** (`movePath`/`deletePath` — the UI applies an optimistic
 > edit, then reconciles to journal truth on the `filesChanged`-triggered `listFiles` refetch; proven over
-> the daemon socket, 2026-06-25). Only `newFolder` stays local-only (a virtual path with nothing to persist yet).
+> the daemon socket, 2026-06-25); `createFolder` persists an empty folder as a journal marker, so new
+> folders survive a reload. **Drag-to-move is in (2026-07-15/16)**: drag rows/tiles onto a folder or an
+> ancestor breadcrumb crumb — same `movePath` op as "Move to…", Finder semantics (multi-select drags
+> together, a folder can't drop into its own subtree, internal drags never trigger drop-to-upload) —
+> incl. **spring-loading**: hold over a folder/crumb and it pulses then opens under the drag; the blank
+> area then accepts the drop for the folder you sprang into.
 >
 > **Error states (UI side, 2026-06-24):** a failed upload shows ⚠ **couldn't upload** on the row (kept
 > visible), a **light-red error toast**, a persistent sidebar **"N couldn't upload"** → `FailuresPanel`
@@ -92,13 +97,24 @@ src/renderer/     The web app (React). No Node, no socket — talks to window.co
       model.test.ts   bun-test coverage of the tree derivation + reorganize math + fileFromJournal mapping.
       useFiles.ts     file state seeded from the daemon's listFiles (App maps state.files → ArchivedFile[]);
                       deposit() adds optimistic "uploading" rows carrying srcPath (for retry) + setDepositStatus()
-                      flips them uploading⇄failed; move/rename/delete apply an optimistic edit while the view
-                      fires the real movePath/deletePath (filesChanged → listFiles refetch reconciles); only
-                      newFolder stays local (virtual path); overlays live restore status.
+                      flips them uploading⇄failed; move/rename/delete/newFolder apply an optimistic edit while
+                      the view fires the real movePath/deletePath/createFolder (filesChanged → listFiles
+                      refetch reconciles); overlays live restore status.
                       (No pricing module: the daemon's rate card was deleted 2026-07-13 — a restore's price
                       has ONE source, the backend's POST /retrieval/quote. See RETRIEVAL.md.)
                       (Excludes are daemon-backed: Settings' chips read state.excludes + issue
                       addExclude/removeExclude — no local store.)
+      useMoveDrag.ts  drag-to-move (the Finder gesture) over the SAME movePath op as "Move to…": every
+                      row/tile drags (a selected row drags the whole selection), folder rows/tiles and
+                      ancestor breadcrumb crumbs accept — and SPRING-OPEN on a HOLD (~1.5s, pulsing cue),
+                      so any depth is reachable mid-drag; the blank area then stands in for the current
+                      dir (spring in, release anywhere — Finder's window drop); an explicit target also
+                      accepts a no-op PUT-BACK (drop onto the folder/crumb the items came from — lands
+                      politely, moves nothing, never reaches the daemon). Native HTML5 DnD on
+                      purpose — a private dataTransfer type discriminates an internal move from an OS
+                      file drag, so it can never trigger drop-to-upload (or vice versa). Legality (no
+                      folder into its own subtree, no no-op drop) is pure + tested in model.ts
+                      (canMoveInto/moveIsNoop).
       Breadcrumb, StatusBadge (StatusIcon: ✓ stored · ↑ uploading · ⚠ couldn't upload · ↓ transferring ·
                       saved-here), ContextMenu (incl. Retry upload on failed rows), InfoModal (Get info),
                       RequestBackModal (request-a-copy + native folder picker), GettingBackPanel (transfer

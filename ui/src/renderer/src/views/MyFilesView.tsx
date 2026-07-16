@@ -17,6 +17,7 @@ import {
   type Row,
   type RowTarget,
   baseName,
+  canMoveInto,
   childrenOf,
   filesUnder,
   formatBytes,
@@ -31,10 +32,9 @@ import {
   targetOf,
   totalBytes,
   withName,
-  type UploadProgress,
-  uploadPercent,
 } from "./files/model.ts";
 import { Breadcrumb } from "./files/Breadcrumb.tsx";
+import { type MoveDrag, isMoveDrag, useMoveDrag } from "./files/useMoveDrag.ts";
 import { CollisionModal } from "./files/CollisionModal.tsx";
 import { ContextMenu, type MenuEntry } from "./files/ContextMenu.tsx";
 import { FolderTree } from "./files/FolderTree.tsx";
@@ -50,9 +50,6 @@ interface Props {
   files: ArchivedFile[];
   virtualFolders: string[];
   filesApi: FilesApi;
-  /** Live per-file upload progress (store `run.uploadProgress`), keyed by daemon file id — drives the
-   * determinate bar on an uploading row. Empty between runs. */
-  uploadProgress: Record<string, UploadProgress>;
   /** The whole run, for the aggregate deposit banner at the top of the browser (files done, bytes,
    * throughput, ETA). `null` when no run has happened yet. */
   run: RunProgress | null;
@@ -77,7 +74,6 @@ export const MyFilesView = ({
   files,
   virtualFolders,
   filesApi,
-  uploadProgress,
   run,
   hasRoomFor,
   onDepositBlocked,
@@ -108,11 +104,6 @@ export const MyFilesView = ({
   const lastIndex = useRef<number | null>(null);
 
   const rows = useMemo(() => childrenOf(files, dir, virtualFolders), [files, dir, virtualFolders]);
-
-  // Determinate upload % for a file row (null → fall back to the indeterminate bar). Folders roll up many
-  // files, so they keep the indeterminate stripe rather than picking one file's %.
-  const uploadPct = (row: Row): number | null =>
-    row.type === "file" ? uploadPercent(uploadProgress, row.file) : null;
 
   // ── navigation resets transient state ──
   const goTo = (next: string): void => {
@@ -250,15 +241,34 @@ export const MyFilesView = ({
   const clearSelection = (): void => setSelected(new Set());
   // Move each target's subtree under `toDir`. Optimistic re-parent, then the REAL daemon `movePath` per
   // target ({ from: full path, to: toDir/basename }); `filesChanged` reconciles to journal truth.
-  const doMove = (toDir: string): void => {
-    if (moveTargets) {
-      const targets = moveTargets;
-      filesApi.move(targets, toDir);
-      exec(() => Promise.all(targets.map((t) => api.request("movePath", { from: t.path, to: reparent(t.path, toDir) }))));
+  // The one move op behind BOTH gestures — the "Move to…" picker and a drag-drop.
+  const moveTo = (targets: RowTarget[], toDir: string): void => {
+    // A target already living in `toDir` is a put-back — a legal drop (Finder accepts it) but not a
+    // move, so it never reaches the daemon (movePath from == to). All-put-back just settles the drag.
+    const moving = targets.filter((t) => parentOf(t.path) !== toDir);
+    if (moving.length > 0) {
+      filesApi.move(moving, toDir);
+      exec(() => Promise.all(moving.map((t) => api.request("movePath", { from: t.path, to: reparent(t.path, toDir) }))));
     }
     setSelected(new Set());
+  };
+  const doMove = (toDir: string): void => {
+    if (moveTargets) moveTo(moveTargets, toDir);
     setMoveTargets(null);
   };
+
+  // ── drag-to-move (the Finder gesture; see useMoveDrag for the native-DnD rationale) ──
+  const drag = useMoveDrag({
+    targetsFor: (row) => {
+      // Dragging a selected row carries the whole selection; dragging an unselected row re-anchors the
+      // selection to just it (Finder semantics — the drag acts on what looks picked up).
+      if (selected.has(rowKey(row))) return selectedRows.map(targetOf);
+      setSelected(new Set([rowKey(row)]));
+      return [targetOf(row)];
+    },
+    onMove: moveTo,
+    onOpen: goTo, // spring-load: holding over a folder/crumb drills in mid-drag
+  });
 
   // ── context menu ──
   const openMenu = (e: React.MouseEvent, row?: Row): void => {
@@ -461,6 +471,7 @@ export const MyFilesView = ({
     exec(async () => depositPaths(await api.chooseUploads()));
   };
   const onDrop = (e: React.DragEvent): void => {
+    if (isMoveDrag(e)) return; // an internal row drag is never an upload (folder targets consume it)
     e.preventDefault();
     dragDepth.current = 0;
     setDropActive(false);
@@ -531,19 +542,27 @@ export const MyFilesView = ({
   );
 
   return (
-    <Page title={<Breadcrumb dir={dir} onNavigate={goTo} />} actions={actions} fill>
+    <Page title={<Breadcrumb dir={dir} onNavigate={goTo} drag={drag} />} actions={actions} fill>
       <div
         className="cs-browser"
         onDragEnter={onDragEnter}
         onDragLeave={onDragLeave}
         onDragOver={(e) => {
+          // An internal row drag is only accepted by folder rows/tiles and crumbs (their own handlers);
+          // leaving default here shows the no-drop cursor over everything else — Finder-style.
+          if (isMoveDrag(e)) return;
           e.preventDefault();
           e.dataTransfer.dropEffect = "copy";
         }}
         onDrop={onDrop}
       >
+        {/* The blank area stands in for the CURRENT directory as a drop target (file rows bubble here
+            too — dropping on a file means "into this folder", like Finder). This is what makes a
+            spring-opened folder land the drop: spring in, release anywhere. A drop into the dir the
+            items already live in is refused (no-op), so nothing lights up before any spring. */}
         <div
-          className="cs-browser-main"
+          className={drag.isDropTarget(dir) ? "cs-browser-main cs-browser-main--drop" : "cs-browser-main"}
+          {...drag.background(dir)}
           onClick={(e) => e.target === e.currentTarget && clearSelection()}
           onContextMenu={(e) => e.target === e.currentTarget && openMenu(e)}
         >
@@ -557,7 +576,7 @@ export const MyFilesView = ({
               rows={rows}
               selected={selected}
               renaming={renaming}
-              uploadPct={uploadPct}
+              drag={drag}
               onRowClick={onRowClick}
               onRowOpen={openRow}
               onRowContext={openMenu}
@@ -570,6 +589,7 @@ export const MyFilesView = ({
             <Gallery
               rows={rows}
               selected={selected}
+              drag={drag}
               onRowClick={onRowClick}
               onRowOpen={openRow}
               onRowContext={openMenu}
@@ -685,7 +705,7 @@ const FileList = ({
   rows,
   selected,
   renaming,
-  uploadPct,
+  drag,
   onRowClick,
   onRowOpen,
   onRowContext,
@@ -697,7 +717,7 @@ const FileList = ({
   rows: Row[];
   selected: Set<string>;
   renaming: string | null;
-  uploadPct: (row: Row) => number | null;
+  drag: MoveDrag;
   onRowClick: (e: React.MouseEvent, row: Row, index: number) => void;
   onRowOpen: (row: Row) => void;
   /** Right-click handler — pass a row for a row menu, omit it for the empty-area (Upload / New folder) menu. */
@@ -748,13 +768,22 @@ const FileList = ({
       const key = rowKey(row);
       const isFolder = row.type === "folder";
       const status = rowStatus(row);
-      const pct = status === "uploading" ? uploadPct(row) : null;
+      const src = drag.source(row);
       return (
         <div
           key={key}
-          className="cs-fl-grid cs-fl-row"
+          className={
+            isFolder && drag.isDropTarget(row.path) ? "cs-fl-grid cs-fl-row cs-fl-row--drop" : "cs-fl-grid cs-fl-row"
+          }
           role="row"
           aria-selected={selected.has(key)}
+          draggable={renaming !== key}
+          onDragStart={(e) => {
+            cancelPress(); // a drag is a drag — never a hold-to-rename
+            src.onDragStart(e);
+          }}
+          onDragEnd={src.onDragEnd}
+          {...(isFolder ? drag.target(row.path) : {})}
           onClick={(e) => onRowClick(e, row, i)}
           onDoubleClick={() => onRowOpen(row)}
           onContextMenu={(e) => onRowContext(e, row)}
@@ -779,6 +808,10 @@ const FileList = ({
           <span className="cs-fl-size">{row.type === "folder" ? (row.empty ? "—" : formatBytes(row.size)) : formatBytes(row.file.size)}</span>
           <span className="cs-fl-date">{row.type === "file" ? formatDate(row.file.date) : `${row.count} items`}</span>
           <span className="cs-fl-actions">
+            {/* A quiet spinner rides beside the status icon while this row is in flight — just a "this one's
+                going" cue. The quantitative progress (bytes, %, ETA) lives in the deposit banner up top, so
+                the row doesn't repeat it; it only marks which file is uploading right now. */}
+            {status === "uploading" && <span className="cs-spinner" aria-hidden="true" />}
             {/* status icon by the ⋯: ✓ stored · ↑ uploading · ⚠ couldn't upload · ↓ transferring · saved-here.
                 An empty folder has nothing stored, so it shows no badge. */}
             {!isEmptyFolder(row) && <StatusIcon status={status} />}
@@ -792,19 +825,6 @@ const FileList = ({
               }}
             />
           </span>
-          {/* activity indicator under the row: a DETERMINATE 0–100 fill when the daemon reports per-file
-              byte progress (`uploadProgress`, large solo-blob files), else an INDETERMINATE stripe that
-              just says "working" (small batched files / before the first progress event). */}
-          {status === "uploading" &&
-            (pct === null ? (
-              <span className="cs-uploading-bar" aria-hidden="true" />
-            ) : (
-              <span
-                className="cs-uploading-bar cs-uploading-bar--determinate"
-                style={{ "--pct": `${pct}%` } as React.CSSProperties}
-                aria-hidden="true"
-              />
-            ))}
         </div>
       );
     })}
@@ -858,6 +878,7 @@ const RenameInput = ({
 const Gallery = ({
   rows,
   selected,
+  drag,
   onRowClick,
   onRowOpen,
   onRowContext,
@@ -865,6 +886,7 @@ const Gallery = ({
 }: {
   rows: Row[];
   selected: Set<string>;
+  drag: MoveDrag;
   onRowClick: (e: React.MouseEvent, row: Row, index: number) => void;
   onRowOpen: (row: Row) => void;
   /** Right-click handler — pass a tile's row for a row menu, omit it for the empty-area menu. */
@@ -879,12 +901,18 @@ const Gallery = ({
   >
     {rows.map((row, i) => {
       const key = rowKey(row);
+      const isFolder = row.type === "folder";
+      const src = drag.source(row);
       return (
         <button
           key={key}
           type="button"
-          className="cs-tile"
+          className={isFolder && drag.isDropTarget(row.path) ? "cs-tile cs-tile--drop" : "cs-tile"}
           aria-selected={selected.has(key)}
+          draggable
+          onDragStart={src.onDragStart}
+          onDragEnd={src.onDragEnd}
+          {...(isFolder ? drag.target(row.path) : {})}
           onClick={(e) => onRowClick(e, row, i)}
           onDoubleClick={() => onRowOpen(row)}
           onContextMenu={(e) => onRowContext(e, row)}
@@ -940,9 +968,8 @@ const MoveModal = ({
   onMove: (toDir: string) => void;
   onClose: () => void;
 }): React.JSX.Element => {
-  // Can't move a folder into itself or its own subtree.
-  const moved = new Set(targets.filter((t) => t.kind === "folder").map((t) => t.path));
-  const blocked = (p: string): boolean => [...moved].some((m) => p === m || p.startsWith(`${m}/`));
+  // Can't move a folder into itself or its own subtree — the same legality the drag gesture enforces.
+  const blocked = (p: string): boolean => !canMoveInto(targets, p);
   const [dest, setDest] = useState("");
   return (
     <Modal

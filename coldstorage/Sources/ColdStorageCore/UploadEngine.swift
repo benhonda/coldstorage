@@ -469,14 +469,22 @@ private actor PartShipper {
             // method — and therefore the strictly-sequential producer awaiting our `push` — so nothing piles up.
             while inFlight.count >= UploadTuning.maxPartsInFlight { try await drainOne() }
 
-            let key = blob.s3Key   // capture the Sendable bits; the Task must not touch actor state
+            let key = blob.s3Key   // capture the Sendable bits; the Task must not touch actor state synchronously
             let store = self.store
+            let partBytes = bytes.count
             let task = Task { () throws -> (etag: String, sha: String) in
                 // demo aid: slow parts so a kill/resume is easy to observe by hand
                 if let ms = ProcessInfo.processInfo.environment["COLDSTORE_PART_DELAY_MS"].flatMap(Int.init), ms > 0 {
                     try await Task.sleep(for: .milliseconds(ms))
                 }
-                return try await store.uploadPart(key: key, uploadId: uploadId, number: number, data: bytes)
+                let r = try await store.uploadPart(key: key, uploadId: uploadId, number: number, data: bytes)
+                // Announce the bytes the MOMENT S3 confirms this part — NOT when we later drain it for the journal.
+                // Draining is lazy: a blob with ≤ maxPartsInFlight parts never drains until `finish`, so reporting
+                // at drain time meant a whole small file uploaded in silence and then snapped to 100% at the end
+                // (the "stuck on Preparing… until the file was basically done" bug). Report on real completion;
+                // `drainOne` stays responsible only for the ordered journal write.
+                await self.reportShipped(number: number, bytes: partBytes)
+                return r
             }
             inFlight[number] = (task, bytes.count)
         }
@@ -487,9 +495,10 @@ private actor PartShipper {
     private func drainOne() async throws {
         guard let number = inFlight.keys.min(), let part = inFlight.removeValue(forKey: number) else { return }
         let r = try await part.task.value
+        // Progress was already reported by the task the instant its PUT confirmed — drain only performs the
+        // ORDERED journal write (`complete` reads the journal, so records must land lowest-number-first).
         try journal.recordPart(PartRow(blobId: blob.id, partNumber: number,
                                        eTag: r.etag, sha256: r.sha, status: .uploaded))
-        await reportShipped(number: number, bytes: part.bytes)
     }
 
     /// A part is done (uploaded or already on S3): advance the aggregate bar and the solo determinate bar.

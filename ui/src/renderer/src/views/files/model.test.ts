@@ -7,8 +7,11 @@ import { describe, expect, test } from "bun:test";
 import type { ListedFile } from "../../../../shared/ipc.ts";
 import {
   type ArchivedFile,
+  type RowTarget,
   allFolderPaths,
+  canMoveInto,
   childrenOf,
+  moveIsNoop,
   fileFromJournal,
   filesUnder,
   formatBytes,
@@ -240,5 +243,33 @@ describe("planDeposit (collision resolution)", () => {
     expect(rows.map((r) => r.relativePath).sort()).toEqual(["F/a 2.jpg", "F/a 3.jpg"]);
     expect(rows.find((r) => r.original === "F/a.jpg")?.relativePath).toBe("F/a 3.jpg");
     expect(conflicts).toEqual({ "F/a.jpg": "keepBoth" });
+  });
+});
+
+describe("move legality (drag-to-move + Move to…)", () => {
+  const folder = (path: string): RowTarget => ({ kind: "folder", path });
+  const fileT = (path: string): RowTarget => ({ kind: "file", id: path, path });
+
+  test("a folder can't move into itself or its own subtree", () => {
+    expect(canMoveInto([folder("Photos")], "Photos")).toBe(false);
+    expect(canMoveInto([folder("Photos")], "Photos/2019")).toBe(false);
+    expect(canMoveInto([folder("Photos")], "Backups")).toBe(true);
+    // a sibling that merely shares the name prefix is NOT the subtree
+    expect(canMoveInto([folder("Photos")], "Photos-old")).toBe(true);
+  });
+
+  test("one illegal folder blocks the whole multi-item drag", () => {
+    expect(canMoveInto([fileT("readme.txt"), folder("Photos")], "Photos/2019")).toBe(false);
+  });
+
+  test("files can move anywhere, including up to the root", () => {
+    expect(canMoveInto([fileT("Photos/2019/beach.jpg")], "")).toBe(true);
+  });
+
+  test("moveIsNoop flags a drop into the dir every target already lives in", () => {
+    expect(moveIsNoop([fileT("Photos/beach.jpg"), folder("Photos/2019")], "Photos")).toBe(true);
+    expect(moveIsNoop([fileT("Photos/beach.jpg")], "")).toBe(false); // root is a REAL move up
+    expect(moveIsNoop([fileT("readme.txt")], "")).toBe(true); // a root item dropped on the root crumb
+    expect(moveIsNoop([fileT("Photos/beach.jpg"), fileT("readme.txt")], "Photos")).toBe(false); // mixed parents → a real move
   });
 });

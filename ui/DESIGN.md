@@ -75,7 +75,8 @@ Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-cl
   factual line "encrypted on your Mac before upload" + a "Choose files or folders" CTA). Delete-empty-folder
   skips the confirm (no bytes at stake).
 - **Manipulation = standard Finder gestures:** rename (press-and-hold the name → inline edit, or the
-  menu — NOT double-click, which opens), new folder, drag-to-move, delete (⌫ → confirm). **Delete =
+  menu — NOT double-click, which opens), new folder, drag-to-move (spring-loaded: hold over a
+  folder/crumb and it opens under the drag), delete (⌫ → confirm). **Delete =
   instant tombstone** with honest copy: *"removes it from your files; it doesn't lower your cost for
   180 days"* (Deep Archive minimum-duration; never imply delete-to-save-money). Byte reclamation is
   deferred/rare (thaw-to-repack — backend concern, invisible here).

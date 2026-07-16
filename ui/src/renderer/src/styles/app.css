@@ -561,6 +561,13 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-crumb:hover { background: var(--surface-hover); color: var(--text-primary); }
 .cs-crumb--current { color: var(--text-primary); cursor: default; }
 .cs-crumb--current:hover { background: transparent; }
+/* drag-to-move: this ancestor crumb is the hovered, legal destination (drag up/out, Finder-style). */
+.cs-crumb--drop {
+  background: var(--accent-subtle);
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+  color: var(--text-primary);
+}
 .cs-crumb-sep { color: var(--text-tertiary); flex: 0 0 auto; }
 
 /* ── segmented list/grid toggle ─────────────────────────────────── */
@@ -639,40 +646,25 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-fl-row[aria-selected="true"] .cs-fl-more { opacity: 1; }
 .cs-fl-more:focus-visible { opacity: 1; }
 
-/* indeterminate upload activity bar — a looping stripe along the row's bottom edge (NOT a 0–100 fill;
-   we have no real per-file % yet, so this conveys "working" without faking a determinate value) */
+/* uploading-row cue — a small, quiet spinner that rides beside the status icon while a row is in flight.
+   The row used to grow a full-width animated stripe along its bottom edge; the deposit banner up top now
+   owns the quantitative progress (bytes / % / ETA), so the row only needs to mark which file is going. */
 .cs-fl-row { position: relative; }
-.cs-uploading-bar {
-  position: absolute;
-  left: var(--cs-pad-x, 0);
-  right: var(--cs-pad-x, 0);
-  bottom: 0;
-  height: 2px;
-  overflow: hidden;
-  border-radius: var(--radius-pill);
-  background: var(--accent-subtle);
+.cs-spinner {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 1.5px solid var(--accent-subtle);
+  border-top-color: var(--accent);
+  animation: cs-spin 0.7s linear infinite;
 }
-.cs-uploading-bar::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 35%;
-  border-radius: inherit;
-  background: var(--accent);
-  animation: cs-indeterminate 1.1s var(--ease-in-out, ease-in-out) infinite;
+@keyframes cs-spin {
+  to { transform: rotate(360deg); }
 }
-@keyframes cs-indeterminate {
-  from { left: -35%; }
-  to { left: 100%; }
-}
-/* determinate variant — a real 0–100 fill, driven by the daemon's per-file `uploadProgress`. Same track;
-   the stripe becomes a left-anchored fill whose width is the live percent (--pct). */
-.cs-uploading-bar--determinate::after {
-  left: 0;
-  width: var(--pct, 0%);
-  animation: none;
-  transition: width 0.25s var(--ease-out, ease-out);
+@media (prefers-reduced-motion: reduce) {
+  /* no whirl for motion-sensitive users — leave a static accent tick that still reads as "working". */
+  .cs-spinner { animation: none; }
 }
 
 /* small colored status icon — colors kept from the badges (accent / amber / green) */
@@ -710,6 +702,14 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-fl-row:nth-child(even) { background: var(--surface-raised); }
 .cs-fl-row:hover { background: var(--surface-hover); }
 .cs-fl-row[aria-selected="true"] { background: var(--accent-subtle); }
+/* drag-to-move: this folder row is the hovered, legal destination. Dashed accent = "drops in here",
+   the same visual language as the .cs-drop upload overlay. Inset outline so the full-bleed row doesn't
+   shift layout. Declared after hover/selected so the drop state wins while dragging over it. */
+.cs-fl-row--drop {
+  background: var(--accent-subtle);
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
 .cs-fl-name { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
 .cs-fl-name .csf-icon { color: var(--text-secondary); flex: 0 0 auto; }
 .cs-fl-folder .csf-icon { color: var(--accent); }
@@ -754,6 +754,11 @@ button.cs-kv:hover { background: var(--surface-hover); }
 }
 .cs-tile:hover { box-shadow: var(--shadow-card); }
 .cs-tile[aria-selected="true"] { outline: 2px solid var(--accent); }
+/* drag-to-move: this folder tile is the hovered, legal destination (dashed = "drops in here"). */
+.cs-tile--drop {
+  background: var(--accent-subtle);
+  outline: 2px dashed var(--accent);
+}
 .cs-tile-thumb {
   aspect-ratio: 4 / 3;
   display: grid;
@@ -803,6 +808,41 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-drop-inner { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); color: var(--accent-text); }
 .cs-drop-inner .csf-icon { font-size: 40px; }
 .cs-drop-title { font: var(--type-card-title); }
+
+/* ── drag-to-move: spring-load pulse + background (current-dir) drop ─
+   While a drag HOLDS over a folder row/tile/crumb, its dashed outline breathes — the Finder cue that
+   the target is about to spring open under the drag (useMoveDrag opens it after SPRING_OPEN_MS ≈ 1.5s).
+   The animation-delay keeps a brief pass-over on the steady highlight only; the pulse kicks in about
+   a third into the hold and loops until the open fires, so no duration needs to stay in sync with the
+   JS timer. The background drop highlight does NOT pulse: dropping there is immediate — nothing opens. */
+@keyframes cs-spring-pulse {
+  50% { outline-color: color-mix(in srgb, var(--accent) 25%, transparent); }
+}
+.cs-fl-row--drop,
+.cs-tile--drop,
+.cs-crumb--drop { animation: cs-spring-pulse 0.45s ease-in-out 0.5s infinite; }
+/* the whole list/gallery card is the drop target when the blank area = "into this folder" is legal
+   (i.e. after a spring-open) — Finder's window highlight, drawn on the card, not the padded shell */
+.cs-browser-main--drop .cs-filelist,
+.cs-browser-main--drop .cs-gallery {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+
+/* ── drag-to-move count badge ───────────────────────────────────────
+   The drag image for a multi-item row drag ("3 items"), snapshotted by setDragImage. Parked offscreen —
+   it must be in the DOM and rendered for the snapshot, then useMoveDrag removes it on the next tick. */
+.cs-drag-badge {
+  position: fixed;
+  top: -1000px;
+  left: -1000px;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--accent-on);
+  font: var(--type-label);
+  white-space: nowrap;
+}
 
 /* ── first-run / empty state — the WHOLE area is one big clickable drop zone ─
    Same footprint the file list occupies (so it never looks like a stray card), framed by a brand-tinted
