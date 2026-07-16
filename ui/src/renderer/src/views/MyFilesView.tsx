@@ -106,7 +106,6 @@ export const MyFilesView = ({
 
   const dragDepth = useRef(0);
   const lastIndex = useRef<number | null>(null);
-  const fileInput = useRef<HTMLInputElement>(null);
 
   const rows = useMemo(() => childrenOf(files, dir, virtualFolders), [files, dir, virtualFolders]);
 
@@ -295,7 +294,7 @@ export const MyFilesView = ({
           { label: "Delete", icon: "delete", danger: true, onClick: () => requestDelete(targets) },
         ]
       : [
-          { label: "Upload files…", icon: "upload", onClick: () => fileInput.current?.click() },
+          { label: "Upload files or folders…", icon: "upload", onClick: addUploads },
           { label: "Add photos…", icon: "photo_library", onClick: addPhotos },
           { label: "New folder", icon: "create_new_folder", onClick: doNewFolder },
         ];
@@ -322,8 +321,7 @@ export const MyFilesView = ({
     kind: "files" | "photos";
     wire: string; // newline-joined absolute paths (files) or Photos localIdentifiers (photos)
     dest: string;
-    srcByBase: Map<string, string>; // basename → local srcPath (files only) so a failed upload can retry
-    sizeByBase: Map<string, number>; // basename → byte size (files only; empty for photos) for the quota gate
+    srcByPath: Map<string, string>; // previewed vault path → local srcPath (top-level picks only) so a failed upload can retry
     fallback: string[]; // target relativePaths to assume if preview is unavailable
   }): Promise<void> => {
     // Quota gate, pass 1 (Phase 5c): if the vault is already full, bail to the paywall before any
@@ -340,7 +338,7 @@ export const MyFilesView = ({
         opts.kind === "files" ? { dest: opts.dest, src: opts.wire } : { dest: opts.dest, assetIds: opts.wire },
       );
     } catch {
-      preview = opts.fallback.map((relativePath) => ({ relativePath, exists: false }));
+      preview = opts.fallback.map((relativePath) => ({ relativePath, size: 0, exists: false }));
     }
     const collisions = preview.filter((p) => p.exists).map((p) => p.relativePath);
     let policies: Record<string, ConflictPolicy> = {};
@@ -350,11 +348,15 @@ export const MyFilesView = ({
       policies = chosen;
     }
     const { rows, conflicts } = planDeposit(preview, policies, new Set(files.map((f) => f.relativePath)));
-    // Quota gate, pass 2: now we know which files actually land (post-collision-resolution) and — for a
-    // file drop — how big they are, so refuse the drop if it would overflow the quota. Bytes are 0 for a
-    // photo pick (unknown until the daemon resolves it), so photo deposits fall back to the coarse pass-1
-    // guard; the daemon's usage read catches them up on the next refresh.
-    const incomingBytes = rows.reduce((sum, r) => sum + (opts.sizeByBase.get(baseName(r.original)) ?? 0), 0);
+    // Byte size per landing row, sourced from the daemon's preview (`original` is the previewed path each
+    // row keys off). This is the SSOT for "how big is this deposit" — files, whole folders, and photos
+    // alike — so the quota gate below is exact regardless of how the items were chosen. 0 only when the
+    // preview couldn't run (fallback) or a photo's size isn't resolvable yet; the daemon's usage read
+    // reconciles those on the next refresh.
+    const sizeByOriginal = new Map(preview.map((p) => [p.relativePath, p.size]));
+    // Quota gate, pass 2: now we know which files actually land (post-collision-resolution) and how big
+    // they are, so refuse the drop if it would overflow the quota.
+    const incomingBytes = rows.reduce((sum, r) => sum + (sizeByOriginal.get(r.original) ?? 0), 0);
     if (!hasRoomFor(incomingBytes)) {
       onDepositBlocked();
       return;
@@ -363,9 +365,8 @@ export const MyFilesView = ({
     // Each carries its srcPath (for retry) and byte size (for the in-flight half of the quota gate).
     const optimisticIds = filesApi.deposit(
       rows.map((r) => {
-        const base = baseName(r.original);
-        const srcPath = opts.srcByBase.get(base);
-        const size = opts.sizeByBase.get(base);
+        const srcPath = opts.srcByPath.get(r.original);
+        const size = sizeByOriginal.get(r.original);
         return { name: r.relativePath, ...(srcPath ? { srcPath } : {}), ...(size != null ? { size } : {}) };
       }),
       "",
@@ -382,32 +383,39 @@ export const MyFilesView = ({
     });
   };
 
-  // ── deposit (hero) — REAL drop-to-upload ──
-  const depositFiles = (dropped: File[]): void => {
-    if (dropped.length === 0) return;
-    // `File.size` is the plaintext byte count — the figure the quota gate compares against `bytesStored`
-    // (ciphertext is within a rounding error of it for the free-tier check; the exact billed size is the
-    // daemon's S3 usage read, which reconciles once the run lands).
-    const items = dropped.map((f) => ({ name: f.name, srcPath: api.pathForFile(f), size: f.size }));
-    const paths = items.map((i) => i.srcPath).filter(Boolean);
-    if (paths.length === 0) {
-      // Couldn't resolve any local paths → show ⚠ rows rather than vanishing.
-      const ids = filesApi.deposit(items.map((i) => ({ name: i.name })), dir);
-      filesApi.setDepositStatus(ids, "failed");
-      return;
-    }
-    const srcByBase = new Map(items.filter((i) => i.srcPath).map((i) => [i.name, i.srcPath]));
-    const sizeByBase = new Map(items.map((i) => [i.name, i.size]));
+  // ── deposit (hero) — REAL upload of chosen paths ──
+  // The one deposit path for BOTH the native "Add" picker and a drag-drop: absolute file/folder paths in,
+  // the daemon walks any directory among them (structure preserved) and the preview prices every item for
+  // the quota gate (so no per-file size is needed here). `srcByPath` maps each TOP-LEVEL pick's landing path
+  // → its source, so a failed loose-file upload can retry; a folder's inner files aren't individually
+  // retryable (re-add the folder). Keyed by the vault path (`dir`/basename) the row will report as
+  // `original`, matching how the size map is keyed — one lookup key for both.
+  const depositPaths = (paths: string[]): void => {
+    if (paths.length === 0) return;
+    const srcByPath = new Map(paths.map((p) => [joinPath(dir, baseName(p)), p]));
     exec(() =>
       runDeposit({
         kind: "files",
         wire: paths.join("\n"),
         dest: dir,
-        srcByBase,
-        sizeByBase,
-        fallback: items.map((i) => joinPath(dir, i.name)),
+        srcByPath,
+        fallback: paths.map((p) => joinPath(dir, baseName(p))), // coarse rows if the preview can't run
       }),
     );
+  };
+  // Drag-drop → resolve each dropped File to its absolute path (in the preload; Electron 32+ dropped
+  // `File.path`), then deposit exactly like a picker selection. A dropped folder yields its directory path,
+  // which the daemon walks.
+  const depositFiles = (dropped: File[]): void => {
+    if (dropped.length === 0) return;
+    const paths = dropped.map((f) => api.pathForFile(f)).filter(Boolean);
+    if (paths.length === 0) {
+      // Couldn't resolve any local paths → show ⚠ rows rather than vanishing.
+      const ids = filesApi.deposit(dropped.map((f) => ({ name: f.name })), dir);
+      filesApi.setDepositStatus(ids, "failed");
+      return;
+    }
+    depositPaths(paths);
   };
   // Retry a failed upload: flip the row back to uploading and re-issue its deposit (we kept its srcPath).
   // No preview/prompt — a retry targets the same path it already owns (overwrite-self is a no-op upsert).
@@ -440,11 +448,17 @@ export const MyFilesView = ({
         kind: "photos",
         wire: picks.map((p) => p.id).join("\n"),
         dest: dir,
-        srcByBase: new Map(),
-        sizeByBase: new Map(), // photo sizes aren't known until the daemon resolves them — see runDeposit pass 2
+        srcByPath: new Map(), // photos have no local source path (the daemon resolves them from the library)
         fallback: picks.map((p) => joinPath(dir, p.name)),
       });
     });
+  };
+  // ── add (native files-AND-folders picker) — the primary deposit gesture ──
+  // One native panel selects any mix of files and folders, multi-select (the web <input> can't offer
+  // folders at all). Whatever's picked flows through the same deposit path as a drag-drop; the daemon walks
+  // any chosen directory and preserves its structure. Cancel / pick-nothing is a no-op (resolves []).
+  const addUploads = (): void => {
+    exec(async () => depositPaths(await api.chooseUploads()));
   };
   const onDrop = (e: React.DragEvent): void => {
     e.preventDefault();
@@ -510,7 +524,7 @@ export const MyFilesView = ({
         </button>
       </div>
       <IconButton icon="create_new_folder" label="New folder" onClick={doNewFolder} />
-      <Button variant="primary" icon="add" onClick={() => fileInput.current?.click()}>
+      <Button variant="primary" icon="add" onClick={addUploads}>
         Add
       </Button>
     </>
@@ -518,16 +532,6 @@ export const MyFilesView = ({
 
   return (
     <Page title={<Breadcrumb dir={dir} onNavigate={goTo} />} actions={actions} fill>
-      <input
-        ref={fileInput}
-        type="file"
-        multiple
-        hidden
-        onChange={(e) => {
-          depositFiles([...(e.target.files ?? [])]);
-          e.target.value = "";
-        }}
-      />
       <div
         className="cs-browser"
         onDragEnter={onDragEnter}
@@ -547,7 +551,7 @@ export const MyFilesView = ({
           {/* FirstRun (the drop-zone hero) is the onboarding state for a genuinely empty vault — root with
               nothing in it. A drilled-into empty folder just shows the empty file list, not the hero. */}
           {rows.length === 0 && dir === "" ? (
-            <FirstRun onChoose={() => fileInput.current?.click()} onContextMenu={openMenu} />
+            <FirstRun onChoose={addUploads} onContextMenu={openMenu} />
           ) : view === "list" ? (
             <FileList
               rows={rows}
@@ -916,7 +920,7 @@ const FirstRun = ({
     </span>
     <span className="cs-btn cs-btn--primary cs-dropzone-cta">
       <Icon name="add" size={20} />
-      Choose files
+      Choose files or folders
     </span>
   </button>
 );

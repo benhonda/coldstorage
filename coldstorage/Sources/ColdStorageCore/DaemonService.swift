@@ -461,7 +461,7 @@ public actor DaemonService {
     }
     /// One resolved target of a `previewDeposit` dry-run: the vault path the item WOULD land at, and whether
     /// a live row already sits there (a collision the UI prompts on).
-    private struct DepositPreviewItemDTO: Encodable { let relativePath: String; let exists: Bool }
+    private struct DepositPreviewItemDTO: Encodable { let relativePath: String; let size: Int; let exists: Bool }
     /// One idempotent restore step's outcome. `state` ∈ restored | thawRequested | thawInProgress —
     /// re-issue `restore` until it's `restored`. `out` is set only when bytes landed; `tier`/`typicalWait`
     /// only while thawing, so the UI can show the quoted wait.
@@ -651,19 +651,19 @@ public actor DaemonService {
             // the drop — and the preview throws all of that away, keeping only the names. On a 1000-file
             // deposit that read is minutes of work in front of a UI that gives up after 10 seconds, so the
             // whole thing looked hung before a single row appeared. The preview is now a stat-only walk.
-            let paths: [String]
+            let previews: [DepositPreviewPath]
             if let raw = p["src"], !raw.isEmpty {
                 let entries = raw.split(separator: "\n").map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: String($0)), destDir: dest) }
-                paths = try await ExplicitPathsSource(entries: entries, exclude: excludeMatcher(session)).previewPaths()
+                previews = try await ExplicitPathsSource(entries: entries, exclude: excludeMatcher(session)).previewPaths()
             } else if let raw = p["assetIds"], !raw.isEmpty {
                 guard let resolver = photoResolver else { throw ColdStorageError.invalidRequest("previewDeposit: Photos ingest is unavailable on this platform") }
-                paths = try await PhotoDepositSource(resolver: resolver, assetIds: raw.split(separator: "\n").map(String.init),
-                                                     destDir: dest, scratchDir: session.scratchDir).previewPaths()
+                previews = try await PhotoDepositSource(resolver: resolver, assetIds: raw.split(separator: "\n").map(String.init),
+                                                        destDir: dest, scratchDir: session.scratchDir).previewPaths()
             } else {
                 throw ColdStorageError.invalidRequest("previewDeposit requires params.src (paths) or params.assetIds")
             }
             let live = try session.journal.livePaths()
-            return AnyEncodable(paths.map { DepositPreviewItemDTO(relativePath: $0, exists: live.contains($0)) })
+            return AnyEncodable(previews.map { DepositPreviewItemDTO(relativePath: $0.relativePath, size: $0.size, exists: live.contains($0.relativePath)) })
         case "movePath":
             let session = try requireSession("movePath")
             // Reorganize: relocate the subtree at `from` → `to` (a file/folder move OR rename). A cheap

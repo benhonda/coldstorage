@@ -1,5 +1,15 @@
 import Foundation
 
+/// One resolved target of a deposit dry-run: where the dropped/picked item WOULD land, plus its size in
+/// bytes. The size is a free stat field from the placement walk (no bytes are read), and it lets the UI
+/// run its pre-flight quota check against the EXACT incoming size — for a folder deposit as much as a loose
+/// file — instead of guessing. `exists` (the collision flag) is added at the daemon seam against the journal.
+public struct DepositPreviewPath: Sendable {
+    public let relativePath: String
+    public let size: Int
+    public init(relativePath: String, size: Int) { self.relativePath = relativePath; self.size = size }
+}
+
 /// Ad-hoc ingest of explicitly chosen paths — the UI's drag-drop / "Choose files" **deposit**, NOT a
 /// watched source. Each entry pairs an absolute path with the destination folder the user dropped it into
 /// (a `relativePath` prefix; "" = the vault root). A dropped directory is walked (its contents placed
@@ -62,19 +72,22 @@ public struct ExplicitPathsSource: IngestSource {
     ///
     /// It reuses the SAME placement arithmetic as `enumerate` (`LocalDirSource.walk` + `join`), so a preview
     /// can never disagree with the deposit it is previewing.
-    public func previewPaths() async throws -> [String] {
+    public func previewPaths() async throws -> [DepositPreviewPath] {
         let fm = FileManager.default
-        var paths: [String] = []
+        var paths: [DepositPreviewPath] = []
         for e in entries {
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: e.url.path, isDirectory: &isDir) else { continue }
             if isDir.boolValue {
+                // The walk already stats `size` (a byte count, no content read) — carry it through so the
+                // preview can price the deposit, rather than throwing it away and re-statting later.
                 let base = e.url.lastPathComponent
                 for entry in try LocalDirSource(root: e.url, exclude: exclude).walk() {
-                    paths.append(Self.join(e.destDir, "\(base)/\(entry.relativePath)"))
+                    paths.append(DepositPreviewPath(relativePath: Self.join(e.destDir, "\(base)/\(entry.relativePath)"), size: entry.size))
                 }
             } else {
-                paths.append(Self.join(e.destDir, e.url.lastPathComponent))
+                let size = (try? e.url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                paths.append(DepositPreviewPath(relativePath: Self.join(e.destDir, e.url.lastPathComponent), size: size))
             }
         }
         return paths

@@ -41,6 +41,8 @@ export const IPC = {
   lifecycle: "daemon:lifecycle",
   /** invoke: open the native folder picker; resolves to the chosen path or null. */
   chooseFolder: "dialog:chooseFolder",
+  /** invoke: open the native files-AND-folders upload picker (multi-select); resolves to the chosen paths (or [] if cancelled). */
+  chooseUploads: "dialog:chooseUploads",
   /** invoke: the OS Downloads directory (default save destination). */
   downloadsDir: "dialog:downloadsDir",
   /** invoke: present the native Photos picker; resolves to the picked asset ids (or [] if cancelled). */
@@ -286,6 +288,13 @@ export interface ColdstoreApi {
   /** Open the native folder picker (a window sheet on macOS). Resolves to the chosen absolute path, or
    * null if cancelled. `defaultPath` seeds where it opens. */
   chooseFolder(defaultPath?: string): Promise<string | null>;
+  /** Open the native upload picker (a window sheet on macOS): select any mix of files AND folders,
+   * multi-select. The deposit pipeline walks each chosen directory and re-bases its tree under the current
+   * folder, so folder structure is preserved. Resolves to the chosen absolute paths, or [] if cancelled.
+   * `defaultPath` seeds where it opens. This is the deposit picker — a native panel, NOT the web `<input>`
+   * (which can't offer folders at all). Distinct from {@link chooseFolder} (single dir, for a
+   * watched-folder / restore destination). */
+  chooseUploads(defaultPath?: string): Promise<string[]>;
   /** The OS Downloads directory (absolute) — the default save destination for a requested copy. */
   getDownloadsDir(): Promise<string>;
   /** Present the native macOS Photos picker (option B) and resolve to the picked photos ({id, name}), or []

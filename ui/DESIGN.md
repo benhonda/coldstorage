@@ -72,7 +72,7 @@ Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-cl
   modal, labeled **"Request a copy…"** (*request* signals not-instant); the dialog's confirm is
   **"Start transfer"** and owns the "ready in ~a day" detail.
 - **Empty/first-run:** a bounded, clickable drop-zone card (*"Drop files or folders to upload"* + one
-  factual line "encrypted on your Mac before upload" + a "Choose files" CTA). Delete-empty-folder
+  factual line "encrypted on your Mac before upload" + a "Choose files or folders" CTA). Delete-empty-folder
   skips the confirm (no bytes at stake).
 - **Manipulation = standard Finder gestures:** rename (press-and-hold the name → inline edit, or the
   menu — NOT double-click, which opens), new folder, drag-to-move, delete (⌫ → confirm). **Delete =
@@ -81,7 +81,11 @@ Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-cl
   deferred/rare (thaw-to-repack — backend concern, invisible here).
 
 ## Deposit flow (the hero)
-1. **Drop** anywhere (or ⊕ Add) → *"Drop to upload"*; items land in the currently-viewed folder.
+1. **Drop** anywhere (or ⊕ Add) → *"Drop to upload"*; items land in the currently-viewed folder. The ⊕ Add
+   button opens a **native open panel that selects any mix of files AND folders, multi-select** (`openFile`
+   + `openDirectory` + `multiSelections` — a web `<input>` can't offer folders at all, which is why the
+   deposit picker is native, not an `<input>`). A chosen folder is walked by the daemon and its tree is
+   preserved under the current folder. Photos are a separate picker (the Photos library isn't the filesystem).
 2. **Encrypt + upload** — daemon-owned, non-blocking: browse/close the app, it continues. The
    **deposit banner** (`DepositProgress`) at the top of the browser is the aggregate: a determinate bar
    driven by the daemon's `runProgress` (bytes uploaded / total across every file and blob), the file

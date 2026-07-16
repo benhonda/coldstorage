@@ -40,22 +40,24 @@ import Foundation
         // Reading the bytes is impossible…
         await #expect(throws: (any Error).self) { try await source.enumerate() }
         // …yet the preview answers fine, because it only ever stats.
-        let paths = try await source.previewPaths()
+        let paths = try await source.previewPaths().map(\.relativePath)
         #expect(paths.sorted() == ["Photos/Trip/a.txt", "Photos/Trip/b.txt", "Photos/Trip/nested/c.txt"])
     }
 
     /// Placement is one SSOT: a preview that disagreed with the deposit would prompt about the wrong
-    /// collisions, or miss real ones.
+    /// collisions, or miss real ones. The preview now also carries each item's SIZE (for the UI's quota
+    /// gate), which must likewise agree with what the deposit records.
     @Test func previewPlacementMatchesTheDepositExactly() async throws {
         let d = try drop()
         defer { try? FileManager.default.removeItem(at: d.base) }
 
         let source = ExplicitPathsSource(entries: [.init(url: d.root, destDir: "Photos")])
-        let previewed = try await source.previewPaths().sorted()
-        let archived = try await source.enumerate().map(\.relativePath).sorted()
+        let previewed = try await source.previewPaths().sorted { $0.relativePath < $1.relativePath }
+        let archived = try await source.enumerate().sorted { $0.relativePath < $1.relativePath }
 
-        #expect(previewed == archived)
-        #expect(!previewed.isEmpty)   // guard: the equality above is not vacuously true
+        #expect(previewed.map(\.relativePath) == archived.map(\.relativePath))
+        #expect(previewed.map(\.size) == archived.map(\.size))   // sizes agree, not just paths
+        #expect(!previewed.isEmpty)   // guard: the equalities above are not vacuously true
     }
 
     /// Excludes are applied during the walk, so the preview must honour them too — otherwise it would prompt
@@ -66,6 +68,6 @@ import Foundation
 
         let source = ExplicitPathsSource(entries: [.init(url: d.root, destDir: "")],
                                          exclude: ExcludeMatcher(patterns: ["nested"]))
-        #expect(try await source.previewPaths().sorted() == ["Trip/a.txt", "Trip/b.txt"])
+        #expect(try await source.previewPaths().map(\.relativePath).sorted() == ["Trip/a.txt", "Trip/b.txt"])
     }
 }

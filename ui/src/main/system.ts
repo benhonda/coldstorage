@@ -1,6 +1,7 @@
 /**
  * Main-process OS integrations the renderer needs but can't reach (no Node in the renderer): the native
- * folder picker, the default Downloads directory (request-a-copy dialog), and the native Photos picker
+ * open panels (single-folder for a watched source / restore destination; files-AND-folders multi-select
+ * for a deposit), the default Downloads directory (request-a-copy dialog), and the native Photos picker
  * (the explicit photo-deposit path, UI option B). Kept separate from {@link registerBridge} (which is
  * strictly the daemon-client seam).
  */
@@ -51,21 +52,35 @@ export const registerSystemHandlers = (): (() => void) => {
   ipcMain.handle(IPC.pickPhotos, () => pickPhotos());
   ipcMain.handle(IPC.openPhotosSettings, () => shell.openExternal(PHOTOS_PRIVACY_PANE));
 
-  ipcMain.handle(IPC.chooseFolder, async (_e, defaultPath?: string) => {
-    const opts: Electron.OpenDialogOptions = {
-      title: "Choose a folder",
-      defaultPath: defaultPath || app.getPath("downloads"),
-      properties: ["openDirectory", "createDirectory"],
-    };
-    // Parent to the focused window so it's a sheet on macOS (modal, attached), not a free window.
+  // Shared native open-panel. Parented to the focused window so it's a sheet on macOS (modal, attached),
+  // not a free window. Returns the chosen absolute paths ([] on cancel).
+  const openPanel = async (
+    defaultPath: string | undefined,
+    title: string,
+    properties: NonNullable<Electron.OpenDialogOptions["properties"]>,
+  ): Promise<string[]> => {
+    const opts: Electron.OpenDialogOptions = { title, defaultPath: defaultPath || app.getPath("downloads"), properties };
     const win = BrowserWindow.getFocusedWindow();
     const result = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
-    return result.canceled ? null : (result.filePaths[0] ?? null);
+    return result.canceled ? [] : result.filePaths;
+  };
+
+  // Single directory — a watched-folder source or a restore destination (also offers "New Folder…").
+  ipcMain.handle(IPC.chooseFolder, async (_e, defaultPath?: string) => {
+    const paths = await openPanel(defaultPath, "Choose a folder", ["openDirectory", "createDirectory"]);
+    return paths[0] ?? null;
   });
+  // The deposit picker: any mix of files AND folders, multi-select. `openFile` + `openDirectory` in one
+  // panel is exactly what the web <input> can't do (it's files-only, single-directory at best), which is
+  // why deposits go through a native panel. The daemon walks any chosen directory (structure preserved).
+  ipcMain.handle(IPC.chooseUploads, (_e, defaultPath?: string) =>
+    openPanel(defaultPath, "Choose files or folders to upload", ["openFile", "openDirectory", "multiSelections"]),
+  );
 
   return () => {
     ipcMain.removeHandler(IPC.downloadsDir);
     ipcMain.removeHandler(IPC.chooseFolder);
+    ipcMain.removeHandler(IPC.chooseUploads);
     ipcMain.removeHandler(IPC.pickPhotos);
     ipcMain.removeHandler(IPC.openPhotosSettings);
   };

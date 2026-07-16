@@ -68,8 +68,8 @@ public struct PhotoDepositSource: IngestSource {
     /// Where these picks WOULD land. Resolving an asset reads no bytes (a photo's content key is `.opaque` —
     /// PhotoKit doesn't produce the bytes until `open` streams them), so unlike the file path this was never
     /// the expensive part; it exists so `previewDeposit` has one shape to call for both kinds of deposit.
-    public func previewPaths() async throws -> [String] {
+    public func previewPaths() async throws -> [DepositPreviewPath] {
         try await resolver.resolve(assetIds: assetIds, scratchDir: scratchDir)
-            .map { ExplicitPathsSource.join(destDir, $0.relativePath) }
+            .map { DepositPreviewPath(relativePath: ExplicitPathsSource.join(destDir, $0.relativePath), size: $0.size) }
     }
 }

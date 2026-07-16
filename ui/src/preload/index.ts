@@ -30,6 +30,7 @@ const api: ColdstoreApi = {
   },
 
   chooseFolder: (defaultPath?: string) => ipcRenderer.invoke(IPC.chooseFolder, defaultPath),
+  chooseUploads: (defaultPath?: string) => ipcRenderer.invoke(IPC.chooseUploads, defaultPath),
   getDownloadsDir: () => ipcRenderer.invoke(IPC.downloadsDir),
   pickPhotos: () => ipcRenderer.invoke(IPC.pickPhotos),
   openPhotosSettings: () => ipcRenderer.invoke(IPC.openPhotosSettings),

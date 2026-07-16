@@ -87,9 +87,12 @@ export interface ListedFile {
 export type ConflictPolicy = "keepBoth" | "replace" | "skip";
 
 /** `DepositPreviewItemDTO` — one resolved target of a `previewDeposit` dry-run: the vault path the dropped
- *  item WOULD land at, and whether a live row already sits there (a collision to prompt on). */
+ *  item WOULD land at, its size in bytes (a free stat from the placement walk — the pre-flight quota gate
+ *  prices the deposit off these, so a folder deposit is gated as precisely as a loose file; 0 when unknown),
+ *  and whether a live row already sits there (a collision to prompt on). */
 export interface DepositPreviewItem {
   relativePath: string;
+  size: number;
   exists: boolean;
 }
 
