@@ -20,7 +20,7 @@ commands. Full plan + decisions: [`DESIGN.md`](./DESIGN.md). Orientation:
 > were kept. `task ui:typecheck` + `task ui:test` + `task ui:build` green. **PENDING Ben (macOS): visual
 > verify** (`task ui:mac:live` — Electron can't render in the container). The browser tree is
 > **real journal data** — the daemon's `listFiles` read is built and the fixtures stand-in is deleted
-> (proven over the daemon socket, `task ui:prove`); **drop-to-upload / "Choose files" really archive through the daemon**
+> (proven over the daemon socket, `task ui:prove`); **drop-to-upload / "Choose files or folders" (native files-and-folders picker) really archive through the daemon**
 > (the `deposit` command); request-a-copy issues the **real `restore` command**;
 > **move/rename/delete are real daemon commands** (`movePath`/`deletePath` — the UI applies an optimistic
 > edit, then reconciles to journal truth on the `filesChanged`-triggered `listFiles` refetch; proven over
@@ -61,8 +61,8 @@ src/shared/
 src/main/         Electron main process — owns the one DaemonClient + the window.
   index.ts      app/window lifecycle; dials the daemon (autoReconnect); secure webPreferences.
   bridge.ts     DaemonClient ⇄ IPC: ipcMain.handle(commands) + webContents push(events/lifecycle).
-  system.ts     OS integrations the renderer can't reach: native folder picker + Downloads dir
-                (dialog.showOpenDialog), plus the native Photos picker — spawns the coldstore-photo-picker
+  system.ts     OS integrations the renderer can't reach: native folder picker (single dir) + files-and-folders
+                upload picker + Downloads dir (dialog.showOpenDialog), plus the native Photos picker — spawns the coldstore-photo-picker
                 helper (COLDSTORE_PHOTO_PICKER) and returns the picked {id,name} for "Add photos…". Not daemon-related.
 
 src/preload/
