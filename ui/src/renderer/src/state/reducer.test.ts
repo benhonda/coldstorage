@@ -169,6 +169,29 @@ describe("failures, pause, restore, error", () => {
     expect(s.failures[0]?.files).toEqual([]);
   });
 
+  test("fileArchived prunes the failure of its blob (a retry that lands clears the pill), leaving others", () => {
+    const s = run(
+      { type: "event", name: "blobFailed", data: { blob: "b1", kind: "overQuota", message: "full", paths: "a.jpg" } },
+      { type: "event", name: "blobFailed", data: { blob: "b2", kind: "permanent", message: "NoSuchBucket", paths: "b.jpg" } },
+      { type: "event", name: "fileArchived", data: { file: "f1", blob: "b1" } },
+    );
+    expect(s.failures.map((f) => f.blob)).toEqual(["b2"]);
+  });
+
+  test("failuresDismissed clears recorded failures; a later blobFailed re-surfaces", () => {
+    const cleared = run(
+      { type: "event", name: "blobFailed", data: { blob: "b1", kind: "permanent", message: "boom", paths: "a.jpg" } },
+      { type: "failuresDismissed" },
+    );
+    expect(cleared.failures).toEqual([]);
+    const again = reducer(cleared, {
+      type: "event",
+      name: "blobFailed",
+      data: { blob: "b1", kind: "permanent", message: "boom", paths: "a.jpg" },
+    });
+    expect(again.failures).toHaveLength(1);
+  });
+
   test("restore* events fold into one keyed activity, latest state winning", () => {
     const s = run(
       { type: "event", name: "restoreRequested", data: { file: "f1", tier: "Bulk" } },

@@ -64,7 +64,9 @@ Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-cl
   quiet green ✓ **stored** (explicit success is what makes silence trustworthy — stored must be
   distinguishable from stuck) · blue ↑ **uploading** (a transient retry stays here; it self-heals) ·
   muted-red ⚠ **couldn't upload** (permanent/stuck — also persistent in the sidebar → failures panel
-  + Try again, because a one-shot toast gets missed) · amber ↓ **Transferring** · green `download_done`
+  + Try again / Dismiss, because a one-shot toast gets missed; the pill clears itself when a retry
+  lands, Dismiss is acknowledge-only — rows keep their ⚠, and a re-hit fault re-surfaces it) ·
+  amber ↓ **Transferring** · green `download_done`
   **saved on this Mac**. No icon = nothing in flight.
 - **Selection is just selection** (cmd/shift multi → batch ops); details live behind `⋯`/right-click;
   double-click a file = Get info, a folder = drill in. No docked side-inspector.
@@ -92,9 +94,16 @@ Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-cl
    driven by the daemon's `runProgress` (bytes uploaded / total across every file and blob), the file
    currently uploading, files done / total, throughput, and a rough ETA — all derived from the
    `runProgress` stream, so a deposit of many small BATCHED files shows real motion instead of silence
-   then a burst of green. A Photos deposit (sizes unknown until streamed → `bytesTotal` 0) falls back to
-   count progress + an indeterminate sheen rather than a fake byte bar. Individual uploading rows still
-   show a determinate % for large solo-blob files (the daemon's per-file `uploadProgress`).
+   then a burst of green. Before the first ciphertext part lands (bytes still 0) it reads **"Preparing…"**
+   over an indeterminate sheen, not a dead `0 B` bar; the ETA shows in **coarse buckets** ("under a
+   minute", "about 5 min left") because a fresh estimate only arrives per 64 MiB part, so exact seconds
+   would only lurch. A Photos deposit (sizes unknown until streamed → `bytesTotal` 0) falls back to count
+   progress + an indeterminate sheen rather than a fake byte bar. Individual uploading **rows** carry only
+   a small **spinner** beside the status icon — a quiet "this one's in flight" cue; the quantitative
+   progress lives once, in the banner, so the row never repeats it. (The daemon still emits a determinate
+   per-file `uploadProgress` for large solo-blob files and the store still folds it, but nothing renders it
+   today — retained as a latent capability, e.g. a per-file detail view; see the RETAINED note in
+   `state/reducer.ts` / `views/files/model.ts`.)
 3. **Done = quiet inline confirmation** (no celebration): *"240 photos uploaded. Skipped 1,203 files
    in node_modules and caches. see what →"*. The skip line is cost-protection made factual — name the
    junk, no salesy "saved you $X," no "safe." *(Needs skipped-count reporting — still open, below.)*
@@ -182,8 +191,10 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   restoreRequested · restoreInProgress · restoreCompleted · restoreNeedsAuthorization · error`.
   `runProgress` carries `{filesTotal, bytesTotal, filesArchived, bytesUploaded, currentPath}` — the
   whole-run aggregate the deposit banner draws from (all ENCRYPTED bytes; `bytesTotal` 0 ⇒ unknown, e.g.
-  Photos; ETA/throughput are derived UI-side, never sent). `uploadProgress` carries
-  `{file, path, bytes, totalBytes}`; `blobFailed` carries `{blob, kind, message, paths}` (newline-joined
+  Photos; ETA/throughput are derived UI-side, never sent — coarsely, in buckets, since a snapshot only
+  lands per 64 MiB part). `uploadProgress` carries `{file, path, bytes, totalBytes}` — a determinate
+  per-file signal for large solo-blob files, still emitted and folded into the store but no longer rendered
+  (uploading rows now show a plain spinner); retained as a latent capability; `blobFailed` carries `{blob, kind, message, paths}` (newline-joined
   relativePaths); `filesChanged` carries `{moved, to}` / `{created}` / `{deleted}` — the cue to re-read
   `listFiles` — plus `{signedIn}` / `{signedOut}`, the cue that the tree just changed owner entirely.
 - **Connection model:** one long-lived socket for the event tail (blocks indefinitely by design) +
@@ -239,7 +250,9 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   picker (PADDLE.md spec: size cards, fetched live, never hardcoded; the picker itself is the shared
   `views/PlanPicker.tsx`); Settings shows the state. `coldstorage://checkout-complete` is a check-now nudge. **Manage surface (2026-07-10, PADDLE.md "Managing a subscription"):**
   `getSubscription()/previewPlanChange()/changePlan()/openManage()` → the sidebar's pinned
-  `views/AccountCard.tsx` (avatar · email · plan badge, click → Settings) + Settings ▸ Account
+  `views/AccountCard.tsx` (avatar · email · a Drive-style storage meter fed by the gate's own
+  used/quota figures; the plan-size badge only when the meter can't name the quota; click → Settings)
+  + Settings ▸ Account
   (plan row + `views/ChangePlanModal.tsx` with a proration preview; cancel/payment-method open
   Paddle-hosted pages in the browser).
 - `src/renderer/src/styles/tokens/` — the 5 DS token CSS files **vendored verbatim** (SSOT — re-sync,

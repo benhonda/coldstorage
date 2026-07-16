@@ -330,7 +330,13 @@ export const kindFromName = (name: string): FileKind => {
   return EXT_KIND[ext] ?? "other";
 };
 
-/** Live determinate upload progress for one file (the value side of the store's `run.uploadProgress`). */
+/** Live determinate upload progress for one file (the value side of the store's `run.uploadProgress`).
+ *
+ * RETAINED, CURRENTLY UNRENDERED. The daemon still emits this per-file byte signal (`onProgress` in the
+ * upload engine, for large solo-blob files) and the store still folds it — but no view draws it today: the
+ * uploading row dropped its per-file determinate bar for a plain spinner (progress now lives once, in the
+ * top deposit banner). Kept deliberately as a latent capability (e.g. a per-file detail view) — NOT dead
+ * code to wire back into the row. See `DepositProgress` and `MyFilesView`'s row render. */
 export interface UploadProgress {
   /** relativePath the daemon reported — the match key for an optimistic (pre-archive) drop row. */
   path: string;
@@ -339,10 +345,13 @@ export interface UploadProgress {
 }
 
 /**
- * The upload percent (0–100) to draw on a file's row, or null for no determinate bar (fall back to the
- * indeterminate stripe). Matches the daemon's `uploadProgress` entries to a file by EITHER its journal id
- * or its relativePath — they diverge for Photos (id = localIdentifier) and for an optimistic drop row
- * (synthetic id, real path). Only large (solo-blob) files ever have an entry; everything else → null.
+ * The upload percent (0–100) for one file, or null when there's no determinate signal for it. Matches the
+ * daemon's `uploadProgress` entries to a file by EITHER its journal id or its relativePath — they diverge
+ * for Photos (id = localIdentifier) and for an optimistic drop row (synthetic id, real path). Only large
+ * (solo-blob) files ever have an entry; everything else → null.
+ *
+ * RETAINED, CURRENTLY UNRENDERED — this backed the old per-row determinate bar, which is gone (see
+ * {@link UploadProgress}). Still unit-tested and correct; kept for a future per-file progress surface.
  */
 export const uploadPercent = (
   progress: Record<string, UploadProgress>,

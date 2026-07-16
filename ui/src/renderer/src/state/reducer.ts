@@ -45,7 +45,12 @@ export interface RunProgress {
   /** Live determinate upload progress, keyed by the daemon file id. Each entry carries the file's `path`
    * too, so the browser can match either a journal row (by id) or an optimistic drop row (by path). Only
    * large (solo-blob) files appear here; small batched files flip to archived too fast to bother. Cleared
-   * at `runFinished`; an entry is dropped as its file archives. */
+   * at `runFinished`; an entry is dropped as its file archives.
+   *
+   * RETAINED, CURRENTLY UNRENDERED: still folded from the daemon's `uploadProgress` event (below), but no
+   * view reads it anymore — uploading rows switched from a per-file determinate bar to a plain spinner, and
+   * the aggregate progress lives in the deposit banner (`runProgress`). Kept as a latent capability, not
+   * dead code. See {@link UploadProgress} in `views/files/model.ts` for the full note. */
   uploadProgress: Record<string, { path: string; uploaded: number; total: number }>;
 }
 
@@ -136,6 +141,7 @@ export type Action =
   | { type: "sourcesLoaded"; sources: Source[] }
   | { type: "filesLoaded"; files: ListedFile[] }
   | { type: "excludesLoaded"; excludes: string[] }
+  | { type: "failuresDismissed" }
   | EventAction;
 
 /**
@@ -256,6 +262,13 @@ export const reducer = (state: AppState, action: Action): AppState => {
     case "excludesLoaded":
       return { ...state, excludes: action.excludes };
 
+    case "failuresDismissed":
+      // The user acknowledged the "couldn't upload" pill and asked it gone. An acknowledgement, not a
+      // resolution: the affected file rows keep their journal-backed ⚠ status, and a daemon that re-hits
+      // the same fault (e.g. a still-over-quota blob on the next auto-run pass) re-adds its failure —
+      // the pill re-asserting a still-true condition is honest, not a dismissal bug.
+      return { ...state, failures: [] };
+
 
     case "event":
       return foldEvent(state, action);
@@ -272,8 +285,16 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
       const prev = state.run ?? startedRun();
       // It's archived now — drop its live progress entry so no stale bar lingers.
       const { [file]: _done, ...uploadProgress } = prev.uploadProgress;
+      // The blob went through, so any recorded failure for it is stale — prune it. Blob ids are
+      // content-derived and stable across runs (BlobPlanner.stableId), so a retried blob that finally
+      // lands carries the SAME id its failure was recorded under; without this, the "couldn't upload"
+      // pill keeps counting an upload that has since succeeded.
+      const failures = state.failures.some((f) => f.blob === blob)
+        ? state.failures.filter((f) => f.blob !== blob)
+        : state.failures;
       return {
         ...state,
+        failures,
         run: {
           ...prev,
           active: true,

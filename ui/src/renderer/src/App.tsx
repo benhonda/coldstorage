@@ -159,6 +159,9 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   }, [state.failures]);
 
   const retryFailures = (): void => exec(() => api.request("triggerNow"));
+  // Acknowledge-and-clear (renderer state only, no daemon command) — the pill's other exit besides a
+  // successful retry (the reducer prunes a failure when its blob later archives). File rows keep their ⚠.
+  const dismissFailures = (): void => store.dispatch({ type: "failuresDismissed" });
 
   // A quota refusal from the DAEMON opens the SAME paywall the client gate would have — so the experience is
   // identical whichever layer catches an over-quota deposit. This is the fail-open path: a drop slipped past
@@ -291,6 +294,8 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
               email={state.auth.email}
               subscription={subscription}
               active={state.entitlement.active}
+              usedBytes={usedBytes}
+              quotaBytes={state.entitlement.quotaBytes}
               onClick={() => setRoute("settings")}
             />
           ) : undefined
@@ -310,7 +315,12 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
       )}
 
       {failuresOpen && stuckFailures.length > 0 && (
-        <FailuresPanel failures={stuckFailures} onRetry={retryFailures} onClose={() => setFailuresOpen(false)} />
+        <FailuresPanel
+          failures={stuckFailures}
+          onRetry={retryFailures}
+          onDismiss={dismissFailures}
+          onClose={() => setFailuresOpen(false)}
+        />
       )}
 
       {route === "files" && (

@@ -3,7 +3,9 @@
  * (the daemon classified them non-retryable and stopped trying). Transient blips never appear here —
  * they stay shown as `uploading` and self-heal (Ben, 2026-06-24). Mirrors {@link GettingBackPanel}.
  * Closes on outside click / Escape. "Try again" re-triggers a run (the daemon re-attempts non-skipped
- * work; a permanent fault that's since been fixed will then clear).
+ * work; a permanent fault that's since been fixed will then clear). "Dismiss" acknowledges the failures
+ * and clears the pill — the file rows keep their journal-backed ⚠, and a fault the daemon re-hits
+ * re-surfaces (see the reducer's `failuresDismissed`).
  *
  * COPY IS PLACEHOLDER — Ben gatekeeps the error wording. The daemon now names the affected files (the
  * `blobFailed` event carries their relativePaths), so each row lists the file name(s) that couldn't upload
@@ -23,10 +25,13 @@ const failedNames = (paths: string[]): string =>
 export const FailuresPanel = ({
   failures,
   onRetry,
+  onDismiss,
   onClose,
 }: {
   failures: BlobFailure[];
   onRetry: () => void;
+  /** Acknowledge-and-clear: drops the recorded failures (and so the footer pill) without retrying. */
+  onDismiss: () => void;
   onClose: () => void;
 }): React.JSX.Element => {
   useEffect(() => {
@@ -55,7 +60,19 @@ export const FailuresPanel = ({
           </div>
         </div>
       ))}
-      <div className="cs-queue-foot">
+      <div className="cs-queue-foot cs-queue-foot--row">
+        {/* PLACEHOLDER copy — Ben to finalize */}
+        <Button
+          variant="ghost"
+          size="sm"
+          full
+          onClick={() => {
+            onDismiss();
+            onClose();
+          }}
+        >
+          Dismiss
+        </Button>
         <Button
           variant="secondary"
           size="sm"

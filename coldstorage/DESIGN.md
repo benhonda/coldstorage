@@ -139,6 +139,11 @@ objects carrying them.
   naturally: at the cap, `flush` drains one before dispatching the next, which suspends the producer. Override
   with `COLDSTORE_MAX_PARTS_INFLIGHT` (1 = the old sequential behaviour). *(Whether it speeds a given deposit
   depends on the link: a slow saturated uplink sees little; a link with spare capacity sees up to ~Nx.)*
+  **Byte progress (`runProgress`) is reported the instant each part's PUT confirms — inside the part's own
+  task — NOT when it's later drained for the journal.** Draining is lazy: a blob with ≤ `maxPartsInFlight`
+  parts never drains until `finish`, so reporting at drain time meant a whole small-to-mid file uploaded in
+  silence and then snapped to 100% at the very end (the "stuck on *Preparing…* until it was basically done"
+  bug). Drain still owns only the ordered `recordPart`; progress rides the completion.
 - **The one thing still written to disk is a PUSH source.** PhotoKit hands us bytes at its own pace and cannot
   be told to wait, so an asset is drained to `scratch/` at full speed and pulled back at upload pace
   (`scratchFileStream`). That costs one plaintext copy of the asset — deliberately, because the alternative is

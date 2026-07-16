@@ -2,6 +2,9 @@
 
 ## 2026-07-16
 
+- feat(ui): **AccountCard shows a Drive-style storage meter** — a bar + "X of Y used" (stored + in-flight, the gate's own figures) right in the sidebar tile, coloured accent → amber ≥90% → red when full; the plan-size badge shows only when the meter can't name the quota.
+- feat(ui): **the "couldn't upload" pill gains Dismiss** (acknowledge-only — rows keep their ⚠, a re-hit fault re-surfaces) and **auto-clears a failure when its blob later archives**, so a retry that lands stops the pill counting a success (`failuresDismissed` + `fileArchived` prune, blob ids are stable across runs).
+- feat(ui): **drag-to-move ghost is a Finder-style name pill** (the item's name for one, "N items" for many) instead of the heavy default row snapshot.
 - feat(ui): **drag-to-move in My Files** — drag rows/tiles onto a folder or an ancestor breadcrumb crumb (same `movePath` op as "Move to…"), Finder semantics: multi-select drags together, spring-loading (hold ~1.5s over a folder/crumb → it opens under the drag), no-op put-back, and a private dataTransfer type so an internal move never triggers drop-to-upload. New `useMoveDrag.ts` + pure `canMoveInto`/`moveIsNoop` (tested).
 - fix(ui): **deposit progress no longer sits on "Preparing…" until a file is nearly done** — the daemon now reports a part's bytes the instant S3 confirms it (not at the lazy journal-drain), the banner shows an honest indeterminate "Preparing…" until the first part lands, and the ETA reads in coarse buckets (`etaLabel`) instead of a lurching stopwatch. Per-row upload bars drop to a quiet spinner (the byte/%/ETA detail lives in the banner).
 

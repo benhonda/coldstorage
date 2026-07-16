@@ -35,16 +35,15 @@ export const isMoveDrag = (e: React.DragEvent): boolean =>
   e.dataTransfer.types.includes(MOVE_DRAG_TYPE);
 
 /**
- * Multi-item drags get a Finder-style count badge as the drag image (a single item keeps the
- * browser's default ghost of the row itself — the best preview there is). The badge must be in the
- * DOM and rendered when `setDragImage` snapshots it, so it's parked offscreen (see `.cs-drag-badge`)
- * and removed on the next tick.
+ * Every drag ghosts as a Finder-style pill — the item's name for one, "N items" for many — instead
+ * of the browser's default full-row snapshot (which reads heavy and whose opacity we can't control).
+ * The badge must be in the DOM and rendered when `setDragImage` snapshots it, so it's parked
+ * offscreen (see `.cs-drag-badge`) and removed on the next tick.
  */
-const dragBadge = (e: React.DragEvent, count: number): void => {
-  if (count <= 1) return;
+const dragBadge = (e: React.DragEvent, label: string): void => {
   const badge = document.createElement("div");
   badge.className = "cs-drag-badge";
-  badge.textContent = `${count} items`;
+  badge.textContent = label;
   document.body.appendChild(badge);
   e.dataTransfer.setDragImage(badge, 16, 16);
   setTimeout(() => badge.remove(), 0);
@@ -174,7 +173,7 @@ export const useMoveDrag = (opts: {
         dragged.current = targets;
         e.dataTransfer.setData(MOVE_DRAG_TYPE, ""); // the marker; the payload stays in the ref
         e.dataTransfer.effectAllowed = "move";
-        dragBadge(e, targets.length);
+        dragBadge(e, targets.length > 1 ? `${targets.length} items` : row.name);
         // A spring-open unmounts the source row mid-drag, and Chromium then skips its dragend — so the
         // reset also rides document-level dragend/drop. Whichever path fires first wins (reset is
         // idempotent) and removes these listeners again.
