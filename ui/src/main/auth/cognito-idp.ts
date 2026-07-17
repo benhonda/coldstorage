@@ -96,10 +96,27 @@ export const startEmailSignIn = async (c: Cognito, email: string): Promise<Email
     return { email, session: await initiateEmailOtp(c, email), mode: "signin" };
   } catch (e) {
     if (e instanceof CognitoError && e.type === "UserNotFoundException") {
-      return { email, session: await signUp(c, email), mode: "signup" };
+      try {
+        return { email, session: await signUp(c, email), mode: "signup" };
+      } catch (e2) {
+        // The pre-sign-up trigger refused this signup (one email = one account: the address belongs
+        // to a legacy unlinked Google account). Cognito wraps the trigger's message — unwrap it so
+        // the user reads "This email signs in with Google — use Continue with Google", not plumbing.
+        if (e2 instanceof CognitoError && e2.type === "UserLambdaValidationException") {
+          throw new CognitoError(e2.type, stripLambdaWrapper(e2.message));
+        }
+        throw e2;
+      }
     }
     throw e;
   }
+};
+
+/** "PreSignUp failed with error <msg>." → "<msg>" — Cognito's trigger-error wrapper, removed at the
+ * one place it reaches the user. Exported for its unit test. */
+export const stripLambdaWrapper = (message: string): string => {
+  const m = /^PreSignUp failed with error (.*?)\.?$/.exec(message.trim());
+  return m?.[1] ? m[1] : message;
 };
 
 /** Finish an email-OTP flow with the code the user typed → tokens. Signin answers the EMAIL_OTP

@@ -71,6 +71,16 @@ export const parseCallbackUrl = (raw: string): CallbackResult | null => {
   return { kind: "code", code, state };
 };
 
+/**
+ * The account-linking first-sign-in failure (one email = one account, infra
+ * `lambda/pre-signup/`): when the pre-sign-up trigger just LINKED this federated identity into a
+ * native user, Cognito still fails THAT sign-in with "Already found an entry for username …" — an
+ * acknowledged limitation; the immediate retry lands in the linked account. The manager consumes
+ * this to restart the flow silently, exactly once.
+ */
+export const isFirstLinkError = (result: CallbackResult): boolean =>
+  result.kind === "error" && /already found an entry for username/i.test(result.description ?? "");
+
 /** The /oauth2/authorize URL to open in the SYSTEM browser (Google blocks embedded webviews).
  * `identityProvider: "Google"` skips the managed-login chooser and goes straight to Google. */
 export const buildAuthorizeUrl = (

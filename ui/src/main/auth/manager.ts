@@ -18,6 +18,7 @@ import {
   buildAuthorizeUrl,
   decodeJwtClaims,
   exchangeCode,
+  isFirstLinkError,
   parseCallbackUrl,
   refreshTokens,
   revokeRefreshToken,
@@ -56,6 +57,9 @@ export class AuthManager {
   private readonly useLoopback: boolean;
   private tokens: TokenSet | null = null;
   private pending: PendingSignIn | null = null;
+  /** The one automatic restart for the account-linking first-sign-in error has been spent (re-armed
+   * by any user-initiated signIn), so a genuine repeat failure surfaces instead of looping. */
+  private linkRetryUsed = false;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private lastError: string | null = null;
   /** False until {@link restore} finishes checking for a saved session — status reports `restoring`
@@ -145,9 +149,12 @@ export class AuthManager {
   }
 
   /** Start (or restart — a new attempt supersedes a stuck one) a sign-in: fresh PKCE material, then
-   * the system browser at managed login. The flow completes asynchronously in handleCallbackUrl. */
-  async signIn(): Promise<void> {
+   * the system browser at managed login. The flow completes asynchronously in handleCallbackUrl.
+   * `linkRetry` marks the internal restart after the account-linking first-sign-in error (below) —
+   * a plain user-initiated call re-arms that one automatic retry. */
+  async signIn(opts?: { linkRetry?: boolean }): Promise<void> {
     if (!this.cfg) return;
+    if (!opts?.linkRetry) this.linkRetryUsed = false;
     this.clearPending();
     const { verifier, challenge, state } = createPkce();
     const pending: PendingSignIn = { state, verifier, expiresAt: Date.now() + PENDING_TTL_MS, stopLoopback: null };
@@ -221,6 +228,15 @@ export class AuthManager {
       // The IdP said no (user cancelled at Google, mostly). Only unwind OUR pending attempt.
       if (pending && parsed.state === pending.state) {
         this.clearPending();
+        // One silent restart for the account-linking quirk (see isFirstLinkError): the pre-sign-up
+        // trigger just linked this Google identity into the user's email account, Cognito failed
+        // the linking sign-in itself, and the retry lands in the linked account. Google usually
+        // silent-approves the second pass, so the user sees a browser flash, not an error.
+        if (isFirstLinkError(parsed) && !this.linkRetryUsed) {
+          this.linkRetryUsed = true;
+          void this.signIn({ linkRetry: true });
+          return true;
+        }
         this.lastError = parsed.error === "access_denied" ? null : (parsed.description ?? parsed.error);
         this.emitStatus();
       }

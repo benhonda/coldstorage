@@ -1,6 +1,6 @@
 /** OAuth URL building/parsing — the pure halves of the sign-in flow (no fetch, no Electron). */
 import { describe, expect, test } from "bun:test";
-import { buildAuthorizeUrl, decodeJwtClaims, parseCallbackUrl, SCHEME_REDIRECT_URI, type OAuthConfig } from "./oauth.ts";
+import { buildAuthorizeUrl, decodeJwtClaims, isFirstLinkError, parseCallbackUrl, SCHEME_REDIRECT_URI, type OAuthConfig } from "./oauth.ts";
 
 const cfg: OAuthConfig = {
   domain: "example.auth.ca-central-1.amazoncognito.com",
@@ -77,5 +77,23 @@ describe("decodeJwtClaims", () => {
   test("returns null for junk", () => {
     expect(decodeJwtClaims("junk")).toBeNull();
     expect(decodeJwtClaims("a.%%%.c")).toBeNull();
+  });
+});
+
+describe("isFirstLinkError", () => {
+  test("matches the account-linking first-sign-in failure, case-insensitively", () => {
+    expect(
+      isFirstLinkError({
+        kind: "error",
+        error: "invalid_request",
+        description: "Already found an entry for username Google_108347...",
+        state: "s",
+      }),
+    ).toBe(true);
+  });
+
+  test("ignores other errors and successful callbacks", () => {
+    expect(isFirstLinkError({ kind: "error", error: "access_denied", description: null, state: "s" })).toBe(false);
+    expect(isFirstLinkError({ kind: "code", code: "c", state: "s" })).toBe(false);
   });
 });

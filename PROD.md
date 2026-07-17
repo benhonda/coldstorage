@@ -729,12 +729,27 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
     Storage row reads *"6 GB of 25 GB"* off the same entitlement (no hardcoded cap anywhere in the
     app — it's the backend's number). Remaining: the site pricing section gains the free tier
     (design-synced upstream per `site/SPEC.md`, not hand-edited).
-- **[open] Same-email, two sign-in methods = two Cognito accounts.** A Google-federated user and an
-  email-OTP user with the SAME address are separate profiles (separate `sub`s → separate key-blobs,
-  separate S3 prefixes — under ZK they can't see each other's data) unless linked server-side
-  (`AdminLinkProviderForUser`, which must run BEFORE the federated first sign-in — a pre-signup
-  Lambda). Surfaced by the 2026-07-02 research pass. Leaning: ship 5a/5b unlinked with plain copy
-  ("sign in the way you signed up"), decide linking before public launch — but this is Ben's call.
+- ~~**Same-email, two sign-in methods = two Cognito accounts.**~~ **DECIDED + BUILT ✅ (2026-07-17,
+  Ben): ONE EMAIL = ONE ACCOUNT, linked automatically at the door** — the industry default
+  (Clerk/Supabase/Firebase ship it out of the box), keyed on VERIFIED email both sides (Google's
+  claim + our OTP; unverified never links — the Auth.js `allowDangerousEmailAccountLinking` lesson).
+  New **pre-sign-up Lambda** (`infra/coldstorage/modules/stack/lambda/pre-signup/` — pure
+  `decide()` table + thin handler, 10 unit tests; wired by `lambda.tf` + `lambda_config.pre_sign_up`;
+  built by `task tf:coldstorage:lambda:build`, a dep of tf plan/apply): a Google first sign-in links
+  into the existing native (email-code) user, or mints a passwordless native SHELL user (born
+  CONFIRMED — no temp-password dance) and links into that, so the account is native-parented from
+  birth and BOTH doors always open the same `sub` → same key-blob → same vault; stale UNCONFIRMED
+  native signups are deleted, never linked into (takeover guard). Native signup against a **legacy
+  unlinked** Google account (pre-trigger — currently only Ben's) is refused with plain copy ("This
+  email signs in with Google — use Continue with Google", unwrapped in `cognito-idp.ts`). The known
+  Cognito quirk — the linking sign-in itself fails once with "Already found an entry for username" —
+  is auto-retried silently, exactly once, in `auth/manager.ts` (`isFirstLinkError`). Google
+  `attribute_mapping` gains `email_verified` (load-bearing for the trigger). **Pending: TF apply
+  (plan blocked 2026-07-17 — pharmer SSO token expired; `task login` then
+  `tf:coldstorage:plan ENV=production`), then the Mac gate:** ① email-first + Google same address →
+  same files; ② Google-first + email-code → same vault; ③ legacy Google account's email-code attempt
+  → the clean "use Google" copy. Optional ride-along: retro-link Ben's legacy account by hand so
+  both doors work for him too.
 - ~~**Daemon-side sign-out** — app sign-out revokes tokens, drops the session, AND relocks the
   vault (5b's `lockVault`, so no crypto happens after sign-out), but the daemon still holds its STS
   creds + `vaultPrefix` until expiry (~1h).~~ **CLOSED ✅ (2026-07-10): `deauthenticate` landed.**

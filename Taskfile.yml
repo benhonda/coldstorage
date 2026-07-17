@@ -1475,11 +1475,22 @@ tasks:
     cmds:
       - 'case "{{.ENV}}" in production|staging) ;; *) echo "ENV must be production|staging"; exit 1 ;; esac'
 
+  # The pre-sign-up Lambda (modules/stack/lambda.tf) is packaged from a BUILT artifact — typecheck +
+  # unit tests + bundle here, so a plan/apply can never ship a stale or broken dist. Idempotent + fast.
+  tf:coldstorage:lambda:build:
+    desc: Build the Cognito pre-sign-up Lambda (typecheck + tests + bundle → dist/index.mjs)
+    dir: infra/coldstorage/modules/stack/lambda/pre-signup
+    cmds:
+      - bun install
+      - bun run typecheck
+      - bun test
+      - bun run build
+
   tf:coldstorage:plan:
     desc: Terragrunt plan (ENV=production|staging) — plans shared first
     requires:
       vars: [ENV]
-    deps: [check-aws-identity]
+    deps: [check-aws-identity, "tf:coldstorage:lambda:build"]
     dir: infra/coldstorage/live/{{.ENV}}
     cmds:
       - task: tf:coldstorage:_validate-env
@@ -1497,7 +1508,7 @@ tasks:
     prompt: "Apply ColdStorage infra to {{.ENV}}?"
     requires:
       vars: [ENV]
-    deps: [check-aws-identity]
+    deps: [check-aws-identity, "tf:coldstorage:lambda:build"]
     dir: infra/coldstorage/live/{{.ENV}}
     cmds:
       - task: tf:coldstorage:_validate-env

@@ -39,6 +39,13 @@ resource "aws_cognito_user_pool" "main" {
     allowed_first_auth_factors = ["PASSWORD", "EMAIL_OTP"]
   }
 
+  # One email = one account: the pre-sign-up trigger (lambda.tf) links a federated first sign-in
+  # into the native user with the same verified email (or mints + links a native shell), so Google
+  # and email-code always open the SAME account/vault. See lambda/pre-signup/decide.ts.
+  lambda_config {
+    pre_sign_up = aws_lambda_function.pre_signup.arn
+  }
+
   # Email-based account recovery (account access only — see the zero-knowledge note above). Inert while
   # no user has a password, but harmless and required-shaped if an admin ever sets one.
   account_recovery_setting {
@@ -116,6 +123,10 @@ resource "aws_cognito_identity_provider" "google" {
     # (Cognito overwrites it), which is why the user-owned display name lives in the account
     # backend — this mapping only seeds the onboarding prefill via the ID token claim.
     name = "name"
+    # Load-bearing for account linking: the pre-sign-up trigger (lambda.tf) links on VERIFIED email
+    # only — without this mapping the trigger never sees Google's email_verified claim and would
+    # (safely but uselessly) never link.
+    email_verified = "email_verified"
   }
 }
 

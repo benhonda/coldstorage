@@ -1,6 +1,6 @@
 /** Cognito email-OTP JSON-RPC — request shapes, token mapping, error/new-user branching (mocked fetch). */
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { CognitoError, refreshEmailTokens, startEmailSignIn, submitEmailCode, type EmailFlow } from "./cognito-idp.ts";
+import { CognitoError, refreshEmailTokens, startEmailSignIn, stripLambdaWrapper, submitEmailCode, type EmailFlow } from "./cognito-idp.ts";
 
 const C = { region: "ca-central-1", clientId: "client123" };
 
@@ -67,6 +67,36 @@ describe("startEmailSignIn", () => {
   test("a non-UserNotFound error propagates (not swallowed as signup)", async () => {
     mockFetch([{ ok: false, status: 400, json: { __type: "InvalidParameterException", message: "bad email" } }]);
     await expect(startEmailSignIn(C, "bad")).rejects.toBeInstanceOf(CognitoError);
+  });
+
+  test("a pre-sign-up-blocked signup surfaces the trigger's message, unwrapped", async () => {
+    // One email = one account: the trigger refuses a native signup against a legacy unlinked Google
+    // account; Cognito wraps its message in "PreSignUp failed with error …".
+    mockFetch([
+      { ok: false, status: 400, json: { __type: "com.amazonaws#UserNotFoundException", message: "no such user" } },
+      {
+        ok: false,
+        status: 400,
+        json: {
+          __type: "com.amazonaws#UserLambdaValidationException",
+          message: "PreSignUp failed with error This email signs in with Google — use Continue with Google..",
+        },
+      },
+    ]);
+    await expect(startEmailSignIn(C, "ben@gmail.com")).rejects.toThrow(
+      "This email signs in with Google — use Continue with Google.",
+    );
+  });
+});
+
+describe("stripLambdaWrapper", () => {
+  test("unwraps Cognito's trigger-error prefix and its appended period", () => {
+    expect(stripLambdaWrapper("PreSignUp failed with error Use Google instead..")).toBe("Use Google instead.");
+    expect(stripLambdaWrapper("PreSignUp failed with error Use Google instead")).toBe("Use Google instead");
+  });
+
+  test("leaves an unwrapped message untouched", () => {
+    expect(stripLambdaWrapper("some other failure")).toBe("some other failure");
   });
 });
 
