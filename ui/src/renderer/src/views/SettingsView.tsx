@@ -1,16 +1,21 @@
 /**
- * Settings — the rules behind My Files (the *stuff* lives there; the *rules* live here). Watched folders
- * (auto-sync, demoted from the old home hero), what not to back up, and storage. Fully daemon-backed:
- * sources (each with a destination mount + per-folder pause/resume), catch-up, and excludes ({@link
- * SettingsApi}).
+ * Settings — ONE door, two subpages ({@link Tabs}): **General** (how this Mac backs up — watched
+ * folders, exclude patterns, the encryption fact) and **Account** (who's signed in and what they pay
+ * for — profile, plan + quota, subscription, billing). The split is the ownership line — *"would this
+ * setting follow me to a second Mac?"* — so every future setting has an unambiguous home
+ * (notification prefs → General; recovery code / devices → a Security tab the day that content
+ * exists). Destructive/rare billing actions fold behind a disclosure, last. Dogfood mode
+ * (unconfigured) has no account: no tab strip, General's content IS the page, and the storage figure
+ * stays here (Storage card) because there's no Account subpage to carry it. Fully daemon-backed:
+ * sources (each with a destination mount + per-folder pause/resume), catch-up, and excludes
+ * ({@link SettingsApi}).
  *
- * It used to show "Roughly ~$X/month (estimate)" for storage, computed from AWS's list price. That was
- * removed on 2026-07-13: it was OUR cost, not the customer's. A customer pays their plan price (shown on
- * the AccountCard) whatever they store, so quoting them an AWS figure answered a question nobody asked,
- * in the place a price belongs. It was honest when Ben was the only user and paid AWS directly — a
- * dogfood-era number that quietly turned into a customer-facing one when the product grew a real price,
- * the same drift that made the restore dialog understate its charge by ~40× (root `RETRIEVAL.md`).
- * If a cost figure ever returns here, it must be the one we actually bill.
+ * The quota row ("In deep storage — X of Y") lives on Account › Plan & billing, beside its remedy
+ * (Change plan); the sidebar chip's meter is the ambient copy. It used to sit here as a Storage card
+ * beside a "Roughly ~$X/month (estimate)" line, removed 2026-07-13: that was OUR AWS cost, not the
+ * customer's price — a dogfood-era number that quietly turned customer-facing, the same drift that
+ * made the restore dialog understate its charge by ~40× (root `RETRIEVAL.md`). If a cost figure ever
+ * returns, it must be the one we actually bill.
  */
 import { useState } from "react";
 import type { AccountStatus, AuthStatus, EntitlementStatus, Source, SubscriptionInfo } from "../../../shared/ipc.ts";
@@ -20,8 +25,16 @@ import type { ArchivedFile } from "./files/model.ts";
 import { baseName, formatBytes } from "./files/model.ts";
 import { AddWatchedFolderModal } from "./files/AddWatchedFolderModal.tsx";
 import { ContextMenu, type MenuEntry } from "./files/ContextMenu.tsx";
-import { Badge, Button, Card, Chip, EmptyState, Field, Icon, IconButton, KeyValueRow, Modal } from "../ui/primitives.tsx";
+import { Badge, Button, Card, Chip, EmptyState, Field, Icon, IconButton, KeyValueRow, Modal, Tabs } from "../ui/primitives.tsx";
 import { Page } from "../ui/layout.tsx";
+
+/** The Settings subpages. `general` = this-Mac behavior; `account` = identity/plan (configured installs only). */
+export type SettingsTab = "general" | "account";
+
+const TABS = [
+  { id: "general", label: "General" },
+  { id: "account", label: "Account" },
+] as const satisfies readonly { id: SettingsTab; label: string }[];
 
 /** A watched folder's at-a-glance state. The daemon only exposes a GLOBAL `running` flag (no per-source
  * progress), so a catch-up shows every un-paused folder as syncing — accurate, since a run scans them all.
@@ -56,9 +69,11 @@ export const SettingsView = ({
   onSubscribe,
   subscription,
   onSubscriptionChanged,
+  tab,
+  onTabChange,
 }: ViewProps & {
-  /** Sign-in status (Phase 5). The account card renders only for a configured (multi-user) install —
-   * dogfood mode has no account to show. */
+  /** Sign-in status (Phase 5). The Account subpage exists only for a configured (multi-user) install —
+   * dogfood mode has no account, so no tab strip either. */
   auth: AuthStatus;
   /** Account profile (display name + onboarding facts) — the Name row + its inline edit. */
   account: AccountStatus;
@@ -74,17 +89,24 @@ export const SettingsView = ({
   running: boolean;
   settings: SettingsApi;
   /** The vault total: a live S3 listing under this user's own prefix — every device, and the figure the
-   * plan quota is enforced against. Drives the Storage card AND the downgrade warning, so they can never
+   * plan quota is enforced against. Drives the quota row AND the downgrade warning, so they can never
    * disagree. Null only before the daemon's first listing lands (or signed out). */
   bytesStored: number | null;
   files: ArchivedFile[];
   virtualFolders: string[];
+  /** The active subpage — owned by App so the sidebar chip's popover can deep-link to Account.
+   * App-owned state also means the last-visited tab survives a trip to My Files and back. */
+  tab: SettingsTab;
+  onTabChange: (tab: SettingsTab) => void;
 }): React.JSX.Element => {
   const [adding, setAdding] = useState(false);
   const [pattern, setPattern] = useState("");
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuEntry[] } | null>(null);
   const [removing, setRemoving] = useState<Source | null>(null);
   const [changingPlan, setChangingPlan] = useState(false);
+  // Billing actions folded (destructive last, GitHub/Linear "danger zone" convention): the STATE
+  // (Active · renews …) stays visible above; only the rare actions live behind the disclosure.
+  const [billingOpen, setBillingOpen] = useState(false);
   // The Name row's inline edit (null = read mode). Also the durable override for a Google user who
   // wants something other than their Google name — our copy is never clobbered by the next sign-in.
   const [editingName, setEditingName] = useState<string | null>(null);
@@ -170,47 +192,63 @@ export const SettingsView = ({
     </Button>
   );
 
-  return (
-    <Page title="Settings">
-      <Card title="Watched folders" action={watchActions}>
+  const quotaValue =
+    bytesStored == null
+      ? "—"
+      : entitlement.quotaBytes != null
+        ? `${formatBytes(bytesStored)} of ${formatBytes(entitlement.quotaBytes)}`
+        : formatBytes(bytesStored);
+
+  const hasAccount = auth.configured;
+  const active: SettingsTab = hasAccount ? tab : "general";
+
+  const general = (
+    <>
+      <Card
+        title="Watched folders"
+        action={watchActions}
+        // Only with folders present — the empty state carries its own explanatory copy, so a card
+        // description here would say it twice.
+        description={
+          sources.length > 0
+            ? "Folders coldstorage keeps current as they change. Their files show in My Files with an auto marker. Done-once folders don't need watching — just drop them into My Files."
+            : undefined
+        }
+      >
         {sources.length > 0 ? (
           <>
-            <p className="cs-help" style={{ marginBottom: "var(--space-4)" }}>
-              Folders coldstorage keeps current as they change. Their files show in My Files with an auto
-              marker. Done-once folders don't need watching — just drop them into My Files.
-            </p>
             <div>
               {sources.map((s) => {
                 const st = folderState(s);
                 const badge = folderBadge[st];
                 return (
-                <div
-                  className={s.paused ? "cs-row cs-row--paused" : "cs-row"}
-                  key={s.id}
-                  onContextMenu={(e) => openRowMenu(e, s)}
-                >
-                  <span className="cs-watch-folder-icon">
-                    <Icon name="folder" size={22} />
-                  </span>
-                  <div className="cs-row-main">
-                    {/* source → destination: the watched folder on the Mac (~-shortened, full path on
-                        hover), then where its files land in My Files. */}
-                    <div className="cs-watch-src" title={s.path ?? s.id}>{tildify(s.path ?? s.id)}</div>
-                    <div className="cs-watch-dest">
-                      <Icon name="subdirectory_arrow_right" size={16} />
-                      {s.mountPath ? dest(s.mountPath) : "My Files"}
+                  <div
+                    className={s.paused ? "cs-row cs-row--paused" : "cs-row"}
+                    key={s.id}
+                    onContextMenu={(e) => openRowMenu(e, s)}
+                  >
+                    <span className="cs-watch-folder-icon">
+                      <Icon name="folder" size={22} />
+                    </span>
+                    <div className="cs-row-main">
+                      {/* source → destination: the watched folder on the Mac (~-shortened, full path on
+                          hover), then where its files land in My Files. */}
+                      <div className="cs-watch-src" title={s.path ?? s.id}>{tildify(s.path ?? s.id)}</div>
+                      <div className="cs-watch-dest">
+                        <Icon name="subdirectory_arrow_right" size={16} />
+                        {s.mountPath ? dest(s.mountPath) : "My Files"}
+                      </div>
                     </div>
+                    {/* Status at a glance — the badge carries the live state (amber Paused on a dimmed row
+                        reads loud, so the folder never looks protected when it isn't). */}
+                    <Badge tone={badge.tone} icon={badge.icon}>{badge.label}</Badge>
+                    <IconButton
+                      icon="more_horiz"
+                      label={`Actions for ${s.path ?? s.id}`}
+                      className="cs-iconbtn--ghost"
+                      onClick={(e) => openRowMenu(e, s)}
+                    />
                   </div>
-                  {/* Status at a glance — the badge carries the live state (amber Paused on a dimmed row
-                      reads loud, so the folder never looks protected when it isn't). */}
-                  <Badge tone={badge.tone} icon={badge.icon}>{badge.label}</Badge>
-                  <IconButton
-                    icon="more_horiz"
-                    label={`Actions for ${s.path ?? s.id}`}
-                    className="cs-iconbtn--ghost"
-                    onClick={(e) => openRowMenu(e, s)}
-                  />
-                </div>
                 );
               })}
             </div>
@@ -225,6 +263,171 @@ export const SettingsView = ({
           />
         )}
       </Card>
+
+      {/* Always-visible chips, deliberately NOT folded behind a disclosure: in a backup product, what's
+          NOT being uploaded is the most dangerous setting in the app — it stays in plain sight. */}
+      <Card title="Don't back up" description="coldstorage skips these everywhere — caches and junk you never mean to keep.">
+        <div className="cs-chips">
+          {settings.excludes.map((p) => (
+            <Chip key={p} mono onRemove={() => settings.removeExclude(p)}>
+              {p}
+            </Chip>
+          ))}
+        </div>
+        <div className="cs-stack" style={{ marginTop: "var(--space-4)" }}>
+          <Field
+            label="Add a pattern"
+            placeholder="*.log"
+            value={pattern}
+            mono
+            onChange={(e) => setPattern(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addPattern()}
+          />
+          <Button icon="add" disabled={!pattern.trim()} onClick={addPattern}>
+            Add pattern
+          </Button>
+        </div>
+      </Card>
+
+      {hasAccount ? (
+        // Signed-in installs: the quota row lives on Account › Plan & billing (beside its remedy);
+        // only the this-Mac fact remains here.
+        <Card title="This Mac">
+          <KeyValueRow label="Encryption" value="on this Mac, before upload" icon="lock" />
+        </Card>
+      ) : (
+        // Dogfood mode has no Account subpage to carry the figure, so the original Storage card stands.
+        <Card title="Storage">
+          {/* ONE number, one meaning: `bytesStored` is a live listing of what's actually in the user's own
+              vault, so it counts every device they've deposited from and it's the figure the plan's quota is
+              enforced against. Never reintroduce a second, journal-summed total beside it. */}
+          <KeyValueRow label="In deep storage" value={quotaValue} accent />
+          <KeyValueRow label="Encryption" value="on this Mac, before upload" icon="lock" />
+        </Card>
+      )}
+    </>
+  );
+
+  const accountPage = hasAccount && (
+    <>
+      <Card
+        title="Account"
+        action={
+          <Button size="sm" icon="logout" onClick={() => exec(() => api.signOut())}>
+            Sign out
+          </Button>
+        }
+      >
+        <KeyValueRow
+          label="Name"
+          value={
+            editingName !== null ? (
+              <span className="cs-plan-row">
+                <Field
+                  label="Name"
+                  value={editingName}
+                  autoFocus
+                  onChange={(e) => setEditingName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && saveName()}
+                />
+                <Button size="sm" icon="check" onClick={saveName}>
+                  {savingName ? "Saving…" : "Save"}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setEditingName(null)}>
+                  Cancel
+                </Button>
+              </span>
+            ) : (
+              <span className="cs-plan-row">
+                {account.displayName ?? "—"}
+                <Button size="sm" icon="edit" onClick={() => setEditingName(account.displayName ?? "")}>
+                  Edit
+                </Button>
+              </span>
+            )
+          }
+        />
+        <KeyValueRow label="Signed in as" value={auth.email ?? "—"} />
+      </Card>
+
+      <Card title="Plan & billing">
+        {subscription && (
+          <KeyValueRow
+            label="Plan"
+            value={
+              <span className="cs-plan-row">
+                {subscription.plan ? (
+                  <Badge tone="accent">
+                    {subscription.plan.size} · {subscription.plan.years} yr{subscription.plan.years > 1 ? "s" : ""}
+                  </Badge>
+                ) : (
+                  // A price that predates the current plan lineup (e.g. sold before a catalog
+                  // reshape) — still fully changeable; the picker just starts from the default.
+                  <Badge tone="neutral">Earlier plan</Badge>
+                )}
+                <Button size="sm" icon="swap_horiz" onClick={() => setChangingPlan(true)}>
+                  Change plan
+                </Button>
+              </span>
+            }
+          />
+        )}
+        <KeyValueRow label="In deep storage" value={quotaValue} accent />
+        <KeyValueRow
+          label="Subscription"
+          value={
+            subscription?.cancelsAt ? (
+              <Badge tone="warning" icon="event">Ends {shortDate(subscription.cancelsAt)}</Badge>
+            ) : entitlement.active ? (
+              <Badge tone="success" icon="check">
+                {subscription?.nextBilledAt ? `Active · renews ${shortDate(subscription.nextBilledAt)}` : "Active"}
+              </Badge>
+            ) : (
+              // No subscription = the free tier, not a dead account. Name the plan they're on before
+              // offering the one they aren't; the quota row above already shows it filling up.
+              <span className="cs-plan-row">
+                <Badge tone="neutral">Free</Badge>
+                <Button size="sm" onClick={onSubscribe}>
+                  {entitlement.checkingOut ? "Finishing…" : "Upgrade"}
+                </Button>
+              </span>
+            )
+          }
+        />
+        {subscription && (
+          <>
+            <button
+              type="button"
+              className={billingOpen ? "cs-disclose cs-disclose--open" : "cs-disclose"}
+              aria-expanded={billingOpen}
+              onClick={() => setBillingOpen((v) => !v)}
+            >
+              <Icon name="chevron_right" size={18} />
+              Billing
+            </button>
+            {billingOpen && (
+              <div className="cs-plan-row cs-disclose-body">
+                <Button size="sm" icon="credit_card" onClick={() => exec(() => api.openManage("payment"))}>
+                  Update payment method
+                </Button>
+                {!subscription.cancelsAt && (
+                  <Button size="sm" icon="cancel" onClick={() => exec(() => api.openManage("cancel"))}>
+                    Cancel subscription
+                  </Button>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </Card>
+    </>
+  );
+
+  return (
+    <Page title="Settings">
+      {hasAccount && <Tabs tabs={TABS} active={active} onChange={onTabChange} label="Settings sections" />}
+
+      {active === "general" ? general : accountPage}
 
       {adding && (
         <AddWatchedFolderModal
@@ -260,153 +463,6 @@ export const SettingsView = ({
             you&apos;ve backed up.
           </p>
         </Modal>
-      )}
-
-      <Card title="Don't back up">
-        <p className="cs-help" style={{ marginBottom: "var(--space-4)" }}>
-          coldstorage skips these everywhere — caches and junk you never mean to keep.
-        </p>
-        <div className="cs-chips">
-          {settings.excludes.map((p) => (
-            <Chip key={p} mono onRemove={() => settings.removeExclude(p)}>
-              {p}
-            </Chip>
-          ))}
-        </div>
-        <div className="cs-stack" style={{ marginTop: "var(--space-4)" }}>
-          <Field
-            label="Add a pattern"
-            placeholder="*.log"
-            value={pattern}
-            mono
-            onChange={(e) => setPattern(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && addPattern()}
-          />
-          <Button icon="add" disabled={!pattern.trim()} onClick={addPattern}>
-            Add pattern
-          </Button>
-        </div>
-      </Card>
-
-      <Card title="Storage">
-        {/* ONE number, one meaning: `bytesStored` is a live listing of what's actually in the user's own
-            vault, so it counts every device they've deposited from and it's the figure the plan's quota is
-            enforced against. This row used to sum the local file rows instead — a per-device number sitting
-            under a label that reads like the whole vault. Two numbers that could disagree, both presented as
-            the truth. (Selection sizes elsewhere still sum rows; that's a different question.) */}
-        <KeyValueRow
-          label="In deep storage"
-          value={
-            bytesStored == null
-              ? "—"
-              : entitlement.quotaBytes != null
-                ? `${formatBytes(bytesStored)} of ${formatBytes(entitlement.quotaBytes)}`
-                : formatBytes(bytesStored)
-          }
-          accent
-        />
-        <KeyValueRow label="Encryption" value="on this Mac, before upload" icon="lock" />
-      </Card>
-
-      {auth.configured && (
-        <Card
-          title="Account"
-          action={
-            <Button size="sm" icon="logout" onClick={() => exec(() => api.signOut())}>
-              Sign out
-            </Button>
-          }
-        >
-          <KeyValueRow
-            label="Name"
-            value={
-              editingName !== null ? (
-                <span className="cs-plan-row">
-                  <Field
-                    label="Name"
-                    value={editingName}
-                    autoFocus
-                    onChange={(e) => setEditingName(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && saveName()}
-                  />
-                  <Button size="sm" icon="check" onClick={saveName}>
-                    {savingName ? "Saving…" : "Save"}
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setEditingName(null)}>
-                    Cancel
-                  </Button>
-                </span>
-              ) : (
-                <span className="cs-plan-row">
-                  {account.displayName ?? "—"}
-                  <Button size="sm" icon="edit" onClick={() => setEditingName(account.displayName ?? "")}>
-                    Edit
-                  </Button>
-                </span>
-              )
-            }
-          />
-          <KeyValueRow label="Signed in as" value={auth.email ?? "—"} />
-          {subscription && (
-            <KeyValueRow
-              label="Plan"
-              value={
-                <span className="cs-plan-row">
-                  {subscription.plan ? (
-                    <Badge tone="accent">
-                      {subscription.plan.size} · {subscription.plan.years} yr{subscription.plan.years > 1 ? "s" : ""}
-                    </Badge>
-                  ) : (
-                    // A price that predates the current plan lineup (e.g. sold before a catalog
-                    // reshape) — still fully changeable; the picker just starts from the default.
-                    <Badge tone="neutral">Earlier plan</Badge>
-                  )}
-                  <Button size="sm" icon="swap_horiz" onClick={() => setChangingPlan(true)}>
-                    Change plan
-                  </Button>
-                </span>
-              }
-            />
-          )}
-          <KeyValueRow
-            label="Subscription"
-            value={
-              subscription?.cancelsAt ? (
-                <Badge tone="warning" icon="event">Ends {shortDate(subscription.cancelsAt)}</Badge>
-              ) : entitlement.active ? (
-                <Badge tone="success" icon="check">
-                  {subscription?.nextBilledAt ? `Active · renews ${shortDate(subscription.nextBilledAt)}` : "Active"}
-                </Badge>
-              ) : (
-                // No subscription = the free tier, not a dead account. Name the plan they're on before
-                // offering the one they aren't; the Storage row above already shows it filling up.
-                <span className="cs-plan-row">
-                  <Badge tone="neutral">Free</Badge>
-                  <Button size="sm" onClick={onSubscribe}>
-                    {entitlement.checkingOut ? "Finishing…" : "Upgrade"}
-                  </Button>
-                </span>
-              )
-            }
-          />
-          {subscription && (
-            <KeyValueRow
-              label="Billing"
-              value={
-                <span className="cs-plan-row">
-                  <Button size="sm" icon="credit_card" onClick={() => exec(() => api.openManage("payment"))}>
-                    Update payment method
-                  </Button>
-                  {!subscription.cancelsAt && (
-                    <Button size="sm" icon="cancel" onClick={() => exec(() => api.openManage("cancel"))}>
-                      Cancel subscription
-                    </Button>
-                  )}
-                </span>
-              }
-            />
-          )}
-        </Card>
       )}
 
       {changingPlan && subscription && (

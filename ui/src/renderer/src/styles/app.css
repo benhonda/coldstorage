@@ -216,9 +216,23 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
+  /* Reserve the height an `sm` action button forces, so a bare-title header (no action) sits at the
+     same height as one with a Sync now / Sign out button — cards read on a consistent baseline
+     whether or not they carry an action. */
+  min-height: var(--control-sm);
   margin-bottom: var(--space-2); /* header → content (C) */
 }
 .cs-card-title { margin: 0; font: var(--type-card-title); letter-spacing: var(--tracking-tight); }
+/* Card header supporting line — grouped tight under the title, then the standard space-4 down to the
+   body. The negative top pulls back part of the head's space-2 margin so title→desc reads as one
+   group (~4px), without touching that shared margin (which sets header→content on description-less
+   cards). Same typography as an inline help line. */
+.cs-card-desc {
+  margin: calc(-1 * var(--space-1)) 0 var(--space-4);
+  font: var(--type-label);
+  color: var(--text-secondary);
+  line-height: var(--leading-normal);
+}
 
 /* ── Stat (big reassuring number) ───────────────────────────────── */
 .cs-stat-value { font: var(--type-stat); letter-spacing: var(--tracking-tighter); }
@@ -1281,6 +1295,84 @@ button.cs-kv:hover { background: var(--surface-hover); }
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+/* the "this opens something" cue — quiet, like a select's chevron */
+.cs-account-caret { flex: none; color: var(--text-tertiary); display: grid; place-items: center; }
+
+/* ── account popover (opens above the chip — identity · Settings… · Sign out) ── */
+.cs-account-pop {
+  position: fixed;
+  z-index: 30;
+  min-width: 240px;
+  padding: var(--space-2);
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+}
+.cs-account-pop-head { padding: var(--space-2) var(--space-3); min-width: 0; }
+.cs-account-pop-name { font: var(--type-body); font-weight: var(--weight-medium); color: var(--text-primary); }
+.cs-account-pop-email {
+  font: var(--type-label);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cs-account-pop-plan {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font: var(--type-label);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── settings sub-nav (General | Account) — text-forward segmented tab strip ── */
+.cs-subnav {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 2px;
+  padding: 3px;
+  background: var(--btn-secondary-bg);
+  border-radius: var(--radius-pill);
+}
+.cs-subnav-tab {
+  border: 0;
+  background: transparent;
+  padding: 6px 18px;
+  border-radius: var(--radius-pill);
+  font: var(--type-label);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.cs-subnav-tab:hover { color: var(--text-primary); }
+.cs-subnav-tab[aria-selected="true"] {
+  background: var(--surface-card);
+  color: var(--accent-text);
+  font-weight: var(--weight-medium);
+  box-shadow: var(--shadow-card);
+}
+.cs-subnav-tab:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* ── inline disclosure (Settings › Account › Billing — rare actions folded, state stays visible) ── */
+.cs-disclose {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: var(--space-2) 0;
+  font: var(--type-body);
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+.cs-disclose:hover { color: var(--text-primary); }
+.cs-disclose .csf-icon { transition: transform var(--duration-fast) var(--ease-out); }
+.cs-disclose--open .csf-icon { transform: rotate(90deg); }
+.cs-disclose-body { padding: 0 0 var(--space-2); }
 
 /* ── Deposit progress banner — the live "what's uploading + how long" surface (DepositProgress.tsx). ── */
 .cs-deposit {

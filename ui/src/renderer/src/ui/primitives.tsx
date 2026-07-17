@@ -4,7 +4,7 @@
  * (../styles); they hold no app state. Voice rules live in the DS guide: sentence case, no exclamation
  * marks, no emoji — enforced by the copy passed in, not here.
  */
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 
@@ -81,6 +81,7 @@ export const IconButton = ({
 export const Card = ({
   title,
   action,
+  description,
   raised = false,
   flush = false,
   className,
@@ -88,6 +89,10 @@ export const Card = ({
 }: {
   title?: ReactNode;
   action?: ReactNode;
+  /** Supporting line under the title — part of the header block, not the body, so its spacing is
+   * standardized (never a hand-set margin on an ad-hoc `<p>`). Sits below the title/action row,
+   * full-width. */
+  description?: ReactNode;
   raised?: boolean;
   flush?: boolean;
   className?: string;
@@ -109,6 +114,7 @@ export const Card = ({
           {action}
         </header>
       )}
+      {description && <p className="cs-card-desc">{description}</p>}
       {children}
     </section>
   );
@@ -132,6 +138,61 @@ export const Stat = ({
     <div className="cs-stat-label">{label}</div>
   </div>
 );
+
+/**
+ * Sub-page tab strip (a proper `tablist`) — the text-forward segmented control over a view's subpages
+ * (e.g. Settings › General | Account). Generic over the tab id so `onChange` hands back the caller's
+ * union, never a bare string. Arrow keys move selection (automatic activation) with focus following
+ * the newly active tab (roving tabindex).
+ */
+export const Tabs = <T extends string>({
+  tabs,
+  active,
+  onChange,
+  label,
+}: {
+  tabs: readonly { id: T; label: string }[];
+  active: T;
+  onChange: (id: T) => void;
+  /** Accessible name for the tablist (e.g. "Settings sections"). */
+  label: string;
+}): React.JSX.Element => {
+  const strip = useRef<HTMLDivElement>(null);
+  const move = (dir: 1 | -1): void => {
+    const i = tabs.findIndex((t) => t.id === active);
+    const next = tabs[(i + dir + tabs.length) % tabs.length];
+    if (!next || next.id === active) return;
+    onChange(next.id);
+    strip.current?.querySelector<HTMLButtonElement>(`[data-tab="${next.id}"]`)?.focus();
+  };
+  return (
+    <div
+      ref={strip}
+      className="cs-subnav"
+      role="tablist"
+      aria-label={label}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowRight") move(1);
+        else if (e.key === "ArrowLeft") move(-1);
+      }}
+    >
+      {tabs.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          role="tab"
+          data-tab={t.id}
+          aria-selected={active === t.id}
+          tabIndex={active === t.id ? 0 : -1}
+          className="cs-subnav-tab"
+          onClick={() => onChange(t.id)}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+};
 
 type BadgeTone = "neutral" | "accent" | "success" | "danger" | "warning";
 

@@ -37,7 +37,8 @@ Two jobs are the whole product: **get files up** and **get them back**. The app 
 ## Surfaces — two, not four
 *(The original 4-tab Vault/Sources/Restore/Browse layout is superseded and deleted.)*
 - **My Files** — the entire drive: browse, drop-to-upload, reorganize, request a copy.
-- **Settings** — watched folders, exclude patterns, storage/cost.
+- **Settings** — one door, two subpages (tabs): **General** (this-Mac behavior) and **Account**
+  (identity/plan — configured installs only; the sidebar identity chip's popover deep-links here).
 
 Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-click) opens actions,
 **Get info** opens a modal.
@@ -134,6 +135,17 @@ Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-cl
 7. Batch/folder request → one **combined** quote (`240 files · ~a day · ~$3.10`).
 
 ## Settings
+**One door, two subpages (2026-07-17).** The nav has a single Settings entry; inside, a small
+text-forward tab strip (`Tabs` primitive, a real `tablist`) splits it into **General** and
+**Account**. The cut is the ownership line — *"would this setting follow me to a second Mac?"* —
+so every future setting has an unambiguous home: notification prefs → General; recovery code /
+device list → a **Security** tab added the day that content exists (never an empty pane as an IOU).
+The tab is App-owned state: last-visited is remembered across a trip to My Files, and the sidebar
+identity chip's popover deep-links to Settings › Account. **Dogfood mode (unconfigured) shows no
+tab strip at all** — General's content IS the page, byte-identical shape either way; the
+conditionality is structural, not a card that appears mid-page.
+
+### General — how this Mac backs up
 - **Watched folders:** list + "Add a watched folder" + **"Sync now"** (global catch-up). Each row: a
   rounded accent folder tile, source → destination (`~`-shortened Mac path over `↳ My Files / <mount>`),
   a live status badge (🟢 Up to date · 🔵 Syncing… · 🟠 Not watching — driven by the live `run.active`,
@@ -146,11 +158,21 @@ Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-cl
 - **Don't back up (excludes):** friendly removable chips over real gitignore-style globs, seeded with
   smart defaults; daemon is the SSOT (journal-persisted, applied *inside* the directory walk so junk
   is never hashed and node_modules is pruned whole). Per-source extras are a later refinement.
-- **Storage:** plain + factual (no "safe", no privacy over-claim). **ONE row, one number** —
-  *"In deep storage — 12 GB of 25 GB"* (the `of Y` appears once the plan's quota is known, from the
-  backend's entitlement). The bytes are `getStatus.bytesStored`: a **live S3 listing** under the user's own
-  prefix, so it counts every device they've deposited from and it is the exact figure the quota is enforced
-  against.
+- **This Mac:** the encryption fact ("on this Mac, before upload" — plain, no "safe", no privacy
+  over-claim). In **dogfood mode** this card is the original **Storage** card instead — the quota row
+  stays here because there's no Account subpage to carry it.
+
+### Account — who's signed in, what they pay for (configured installs only)
+- **Account card:** Name (inline edit) + Signed in as, with **Sign out** as the header action.
+- **Plan & billing card:** Plan row (badge + Change plan → `ChangePlanModal`), the quota row (below),
+  Subscription state (Active · renews / Free + Upgrade / Ends date), then **Billing folded behind an
+  inline disclosure** (Update payment method · Cancel subscription) — destructive last, state always
+  visible, actions two clicks, never staring at you.
+- **The quota row — ONE row, one number:** *"In deep storage — 12 GB of 25 GB"* (the `of Y` appears
+  once the plan's quota is known, from the backend's entitlement). The bytes are
+  `getStatus.bytesStored`: a **live S3 listing** under the user's own prefix, so it counts every
+  device they've deposited from and it is the exact figure the quota is enforced against. It lives
+  beside its remedy (Change plan); the sidebar chip's meter is the ambient copy.
 
   It used to be two rows — a journal-summed "In deep storage" beside an S3-derived "Plan usage" — which is
   a per-device number and a per-identity number sitting next to each other, both labelled as the truth about
@@ -290,8 +312,9 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   `views/PlanPicker.tsx`); Settings shows the state. `coldstorage://checkout-complete` is a check-now nudge. **Manage surface (2026-07-10, PADDLE.md "Managing a subscription"):**
   `getSubscription()/previewPlanChange()/changePlan()/openManage()` → the sidebar's pinned
   `views/AccountCard.tsx` (avatar · email · a Drive-style storage meter fed by the gate's own
-  used/quota figures; the plan-size badge only when the meter can't name the quota; click → Settings)
-  + Settings ▸ Account
+  used/quota figures; the plan-size badge only when the meter can't name the quota; click → a
+  popover: identity summary + "Settings…" deep-linking to Settings › Account + Sign out)
+  + Settings › Account
   (plan row + `views/ChangePlanModal.tsx` with a proration preview; cancel/payment-method open
   Paddle-hosted pages in the browser).
 - `src/renderer/src/styles/tokens/` — the 5 DS token CSS files **vendored verbatim** (SSOT — re-sync,

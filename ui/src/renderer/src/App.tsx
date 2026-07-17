@@ -24,7 +24,7 @@ import { FailuresPanel } from "./views/files/FailuresPanel.tsx";
 import type { BlobFailure } from "./state/reducer.ts";
 import { bytesAvailable } from "./state/entitlement.ts";
 import { MyFilesView } from "./views/MyFilesView.tsx";
-import { SettingsView, type SettingsApi } from "./views/SettingsView.tsx";
+import { SettingsView, type SettingsApi, type SettingsTab } from "./views/SettingsView.tsx";
 import { SignInView } from "./views/SignInView.tsx";
 import { RecoveryCodeShow, RecoveryCodeEnter, VaultGate } from "./views/RecoveryCodeView.tsx";
 import { OnboardingWizard, onboardingPending } from "./views/OnboardingWizard.tsx";
@@ -56,6 +56,9 @@ interface Props {
 export const App = ({ api, store }: Props): React.JSX.Element => {
   const state = useAppState(store);
   const [route, setRoute] = useState<Route>("files");
+  // Settings' active subpage, owned here (not in SettingsView) for two reasons: the sidebar chip's
+  // popover deep-links to Settings › Account, and the last-visited tab survives a trip to My Files.
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [cmdError, setCmdError] = useState<string | null>(null);
   // The error message the user has dismissed. Daemon `error` events are live state (no id/timestamp), so
   // we gate on the message string: a new, distinct error re-shows the toast; re-firing the same one stays hidden.
@@ -328,7 +331,11 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
               active={state.entitlement.active}
               usedBytes={usedBytes}
               quotaBytes={state.entitlement.quotaBytes}
-              onClick={() => setRoute("settings")}
+              onOpenSettings={() => {
+                setSettingsTab("account");
+                setRoute("settings");
+              }}
+              onSignOut={() => void api.signOut()}
             />
           ) : undefined
         }
@@ -383,6 +390,8 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           onSubscribe={() => setPaywallReason("upgrade")}
           subscription={subscription}
           onSubscriptionChanged={setSubscription}
+          tab={settingsTab}
+          onTabChange={setSettingsTab}
         />
       )}
 
