@@ -28,6 +28,13 @@
       "skillPath": "skills/engineering/audit-code-quality/SKILL.md",
       "computedHash": "bf0ec8afa66c93fe01e7e7622a49e41d3fc0a94ec0ad72f8282ae5a687d3300f"
     },
+    "ben-prose": {
+      "source": "git@github.com:adpharm/adpharm-skills.git",
+      "sourceUrl": "git@github.com:adpharm/adpharm-skills.git",
+      "sourceType": "git",
+      "skillPath": "skills/misc/ben-prose/SKILL.md",
+      "computedHash": "0bd800554014b085b3278512ca09cb313627b7b95364067a2886d65ad7f34bcb"
+    },
     "brand-review": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",
@@ -40,6 +47,12 @@
       "sourceType": "git",
       "skillPath": "skills/engineering/checkpoint/SKILL.md",
       "computedHash": "70d80d89678f84af80a30510cf686682a05a3597501adaaaa68abc137daef2fc"
+    },
+    "design-an-interface": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/deprecated/design-an-interface/SKILL.md",
+      "computedHash": "aef348a9af675b771635623b5aa7790da4d40adc1ee88b58b6fd116eda2047d8"
     },
     "humanizer": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
