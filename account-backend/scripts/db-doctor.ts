@@ -15,8 +15,9 @@
  * Read-only. Fixing a gap is `task backend:db:push`.
  */
 import { neon } from "@neondatabase/serverless";
-import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { accountsTable, retrievalJobsTable } from "../src/db/schema.js";
+import { is } from "drizzle-orm";
+import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
+import * as schema from "../src/db/schema.js";
 
 const url = process.env.DATABASE_URL;
 if (!url) {
@@ -25,7 +26,10 @@ if (!url) {
 }
 
 const sql = neon(url);
-const TABLES: PgTable[] = [accountsTable, retrievalJobsTable];
+// Every pgTable the schema module exports — derived, never hand-listed, so a future table is
+// audited automatically instead of drifting out of this check.
+const exported: unknown[] = Object.values(schema);
+const TABLES: PgTable[] = exported.filter((v): v is PgTable => is(v, PgTable));
 
 console.log("─".repeat(78));
 console.log(`DB doctor — ${new URL(url).host}`);

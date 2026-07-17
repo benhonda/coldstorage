@@ -1286,16 +1286,28 @@ tasks:
       - bun run scripts/create-paddle-client-token.ts {{.CLI_ARGS}}
 
   backend:db:push:
-    desc: "Push the Drizzle schema to Neon (drizzle-kit push) — NO migration files. Target is DATABASE_URL from account-backend/.env (it's loaded last, so it overrides .env.vercel — verified). Prints the host it's pushing to. Verify after with backend:db:doctor."
+    desc: "Push the Drizzle schema to Neon (drizzle-kit push) — NO migration files. Target is DATABASE_URL from account-backend/.env (it's loaded last, so it overrides .env.vercel — verified). Prints the host AND the lane (STAGING vs not, derived from the pulled .env.vercel staging baseline). ⚠ Staging + production are SEPARATE Neon DBs — a push lands on ONE lane, and the other needs its own push before code expecting the new schema deploys there. Verify after with backend:db:doctor."
     dir: account-backend
     interactive: true
     prompt: "Before pushing schema changes, double-check DATABASE_URL — is it correct?"
     cmds:
       # .env is loaded LAST and wins for DATABASE_URL; .env.vercel still supplies everything else
       # (PADDLE_*, COGNITO_*, AWS_*). You choose the target in .env — nothing here second-guesses it.
-      # It just says which host it landed on, out loud, because that's the fact that went unnoticed.
+      # db-target says which host AND which lane, out loud, because "which database did that actually
+      # hit" is the fact that went unnoticed for an evening.
       - bun --env-file=.env.vercel --env-file=.env run scripts/db-target.ts
       - bun --env-file=.env.vercel --env-file=.env run db:push
+      # The vice-versa reminder. Staging and production are SEPARATE Neon DBs (there's no
+      # restore-one-from-the-other in this project) — a schema change that ships to both lanes needs
+      # a push per lane, and forgetting the second one surfaces later as a bare http 500 from the
+      # deployed API. Printed AFTER a successful push, the moment you're about to walk away.
+      - |
+        echo ""
+        echo "⚠️  That push changed ONE lane only (the lane line above says which). Staging and"
+        echo "   production are separate Neon DBs — the other lane keeps its OLD schema until you"
+        echo "   repoint DATABASE_URL in account-backend/.env and run this again. Before deploying"
+        echo "   code that needs the new schema to the other lane, push its DB first."
+        echo "   Deployed-lane check: task backend:api:health ENV=staging  |  ENV=production"
 
 
   backend:db:doctor:
