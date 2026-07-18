@@ -3,11 +3,11 @@
   display: flex;
   flex-direction: column;
 }
-.csf-accordion__item {
+/* Hairlines divide items from each other, but never fence the whole list: the outer edges
+   double up with whatever contains the accordion (on /faq and the home page it sits in a
+   bordered card), which reads as a stray line rather than structure. */
+.csf-accordion__item + .csf-accordion__item {
   border-top: 1px solid var(--border-subtle);
-}
-.csf-accordion__item:last-child {
-  border-bottom: 1px solid var(--border-subtle);
 }
 .csf-accordion__h {
   margin: 0;

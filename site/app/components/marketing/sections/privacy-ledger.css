@@ -1,0 +1,46 @@
+/* Section · Privacy ledger. Ported from the upstream `csInjectStyle("v3-privacy-css", …)`
+   block (`.csV3-priv`, `.csV3-row`, `.csV3-num`), renamed to the repo's `cs-` convention. */
+
+.cs-privacy {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  gap: 64px;
+  align-items: start;
+}
+
+.cs-privacy__left {
+  position: sticky;
+  top: 120px;
+}
+
+.cs-privacy__row {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 20px;
+  padding: 28px 0;
+  border-top: 1px solid var(--border-subtle);
+  align-items: baseline;
+}
+
+/* Close the list with a bottom rule on the FINAL row only.
+   Upstream writes `.csV3-row:last-child`, but each row is wrapped in its own <Reveal>,
+   so that selector matches every row and doubles the divider between them. The rule is
+   hung off the last wrapper instead, which is what the design plainly intends. */
+.cs-privacy__rows > :last-child .cs-privacy__row {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.cs-privacy__num {
+  font: 500 15px/1 var(--font-mono);
+  color: var(--accent-text);
+}
+
+@media (max-width: 880px) {
+  .cs-privacy {
+    grid-template-columns: 1fr;
+    gap: 32px;
+  }
+  .cs-privacy__left {
+    position: static;
+  }
+}

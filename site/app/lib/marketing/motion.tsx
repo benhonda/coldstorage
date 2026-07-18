@@ -84,10 +84,24 @@ type RevealProps = {
   threshold?: number;
   className?: string;
   style?: React.CSSProperties;
+  /**
+   * Element to render. Defaults to a block `div`; pass `"span"` when the reveal sits inside
+   * phrasing content (the hero reveals each headline word *inside* the `<h1>`, and a `<div>`
+   * there is invalid HTML — harmless in the design preview, not in server-rendered markup).
+   */
+  as?: "div" | "span";
 };
 
 /** Fade-and-rise on first view. Visible pre-mount (SSR/no-JS) and under reduced motion. */
-export function Reveal({ children, delay = 0, y = 16, threshold, className, style }: RevealProps) {
+export function Reveal({
+  children,
+  delay = 0,
+  y = 16,
+  threshold,
+  className,
+  style,
+  as: Tag = "div",
+}: RevealProps) {
   const reduced = useReducedMotion();
   const [mounted, setMounted] = React.useState(false);
   const [ref, seen] = useInViewOnce(
@@ -99,7 +113,7 @@ export function Reveal({ children, delay = 0, y = 16, threshold, className, styl
   // hiding them is imperceptible and lets them animate in on scroll.
   const hidden = mounted && !reduced && !seen;
   return (
-    <div
+    <Tag
       ref={ref}
       className={className}
       style={{
@@ -112,6 +126,6 @@ export function Reveal({ children, delay = 0, y = 16, threshold, className, styl
       }}
     >
       {children}
-    </div>
+    </Tag>
   );
 }

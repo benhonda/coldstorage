@@ -1,0 +1,26 @@
+/* Section · Drag in — media/copy split. Ported verbatim from the upstream
+   `csInjectStyle("v4-how-css", …)` block (`.csV4-how`, `.csV4-howmedia`).
+   On narrow screens the media drops below the copy (order: 2). */
+
+.cs-dragin {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 56px;
+  align-items: center;
+}
+
+.cs-dragin__media {
+  aspect-ratio: 4 / 3;
+  min-height: 300px;
+  border-radius: 24px;
+}
+
+@media (max-width: 960px) {
+  .cs-dragin {
+    grid-template-columns: 1fr;
+    gap: 32px;
+  }
+  .cs-dragin > :first-child {
+    order: 2;
+  }
+}

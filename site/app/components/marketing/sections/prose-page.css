@@ -1,0 +1,55 @@
+/* Section · Prose page (how-it-works, about, open-source) — heading left, prose right, so the page scans as a
+   document rather than a stack of marketing cards. */
+
+.cs-prose__h1 {
+  margin: 8px 0 0;
+  max-width: 18ch;
+}
+
+.cs-prose__intro {
+  margin: 22px 0 0;
+  max-width: 60ch;
+  font-size: var(--text-lg);
+}
+
+.cs-prose {
+  display: grid;
+  grid-template-columns: 1fr 1.5fr;
+  gap: 64px;
+  align-items: start;
+}
+
+.cs-prose__head {
+  position: sticky;
+  top: 120px;
+}
+
+.cs-prose__h2 {
+  margin: 0;
+  text-wrap: balance;
+}
+
+.cs-prose__body {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* This page is prose — body copy, not leads. Comfortable measure, generous line height. */
+.cs-prose__p {
+  margin: 0;
+  max-width: 64ch;
+  font: 400 17px/1.65 var(--font-ui);
+  color: var(--text-secondary);
+  text-wrap: pretty;
+}
+
+@media (max-width: 880px) {
+  .cs-prose {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  .cs-prose__head {
+    position: static;
+  }
+}

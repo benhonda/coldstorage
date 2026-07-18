@@ -15,6 +15,8 @@
 declare global {
   interface Window {
     env: {
+      // Cloudflare Turnstile site key (public half of the widget pair)
+      PUBLIC_TURNSTILE_SITE_KEY?: string;
       // Paddle client-side token (public by design; sandbox/live differ)
       PUBLIC_PADDLE_CLIENT_TOKEN?: string;
       // Paddle JS environment ("sandbox" | "production")

@@ -69,7 +69,10 @@ async function runGenerator(gen: { name: string; script: string }) {
 export default defineConfig({
   server: {
     host: "0.0.0.0", // required to work in a devcontainer
-    port: 3000,
+    // 4352, not the Vite/RR default 3000: the account-backend's local API already owns :3000
+    // (see Taskfile `backend:*`), so the two apps could not run side by side on the default.
+    port: 4352,
+    strictPort: true, // fail loudly on a port clash instead of silently drifting to 4353
   },
   resolve: {
     // `~` → app/. vite-tsconfig-paths is deprecated; alias directly. tsconfig `paths` covers tsc.

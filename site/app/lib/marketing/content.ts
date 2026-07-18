@@ -1,175 +1,726 @@
 /*
- * Marketing site content — typed, ported VERBATIM from the upstream design
- * (`design-mirror/marketing/shared/site-common.jsx`, voiced per `uploads/BRAND-VOICE.md`).
- * The copy is authoritative — do not paraphrase or "improve" it here; edit it upstream and
- * re-pull. English-only today; the `/fr` pass will pair each string with its translation
- * (see site/SPEC.md → i18n). Only the pieces the shipped Master composes are ported.
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  THE MARKETING COPY SSOT. This file is the source, not a copy of one.
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Every word the marketing site renders lives here. Edit the copy HERE — there is no
+ * upstream doc to change first, and nothing regenerates this file.
+ *
+ * How we got here (2026-07-18, Ben): copy used to be drafted in `strategy/*-copy.md`, which
+ * is gitignored and private. That put the words in five places at once (strategy doc → design
+ * project upload → design `LC` object → design-mirror → here) with nothing declaring a winner,
+ * and the words drifted. `strategy/` is now for high-level thinking and what's next — it does
+ * not prescribe artifacts. Shipped copy is public words in version control, reviewed in diffs.
+ *
+ * WHAT IS *NOT* A COPY SOURCE — do not port words from these, they will be stale:
+ *  - `design-mirror/marketing/shared/landing-copy.jsx` (the `LC` object) and the design
+ *    project it mirrors. That is a **preview fixture** so the upstream design renders. It is
+ *    mirrored verbatim for clean design diffs, NOT consulted for wording.
+ *  - `design-mirror/marketing/shared/site-common.jsx` — its `CS_*` copy constants are DEAD
+ *    (superseded upstream). It is mirrored only for its helper functions.
+ *
+ * WHAT STILL OWNS SOMETHING ELSE:
+ *  - **Framing** (what a page argues) → `strategy/landing-framing.md`.
+ *  - **Voice** (how it sounds) → `strategy/BRAND-VOICE.md` + the `ben-prose` skill.
+ *  - **Prices** → `account-backend/src/plan-sizes.ts` (generator: `$0.018/GB/yr + $0.99`) and
+ *    `account-backend/src/retrieval-pricing.ts` (`quoteCents()`). The numbers in `PRICING`
+ *    below mirror those. `task copy:check:site` re-derives them from the code every run, so a
+ *    price that moves in one place and not the other fails loudly instead of shipping.
+ *  - **Published prices are the REAL prices — never tidied.** Retrieval runs at 0% margin, so
+ *    rounding a rate down subsidizes it out of storage margin and rounding it up takes margin
+ *    we said we don't take. $0.0974 is not $0.10; $0.53 is not $0.50.
+ *  - **Legal prose** → `~/lib/marketing/legal.ts` (its own SSOT; different review path).
+ *
+ * STANDING CONSTRAINTS on everything in this file:
+ *  - **Never name the backend provider in customer copy** — no "AWS", "S3", "Glacier", no
+ *    vendor, anywhere. (Firm reversal, Ben 2026-07-17; the earlier "name AWS in one FAQ slot"
+ *    rule is dead.) Legal disclosure in `legal.ts` is the one carve-out — it must name them.
+ *  - **No fear-mongering, no "safe"/"secure" claims.** Calm and factual; status is
+ *    information, not comfort.
+ *  - **Never over-claim past the architecture.** True zero-knowledge shipped (PROD.md
+ *    2026-07-02), so "only you hold the key" is now earned — but claims track the code.
+ *  - **Terminology: say "encrypted", never "scrambled".** (Voice delta, 2026-07-17 — reverses
+ *    the older "scrambled on your Mac" phrasing, which the design's `LC` still uses.)
+ *  - **Never frame our own costs as "nearly free"/"basically nothing".** It reads as "then why
+ *    am I paying you", and it isn't true — storage carries real cost plus a modest margin;
+ *    only retrieval runs at zero markup. Explain cheapness comparatively.
+ *
+ * i18n: English-only today; the `/fr` pass will pair each string with its translation
+ * (see site/SPEC.md → i18n).
  */
+
+// The two published contact addresses belong to `legal.ts` (they're the controller/seller
+// contacts of record). Imported rather than retyped so the marketing pages and the legal
+// pages can never disagree about where to write.
+import { LEGAL_EMAIL, SUPPORT_EMAIL } from "~/lib/marketing/legal";
+
+/* ────────────────────────────────  Hero  ─────────────────────────────────── */
+
+export type Hero = {
+  /** Rendered as separately-revealed inline words. */
+  words: string[];
+  lead: string;
+  cta: string;
+  note: string;
+};
+
+export const HERO: Hero = {
+  words: ["Private.", "Cost-effective.", "Simple."],
+  lead: "ColdStorage backs up your photos and files, so a dead laptop or a wiped drive doesn't take them with it.",
+  cta: "Download for Mac",
+  note: "Free to start: 25 GB, no card.",
+};
 
 /* ─────────────────────────────  How it works  ───────────────────────────── */
 
-export type HowStep = {
-  /** two-digit step number, e.g. "01" */
-  n: string;
-  /** Material Symbols Rounded glyph name */
+export type How = { eyebrow: string; title: string; body: string };
+
+export const HOW: How = {
+  eyebrow: "How it works",
+  title: "Drag in what you want to keep",
+  body: "Open the app, drag in the photos or files you want to keep, and they upload. Pull in your whole camera roll or a single folder — whatever you drop in gets encrypted on your Mac and stored. There's no setup, and nothing to manage after.",
+};
+
+/* ─────────────────────  How it works (the /how-it-works page)  ───────────── */
+
+/*
+ * The deep-storage explainer (`/how-it-works`), linked from the pricing section's callout.
+ * First draft, agreed "good for now" — not settled.
+ *
+ * Page-specific constraints, on top of the file-header ones:
+ *  - **No dollar figures on this page.** The retrieval cost stays qualitative here; the actual
+ *    numbers live on /pricing. (Both this and the never-name-the-provider rule are asserted
+ *    against the rendered HTML — see site/SPEC.md.)
+ *
+ * ⚠️ GAP — this page has no durability story. One shipped briefly and was pulled 2026-07-18 as
+ * a false claim (see the note where the block used to be). Readers reasonably want to know
+ * their files won't rot; that answer needs writing from verified infrastructure behaviour.
+ */
+
+export type ProseBlock = {
+  heading: string;
+  /** One entry per paragraph, in order. */
+  body: string[];
+};
+
+/**
+ * A headed prose page: eyebrow, title, a framing paragraph, headed blocks, and a closing CTA.
+ * Three routes share this shape and the one `<ProsePage>` renderer — `/how-it-works`,
+ * `/about`, `/open-source`. Adding a fourth is a content object plus a four-line route.
+ */
+export type ProsePageContent = {
+  eyebrow: string;
+  title: string;
+  intro: string;
+  blocks: ProseBlock[];
+  cta: { label: string; note: string };
+};
+
+export const HOW_PAGE: ProsePageContent = {
+  eyebrow: "How it works",
+  title: "How deep storage works",
+  intro:
+    "ColdStorage is deep storage — the kind built for files you want to keep but hardly ever open. That's the whole reason it's cheap, and it's also why getting a lot back takes a little patience. Here's how it actually works, and why it costs what it does.",
+  blocks: [
+    {
+      heading: "Why it costs so little",
+      body: [
+        "Most cloud storage keeps every one of your files live, ready to open the second you want it. Keeping files awake like that takes real hardware running around the clock, and you pay for it whether you open a file every day or once a decade.",
+        "Deep storage does the opposite. Your files rest on low-power storage that isn't kept spinning and waiting, so it costs far less to run than keeping everything live and ready. That's where the low price comes from — you're not paying to keep your files awake when they don't need to be.",
+      ],
+    },
+    {
+      heading: "What happens when you put files in",
+      body: [
+        "When you drag files into the app, they're encrypted right there on your Mac, before anything leaves your computer. The encrypted copies are what upload and settle into deep storage. The key that unlocks them stays on your device — we never receive it, so what we're holding is a pile of files we can't read.",
+      ],
+    },
+    {
+      heading: "What happens when you get them back",
+      body: [
+        // "or sooner if you pay a bit to hurry it" removed — V1 sells the bulk tier only, so
+        // there is no faster option to offer. ~48 hours is what `TYPICAL_WAIT` actually promises.
+        "Because your files are resting instead of sitting live, they can't be handed over on the spot. When you ask for something, it's brought up out of deep storage and made ready — usually in about two days.",
+        "Pulling files back has a cost, and we'd rather be plain about it. Part of it is bringing the data up; the bigger part is moving it across the internet to you, which is a real expense on our end. We charge you exactly what those cost us and nothing more — you see the amount before anything runs, and a little each month is free.",
+        "We make our money on storage, not on handing your files back, so there's no reason for us to make that cost a penny more than it is.",
+      ],
+    },
+    /*
+     * REMOVED 2026-07-18 — a "How your files are kept" durability block claimed the encrypted
+     * files are "copied across several separate locations, so losing one machine — or a whole
+     * building — doesn't lose them" and are "checked over time to make sure they're still
+     * whole". Ben: that is a false claim. It shipped unverified and is now pulled.
+     *
+     * A durability story is a fair thing for a reader to want, so this is a gap worth filling —
+     * but only with a claim someone has checked against what the infrastructure actually does
+     * and guarantees. Do not restore the old wording, and do not write a replacement from
+     * intuition about how the storage tier "probably" works.
+     */
+  ],
+  cta: { label: "Download for Mac", note: "Start with 25 GB free." },
+};
+
+/* ───────────────────────────────  Privacy  ──────────────────────────────── */
+
+export type PrivacyStep = {
+  /** Material Symbols Rounded glyph name — also the React key upstream uses. */
   icon: string;
   title: string;
   body: string;
 };
 
-/** Four honest steps (step four is the deliberately-frank one). */
-export const HOW_STEPS: HowStep[] = [
-  {
-    n: "01",
-    icon: "ads_click",
-    title: "Point it at what matters",
-    body: "Pick your Photos library and the folders you'd hate to lose — or drag them in. It works like copying to a drive: no per-upload meter, no decisions.",
-  },
-  {
-    n: "02",
-    icon: "lock",
-    title: "It scrambles and ships",
-    body: "Everything is encrypted on your Mac before it leaves, then archived to deep storage somewhere else entirely. Newest photos go first, so the things you'd miss most are safe soonest.",
-  },
-  {
-    n: "03",
-    icon: "photo_library",
-    title: "Browse everything, always",
-    body: "Your whole archive stays browsable — file tree and thumbnails, instantly, without touching cold storage. Proof of safety you can look at.",
-  },
-  {
-    n: "04",
-    icon: "cloud_download",
-    title: "Getting it back is a quote, then a wait",
-    body: "A restore isn't instant — it's a recovery. Pick what you need, see the exact cost and ready-time, and nothing starts until you say go. Most people restore a folder, not the library.",
-  },
-];
+export type Privacy = {
+  eyebrow: string;
+  title: string;
+  lead: string;
+  steps: PrivacyStep[];
+};
 
-/* ───────────────────────────────  Privacy  ──────────────────────────────── */
-
-export type PrivacyRow = { label: string; value: string; icon: string };
-
-/** Commitments, in writing (V1-honest — claims match the architecture). */
-export const PRIVACY_ROWS: PrivacyRow[] = [
-  { label: "Scanning your files", value: "Never", icon: "visibility_off" },
-  { label: "AI training on your data", value: "Never", icon: "smart_toy" },
-  { label: "Ads, or selling data", value: "Never", icon: "block" },
-  { label: "Human access", value: "Audit-logged, with your say-so", icon: "shield_person" },
-  { label: "Leaving", value: "Export everything, anytime", icon: "output" },
-];
-
-export const KEY_ESCROW_LINE =
-  "One more honest detail: today we hold your key — as escrow, so recovery works when you need it. " +
-  "It's audit-logged, only ever used with your say-so, and we're moving it onto your device alone.";
+export const PRIVACY: Privacy = {
+  eyebrow: "Privacy",
+  title: "Only you can open them",
+  lead: "Your files are encrypted on your Mac before they leave it, with a key only you hold. We never get that key, so we can't open your files. Only you can.",
+  steps: [
+    {
+      icon: "enhanced_encryption",
+      title: "Encrypted on your Mac",
+      // "encrypted", never "scrambled" — see the header's terminology rule.
+      body: "Files are encrypted before they leave your machine.",
+    },
+    {
+      icon: "key",
+      title: "The key stays with you",
+      body: "We never get it, and there's no copy on our side.",
+    },
+    {
+      icon: "visibility_off",
+      title: "We store what we can't read",
+      body: "What sits with us is data only you can open.",
+    },
+  ],
+};
 
 /* ───────────────────────────────  Pricing  ──────────────────────────────── */
 
-export type Term = { id: string; label: string };
-
-/** The settled 3×4 matrix (SPEC §5). A term is exactly N × the yearly rate;
-    the only discount in the model is the gentle size-taper. */
-export const TERMS: Term[] = [
-  { id: "1yr", label: "1 year" },
-  { id: "2yr", label: "2 years" },
-  { id: "3yr", label: "3 years" },
-  { id: "5yr", label: "5 years" },
-];
-
-type MatrixEntry = { perYear: string; perMonth: string; totals: Record<string, string> };
-
-const MATRIX: Record<string, MatrixEntry> = {
-  "500 GB": { perYear: "$9.99", perMonth: "$0.83", totals: { "1yr": "$9.99", "2yr": "$19.98", "3yr": "$29.97", "5yr": "$49.95" } },
-  "1 TB": { perYear: "$18.99", perMonth: "$1.58", totals: { "1yr": "$18.99", "2yr": "$37.98", "3yr": "$56.97", "5yr": "$94.95" } },
-  "2 TB": { perYear: "$36.99", perMonth: "$3.08", totals: { "1yr": "$36.99", "2yr": "$73.98", "3yr": "$110.97", "5yr": "$184.95" } },
-};
-
-const TERM_WORDS: Record<string, string> = {
-  "1yr": "for one year",
-  "2yr": "for two years",
-  "3yr": "for three years",
-  "5yr": "for five years",
-};
-
-export type PriceCell = { price: string; period: string; perYear: string; perMonth: string };
 export type PricingTier = {
-  name: string;
   size: string;
-  featured: boolean;
-  ctaLabel: string;
-  prices: Record<string, PriceCell>;
+  /** Yearly price, or "Free" on the free tier. */
+  year: string;
+  /** Monthly equivalent, or an em-dash on the free tier. */
+  month: string;
+  free?: boolean;
 };
 
-/** Derive the tier list (name × term → price cell) from the matrix. */
-export function pricingTiers(ctaLabel = "Get started"): PricingTier[] {
-  return Object.entries(MATRIX).map(([name, t], i) => ({
-    name,
-    size: name,
-    featured: i === 1,
-    ctaLabel,
-    prices: Object.fromEntries(
-      TERMS.map(({ id }) => [
-        id,
-        { price: t.totals[id], period: TERM_WORDS[id], perYear: t.perYear, perMonth: t.perMonth },
-      ])
-    ),
-  }));
-}
+export type RetrievalRow = { label: string; value: string };
 
-export const ENTERPRISE = {
-  title: "Keeping more than 2 TB?",
-  note: "Same rate, same gentle taper — tell us what you keep and we'll set it up.",
-  cta: "Tell us",
+export type Pricing = {
+  eyebrow: string;
+  title: string;
+  /** Lead used when the retrieval numbers sit behind a second tab (the shipped Master). */
+  lead: string;
+  /** Lead used when both halves are visible at once. */
+  leadNoTabs: string;
+  tiers: PricingTier[];
+  moreLead: string;
+  moreLink: string;
+  renewNote: string;
+  retrievalTitle: string;
+  retrievalLead: string;
+  retrievalRows: RetrievalRow[];
+  readyNote: string;
+  callout: string;
+  calloutLink: string;
+  finePrint: string;
+  /** Editorial microcopy for the tabbed table — labels a reader actually sees. */
+  ui: {
+    tabs: { storage: { label: string; sub: string }; retrieval: { label: string; sub: string } };
+    columns: { size: string; perYear: string; perMonth: string; /** a11y-only */ cta: string };
+    freeBadge: string;
+    ctaFree: string;
+    ctaPaid: string;
+  };
 };
 
-export const RATE_LOCK =
-  "A longer term isn't a discount — it's a rate lock. Every term is exactly that many years at today's rate, " +
-  "and if our costs rise mid-term, we absorb the difference until your term ends.";
-
-export const TAPER_NOTE =
-  "Bigger tiers cost slightly less per GB because one account is cheaper for us to run than two — " +
-  "we pass that back. It's the only discount in the model.";
-
-export const TIERS_NOTE = "Every tier is the whole product. The only difference is room.";
+/*
+ * The tiers below mirror `account-backend/src/plan-sizes.ts` — that file is the price SSOT,
+ * and its prices are generator-derived (`round(1.8 * bytes/1e9 + 99)` cents). Do NOT hand-type
+ * a new row: derive it there, then mirror it here. `month` is `year / 12`, presentational only.
+ *
+ * The 25 GB free tier is deliberately NOT a row in `PLAN_SIZES` (it's an entitlement, never a
+ * sellable Paddle product), so it exists only here on the marketing side.
+ *
+ * ⚠️ KEEP HONEST — `readyNote` ("Ready in a day or two…") is the ONLY place the not-instant
+ * expectation is set on the landing page; everything else about the wait lives on
+ * /how-it-works. Do not cut it. (Standing rule from the copy review, 2026-07-17.)
+ */
+export const PRICING: Pricing = {
+  eyebrow: "Pricing",
+  title: "Start with 25 GB free, no card",
+  lead: "When you need more room, pick a size. Getting files back has its own simple numbers — they're on the second tab.",
+  leadNoTabs:
+    "When you need more room, pick a size. Getting files back has its own simple numbers — they're right below.",
+  tiers: [
+    { size: "25 GB", year: "Free", month: "—", free: true },
+    { size: "500 GB", year: "$9.99", month: "$0.83" },
+    { size: "1 TB", year: "$18.99", month: "$1.58" },
+    { size: "2 TB", year: "$36.99", month: "$3.08" },
+    { size: "5 TB", year: "$90.99", month: "$7.58" },
+    { size: "10 TB", year: "$180.99", month: "$15.08" },
+  ],
+  moreLead: "More than 10 TB?",
+  moreLink: "Get in touch",
+  renewNote: "Plans renew once a year, and we tell you before they do.",
+  retrievalTitle: "Getting files back",
+  retrievalLead:
+    "Storing is your yearly plan. Pulling files back out costs what it costs us to move them — no markup. Here are the numbers, so you can work it out yourself.",
+  /*
+   * These are the ALL-IN customer prices, derived from `account-backend/src/retrieval-pricing.ts`
+   * — `quoteCents()` is the SSOT and `task copy:check:site` re-derives these from it every run.
+   *
+   * Do not "tidy" them. $0.0974 is not $0.10 and $0.53 is not $0.50: retrieval runs at 0% margin, so
+   * a rounded-down rate is a subsidy paid out of storage margin, and a rounded-up one is margin
+   * we said we don't take. The published number has to be the real one.
+   *   $0.0974/GB = (egress $0.09 + thaw $0.0025) ÷ 0.95 (Paddle's 5%)
+   *   $0.53    = Paddle's $0.50 flat ÷ 0.95
+   */
+  retrievalRows: [
+    { label: "First 1 GB each month", value: "Free" },
+    { label: "Every GB you pull back", value: "$0.0974" },
+    { label: "Flat fee per recovery", value: "$0.53" },
+  ],
+  // ~48 hours is the BULK tier's wait, and bulk is the only tier V1 sells. The old copy offered
+  // "sooner if you pay a bit to hurry it" — we don't sell expedited retrieval, so that was a
+  // promise the product can't keep.
+  readyNote: "Ready in about 48 hours.",
+  callout:
+    "Pulling a lot of data back out is a real cost to move, and we pass it through with no markup.",
+  calloutLink: "How deep storage works →",
+  // Was: "Plus a small bring-up cost and card processing (~5%) … computed exactly, never rounded
+  // up." Both halves were false once the rates above became all-in — the bring-up cost and the
+  // 5% are now *inside* them, not added on, and a quote does round up to the whole cent.
+  finePrint:
+    "Those rates already include the bring-up cost and card processing — nothing gets added on top. The exact total is always shown before you confirm. The free monthly amount is 1 GB on paid plans, 200 MB on the free plan.",
+  ui: {
+    tabs: {
+      storage: { label: "Storage", sub: "Yearly plans by size" },
+      // Considered alternative for this label: "Retrieval". "Getting files back" won — it says
+      // what happens in words a reader already uses.
+      retrieval: { label: "Getting files back", sub: "What a recovery costs" },
+    },
+    columns: { size: "Size", perYear: "Per year", perMonth: "Per month", cta: "Choose a plan" },
+    freeBadge: "free · no card",
+    ctaFree: "Get started",
+    ctaPaid: "Choose",
+  },
+};
 
 /* ─────────────────────────────────  FAQ  ────────────────────────────────── */
 
 export type FaqItem = { question: string; answer: string };
 
-/** Full FAQ, in the Master's order: where · sync · cost · lapse · floor · wind-down. */
-export const FAQ: FaqItem[] = [
-  {
-    question: "Where is my data stored?",
-    answer:
-      "In Amazon's S3 Glacier Deep Archive — the industrial vault big companies use for the things they keep for decades. We're the simple, private layer on top: your files are scrambled on your Mac before they leave it, so what sits in that vault is data nobody can read.",
-  },
-  {
-    question: "Is this like iCloud or Dropbox?",
-    answer:
-      "No — those sync your working files and read them along the way. ColdStorage works like a drive you keep somewhere else: what you put is what's there, with no versioning. Putting things in feels like copying to an SSD. Getting things out is a recovery — a short wait and a quoted fee, shown before you commit.",
-  },
-  {
-    question: "Why does getting files back cost money?",
-    answer:
-      "Because pulling data out of deep storage has a real cost, and we pass it through at the raw rate we're charged — no markup. Most recoveries are small: a folder runs about fifty cents. Pulling back a full 500 GB archive at once is about $46. Either way you see the exact number first, and nothing's charged until you say go.",
-  },
-  {
-    question: "What happens if I stop paying?",
-    answer:
-      "Nothing dramatic. Your archive goes read-only — untouched and browsable, with nothing new going in. You get about six months of grace and clear reminders, then a final warning long before anything is touched. We never delete over a lapsed card.",
-  },
-  {
-    question: "What's the 180-day minimum?",
-    answer:
-      "Deep storage bills a 180-day minimum per file, so something you delete on day 10 still bills out the rest of that window. Delete freely — it's your drive — we just want you to know how the meter runs before it matters.",
-  },
-  {
-    question: "What if ColdStorage shuts down?",
-    answer:
-      "If we ever wind down, you get at least six months' notice to take your archive elsewhere before anything is deleted. It's a commitment we publish and stand behind: your archive shouldn't vanish because our company did.",
-  },
+export type Faq = { eyebrow: string; title: string; items: FaqItem[] };
+
+/*
+ * The answers below are first-draft seeds — the questions were chosen deliberately, the
+ * wording is not finalized. Built to be a real, SEO-worthy section (it has its own route at
+ * /faq, with FAQPage JSON-LD), so it's worth filling out.
+ *
+ * BACKLOG — questions agreed as worth answering, not yet written:
+ *  - How long does it take to get my files back?
+ *  - What can I store? Does it back up my iPhone photos?
+ *  - What happens if I stop paying?
+ *  - What happens to my files if ColdStorage shuts down?
+ *  - Can someone reach my files if something happens to me?
+ *  - Is there a Windows app?
+ *  - Where are my files actually stored?   ← answer WITHOUT naming the provider (see header)
+ */
+
+export const FAQ: Faq = {
+  eyebrow: "Questions",
+  title: "Fair to ask",
+  items: [
+    {
+      question: "How is this different from iCloud, Google Drive, or Dropbox?",
+      answer:
+        "Those keep your files live and instantly openable, and you pay for that every month. ColdStorage is for files you want kept but rarely open, so it costs a lot less — and your files are encrypted with a key only you hold, so we can't read them.",
+    },
+    {
+      question: "Can you see my files?",
+      answer:
+        "No. They're encrypted on your Mac before they upload, with a key only you hold. We never get the key, so we can't open them.",
+    },
+    {
+      question: "Is there a free plan?",
+      answer: "Yes — 25 GB free, forever, no card.",
+    },
+    {
+      question: "What does it cost to get my files back?",
+      answer:
+        "Each month you can pull back 1 GB for free. Beyond that, you pay only what it costs us to move the data, and you always see the amount before you agree.",
+    },
+    {
+      question: "Can I get all my files back out?",
+      answer:
+        "Anytime. You can export your whole archive and take it elsewhere — nothing's locked in.",
+    },
+  ],
+};
+
+/* ────────────────────────────────  Close  ───────────────────────────────── */
+
+export type Close = { eyebrow: string; title: string; lead: string; cta: string };
+
+export const CLOSE: Close = {
+  eyebrow: "ColdStorage for Mac",
+  title: "Try it with 25 GB free",
+  lead: "No card, and nothing to cancel if it's not for you.",
+  cta: "Download for Mac",
+};
+
+/* ─────────────────────────────────  Nav  ────────────────────────────────── */
+
+export type NavLink = { label: string; href: string };
+
+/*
+ * One nav list for every page — each entry is a real route, so there's no longer a
+ * home-page ("#how") vs away-page ("/#how") variant to keep in sync.
+ *
+ * "Privacy" is deliberately absent: there is no privacy *marketing* page, only the
+ * `/privacy` legal policy, which belongs in the footer's legal row rather than the primary
+ * nav. The home page still carries a privacy *section* — it just isn't a nav destination.
+ */
+export const NAV_LINKS: NavLink[] = [
+  { label: "How it works", href: "/how-it-works" },
+  { label: "Pricing", href: "/pricing" },
+  { label: "FAQ", href: "/faq" },
 ];
 
-/* ─────────────────────────────────  Footer  ─────────────────────────────── */
+/* ──────────────────────────  Company + support pages  ───────────────────── */
+
+/*
+ * `/about`, `/open-source`, `/help`, `/contact` — the four pages the footer's Company and
+ * Support columns used to point at with dead links.
+ *
+ * All four obey the file-header constraints (no provider named, no "safe"/"secure" claims,
+ * nothing claimed past the architecture) and are scanned by `task copy:check:site`.
+ *
+ * ⚠️ CONFIRM WITH BEN before these ship — two lines assert facts only he can verify:
+ *  1. `ABOUT_PAGE` "made by one person, in Burlington, Ontario" — headcount. The address
+ *     matches `legal.ts`'s registered address; the headcount is inferred, not confirmed.
+ *  2. `CONTACT_PAGE.responseNote` "within a couple of business days" — a response-time
+ *     commitment. Only ship a window that's actually going to be met.
+ *
+ * Product facts below are drawn from shipped behavior, not invented: the passwordless
+ * email-code sign-in and the one-time recovery code as the sole human-held secret come from
+ * `PROD.md` (Phase 5b, done 2026-07-02); the "drop anywhere to upload", "Request a copy",
+ * and browse-is-always-instant behaviors come from `ui/DESIGN.md`. If the app changes, these
+ * change with it.
+ */
+
+/** Where the code lives — used by the `/source` page and its CTA. */
+export const REPO_URL = "https://github.com/benhonda/coldstorage";
+/**
+ * The license the repo ships under, in prose form. Mirrors the root `LICENSE` file
+ * (`FSL-1.1-ALv2` — the Functional Source License with an Apache-2.0 future license).
+ *
+ * ⚠️ This is SOURCE-AVAILABLE, not open source. The page below must never call it open
+ * source, and `copy-check.ts` enforces that — claiming an OSI license we don't have would
+ * undercut the exact thing publishing the code was meant to buy.
+ */
+export const REPO_LICENSE = "Functional Source License";
+/** What FSL converts to, and when. Stated on the page because the clock is the point. */
+export const REPO_LICENSE_CONVERTS = "Apache 2.0";
+
+export const ABOUT_PAGE: ProsePageContent = {
+  eyebrow: "About",
+  title: "About ColdStorage",
+  intro:
+    "ColdStorage is somewhere to put the photos and files you want to keep but don't need open all the time. It's a Mac app and a yearly plan.",
+  blocks: [
+    {
+      heading: "Why we built it",
+      body: [
+        "Everyone ends up with a pile of things they can't bring themselves to delete — old photos, video from a trip, scans of documents, the folder from a job that ended years ago. The usual answer is a cloud drive, which charges you to keep all of it awake and instantly openable even though you'll open almost none of it. So people buy an external drive instead, and then the drive dies, or it doesn't die but nobody can remember which drive it was.",
+        // Comparative, never a figure: an earlier draft claimed "a few terabytes costs less per
+        // year than most drives cost per month", which is arithmetic that doesn't survive
+        // contact with either our prices or a drive's. Numbers live on /pricing.
+        "ColdStorage is the other option. Your files go into deep storage, which is slow to open and much cheaper to keep than storage that stays live and ready all the time. Getting something back takes about 48 hours.",
+      ],
+    },
+    {
+      heading: "We can't read your files",
+      body: [
+        "Files are encrypted on your Mac before they upload, and the key that opens them never comes to us. That's a design choice with a real cost attached: if you lose your recovery code and your Mac, nobody can open your files, and that includes us. We'd rather say so plainly than leave you to find out later.",
+      ],
+    },
+    {
+      heading: "How we make money",
+      body: [
+        "You pay for storage once a year, and that's the whole business. There are no ads, and there's nothing to learn from your files even if we wanted to, because we can't open them.",
+        "Pulling files back out is billed at what it costs us to move them, with nothing added on top.",
+      ],
+    },
+    {
+      heading: "What we won't do",
+      body: [
+        "We don't upload anything you didn't put in. macOS will hand an app access to your entire photo library if you let it, but we only take the files you actually drop in.",
+      ],
+    },
+    {
+      heading: "Who's behind it",
+      body: ["ColdStorage is made by one person, in Burlington, Ontario, Canada."],
+    },
+  ],
+  cta: { label: "Download for Mac", note: "Start with 25 GB free." },
+};
+
+/*
+ * `/source` — formerly `/open-source`, renamed 2026-07-18 along with the license change. The
+ * page's whole job is to make the encryption claim checkable, so the one thing it must not do
+ * is overstate what the license actually grants. See the `REPO_LICENSE` note above.
+ */
+export const OPEN_SOURCE_PAGE: ProsePageContent = {
+  eyebrow: "Source code",
+  title: "You can read the code",
+  intro:
+    "All of ColdStorage is on GitHub — the Mac app, the daemon that does the encrypting and uploading, the account service, and this website.",
+  blocks: [
+    {
+      heading: "Why it's public",
+      body: [
+        "We tell you your files are encrypted before they leave your Mac and that we never get the key. That's a claim, and a claim about encryption isn't worth much if you have to take our word for it. The code is there, so you can go and check instead.",
+      ],
+    },
+    {
+      heading: "Where to look",
+      body: [
+        "The encryption lives in the ColdStorageCore package. Crypto.swift does the per-file envelope encryption, and ZeroKnowledgeKeys.swift is the part that wraps your master key under your recovery code so that only that code can unwrap it. Those two files are where “only you hold the key” is either true or it isn't.",
+      ],
+    },
+    {
+      heading: "The license, and what it doesn't say",
+      body: [
+        `The code is under the ${REPO_LICENSE}. You can read it, run it, change it, and build on it. The one thing you can't do is use it to run a storage service that competes with ours.`,
+        `Two years after we ship any given version, that restriction lapses and the version becomes ${REPO_LICENSE_CONVERTS} — a normal open source license, automatically, whether we're still here or not.`,
+        "That's a real limit, so we're not going to call this open source. It isn't.",
+      ],
+    },
+    {
+      heading: "Running your own copy",
+      body: [
+        "The paid service is still a service. Readable code doesn't come with storage attached — running your own means bringing your own storage account and paying for that directly.",
+      ],
+    },
+    {
+      heading: "We're not taking contributions",
+      body: [
+        "Not for now. It's a small operation, and reviewing patches is time that isn't going into the app. Issues are still worth opening if you find something broken.",
+        "If you find a security problem, email it to us instead of opening a public issue, and give us a chance to fix it before you write it up.",
+      ],
+    },
+  ],
+  cta: { label: "Read the code on GitHub", note: REPO_URL.replace("https://", "") },
+};
+
+/* ──────────────────────────────  Help center  ───────────────────────────── */
+
+/** Same shape as a FAQ item, deliberately — the help groups render through the DS Accordion. */
+export type HelpItem = FaqItem;
+export type HelpGroup = { heading: string; items: HelpItem[] };
+export type HelpPage = {
+  eyebrow: string;
+  title: string;
+  intro: string;
+  groups: HelpGroup[];
+  /** The sign-off that points at a human. */
+  footer: { text: string; linkLabel: string };
+};
+
+/*
+ * Longer answers than the landing FAQ gives — /faq sells, this explains. Deliberately absent:
+ * "what happens if I stop paying" and "what happens if ColdStorage shuts down". Both are on the
+ * FAQ backlog precisely because the answer isn't decided yet, and a help center is the worst
+ * possible place to guess.
+ */
+export const HELP_PAGE: HelpPage = {
+  eyebrow: "Support",
+  title: "Help center",
+  intro:
+    "The things people actually run into, answered at length. If yours isn't here, send us a message.",
+  groups: [
+    {
+      heading: "Getting started",
+      items: [
+        {
+          question: "How do I install it?",
+          answer:
+            "Download the app, drag ColdStorage into your Applications folder, and open it. It runs on macOS, and there's no Windows or iPhone app yet.",
+        },
+        {
+          question: "How do I sign in? I never set a password.",
+          answer:
+            "There isn't one. You type your email address, we send you a code, and you type the code back in.",
+        },
+        {
+          question: "What is the recovery code, and why does it matter so much?",
+          answer:
+            "When you create your account you're shown a one-time recovery code. It's the only human-held secret in the whole system — it's what unwraps the key your files are encrypted with, and we don't keep a copy, because keeping one would mean we could open your files. Write it down somewhere that isn't the Mac you're backing up. You need it when you set ColdStorage up on a new computer. If you lose both the code and the Mac you first used, the files can't be opened by anyone.",
+        },
+      ],
+    },
+    {
+      heading: "Putting files in",
+      items: [
+        {
+          question: "How do I add files?",
+          answer:
+            "Drag them anywhere into the My Files window. Folders come in with their structure intact, and everything is encrypted on your Mac before any of it uploads.",
+        },
+        {
+          question: "Does it back up my whole Mac automatically?",
+          answer:
+            "No, and it won't start doing that on its own. Only what you drop in gets uploaded. If you'd rather not drag things in by hand, you can point the app at a folder in Settings and new files in it will upload as they appear.",
+        },
+        {
+          question: "Can I reorganize things after they're uploaded?",
+          answer:
+            "Yes, and it's free and instant. Renaming, moving, and nesting all happen in your file list, not in deep storage — nothing has to come back out and nothing re-uploads.",
+        },
+      ],
+    },
+    {
+      heading: "Getting files back",
+      items: [
+        {
+          question: "How do I get a file back?",
+          answer:
+            // No "sooner if you pay to hurry it" — we don't sell expedited retrieval, and the
+            // landing page dropped that promise for the same reason. Bulk is the only tier V1
+            // sells, and ~48 hours is its real wait.
+            "Right-click it in My Files and choose Request a copy. The file is brought up out of deep storage and is ready in about 48 hours. You'll see what it costs before anything starts.",
+        },
+        {
+          question: "Why isn't it instant?",
+          answer:
+            "Deep storage keeps your files resting rather than live and spinning, which is the entire reason it's cheap. Waking one up takes hours. There's a longer explanation on the How deep storage works page.",
+        },
+        {
+          question: "What does getting files back cost?",
+          answer:
+            // Rates MUST match PRICING.retrievalRows exactly — asserted by copy-check.ts. They
+            // look untidy on purpose: $0.0974 is not $0.09 and $0.53 is not $0.50 (see the note
+            // on retrievalRows). Retrieval runs at 0% margin, so a rounded number is a lie in
+            // one direction or the other.
+            "Each month, the first 1 GB is free on a paid plan and the first 200 MB is free on the free plan. Past that it's $0.0974 per GB plus a $0.53 fee per recovery. Those rates are what it costs us to move the data, card processing included, and we don't add anything on top. The exact total is shown before you confirm.",
+        },
+        {
+          question: "Do I have to wait just to see what's in there?",
+          answer:
+            "No. Browsing is always instant. Your file list lives on your Mac, so you can look through everything, search it, and reorganize it whenever you like. The wait only happens when you ask for a file's actual contents.",
+        },
+        {
+          question: "Can I get everything out and leave?",
+          answer:
+            "Yes. You can export your whole archive and take it wherever you want. You'd pay the same per-GB cost to move that much data, and that's the only thing standing in the way.",
+        },
+      ],
+    },
+    {
+      heading: "Plans and billing",
+      items: [
+        {
+          question: "How do I change my plan?",
+          answer:
+            "Open Settings and go to the Account tab. You can move up or down a size there, and the change takes effect on your next renewal.",
+        },
+        {
+          question: "When do plans renew?",
+          answer: "Once a year. We email you before it happens, not after.",
+        },
+        {
+          question: "Can I get a refund?",
+          answer:
+            "Usually, yes. The refund policy page has the specifics, and if your situation isn't covered there, write to us and we'll sort it out.",
+        },
+      ],
+    },
+  ],
+  footer: {
+    text: "Still stuck, or your question isn't here?",
+    linkLabel: "Send us a message",
+  },
+};
+
+/* ─────────────────────────────────  Contact  ────────────────────────────── */
+
+export type ContactPage = {
+  eyebrow: string;
+  title: string;
+  intro: string;
+  /** The two published addresses, for people who'd rather use their own mail client. */
+  addresses: { label: string; email: string; note: string }[];
+  responseNote: string;
+  form: {
+    name: { label: string; placeholder: string };
+    email: { label: string; placeholder: string };
+    message: { label: string; placeholder: string };
+    submit: string;
+    submitting: string;
+    /** Shown in place of the form once the message is away. */
+    success: { title: string; body: string };
+    /** Client + server validation messages, and the catch-all failure. */
+    errors: {
+      name: string;
+      email: string;
+      message: string;
+      turnstile: string;
+      failed: string;
+    };
+  };
+};
+
+export const CONTACT_PAGE: ContactPage = {
+  eyebrow: "Contact",
+  title: "Get in touch",
+  intro:
+    "Questions about the app, your account, or a bill all land in the same inbox. Write what's going on and we'll reply by email.",
+  addresses: [
+    {
+      label: "Support",
+      email: SUPPORT_EMAIL,
+      note: "The app, your account, billing — anything that isn't working.",
+    },
+    {
+      label: "Privacy and legal",
+      email: LEGAL_EMAIL,
+      note: "Data requests, privacy questions, and anything a lawyer wrote.",
+    },
+  ],
+  responseNote: "We answer most messages within a couple of business days.",
+  form: {
+    name: { label: "Your name", placeholder: "" },
+    email: { label: "Your email", placeholder: "so we can write back" },
+    message: { label: "Message", placeholder: "" },
+    submit: "Send message",
+    submitting: "Sending…",
+    success: {
+      title: "Message sent",
+      body: "It's in the inbox. You'll get a reply at the address you gave us.",
+    },
+    errors: {
+      name: "Add your name so we know who we're writing back to.",
+      email: "That email address doesn't look right — we need a working one to reply to.",
+      message: "Tell us what's going on and we'll take it from there.",
+      turnstile: "The spam check didn't go through. Reload the page and try once more.",
+      failed:
+        "That didn't send, and it's on our end rather than yours. Try again in a minute, or email us directly at " +
+        SUPPORT_EMAIL +
+        ".",
+    },
+  },
+};
+
+/* ────────────────────────────────  Footer  ──────────────────────────────── */
 
 export type FooterLink = { label: string; href?: string };
 export type FooterColumn = { heading: string; links: FooterLink[] };
@@ -181,11 +732,33 @@ export type Footer = {
 };
 
 export const FOOTER: Footer = {
-  tagline: "The offsite copy your drawer-SSD can't be.",
+  tagline: "For the photos and files you want kept.",
   columns: [
-    { heading: "Product", links: [{ label: "How it works", href: "#how" }, { label: "Pricing", href: "#pricing" }, { label: "Privacy", href: "#privacy" }] },
-    { heading: "Company", links: [{ label: "About" }, { label: "The wind-down promise" }, { label: "Transparency notes" }] },
-    { heading: "Support", links: [{ label: "Help center" }, { label: "Status" }, { label: "Contact us", href: "mailto:support@m.coldstorage.sh" }] },
+    {
+      heading: "Product",
+      links: [
+        { label: "How it works", href: "/how-it-works" },
+        { label: "Pricing", href: "/pricing" },
+        { label: "FAQ", href: "/faq" },
+      ],
+    },
+    // "Transparency notes" and "Status" are gone (Ben, 2026-07-18). Neither had a page behind
+    // it, and a Status link that isn't a real status page is worse than no link at all.
+    {
+      heading: "Company",
+      links: [
+        { label: "About", href: "/about" },
+        // Label says "Source code", not "Open source" — the license is source-available.
+        { label: "Source code", href: "/source" },
+      ],
+    },
+    {
+      heading: "Support",
+      links: [
+        { label: "Help center", href: "/help" },
+        { label: "Contact us", href: "/contact" },
+      ],
+    },
   ],
   legal: [
     { label: "Privacy", href: "/privacy" },

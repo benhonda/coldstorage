@@ -9,18 +9,30 @@ import { components, hooks, utils } from "~/lib/router/generouted-components";
 export const routePaths = [
   "/",
   "/:lang",
+  "/:lang/about",
   "/:lang/checkout",
+  "/:lang/contact",
   "/:lang/download",
+  "/:lang/faq",
+  "/:lang/help",
+  "/:lang/how-it-works",
   "/:lang/pricing",
   "/:lang/privacy",
   "/:lang/refunds",
+  "/:lang/source",
   "/:lang/terms",
+  "/about",
   "/checkout",
+  "/contact",
   "/download",
   "/download[/]dmg",
+  "/faq",
+  "/help",
+  "/how-it-works",
   "/pricing",
   "/privacy",
   "/refunds",
+  "/source",
   "/terms",
 ] as const;
 export type Path = (typeof routePaths)[number];
@@ -28,11 +40,17 @@ export type Path = (typeof routePaths)[number];
 // all params for any given path get defined here...
 export type Params = {
   "/:lang": { lang: string };
+  "/:lang/about": { lang: string };
   "/:lang/checkout": { lang: string };
+  "/:lang/contact": { lang: string };
   "/:lang/download": { lang: string };
+  "/:lang/faq": { lang: string };
+  "/:lang/help": { lang: string };
+  "/:lang/how-it-works": { lang: string };
   "/:lang/pricing": { lang: string };
   "/:lang/privacy": { lang: string };
   "/:lang/refunds": { lang: string };
+  "/:lang/source": { lang: string };
   "/:lang/terms": { lang: string };
 };
 

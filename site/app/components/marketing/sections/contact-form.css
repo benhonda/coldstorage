@@ -1,0 +1,166 @@
+/* Section · Contact — the form on the left, the published addresses on the right. First form
+   in the site, so the field styling is defined here rather than pulled from the DS (which has
+   no input primitive yet — see SPEC "Open decisions"). */
+
+.cs-contact__h1 {
+  margin: 8px 0 0;
+  max-width: 18ch;
+}
+
+.cs-contact__intro {
+  margin: 22px 0 0;
+  max-width: 60ch;
+  font-size: var(--text-lg);
+}
+
+.cs-contact {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 64px;
+  align-items: start;
+}
+
+.cs-contact__card {
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: 24px;
+  box-shadow: var(--shadow-card);
+  padding: 32px;
+}
+
+.cs-contact__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.cs-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cs-field__label {
+  font: 500 14px/1.3 var(--font-ui);
+  color: var(--text-primary);
+}
+
+.cs-field__input,
+.cs-field__textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  font: 400 16px/1.5 var(--font-ui);
+  color: var(--text-primary);
+  background: var(--surface-input);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.cs-field__textarea {
+  min-height: 168px;
+  resize: vertical;
+}
+
+.cs-field__input:focus-visible,
+.cs-field__textarea:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+.cs-field__input[aria-invalid="true"],
+.cs-field__textarea[aria-invalid="true"] {
+  border-color: var(--negative);
+}
+
+/* Field-level and form-level failures share one treatment — a reader shouldn't have to learn
+   two error languages on one form. */
+.cs-field__error,
+.cs-contact__error {
+  margin: 0;
+  font: 400 14px/1.5 var(--font-ui);
+  color: var(--negative);
+}
+
+.cs-contact__error {
+  margin-top: 18px;
+}
+
+.cs-contact__actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 26px;
+}
+
+.cs-contact__note {
+  font: 400 14px/1.4 var(--font-ui);
+  color: var(--text-secondary);
+}
+
+.cs-contact__turnstile {
+  margin-top: 22px;
+}
+
+/* Success replaces the form outright. Leaving a filled-in form sitting under a "sent" banner
+   invites a second identical send. */
+.cs-contact__sent {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.cs-contact__sent-title {
+  margin: 0;
+  font: 600 20px/1.3 var(--font-ui);
+  color: var(--text-primary);
+}
+
+.cs-contact__sent-body {
+  margin: 0;
+  font: 400 16px/1.6 var(--font-ui);
+  color: var(--text-secondary);
+}
+
+.cs-contact__aside {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.cs-contact__addr-label {
+  font: 600 14px/1.3 var(--font-ui);
+  color: var(--text-primary);
+  margin: 0 0 6px;
+}
+
+.cs-contact__addr-mail {
+  font: 400 16px/1.5 var(--font-ui);
+  color: var(--accent);
+  text-decoration: none;
+  word-break: break-word;
+}
+
+.cs-contact__addr-mail:hover {
+  text-decoration: underline;
+}
+
+.cs-contact__addr-note {
+  margin: 6px 0 0;
+  font: 400 15px/1.55 var(--font-ui);
+  color: var(--text-secondary);
+}
+
+@media (max-width: 880px) {
+  .cs-contact {
+    grid-template-columns: 1fr;
+    gap: 36px;
+  }
+  .cs-contact__card {
+    padding: 22px;
+  }
+}

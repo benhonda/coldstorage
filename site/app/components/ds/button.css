@@ -44,10 +44,27 @@
 .csf-btn--primary:hover {
   background: var(--btn-primary-bg-hover);
 }
+/* Secondary — a filled-but-quiet frost tint. Used for the non-free rows in the
+   pricing table, where every row needs an affordance but only one should shout. */
+.csf-btn--secondary {
+  background: var(--btn-secondary-bg);
+  color: var(--btn-secondary-text);
+}
+.csf-btn--secondary:hover {
+  background: var(--btn-secondary-bg-hover);
+}
 .csf-btn--ghost {
   background: transparent;
   color: var(--btn-secondary-text);
 }
 .csf-btn--ghost:hover {
   background: var(--btn-secondary-bg-hover);
+}
+
+/* Disabled — only reachable on the <button> branch (an <a> never gets the attribute). Kept
+   visually obvious rather than subtle: a send in flight should look like one (CORE9). */
+.csf-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+  pointer-events: none;
 }

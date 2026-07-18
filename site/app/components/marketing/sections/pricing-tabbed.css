@@ -1,0 +1,182 @@
+/* Section · Pricing (tabbed). Ported from the upstream `csInjectStyle("m-pricing-css", …)`
+   block (`.csM-tabs`, `.csM-tabbtn`, `.csM-panel`, `.csM-card`, `.csM-table`, …),
+   renamed to the repo's `cs-` convention. */
+
+.cs-pricing__tabs {
+  display: flex;
+  gap: 8px;
+  margin: 40px auto 24px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.cs-pricing__tab {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-card);
+  border-radius: 18px;
+  padding: 14px 22px;
+  min-width: 220px;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  transition:
+    background 150ms var(--ease-out),
+    border-color 150ms var(--ease-out);
+}
+.cs-pricing__tab:hover {
+  background: var(--surface-hover);
+}
+.cs-pricing__tab:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.cs-pricing__tab[data-active="true"] {
+  background: var(--accent-subtle);
+  border-color: transparent;
+}
+.cs-pricing__tab-t {
+  font: 600 16px/1.3 var(--font-ui);
+  color: var(--text-primary);
+}
+.cs-pricing__tab[data-active="true"] .cs-pricing__tab-t {
+  color: var(--accent-text);
+}
+.cs-pricing__tab-s {
+  font: 400 13px/1.4 var(--font-ui);
+  color: var(--text-tertiary);
+}
+
+.cs-pricing__panel {
+  animation: cs-pricing-fade 320ms var(--ease-out);
+  max-width: 760px;
+  margin: 0 auto;
+}
+.cs-pricing__panel:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 24px;
+}
+
+/* The panel remounts on tab switch (React `key`), so this replays each time. */
+@keyframes cs-pricing-fade {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Respect a reduced-motion preference — the tab swap should just cut, not slide. */
+@media (prefers-reduced-motion: reduce) {
+  .cs-pricing__panel {
+    animation: none;
+  }
+}
+
+.cs-pricing__card {
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: 24px;
+  box-shadow: var(--shadow-card);
+  padding: 24px;
+}
+
+.cs-pricing__table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.cs-pricing__table th {
+  font: 400 13px/1 var(--font-ui);
+  color: var(--text-tertiary);
+  text-align: left;
+  padding: 12px 12px 10px;
+}
+.cs-pricing__table td {
+  padding: 0 12px;
+  height: 64px;
+  transition: background 150ms var(--ease-out);
+}
+.cs-pricing__table td:first-child {
+  border-radius: 14px 0 0 14px;
+}
+.cs-pricing__table td:last-child {
+  border-radius: 0 14px 14px 0;
+}
+.cs-pricing__table tbody tr:hover td {
+  background: var(--surface-hover);
+}
+
+.cs-pricing__num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cs-pricing__cta {
+  text-align: right;
+  white-space: nowrap;
+  padding-left: 24px;
+}
+
+.cs-pricing__link {
+  font: 600 15px/1.5 var(--font-ui);
+  color: var(--accent-text);
+  text-decoration: none;
+}
+.cs-pricing__link:hover {
+  text-decoration: underline;
+}
+
+.cs-pricing__krow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 4px;
+  border-top: 1px solid var(--border-subtle);
+}
+.cs-pricing__krow:first-of-type {
+  border-top: 0;
+}
+
+.cs-pricing__retrieval {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.cs-pricing__callout {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 20px;
+  padding: 20px 24px;
+}
+
+@media (max-width: 720px) {
+  .cs-pricing__card {
+    padding: 16px;
+  }
+  .cs-pricing__table td,
+  .cs-pricing__table th {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  /* Upstream hides `th:last-child` here, which only hides the (already empty) CTA header
+     and leaves its cells behind, desyncing the column count. Dropping the per-month
+     column instead is what actually buys the width — it's derivable from the yearly price,
+     and the CTA has to stay. */
+  .cs-pricing__table th:nth-child(3),
+  .cs-pricing__table td:nth-child(3) {
+    display: none;
+  }
+}

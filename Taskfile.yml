@@ -1413,6 +1413,31 @@ tasks:
     cmds:
       - bun run typecheck
 
+  copy:check:site:
+    desc: Guard the marketing copy SSOT — prices still mirror account-backend's PLAN_SIZES, and the standing brand rules hold (no provider named, no over-claims)
+    dir: site
+    dotenv: *site-dotenv
+    cmds:
+      - bun run scripts/copy-check.ts
+
+  build:site:
+    desc: Production-build the site (the same build Vercel runs — catches SSR/bundle breakage typecheck can't)
+    dir: site
+    dotenv: *site-dotenv
+    deps: [generate:site]
+    cmds:
+      - bun run build
+
+  ssr:check:site:
+    desc: Render every marketing route through the production server build and assert it came out (no dev server, no port)
+    dir: site
+    dotenv: *site-dotenv
+    deps: [build:site]
+    cmds:
+      # node, not bun: Bun's `react-dom/server` shim has no `renderToPipeableStream`, which is
+      # what `entry.server.tsx` renders through. Node runs the .ts directly (type stripping).
+      - node scripts/ssr-check.ts
+
   start:site:
     aliases: [dev:site]
     desc: Start the site (marketing) dev server

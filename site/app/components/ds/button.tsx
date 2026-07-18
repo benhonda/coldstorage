@@ -7,17 +7,33 @@ import "./button.css";
 import * as React from "react";
 
 export type ButtonProps = {
-  variant: "primary" | "ghost";
+  variant: "primary" | "secondary" | "ghost";
   size: "lg" | "sm";
   /** leading Material Symbols Rounded glyph name */
   icon?: string;
   /** When set, the button renders as an anchor navigating here (e.g. the `/download` route). */
   href?: string;
+  /**
+   * Native button type. Defaults to `"button"` so a Button dropped inside a form can't submit
+   * it by accident; the contact form sets `"submit"` deliberately. Ignored when `href` is set.
+   */
+  type?: "button" | "submit";
+  /** Greys the control and blocks clicks — the contact form uses it while a send is in flight. */
+  disabled?: boolean;
   onClick?: () => void;
   children: React.ReactNode;
 };
 
-export function Button({ variant, size, icon, href, onClick, children }: ButtonProps) {
+export function Button({
+  variant,
+  size,
+  icon,
+  href,
+  type = "button",
+  disabled = false,
+  onClick,
+  children,
+}: ButtonProps) {
   const className = `csf-btn csf-btn--${variant} csf-btn--${size}`;
   const inner = (
     <>
@@ -41,7 +57,7 @@ export function Button({ variant, size, icon, href, onClick, children }: ButtonP
   }
 
   return (
-    <button type="button" className={className} onClick={onClick}>
+    <button type={type} className={className} onClick={onClick} disabled={disabled}>
       {inner}
     </button>
   );

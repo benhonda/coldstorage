@@ -12,62 +12,21 @@
 <link rel="stylesheet" href="_ds/coldstorage-design-system-41ebafc1-09be-461e-a37e-abeac1c7ec1e/tokens/base.css">
 <link rel="stylesheet" href="_ds/coldstorage-design-system-41ebafc1-09be-461e-a37e-abeac1c7ec1e/tokens/marketing.css">
 <link rel="stylesheet" href="_ds/coldstorage-design-system-41ebafc1-09be-461e-a37e-abeac1c7ec1e/styles.css">
-<!-- Base site styles — shared with the per-section preview pages. Per-variant
-     CSS lives inside each section file instead (injected at load time).
-     See README.md for the map. --><link rel="stylesheet" href="shared/site-base.css">
+<link rel="stylesheet" href="shared/site-base.css">
 </head>
 <body>
 <div id="root"></div>
+<script src="shared/image-slot.js"></script>
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
 <script src="_ds/coldstorage-design-system-41ebafc1-09be-461e-a37e-abeac1c7ec1e/_ds_bundle.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
-
-<!-- Shared infra — copy/data/motion helpers, single source of truth for every
-     section below (see shared/site-common.jsx, shared/motion.jsx). -->
 <script type="text/babel" src="shared/site-common.jsx"></script>
 <script type="text/babel" src="shared/motion.jsx"></script>
-<script type="text/babel" src="shared/macos-window.jsx"></script>
-<script type="text/babel" src="shared/vault-mock.jsx"></script>
-
-<!--
-  ═══════════════════════════════════════════════════════════════════════
-  SECTION LIBRARY — this is the ONE master landing page. Every slot below
-  has its alternate variant files sitting right next to this file (see README.md
-  for the full map of slot → variants → component names).
-
-  TO SWAP A SECTION: change the <script src> below to the alternate file,
-  AND change the matching <Section… /> tag in the PageMaster composition
-  near the bottom of this document. Both live in this one HTML file, so a
-  swap is always a two-line diff, right next to each other.
-  ═══════════════════════════════════════════════════════════════════════
--->
-
-<!-- HERO — active: app mock. Alternates: hero-statement.jsx (SectionHeroStatement), hero-receipt.jsx (SectionHeroReceipt) -->
-<script type="text/babel" src="hero-app-mock.jsx"></script>
-
-<!-- Pulled from the page (files kept, see README): reframe-distance-scene,
-     moments-trio, restore-split-panel, cost-calculator, compare-flat-price. -->
-
-<!-- HOW IT WORKS — active: list. Alternates: how-cards.jsx (SectionHowCards), how-timeline.jsx (SectionHowTimeline),
-     how-one-photo.jsx (SectionHowOnePhoto), how-log.jsx (SectionHowLog), how-scene.jsx (SectionHowScene) -->
-<script type="text/babel" src="how-list.jsx"></script>
-
-<!-- PRIVACY — active: precise. Alternate: privacy-architecture.jsx (SectionPrivacyArchitecture) -->
-<script type="text/babel" src="privacy-precise.jsx"></script>
-
-<!-- PRICING — active: stretch. Alternates: pricing-matrix.jsx (SectionPricingMatrix), pricing-like-drives.jsx (SectionPricingLikeDrives) -->
-<script type="text/babel" src="pricing-stretch.jsx"></script>
-
-<!-- FAQ — active: full. Alternates: faq-costs.jsx (SectionFaqCosts), faq-product.jsx (SectionFaqProduct) -->
-<script type="text/babel" src="faq-full.jsx"></script>
-
-<!-- CLOSING CTA — active: somewhere else. Alternates: closing-every-number.jsx (SectionClosingEveryNumber), closing-kept-elsewhere.jsx (SectionClosingKeptElsewhere) -->
-<script type="text/babel" src="closing-somewhere-else.jsx"></script>
-
-<!-- Page shell — composes the active sections in order. Nav links + footer
-     are site chrome (not swappable "sections"); update nav links if you add
-     or remove an anchor when swapping. -->
+<script type="text/babel" src="shared/landing-copy.jsx"></script>
+<script type="text/babel" src="v3-sections.jsx"></script>
+<script type="text/babel" src="v4-sections.jsx"></script>
+<script type="text/babel" src="master-sections.jsx"></script>
 <script type="text/babel">
   function PageMaster() {
     const solid = useSolidNav();
@@ -76,25 +35,15 @@
       <div style={{ minHeight: "100vh", background: "var(--bg-app)", color: "var(--text-primary)", fontFamily: "var(--font-ui)" }}>
         <div style={{ background: "var(--bg-glow)" }}>
           <div style={{ position: "sticky", top: 0, zIndex: 300 }}>
-            <MarketingNav
-              links={[
-                { label: "How it works", href: "#how" },
-                { label: "Privacy", href: "#privacy" },
-                { label: "Pricing", href: "#pricing" },
-              ]}
-              cta={{ label: "Download for Mac" }}
-              solid={solid}
-            />
+            <MarketingNav links={LC.nav.links} cta={{ label: LC.nav.cta }} solid={solid} />
           </div>
-
-          <SectionHeroAppMock />
-          <SectionHowList />
-          <SectionPrivacyPrecise />
-          <SectionPricingStretch />
-          <SectionFaqFull />
-          <SectionClosingSomewhereElse />
-
-          <MarketingFooter tagline={CS_FOOTER.tagline} columns={CS_FOOTER.columns} legal={CS_FOOTER.legal} copyright={CS_FOOTER.copyright} />
+          <SectionV4Hero />
+          <SectionV4DragIn />
+          <SectionV3Privacy />
+          <SectionMPricing />
+          <SectionMFaq />
+          <SectionV4Close />
+          <MarketingFooter tagline={LC.footer.tagline} columns={LC.footer.columns} legal={LC.footer.legal} copyright={LC.footer.copyright} />
         </div>
       </div>
     );

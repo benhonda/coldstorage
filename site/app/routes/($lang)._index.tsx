@@ -1,23 +1,12 @@
 import type { Route } from "./+types/($lang)._index";
 import { langUtils } from "~/lib/i18n/i18n-utils.server";
-import { useSolidNav } from "~/lib/marketing/site";
-import { DOWNLOAD_PATH } from "~/lib/marketing/download";
-import { FOOTER } from "~/lib/marketing/content";
-import { MarketingNav } from "~/components/marketing/marketing-nav";
-import { MarketingFooter } from "~/components/marketing/marketing-footer";
-import { SectionHeroAppMock } from "~/components/marketing/sections/hero-app-mock";
-import { SectionHowList } from "~/components/marketing/sections/how-list";
-import { SectionPrivacyPrecise } from "~/components/marketing/sections/privacy-precise";
-import { SectionPricingStretch } from "~/components/marketing/sections/pricing-stretch";
-import { SectionFaqFull } from "~/components/marketing/sections/faq-full";
-import { SectionClosingSomewhereElse } from "~/components/marketing/sections/closing-somewhere-else";
-
-/** Nav links — the Master's in-page anchors. */
-const NAV_LINKS = [
-  { label: "How it works", href: "#how" },
-  { label: "Privacy", href: "#privacy" },
-  { label: "Pricing", href: "#pricing" },
-];
+import { MarketingPage } from "~/components/marketing/marketing-page";
+import { SectionHeroStatement } from "~/components/marketing/sections/hero-statement";
+import { SectionDragIn } from "~/components/marketing/sections/drag-in";
+import { SectionPrivacyLedger } from "~/components/marketing/sections/privacy-ledger";
+import { SectionPricingTabbed } from "~/components/marketing/sections/pricing-tabbed";
+import { SectionFaqSplit } from "~/components/marketing/sections/faq-split";
+import { SectionClosingBand } from "~/components/marketing/sections/closing-band";
 
 // The ($lang) optional segment carries the language: "/" is English, "/fr" is French.
 // fr-only is enforced in langUtils (i18n-utils.server).
@@ -27,12 +16,12 @@ const NAV_LINKS = [
 export function meta({ params }: Route.MetaArgs) {
   const isFrench = params.lang === "fr";
   return [
-    { title: "ColdStorage" },
+    { title: "ColdStorage — private, cost-effective backup for Mac" },
     {
       name: "description",
       content: isFrench
-        ? "Le site marketing de ColdStorage."
-        : "The ColdStorage marketing site.",
+        ? "ColdStorage sauvegarde vos photos et vos fichiers. Chiffrés sur votre Mac, avec une clé que vous seul détenez. 25 Go gratuits, sans carte."
+        : "ColdStorage backs up your photos and files, so a dead laptop or a wiped drive doesn't take them with it. Encrypted on your Mac. Free to start: 25 GB, no card.",
     },
   ];
 }
@@ -43,28 +32,15 @@ export function loader({ params }: Route.LoaderArgs) {
 }
 
 export default function Home() {
-  // The Master composition: bg-app wrapper → bg-glow inner → sticky nav → the six
-  // shipping sections in order → footer. (Ported from `ColdStorage - Master.html`.)
-  const solid = useSolidNav();
+  // The Master composition, in order. (Ported from `ColdStorage - Master.html`.)
   return (
-    <div style={{ background: "var(--bg-app)" }}>
-      <div style={{ background: "var(--bg-glow)" }}>
-        <MarketingNav links={NAV_LINKS} cta={{ label: "Download for Mac", href: DOWNLOAD_PATH }} solid={solid} />
-        <main>
-          <SectionHeroAppMock />
-          <SectionHowList />
-          <SectionPrivacyPrecise />
-          <SectionPricingStretch />
-          <SectionFaqFull />
-          <SectionClosingSomewhereElse />
-        </main>
-        <MarketingFooter
-          tagline={FOOTER.tagline}
-          columns={FOOTER.columns}
-          legal={FOOTER.legal}
-          copyright={FOOTER.copyright}
-        />
-      </div>
-    </div>
+    <MarketingPage>
+      <SectionHeroStatement />
+      <SectionDragIn />
+      <SectionPrivacyLedger />
+      <SectionPricingTabbed />
+      <SectionFaqSplit />
+      <SectionClosingBand />
+    </MarketingPage>
   );
 }

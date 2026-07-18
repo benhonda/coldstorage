@@ -25,15 +25,12 @@ export function MarketingNav({ links, cta, solid }: MarketingNavProps) {
     }
   };
 
-  const toTop = (e: React.MouseEvent<HTMLAnchorElement>) => {
-    e.preventDefault();
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  };
-
   return (
     <header className={`csf-mktnav${solid ? " is-solid" : ""}`}>
       <div className="csf-mktnav__inner csf-container">
-        <a className="csf-mktnav__brand" href="#top" onClick={toTop}>
+        {/* The wordmark goes home, the way a wordmark is expected to. It used to scroll to
+            top, which did nothing on the pages that aren't the home page. */}
+        <a className="csf-mktnav__brand" href="/" aria-label="ColdStorage — home">
           <span className="csf-icon" aria-hidden="true">
             ac_unit
           </span>

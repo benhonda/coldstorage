@@ -1,0 +1,19 @@
+/* Section · Hero statement — the wide media stage under the headline.
+   Ported verbatim from the upstream `csInjectStyle("v4-hero-css", …)` block
+   (`.csV4-stage`), renamed to the repo's `cs-` section convention. */
+
+.cs-hero-stage {
+  max-width: 1040px;
+  margin: 56px auto 0;
+  aspect-ratio: 16 / 9;
+  min-height: 300px;
+  border-radius: 28px;
+  box-shadow: var(--shadow-card);
+}
+
+@media (max-width: 720px) {
+  .cs-hero-stage {
+    margin-top: 36px;
+    border-radius: 20px;
+  }
+}
