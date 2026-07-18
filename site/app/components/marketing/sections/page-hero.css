@@ -1,0 +1,25 @@
+/* Section · Page hero — the standard non-landing page head (upstream variant B, left-aligned).
+   Layout only: the type itself comes from `.csf-headline` / `.csf-lead`.
+
+   The 72px band and the 24ch / 54ch measures are the upstream `.ph-band` / `.ph-h1` / `.ph-lead`
+   values, carried over verbatim rather than re-derived. It sets its own padding instead of
+   wearing `.csf-band` because the design specifies a fixed, symmetric band here — this head is
+   tighter than a content section on purpose, so the page starts without a gulf under the nav. */
+
+.cs-page-hero {
+  padding-block: 72px;
+}
+
+.cs-page-hero__eyebrow {
+  display: block;
+  margin-bottom: 16px;
+}
+
+.cs-page-hero__title {
+  max-width: 24ch;
+}
+
+.cs-page-hero__lead {
+  margin-top: 18px;
+  max-width: 54ch;
+}

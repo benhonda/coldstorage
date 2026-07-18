@@ -1,7 +1,8 @@
 import type { Route } from "./+types/($lang).faq";
 import { langUtils } from "~/lib/i18n/i18n-utils.server";
-import { FAQ } from "~/lib/marketing/content";
+import { FAQ, FAQ_PAGE } from "~/lib/marketing/content";
 import { MarketingPage } from "~/components/marketing/marketing-page";
+import { PageHero } from "~/components/marketing/sections/page-hero";
 import { SectionFaqSplit } from "~/components/marketing/sections/faq-split";
 import { SectionClosingBand } from "~/components/marketing/sections/closing-band";
 
@@ -43,7 +44,9 @@ export function loader({ params }: Route.LoaderArgs) {
 export default function Faq() {
   return (
     <MarketingPage>
-      <SectionFaqSplit />
+      <PageHero content={FAQ_PAGE} />
+      {/* The hero says the eyebrow and title in an h1 — the section would repeat both. */}
+      <SectionFaqSplit showHead={false} />
       <SectionClosingBand />
     </MarketingPage>
   );

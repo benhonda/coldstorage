@@ -28,7 +28,16 @@ const TABS: { value: TabId; label: string; sub: string }[] = [
   { value: "retrieval", ...PRICING.ui.tabs.retrieval },
 ];
 
-export function SectionPricingTabbed() {
+export type SectionPricingTabbedProps = {
+  /**
+   * Renders the section's own eyebrow + `<h2>` + lead. On the landing page that's what
+   * introduces the section; on `/pricing` the `<PageHero>` already carries the same words in
+   * an `<h1>`, so the standalone route turns it off rather than printing them twice.
+   */
+  showHead?: boolean;
+};
+
+export function SectionPricingTabbed({ showHead = true }: SectionPricingTabbedProps) {
   const [tab, setTab] = React.useState<TabId>("storage");
   const baseId = React.useId();
   const tabRefs = React.useRef<(HTMLButtonElement | null)[]>([]);
@@ -46,18 +55,20 @@ export function SectionPricingTabbed() {
   return (
     <section
       id="pricing"
-      className="csf-band"
+      className={showHead ? "csf-band" : "csf-band csf-band--flush-top"}
       data-screen-label="Pricing"
-      style={{ borderTop: "1px solid var(--border-subtle)" }}
+      style={showHead ? { borderTop: "1px solid var(--border-subtle)" } : undefined}
     >
       <div className="csf-container">
-        <div className="csf-split-head">
-          <div>
-            <span className="csf-eyebrow">{PRICING.eyebrow}</span>
-            <h2 className="csf-title">{PRICING.title}</h2>
+        {showHead ? (
+          <div className="csf-split-head">
+            <div>
+              <span className="csf-eyebrow">{PRICING.eyebrow}</span>
+              <h2 className="csf-title">{PRICING.title}</h2>
+            </div>
+            <p className="csf-lead">{PRICING.leadNoTabs}</p>
           </div>
-          <p className="csf-lead">{PRICING.leadNoTabs}</p>
-        </div>
+        ) : null}
         <Reveal y={20}>
           <div className="cs-pricing__tabs" role="tablist" aria-label="Pricing">
             {TABS.map((t, i) => {

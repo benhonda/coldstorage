@@ -1,16 +1,7 @@
 /* Section · Prose page (how-it-works, about, open-source) — heading left, prose right, so the page scans as a
    document rather than a stack of marketing cards. */
 
-.cs-prose__h1 {
-  margin: 8px 0 0;
-  max-width: 18ch;
-}
-
-.cs-prose__intro {
-  margin: 22px 0 0;
-  max-width: 60ch;
-  font-size: var(--text-lg);
-}
+/* The page head lives in `page-hero.css` — it's the shared one now, not this page's own. */
 
 .cs-prose {
   display: grid;

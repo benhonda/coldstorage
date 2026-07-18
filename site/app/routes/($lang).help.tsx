@@ -1,11 +1,12 @@
 import type { Route } from "./+types/($lang).help";
 import { langUtils } from "~/lib/i18n/i18n-utils.server";
 import { MarketingPage } from "~/components/marketing/marketing-page";
+import { PageHero } from "~/components/marketing/sections/page-hero";
 import {
-  SectionHelpHead,
   SectionHelpGroups,
   SectionHelpContact,
 } from "~/components/marketing/sections/help-center";
+import { HELP_PAGE } from "~/lib/marketing/content";
 
 /**
  * `/help` — the help center, linked from the footer's Support column. Longer answers than
@@ -33,7 +34,7 @@ export function loader({ params }: Route.LoaderArgs) {
 export default function Help() {
   return (
     <MarketingPage>
-      <SectionHelpHead />
+      <PageHero content={HELP_PAGE} screenLabel="Help center" />
       <SectionHelpGroups />
       <SectionHelpContact />
     </MarketingPage>

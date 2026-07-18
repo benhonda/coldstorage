@@ -54,6 +54,23 @@
 // pages can never disagree about where to write.
 import { LEGAL_EMAIL, SUPPORT_EMAIL } from "~/lib/marketing/legal";
 
+/* ──────────────────────────────  Page heads  ─────────────────────────────── */
+
+/**
+ * The head of any page that isn't the landing page — eyebrow, `<h1>`, and the paragraph that
+ * frames what follows. Every such page renders it through the one `<PageHero>` component
+ * (upstream `page-heroes.jsx`, variant B), so this is the shape that component consumes.
+ *
+ * Declared once and extended by the page shapes below rather than retyped per page: three of
+ * them already had exactly these three fields, and letting them drift apart is how you end up
+ * with three page headers that are almost the same.
+ */
+export type PageHeadContent = {
+  eyebrow: string;
+  title: string;
+  intro: string;
+};
+
 /* ────────────────────────────────  Hero  ─────────────────────────────────── */
 
 export type Hero = {
@@ -108,10 +125,7 @@ export type ProseBlock = {
  * Three routes share this shape and the one `<ProsePage>` renderer — `/how-it-works`,
  * `/about`, `/open-source`. Adding a fourth is a content object plus a four-line route.
  */
-export type ProsePageContent = {
-  eyebrow: string;
-  title: string;
-  intro: string;
+export type ProsePageContent = PageHeadContent & {
   blocks: ProseBlock[];
   cta: { label: string; note: string };
 };
@@ -314,6 +328,17 @@ export const PRICING: Pricing = {
   },
 };
 
+/*
+ * The `/pricing` page head. Entirely derived — no new words. It reuses `leadNoTabs` because the
+ * standalone page shows the head above the tabs rather than beside them, so the "they're right
+ * below" phrasing is the one that's true there.
+ */
+export const PRICING_PAGE: PageHeadContent = {
+  eyebrow: PRICING.eyebrow,
+  title: PRICING.title,
+  intro: PRICING.leadNoTabs,
+};
+
 /* ─────────────────────────────────  FAQ  ────────────────────────────────── */
 
 export type FaqItem = { question: string; answer: string };
@@ -364,6 +389,21 @@ export const FAQ: Faq = {
         "Anytime. You can export your whole archive and take it elsewhere — nothing's locked in.",
     },
   ],
+};
+
+/*
+ * The `/faq` page head. Eyebrow and title are read off `FAQ` rather than retyped, so the page
+ * and the landing section can't end up calling the same thing two different names.
+ *
+ * ⚠️ `intro` is the one genuinely new line here and it is UNCONFIRMED — it was written to fill
+ * the page hero's lead slot, which the standalone route previously had nothing in (it opened
+ * on an `<h2>` with no `<h1>` above it at all). Ben to confirm or replace.
+ */
+export const FAQ_PAGE: PageHeadContent = {
+  eyebrow: FAQ.eyebrow,
+  title: FAQ.title,
+  intro:
+    "The questions people ask before they trust us with a copy of everything. If yours isn't here, the help center goes into more detail — and you can always just write to us.",
 };
 
 /* ────────────────────────────────  Close  ───────────────────────────────── */
@@ -527,10 +567,7 @@ export const OPEN_SOURCE_PAGE: ProsePageContent = {
 /** Same shape as a FAQ item, deliberately — the help groups render through the DS Accordion. */
 export type HelpItem = FaqItem;
 export type HelpGroup = { heading: string; items: HelpItem[] };
-export type HelpPage = {
-  eyebrow: string;
-  title: string;
-  intro: string;
+export type HelpPage = PageHeadContent & {
   groups: HelpGroup[];
   /** The sign-off that points at a human. */
   footer: { text: string; linkLabel: string };
@@ -653,10 +690,7 @@ export const HELP_PAGE: HelpPage = {
 
 /* ─────────────────────────────────  Contact  ────────────────────────────── */
 
-export type ContactPage = {
-  eyebrow: string;
-  title: string;
-  intro: string;
+export type ContactPage = PageHeadContent & {
   /** The two published addresses, for people who'd rather use their own mail client. */
   addresses: { label: string; email: string; note: string }[];
   responseNote: string;
@@ -717,6 +751,43 @@ export const CONTACT_PAGE: ContactPage = {
         SUPPORT_EMAIL +
         ".",
     },
+  },
+};
+
+/* ────────────────────────────────  Download  ─────────────────────────────── */
+
+/**
+ * `/download` serves two arrivals and says something different to each — see the route for
+ * which CTA sends which. These strings used to be typed inline in the route, the only marketing
+ * head copy that lived outside this file; they moved here when the page picked up a `PageHero`.
+ */
+export type DownloadPage = {
+  /** The visitor pressed a button that said "Download", so the file is already on its way. */
+  started: PageHeadContent;
+  /** The visitor pressed "Get started" / "Choose", which read like navigation. Nothing fetched. */
+  waiting: PageHeadContent;
+  note: string;
+  actions: { start: string; startAgain: string; releases: string };
+};
+
+export const DOWNLOAD_PAGE: DownloadPage = {
+  started: {
+    eyebrow: "ColdStorage for Mac",
+    title: "Your download should start shortly",
+    intro:
+      "If it doesn't start on its own, use the button below. Once it lands, open the .dmg and drag ColdStorage into Applications — then open the app and drag in what you want to keep.",
+  },
+  waiting: {
+    eyebrow: "ColdStorage for Mac",
+    title: "Download ColdStorage",
+    intro:
+      "Hit the button and the .dmg starts downloading. Open it, drag ColdStorage into Applications, then open the app and drag in what you want to keep — that's the whole setup.",
+  },
+  note: "Free app · macOS 14 or later · storage from $9.99 a year",
+  actions: {
+    start: "Download for Mac",
+    startAgain: "Download again",
+    releases: "All releases",
   },
 };
 

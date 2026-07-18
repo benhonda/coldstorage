@@ -1,7 +1,9 @@
 import type { Route } from "./+types/($lang).contact";
 import { langUtils } from "~/lib/i18n/i18n-utils.server";
 import { MarketingPage } from "~/components/marketing/marketing-page";
+import { PageHero } from "~/components/marketing/sections/page-hero";
 import { SectionContact } from "~/components/marketing/sections/contact-form";
+import { CONTACT_PAGE } from "~/lib/marketing/content";
 import { contactEnv } from "~/lib/env/contact-env.server";
 import { sendContactMessage, verifyTurnstile } from "~/lib/marketing/contact.server";
 import { CONTACT_FIELDS, contactSchema } from "~/lib/marketing/contact";
@@ -65,6 +67,7 @@ export async function action({ request }: Route.ActionArgs): Promise<ContactResu
 export default function Contact({ loaderData }: Route.ComponentProps) {
   return (
     <MarketingPage>
+      <PageHero content={CONTACT_PAGE} />
       <SectionContact turnstileSiteKey={loaderData.turnstileSiteKey} />
     </MarketingPage>
   );

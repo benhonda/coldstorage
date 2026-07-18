@@ -22,6 +22,7 @@ const ROUTES: { path: string; expect: string }[] = [
   { path: "/source", expect: "Functional Source License" },
   { path: "/help", expect: "Help center" },
   { path: "/contact", expect: "Send message" },
+  { path: "/download", expect: "Download ColdStorage" },
   { path: "/privacy", expect: "Privacy" },
   { path: "/terms", expect: "Terms" },
   { path: "/refunds", expect: "Refund" },
@@ -42,6 +43,23 @@ const HTML_RULES: { path: string; rule: string; forbid: RegExp }[] = [
   // /how-it-works stays free of dollar figures — the numbers live on /pricing.
   { path: "/how-it-works", rule: "no-dollar-figures-on-how-it-works", forbid: /\$\d/ },
 ];
+
+/**
+ * Every page carries exactly one `<h1>`, and on the non-landing pages that `<h1>` is the shared
+ * `<PageHero>`.
+ *
+ * This is a real regression guard, not ceremony: before the page-hero port, `/faq`, `/pricing`
+ * and `/download` each opened on an `<h2>` and shipped **no `<h1>` at all** — invisible in a
+ * typecheck, invisible in a build, and visible to every screen reader and crawler. The
+ * "exactly one" half matters just as much in the other direction: each of those pages now
+ * renders a hero above a section that used to introduce itself, so a section whose own head is
+ * left switched on would silently print the same words twice.
+ */
+const H1 = /<h1\b/g;
+const H1_TEXT = /<h1[^>]*>([\s\S]*?)<\/h1>/;
+const H2_TEXTS = /<h2[^>]*>([\s\S]*?)<\/h2>/g;
+const PAGE_HERO_H1 = /<h1[^>]*class="[^"]*cs-page-hero__title/;
+const LANDING = "/";
 
 const failures: string[] = [];
 
@@ -69,6 +87,31 @@ for (const { path, rule, forbid } of HTML_RULES) {
   if (!body) continue; // the route already failed above; don't pile on
   const hit = body.match(forbid);
   if (hit) failures.push(`${rule}: ${path} renders "${hit[0]}"`);
+}
+
+for (const { path } of ROUTES) {
+  const body = html.get(path);
+  if (!body) continue;
+
+  const count = body.match(H1)?.length ?? 0;
+  if (count !== 1) {
+    failures.push(`one-h1-per-page: ${path} renders ${count} <h1> elements, expected exactly 1`);
+    continue;
+  }
+  // The legal pages are the deliberate exception — long-form documents with their own head
+  // treatment and their own copy SSOT (`legal.ts`), not marketing pages wearing the hero.
+  const isLegal = ["/privacy", "/terms", "/refunds"].includes(path);
+  if (path !== LANDING && !isLegal && !PAGE_HERO_H1.test(body)) {
+    failures.push(`page-hero-is-the-page-head: ${path}'s <h1> is not the shared PageHero`);
+  }
+
+  // …and no section below repeats it. This is the failure mode of adding a hero to a page whose
+  // section already introduced itself: both heads render, the words appear twice, and every
+  // other check still passes because an <h2> is perfectly valid HTML.
+  const title = body.match(H1_TEXT)?.[1];
+  if (title && [...body.matchAll(H2_TEXTS)].some((m) => m[1] === title)) {
+    failures.push(`no-repeated-page-title: ${path} renders "${title}" as both <h1> and <h2>`);
+  }
 }
 
 /*
@@ -135,5 +178,5 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `✓ SSR check passed — ${ROUTES.length} routes rendered, ${HTML_RULES.length} HTML rules held`
+  `✓ SSR check passed — ${ROUTES.length} routes rendered, ${HTML_RULES.length} HTML rules + 3 page-head rules held`
 );

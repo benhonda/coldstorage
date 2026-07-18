@@ -8,26 +8,15 @@
  *
  * Copy is `HELP_PAGE` in content.ts. Note what it deliberately does NOT answer — see the
  * comment there before adding a question, because the gaps are gaps on purpose.
+ *
+ * The page head is not here: `/help` renders the shared `<PageHero>` like every other
+ * non-landing page. `SectionHelpHead` used to be a byte-for-byte copy of the prose pages' head.
  */
 import "./help-center.css";
 import { Reveal } from "~/lib/marketing/motion";
 import { HELP_PAGE } from "~/lib/marketing/content";
 import { Accordion } from "~/components/ds/accordion";
 import { Button } from "~/components/ds/button";
-
-export function SectionHelpHead() {
-  return (
-    <section className="csf-band" data-screen-label="Help center" style={{ paddingTop: 72 }}>
-      <div className="csf-container csf-container--text">
-        <span className="csf-eyebrow">{HELP_PAGE.eyebrow}</span>
-        <h1 className="csf-headline cs-help__h1">{HELP_PAGE.title}</h1>
-        <Reveal delay={120}>
-          <p className="csf-lead cs-help__intro">{HELP_PAGE.intro}</p>
-        </Reveal>
-      </div>
-    </section>
-  );
-}
 
 export function SectionHelpGroups() {
   return (

@@ -1,7 +1,9 @@
 import type { Route } from "./+types/($lang).pricing";
 import { langUtils } from "~/lib/i18n/i18n-utils.server";
 import { MarketingPage } from "~/components/marketing/marketing-page";
+import { PageHero } from "~/components/marketing/sections/page-hero";
 import { SectionPricingTabbed } from "~/components/marketing/sections/pricing-tabbed";
+import { PRICING_PAGE } from "~/lib/marketing/content";
 import { SectionClosingBand } from "~/components/marketing/sections/closing-band";
 
 /**
@@ -28,7 +30,9 @@ export function loader({ params }: Route.LoaderArgs) {
 export default function Pricing() {
   return (
     <MarketingPage>
-      <SectionPricingTabbed />
+      <PageHero content={PRICING_PAGE} />
+      {/* The hero carries the eyebrow, title and lead — the section head would repeat all three. */}
+      <SectionPricingTabbed showHead={false} />
       <SectionClosingBand />
     </MarketingPage>
   );

@@ -16,6 +16,9 @@
  *
  * Copy is `CONTACT_PAGE` in content.ts; the validation contract is `contact.ts`, shared with
  * the route's action so the two can't disagree.
+ *
+ * This section is the form only — the page's head is the shared `<PageHero>`, rendered by the
+ * route above it, so the band sits flush against it.
  */
 import "./contact-form.css";
 import * as React from "react";
@@ -96,15 +99,9 @@ export function SectionContact({ turnstileSiteKey }: ContactSectionProps) {
   );
 
   return (
-    <section className="csf-band" data-screen-label="Contact" style={{ paddingTop: 72 }}>
+    <section className="csf-band csf-band--flush-top" data-screen-label="Contact">
       <div className="csf-container">
-        <div className="csf-container--text" style={{ padding: 0 }}>
-          <span className="csf-eyebrow">{CONTACT_PAGE.eyebrow}</span>
-          <h1 className="csf-headline cs-contact__h1">{CONTACT_PAGE.title}</h1>
-          <p className="csf-lead cs-contact__intro">{CONTACT_PAGE.intro}</p>
-        </div>
-
-        <div className="cs-contact" style={{ marginTop: 52 }}>
+        <div className="cs-contact">
           <Reveal y={16}>
             <div className="cs-contact__card">
               {result?.status === "ok" ? (

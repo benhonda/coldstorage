@@ -1,16 +1,7 @@
 /* Section · Help center — grouped Q&A. Heading left, accordion right, same document-like
    split as the prose pages so the two support routes read as one family. */
 
-.cs-help__h1 {
-  margin: 8px 0 0;
-  max-width: 18ch;
-}
-
-.cs-help__intro {
-  margin: 22px 0 0;
-  max-width: 60ch;
-  font-size: var(--text-lg);
-}
+/* The page head lives in `page-hero.css` — it's the shared one now, not this page's own. */
 
 .cs-help {
   display: grid;

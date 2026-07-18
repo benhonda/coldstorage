@@ -2,8 +2,10 @@ import type { Route } from "./+types/($lang).download";
 import { langUtils } from "~/lib/i18n/i18n-utils.server";
 import { DOWNLOAD_DMG_PATH, RELEASES_LATEST_PAGE } from "~/lib/marketing/download";
 import { MarketingPage } from "~/components/marketing/marketing-page";
+import { PageHero } from "~/components/marketing/sections/page-hero";
 import { CtaPanel } from "~/components/ds/cta-panel";
 import { Button } from "~/components/ds/button";
+import { DOWNLOAD_PAGE } from "~/lib/marketing/content";
 
 /**
  * `/download` — the standalone download page (PROD.md 6c). It serves two arrivals, decided by
@@ -42,25 +44,24 @@ export function loader({ params, request }: Route.LoaderArgs) {
 
 export default function Download({ loaderData }: Route.ComponentProps) {
   const { autoStart } = loaderData;
+  const { note, actions } = DOWNLOAD_PAGE;
   return (
     <MarketingPage>
-      <section className="csf-band" data-screen-label="Download">
+      {/* The head is the standard PageHero, so this page opens the same way every other
+          non-landing page does — and it's where the page's one `<h1>` lives. The panel below
+          is left with just the buttons rather than repeating the same words in an `<h2>`. */}
+      <PageHero
+        content={autoStart ? DOWNLOAD_PAGE.started : DOWNLOAD_PAGE.waiting}
+        screenLabel="Download"
+      />
+      <section className="csf-band csf-band--flush-top" data-screen-label="Download">
         <div className="csf-container">
-          <CtaPanel
-            eyebrow="ColdStorage for Mac"
-            title={autoStart ? "Your download should start shortly" : "Download ColdStorage"}
-            lead={
-              autoStart
-                ? "If it doesn't start on its own, use the button below. Once it lands, open the .dmg and drag ColdStorage into Applications — then open the app and drag in what you want to keep."
-                : "Hit the button and the .dmg starts downloading. Open it, drag ColdStorage into Applications, then open the app and drag in what you want to keep — that's the whole setup."
-            }
-            note="Free app · macOS 14 or later · storage from $9.99 a year"
-          >
+          <CtaPanel note={note}>
             <Button variant="primary" size="lg" icon="download" href={DOWNLOAD_DMG_PATH}>
-              {autoStart ? "Download again" : "Download for Mac"}
+              {autoStart ? actions.startAgain : actions.start}
             </Button>
             <Button variant="ghost" size="lg" href={RELEASES_LATEST_PAGE}>
-              All releases
+              {actions.releases}
             </Button>
           </CtaPanel>
         </div>

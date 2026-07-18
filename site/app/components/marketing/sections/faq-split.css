@@ -8,6 +8,12 @@
   align-items: start;
 }
 
+/* Head off (the `/faq` route, where the PageHero carries it): the narrow leading column has
+   nothing to hold, so the accordion takes the full measure instead of the 1fr sliver. */
+.cs-faq--headless {
+  grid-template-columns: 1fr;
+}
+
 .cs-faq__card {
   background: var(--surface-card);
   border: 1px solid var(--border-card);

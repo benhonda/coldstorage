@@ -272,6 +272,54 @@ Every primary-nav destination is a **real page**, not an in-page anchor — so t
   for no-JS and for crawlers. It deliberately carries **no `FAQPage` JSON-LD**: `/faq` already
   has it, and two competing FAQPage blocks on one domain is worse than one clear one.
 
+### Page heads — one `<PageHero>` for every non-landing page (2026-07-18)
+
+Upstream added **`page-heroes.jsx`** — a contained, text-only page head in three variants
+(A centered · B left · C split), each taking `{ eyebrow, title, lead }` so the copy swaps
+freely. It is the first piece of the pages-beyond-the-landing-page design pass.
+
+**We standardised on B · left-aligned**, ported to
+`components/marketing/sections/page-hero.tsx` + `.css`. It reads with the prose/help/FAQ pages
+that sit under it, and it holds up across titles and leads of very different lengths — which
+centered and split heads do not.
+
+What it replaced, and why this was overdue:
+
+| Before | After |
+| --- | --- |
+| `ProseHead`, `SectionHelpHead`, and an inline head in `contact-form` — three near-identical implementations | one `<PageHero>` |
+| `.cs-prose__h1/__intro`, `.cs-help__h1/__intro`, `.cs-contact__h1/__intro` — three identical CSS pairs under three prefixes | one `page-hero.css`, layout only |
+| `/faq`, `/pricing`, `/download` opened on an `<h2>` and shipped **no `<h1>` at all** | each has one, and it's the hero |
+| `/download`'s head copy typed inline in the route — the only marketing head string outside `content.ts` | `DOWNLOAD_PAGE` in `content.ts` |
+
+- **`PageHeadContent`** (`{ eyebrow, title, intro }`) is declared once in `content.ts` and
+  **extended** by `ProsePageContent` / `HelpPage` / `ContactPage`, which already had exactly
+  those three fields. `<PageHero content={ABOUT_PAGE} />` type-checks structurally — no renames,
+  no per-page prop threading (PILLAR3 + PILLAR4).
+- **`FAQ_PAGE` and `PRICING_PAGE` are derived**, not retyped: they read `eyebrow`/`title` off
+  `FAQ`/`PRICING` so a standalone page can't call something a different name than the landing
+  section does. `PRICING_PAGE.intro` reuses `leadNoTabs` (the head sits above the tabs there,
+  so "they're right below" is the phrasing that's true).
+- **Sections that now sit under a hero take `showHead={false}`** (`SectionFaqSplit`,
+  `SectionPricingTabbed`) rather than the route hiding them with CSS — the landing page still
+  renders the same sections with their own `<h2>` heads, and one boolean is the honest way to
+  say "the page above already said this". `CtaPanel`'s eyebrow/title/lead became optional for
+  the same reason on `/download`.
+- **The band does not re-apply `--bg-glow`.** Upstream's `.ph-band` does, because the preview
+  shell has to reproduce page context; `MarketingPage` already lays the glow across the page,
+  so re-applying it would stack a second gradient.
+- **Three new `ssr:check` rules guard it**, and all three were verified to fail under
+  deliberate sabotage before being kept: exactly one `<h1>` per page; on non-landing,
+  non-legal pages that `<h1>` is the hero; and no `<h2>` repeats the `<h1>`'s text (the exact
+  failure mode of adding a hero above a section that still introduces itself — otherwise
+  invisible, since an `<h2>` is perfectly valid HTML).
+- **The three legal pages are deliberately excluded** — `/privacy`, `/terms`, `/refunds` are
+  long-form documents with their own copy SSOT (`legal.ts`), no eyebrow, and a smaller
+  `--type-page-title` head chosen for reading rather than for marketing. Converting them is a
+  live option, not an oversight; the `ssr:check` rule lists them as the explicit exception.
+- **`FAQ_PAGE.intro` is the one new line of copy** and is flagged UNCONFIRMED in `content.ts` —
+  `/faq` previously had no lead because it had no head.
+
 ### `/contact` — the first `action` in the app
 
 The site was loader-only until 2026-07-18. `/contact` adds the one write path:
@@ -301,9 +349,10 @@ round trip are exercised there.
 
 `typecheck` proves the types line up and `build` proves the bundle links; neither renders a
 page. `scripts/ssr-check.ts` calls the production request handler directly (no port, no dev
-server) to render all 11 routes, assert each came out with expected content, assert the
-rendered-HTML rules (**no provider named**, **no dollar figures on `/how-it-works`**), and
-exercise the `/contact` action end-to-end. With no `CD2_API_KEY` present it pins the `failed`
+server) to render all 12 routes, assert each came out with expected content, assert the
+rendered-HTML rules (**no provider named**, **no dollar figures on `/how-it-works`**), assert
+the **page-head rules** (see *Page heads* above), and exercise the `/contact` action
+end-to-end. With no `CD2_API_KEY` present it pins the `failed`
 branch, which proves the whole chain is wired without sending mail; with a key set that last
 case is **skipped**, not neutered.
 
@@ -320,7 +369,8 @@ case is **skipped**, not neutered.
   DS primitives and the shared `csf-*` layout classes (same status as `/download`). The copy is
   written and voiced; the *layout* is ours. Flag all three for an upstream design pass whenever
   the next design session runs. **`/about`, `/source`, `/help`, `/contact` (2026-07-18)
-  are in the same boat** — same assembly, same flag.
+  are in the same boat** — same assembly, same flag. _Partly closed 2026-07-18:_ their **heads**
+  now come from upstream (see *Page heads* below); their bodies still don't.
 
 - **Two lines on the new pages need Ben's confirmation before they ship** — _OPEN, 2026-07-18._
   Both are flagged in `content.ts` where they live, and both assert facts only he can verify:

@@ -12,8 +12,13 @@
  *
  * Read the constraints in content.ts before editing any of the copy this renders — notably
  * that `/how-it-works` carries no dollar figures and no page names the backend provider.
+ *
+ * The head is the shared `<PageHero>` (upstream `page-heroes.jsx`) — the same one every other
+ * non-landing page wears. It used to be a local `ProseHead` that two other pages had each
+ * copied verbatim.
  */
 import "./prose-page.css";
+import { PageHero } from "./page-hero";
 import { Reveal } from "~/lib/marketing/motion";
 import { DOWNLOAD_START_PATH } from "~/lib/marketing/download";
 import type { ProsePageContent } from "~/lib/marketing/content";
@@ -37,25 +42,10 @@ export function ProsePage({
 }: ProsePageProps) {
   return (
     <>
-      <ProseHead content={content} />
+      <PageHero content={content} />
       <ProseBlocks content={content} />
       <ProseCta content={content} ctaHref={ctaHref} ctaIcon={ctaIcon} />
     </>
-  );
-}
-
-/** Page head — the eyebrow, the h1, and the framing paragraph. */
-function ProseHead({ content }: { content: ProsePageContent }) {
-  return (
-    <section className="csf-band" data-screen-label={content.eyebrow} style={{ paddingTop: 72 }}>
-      <div className="csf-container csf-container--text">
-        <span className="csf-eyebrow">{content.eyebrow}</span>
-        <h1 className="csf-headline cs-prose__h1">{content.title}</h1>
-        <Reveal delay={120}>
-          <p className="csf-lead cs-prose__intro">{content.intro}</p>
-        </Reveal>
-      </div>
-    </section>
   );
 }
 

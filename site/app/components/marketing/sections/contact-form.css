@@ -2,16 +2,7 @@
    in the site, so the field styling is defined here rather than pulled from the DS (which has
    no input primitive yet — see SPEC "Open decisions"). */
 
-.cs-contact__h1 {
-  margin: 8px 0 0;
-  max-width: 18ch;
-}
-
-.cs-contact__intro {
-  margin: 22px 0 0;
-  max-width: 60ch;
-  font-size: var(--text-lg);
-}
+/* The page head lives in `page-hero.css` — it's the shared one now, not this page's own. */
 
 .cs-contact {
   display: grid;
