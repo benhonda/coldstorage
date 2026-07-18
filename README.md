@@ -83,3 +83,23 @@ On a Mac: `task daemon:mac:bootstrap` (creds → Keychain + launchd install), `t
   machine-wide journal.
 - **libsodium is built from source on Linux** (`task daemon:setup`) — Ubuntu's apt 1.0.18 predates
   symbols swift-sodium needs; Apple platforms use the bundled XCFramework.
+
+## License
+
+**Source-available, not open source.** The repo ships under
+[FSL-1.1-ALv2](./LICENSE) — the Functional Source License with an Apache-2.0 future license.
+Read it, run it, change it, build on it; the one thing it forbids is using it to run a storage
+service that competes with ColdStorage. **Each version auto-converts to Apache-2.0 two years
+after release**, irrevocably.
+
+Everything here is covered: the Swift daemon and engine, the Electron control panel, the
+account backend, the marketing site, and the Terraform.
+
+The customer-facing version is [`coldstorage.sh/source`](https://coldstorage.sh/source), which
+points at `coldstorage/Sources/ColdStorageCore/Crypto.swift` and `ZeroKnowledgeKeys.swift` as
+the two files where the "only you hold the key" claim is either true or it isn't — keep that
+page honest if either file moves.
+
+**That page must never call this open source** (`task copy:check:site` enforces it). Publishing
+the code exists to make an encryption claim checkable; overstating the license is the one thing
+that would poison it.
