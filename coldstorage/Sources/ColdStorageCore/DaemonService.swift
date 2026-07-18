@@ -527,7 +527,14 @@ public actor DaemonService {
                                           blobsVerified: s.blobsVerified, running: running,
                                           permanentlyFailedBlobs: permanentlyFailedBlobs.count,
                                           sources: try sourceDTOs(session),
-                                          bytesStored: try await currentUsageBytes(session)))
+                                          // `try?`, deliberately: this is the ONE field backed by a live,
+                                          // paginated S3 listing, so it is the one that can be slow or fail
+                                          // (expired STS, AccessDenied) while every other field — all read
+                                          // from the local journal — is sound. Letting it throw took the
+                                          // whole snapshot down, and the client's 10 s request deadline
+                                          // turned a slow listing into no status at all. A degraded field
+                                          // the UI can label beats a status call that answers nothing.
+                                          bytesStored: try? await currentUsageBytes(session)))
         case "listSources":
             guard let session else { return AnyEncodable([SourceDTO]()) }
             return AnyEncodable(try sourceDTOs(session))

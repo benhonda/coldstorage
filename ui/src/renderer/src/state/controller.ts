@@ -12,37 +12,35 @@ import type { Store } from "./store.ts";
 
 /** Wire an api to a store. Returns a disposer that detaches all subscriptions. */
 export const connectController = (api: ColdstoreApi, store: Store): (() => void) => {
-  const refreshStatus = async (): Promise<void> => {
+  /**
+   * Run one state-syncing read and swallow its rejection — a refetch that fails must never reject into
+   * an unhandled promise, and a transient drop is not a user-facing error.
+   *
+   * But swallow LOUDLY. These four reads are the only path by which daemon truth reaches the UI, and a
+   * failed one leaves its slice stale or empty indefinitely: the recovery is a lifecycle push, so a
+   * failure that isn't a disconnect never retries at all. Silent was the expensive part of the 2026-07-18
+   * storage-figure bug — the UI showed nothing, forever, with no error, no retry and no log to find. The
+   * console line is for whoever debugs the next one; `what` names the slice so the message says which.
+   */
+  const syncing = async (what: string, read: () => Promise<void>): Promise<void> => {
     try {
-      store.dispatch({ type: "statusLoaded", status: await api.request("getStatus") });
-    } catch {
-      /* drop/timeout — a lifecycle push will re-trigger a refresh on reconnect */
+      await read();
+    } catch (e) {
+      console.error(`[coldstore] ${what} refresh failed — this slice is now stale until the next resync:`, e);
     }
   };
 
-  const refreshSources = async (): Promise<void> => {
-    try {
-      store.dispatch({ type: "sourcesLoaded", sources: await api.request("listSources") });
-    } catch {
-      /* same as above */
-    }
-  };
+  const refreshStatus = (): Promise<void> =>
+    syncing("status", async () => store.dispatch({ type: "statusLoaded", status: await api.request("getStatus") }));
 
-  const refreshFiles = async (): Promise<void> => {
-    try {
-      store.dispatch({ type: "filesLoaded", files: await api.request("listFiles") });
-    } catch {
-      /* same as above */
-    }
-  };
+  const refreshSources = (): Promise<void> =>
+    syncing("sources", async () => store.dispatch({ type: "sourcesLoaded", sources: await api.request("listSources") }));
 
-  const refreshExcludes = async (): Promise<void> => {
-    try {
-      store.dispatch({ type: "excludesLoaded", excludes: await api.request("listExcludes") });
-    } catch {
-      /* same as above */
-    }
-  };
+  const refreshFiles = (): Promise<void> =>
+    syncing("files", async () => store.dispatch({ type: "filesLoaded", files: await api.request("listFiles") }));
+
+  const refreshExcludes = (): Promise<void> =>
+    syncing("excludes", async () => store.dispatch({ type: "excludesLoaded", excludes: await api.request("listExcludes") }));
 
 
   const offEvent = api.onEvent((name, data) => {
@@ -52,7 +50,17 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
     // An add/removeExclude changed the registry — re-read it (the next scan already applies the change).
     else if (name === "excludesChanged") void refreshExcludes();
     // A reorganize/delete (movePath/deletePath) rewrote the tree — re-read it to reconcile the optimistic edit.
-    else if (name === "filesChanged") void refreshFiles();
+    // ALSO the daemon's session-established push (`beginSession`), which is the only signal that a
+    // `getStatus` taken earlier is now stale. The connect→refresh at the bottom of this file routinely
+    // beats `authenticate` (main has a keychain/network round trip to do first), and a session-less
+    // getStatus answers SUCCESSFULLY with `signedIn: false, bytesStored: null` rather than erroring — so
+    // nothing looked broken and nothing retried. The storage figures then stayed empty until the next
+    // `runFinished`, up to COLDSTORE_INTERVAL (300 s) later. Re-reading the snapshot here costs one cheap
+    // call on an event that is already a resync, and closes that window.
+    else if (name === "filesChanged") {
+      void refreshStatus();
+      void refreshFiles();
+    }
     // A finished run may have archived new files / changed their status — re-read both the counts
     // (getStatus) and the tree (listFiles).
     else if (name === "runFinished") {

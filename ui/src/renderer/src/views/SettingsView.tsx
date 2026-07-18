@@ -17,6 +17,7 @@
  * made the restore dialog understate its charge by ~40× (root `RETRIEVAL.md`). If a cost figure ever
  * returns, it must be the one we actually bill.
  */
+import type { ReactNode } from "react";
 import { useState } from "react";
 import type { AccountStatus, AuthStatus, EntitlementStatus, Source, SubscriptionInfo } from "../../../shared/ipc.ts";
 import { ChangePlanModal } from "./ChangePlanModal.tsx";
@@ -25,7 +26,7 @@ import type { ArchivedFile } from "./files/model.ts";
 import { baseName, formatBytes } from "./files/model.ts";
 import { AddWatchedFolderModal } from "./files/AddWatchedFolderModal.tsx";
 import { ContextMenu, type MenuEntry } from "./files/ContextMenu.tsx";
-import { Badge, Button, Card, Chip, EmptyState, Field, Icon, IconButton, KeyValueRow, Modal, Tabs } from "../ui/primitives.tsx";
+import { Badge, Button, Card, Chip, EmptyState, Field, Icon, IconButton, KeyValueRow, Modal, Skeleton, Tabs } from "../ui/primitives.tsx";
 import { Page } from "../ui/layout.tsx";
 
 /** The Settings subpages. `general` = this-Mac behavior; `account` = identity/plan (configured installs only). */
@@ -61,6 +62,7 @@ export const SettingsView = ({
   running,
   settings,
   bytesStored,
+  bytesStoredPending,
   files,
   virtualFolders,
   auth,
@@ -92,6 +94,9 @@ export const SettingsView = ({
    * plan quota is enforced against. Drives the quota row AND the downgrade warning, so they can never
    * disagree. Null only before the daemon's first listing lands (or signed out). */
   bytesStored: number | null;
+  /** The vault total is still in flight (daemon socket dialing) rather than genuinely unknown — the
+   * quota row shows a placeholder instead of an em dash, which reads as "no data" and isn't true yet. */
+  bytesStoredPending: boolean;
   files: ArchivedFile[];
   virtualFolders: string[];
   /** The active subpage — owned by App so the sidebar chip's popover can deep-link to Account.
@@ -192,12 +197,22 @@ export const SettingsView = ({
     </Button>
   );
 
-  const quotaValue =
-    bytesStored == null
-      ? "—"
-      : entitlement.quotaBytes != null
-        ? `${formatBytes(bytesStored)} of ${formatBytes(entitlement.quotaBytes)}`
-        : formatBytes(bytesStored);
+  // "—" is the honest rendering for a figure we asked for and didn't get; it is NOT the right one for a
+  // figure still in flight, which is the common case on a cold launch (the daemon socket dials after the
+  // first paint). Separating the two costs one prop and stops the row from claiming "no data" for the
+  // second or so before the first listing lands.
+  const quotaValue: ReactNode =
+    bytesStored == null ? (
+      bytesStoredPending ? (
+        <Skeleton width="14ch" label="Checking deep storage total" />
+      ) : (
+        "—"
+      )
+    ) : entitlement.quotaBytes != null ? (
+      `${formatBytes(bytesStored)} of ${formatBytes(entitlement.quotaBytes)}`
+    ) : (
+      formatBytes(bytesStored)
+    );
 
   const hasAccount = auth.configured;
   const active: SettingsTab = hasAccount ? tab : "general";

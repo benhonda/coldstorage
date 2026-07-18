@@ -11,18 +11,35 @@ import { createStore } from "./store.ts";
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
 const status = (sources: Source[]): Status => ({
+  signedIn: true,
   filesTotal: 1,
   filesArchived: 1,
   blobsVerified: 1,
   running: false,
   permanentlyFailedBlobs: 0,
   sources,
+  bytesStored: 1000,
+});
+
+/** What the daemon answers before `authenticate` has established a session: a SUCCESSFUL response whose
+ * every field is the signed-out zero. Modelling it explicitly is the point of the regression test below —
+ * it is not an error, so nothing upstream treats it as one. */
+const sessionlessStatus = (): Status => ({
+  signedIn: false,
+  filesTotal: 0,
+  filesArchived: 0,
+  blobsVerified: 0,
+  running: false,
+  permanentlyFailedBlobs: 0,
+  sources: [],
+  bytesStored: null,
 });
 
 /** A controllable fake of the preload surface. */
 const makeApi = (initial: ConnectionState) => {
   let connectionState = initial;
   let sources: Source[] = [{ id: "s1", kind: "folder", path: "/a", mountPath: "a", paused: false }];
+  let statusOverride: Status | null = null;
   let files: ListedFile[] = [{ id: "f1", relativePath: "a/b.jpg", size: 10, status: "archived", blobId: "blob-1", date: null }];
   const calls: string[] = [];
   let eventCb: ((name: never, data: never) => void) | null = null;
@@ -36,7 +53,7 @@ const makeApi = (initial: ConnectionState) => {
   const api: ColdstoreApi = {
     request: ((method: string) => {
       calls.push(method);
-      if (method === "getStatus") return Promise.resolve(status(sources));
+      if (method === "getStatus") return Promise.resolve(statusOverride ?? status(sources));
       if (method === "listSources") return Promise.resolve(sources);
       if (method === "listFiles") return Promise.resolve(files);
       return Promise.resolve({ ok: true });
@@ -99,6 +116,7 @@ const makeApi = (initial: ConnectionState) => {
     api,
     calls,
     setSources: (s: Source[]) => (sources = s),
+    setStatus: (s: Status | null) => (statusOverride = s),
     setFiles: (f: ListedFile[]) => (files = f),
     fireLifecycle: (s: ConnectionState) => {
       connectionState = s;
@@ -164,6 +182,30 @@ describe("controller sync policy", () => {
     await tick();
     expect(f.calls.filter((c) => c === "listFiles").length).toBe(before + 1);
     expect(store.getState().files[0]?.relativePath).toBe("moved/b.jpg");
+  });
+
+  // Regression (2026-07-18): the storage meter and Settings' "In deep storage" sat empty for minutes after
+  // launch while the file tree populated normally. The connect→refreshStatus beat main's `authenticate`
+  // (a keychain/network round trip), so the snapshot captured was the daemon's session-less one — which is
+  // a SUCCESSFUL response, so nothing retried. `beginSession` does announce itself, via `filesChanged`,
+  // but that only drove listFiles — hence files-but-no-figures. It self-corrected on the next `runFinished`,
+  // up to 300 s (COLDSTORE_INTERVAL) later.
+  test("filesChanged re-reads the snapshot — a getStatus taken before the session was established is stale", async () => {
+    const f = makeApi("connected");
+    const store = createStore();
+    // Connect lands first, before the daemon has a session: signedIn false, no usage figure.
+    f.setStatus(sessionlessStatus());
+    connectController(f.api, store);
+    await tick();
+    expect(store.getState().status?.signedIn).toBe(false);
+    expect(store.getState().status?.bytesStored).toBeNull();
+
+    // `authenticate` completes; the daemon establishes the session and publishes filesChanged.
+    f.setStatus(null);
+    f.fireEvent("filesChanged", { signedIn: "true" });
+    await tick();
+    expect(store.getState().status?.signedIn).toBe(true);
+    expect(store.getState().status?.bytesStored).toBe(1000);
   });
 
   test("does NOT fetch while disconnected, then refetches on (re)connect", async () => {

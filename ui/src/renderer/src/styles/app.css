@@ -1295,6 +1295,24 @@ button.cs-kv:hover { background: var(--surface-hover); }
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+/* Pending-figure placeholder (Skeleton). A slow opacity pulse, not a sweeping gradient — this sits in
+   a sidebar chip and a settings row, where a moving highlight would pull more attention than the value
+   it's standing in for. Respects reduced-motion by falling back to a flat block. */
+.cs-skeleton {
+  display: inline-block;
+  vertical-align: middle;
+  border-radius: var(--radius-pill);
+  background: rgba(0, 0, 0, 0.12);
+  animation: cs-skeleton-pulse 1.6s var(--ease-out) infinite;
+}
+@keyframes cs-skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cs-skeleton { animation: none; }
+}
+
 /* the "this opens something" cue — quiet, like a select's chevron */
 .cs-account-caret { flex: none; color: var(--text-tertiary); display: grid; place-items: center; }
 

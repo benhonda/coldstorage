@@ -212,6 +212,28 @@ export const Badge = ({
   </span>
 );
 
+/**
+ * Placeholder for a figure that hasn't arrived yet — a quietly pulsing block sized to the text it
+ * stands in for. This exists to keep "still loading" from reading as "zero" or "broken": a storage
+ * figure that renders blank while the daemon socket is still dialing is indistinguishable from an
+ * empty vault, which is the more alarming of the two readings and the wrong one.
+ *
+ * Use ONLY for genuinely-pending data. A value that is known-absent should say so in words.
+ */
+export const Skeleton = ({
+  width,
+  height = 12,
+  label = "Loading",
+}: {
+  /** CSS width — match the shape of the real value (e.g. "9ch" for "6 GB of 25 GB"). */
+  width: string;
+  height?: number;
+  /** Screen-reader text; the block itself is decorative. */
+  label?: string;
+}): React.JSX.Element => (
+  <span className="cs-skeleton" style={{ width, height }} role="status" aria-label={label} />
+);
+
 /** Detail row — label left, value flush right. Pass `onClick` to make it an editable (button) row. */
 export const KeyValueRow = ({
   label,

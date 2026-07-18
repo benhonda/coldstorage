@@ -9,7 +9,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Badge, Icon } from "../ui/primitives.tsx";
+import { Badge, Icon, Skeleton } from "../ui/primitives.tsx";
 import { formatBytes } from "./files/model.ts";
 import type { SubscriptionInfo } from "../../../shared/ipc.ts";
 
@@ -22,6 +22,7 @@ export const AccountCard = ({
   subscription,
   active,
   usedBytes,
+  usagePending,
   quotaBytes,
   onOpenSettings,
   onSignOut,
@@ -35,6 +36,9 @@ export const AccountCard = ({
   active: boolean;
   /** Stored + in-flight — the same figure the deposit gate measures against. Null until the daemon reports. */
   usedBytes: number | null;
+  /** The usage figure is still on its way (daemon socket dialing), as opposed to genuinely unknown.
+   * Drives the placeholder meter — see the render note below for why the distinction earns a prop. */
+  usagePending: boolean;
   /** The plan's byte cap (webhook-fed); null = unknown, and the meter degrades to a plain "X stored" line. */
   quotaBytes: number | null;
   /** The popover's "Settings…" — routes to Settings › Account. */
@@ -120,6 +124,17 @@ export const AccountCard = ({
                 the plan size, and a "25 GB" badge next to it would say the same thing twice. */}
             {subscription?.plan && !subscription.cancelsAt && fraction != null ? null : badge}
           </span>
+          {/* Three states, not two. The meter used to collapse entirely whenever `usedBytes` was null,
+              which conflated "the daemon hasn't reported yet" with "there's nothing to report" — and did
+              it while shifting the chip's layout as the value popped in. Pending now holds the space with
+              a placeholder; a null usage with a live connection still collapses, because that's a real
+              absence rather than a wait. */}
+          {usedBytes == null && usagePending && (
+            <span className="cs-account-meter">
+              <Skeleton width="100%" height={4} label="Checking storage used" />
+              <Skeleton width="11ch" />
+            </span>
+          )}
           {usedBytes != null && (
             <span className="cs-account-meter">
               {fraction != null && quotaBytes != null && (

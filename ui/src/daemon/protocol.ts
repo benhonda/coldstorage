@@ -109,7 +109,10 @@ export interface Status {
   permanentlyFailedBlobs: number;
   sources: Source[];
   /** Total bytes stored in S3 under this identity's own prefix — a live listing, so it is the figure the
-   * storage quota is actually enforced against. Null only when signed out. */
+   * storage quota is actually enforced against. Null when signed out, and ALSO when the listing itself
+   * failed or was too slow: it is the one field here backed by a network call, and the daemon degrades it
+   * rather than failing the whole snapshot (see `getStatus` in `DaemonService.swift`). So a null here does
+   * not imply an empty vault — pair it with `signedIn` before showing it as a figure. */
   bytesStored: number | null;
 }
 

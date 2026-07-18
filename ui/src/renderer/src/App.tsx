@@ -90,8 +90,19 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
     () => filesApi.files.reduce((sum, f) => (f.status === "uploading" ? sum + f.size : sum), 0),
     [filesApi.files],
   );
+  const signedIn = state.auth.configured && state.auth.state === "signedIn";
   const bytesStored = state.status?.bytesStored ?? null;
   const usedBytes = bytesStored == null ? null : bytesStored + inFlightBytes;
+  // Is the vault total merely *late*, or genuinely unavailable? A null `bytesStored` alone can't say, and
+  // the answer differs entirely for the user: one is a wait, the other is a fact. Two ways it's a wait:
+  //   1. the socket hasn't connected yet (getStatus can't land until it does), and
+  //   2. it HAS connected, but the daemon's snapshot still says `signedIn: false` — i.e. we read it before
+  //      `authenticate` established the session, so its nulls describe a daemon that didn't know us yet.
+  // (2) is the common one and used to persist for minutes; the controller now re-reads on the daemon's
+  // session-established push, so this covers the seconds in between rather than a stuck state. Guarded on
+  // the app's own sign-in so a genuinely signed-out install shows an absence, not a spinner that never ends.
+  const storageFigurePending =
+    bytesStored == null && signedIn && (state.connection !== "connected" || state.status?.signedIn !== true);
   const roomLeft = bytesAvailable(state.entitlement, usedBytes);
   // Coarse "is there ANY room left" — drives the paywall-reset effect + the retry guard. A specific deposit
   // is checked against its real size via `hasRoomFor` (handed to the browser), which is what stops the one
@@ -119,7 +130,6 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   // whenever the entitlement flips (a checkout just landed / a cancellation took effect). Best-effort:
   // a fetch failure just leaves the badge on its entitlement fallback — never an error surface here.
   const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
-  const signedIn = state.auth.configured && state.auth.state === "signedIn";
 
   // Session-local "the wizard's final Continue was clicked" — the fail-open half of onboarding: the
   // server facts are what really end it (onboardingPending), but if the final write failed we still
@@ -330,6 +340,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
               subscription={subscription}
               active={state.entitlement.active}
               usedBytes={usedBytes}
+              usagePending={storageFigurePending}
               quotaBytes={state.entitlement.quotaBytes}
               onOpenSettings={() => {
                 setSettingsTab("account");
@@ -381,7 +392,8 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           sources={state.status?.sources ?? []}
           running={state.run?.active ?? false}
           settings={settings}
-          bytesStored={state.status?.bytesStored ?? null}
+          bytesStored={bytesStored}
+          bytesStoredPending={storageFigurePending}
           files={filesApi.files}
           virtualFolders={filesApi.virtualFolders}
           auth={state.auth}
