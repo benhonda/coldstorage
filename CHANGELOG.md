@@ -2,6 +2,7 @@
 
 ## 2026-07-18
 
+- fix: `daemon:mac:doctor` only tails the error log when the socket is missing or `getStatus` fails — the old `&& ||` chain dumped logs under a healthy status.
 - fix: **storage figures no longer sit empty for minutes after launch** — the controller re-reads `getStatus` on the daemon's `filesChanged` (session-established) push, `getStatus` degrades `bytesStored` to null via `try?` instead of failing the whole snapshot on a slow/failed S3 listing, and a new `Skeleton` primitive holds the space in AccountCard's meter + Settings' quota row so pending reads as a wait, not "—".
 
 ## 2026-07-17

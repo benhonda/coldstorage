@@ -601,7 +601,18 @@ tasks:
       - 'echo "── AWS auth (coldstorage profile → credential_process → Keychain) ──"'
       - aws sts get-caller-identity --profile coldstorage || echo "auth FAILED — re-run task daemon:mac:bootstrap (fixes the profile), then re-check"
       - 'echo "── daemon status (control socket) ──"'
-      - test -S "{{.SOCK}}" && ./.build/release/coldstorectl "{{.SOCK}}" getStatus || echo "no control socket at {{.SOCK}} — last errors:" && tail -n 20 "{{.ERRLOG}}" 2>/dev/null || true
+      # An `if`, not an && || && chain: the old one parsed as ((A && B) || C) && D, so the error-log tail
+      # ran even when getStatus had answered perfectly — a wall of log lines under a healthy result reads
+      # as a failure, and cost real time during the 2026-07-18 hunt. The log is diagnostic ONLY when the
+      # socket is missing or the call fails; on success the status line is the whole answer.
+      - |
+        if [ ! -S "{{.SOCK}}" ]; then
+          echo "no control socket at {{.SOCK}} — the daemon isn't listening. Last errors:"
+          tail -n 20 "{{.ERRLOG}}" 2>/dev/null || echo "(no error log)"
+        elif ! ./.build/release/coldstorectl "{{.SOCK}}" getStatus; then
+          echo "socket is there but getStatus FAILED — last errors:"
+          tail -n 20 "{{.ERRLOG}}" 2>/dev/null || echo "(no error log)"
+        fi
 
   daemon:mac:uninstall:
     desc: "Stop + remove the coldstored LaunchAgent. Needed before testing Mode 2 (ui:mac:package) — it and Mode 1 share the same socket/data dir; `task daemon:mac:bootstrap` brings Mode 1 back afterward."
