@@ -11,14 +11,17 @@ provider "vercel" {
 locals {
   is_prod = var.env == "production"
 
-  # TF-managed env vars — the marketing site's whole app config surface (matches the app's zod
-  # schema). Both are PUBLIC_ (exposed to the browser via window.env) and non-secret by design.
-  # PUBLIC_PADDLE_ENVIRONMENT is derived from the stack; PUBLIC_PADDLE_CLIENT_TOKEN is always
-  # set per-stack — staging = the real sandbox token, production = a self-naming placeholder
-  # until the live token exists (see live/production/terragrunt.hcl).
+  # TF-managed env vars — the marketing site's non-secret app config (matches the app's zod
+  # schema). All three are PUBLIC_ (exposed to the browser via window.env) and non-secret by
+  # design. PUBLIC_PADDLE_ENVIRONMENT is derived from the stack; PUBLIC_PADDLE_CLIENT_TOKEN is
+  # always set per-stack — staging = the real sandbox token, production = a self-naming
+  # placeholder until the live token exists (see live/production/terragrunt.hcl).
+  # PUBLIC_TURNSTILE_SITE_KEY is the public half of the /contact form's Turnstile pair; its
+  # secret half is a manual_secret below, because that one really is a secret.
   tf_managed = {
     PUBLIC_PADDLE_ENVIRONMENT  = local.is_prod ? "production" : "sandbox"
     PUBLIC_PADDLE_CLIENT_TOKEN = var.paddle_client_token
+    PUBLIC_TURNSTILE_SITE_KEY  = var.turnstile_site_key
   }
 
   # terraform.md env-var-ownership targeting: prod-only ⇒ all 3 targets; prod-with-staging ⇒
@@ -49,7 +52,10 @@ resource "vercel_project_environment_variable" "managed" {
   custom_environment_ids = local.is_prod ? null : [vercel_custom_environment.env[0].id]
 }
 
-# Empty today (the marketing site has no dashboard-set secrets) — kept as a convention hook.
+# Declared here, valued in the Vercel dashboard. Two today, both for the /contact form:
+# CD2_API_KEY (transactional-mail sender) and TURNSTILE_SECRET_KEY (Turnstile's secret half).
+# The app treats both as OPTIONAL at boot, so a stack with the placeholders still deploys and
+# serves — the contact form is the only thing that stops working, and it says so.
 resource "vercel_project_environment_variable" "manual" {
   for_each               = var.manual_secrets
   project_id             = var.vercel_project_id

@@ -24,4 +24,16 @@ inputs = {
   # tokens) for the staging /checkout page — the SAME sandbox Paddle account account-backend's
   # staging uses. Public by design ("safe to expose in frontend code"), so TF-managed here.
   paddle_client_token = "test_36ccedef6021b9f6c385bc5b643"
+
+  # Turnstile SITE key for staging's /contact form. Cloudflare's documented TESTING key —
+  # "1x…AA" always passes, so the staging form exercises the real widget + the real siteverify
+  # round trip without needing a domain-bound production widget. Pair it with the matching
+  # always-passes SECRET in the dashboard: `1x0000000000000000000000000000000AA`. The two must
+  # match — a production secret rejects dummy tokens and a test secret rejects real ones.
+  turnstile_site_key = "1x00000000000000000000AA"
+
+  manual_secrets = {
+    CD2_API_KEY          = "SET_ME_in_vercel_dashboard"
+    TURNSTILE_SECRET_KEY = "SET_ME_in_vercel_dashboard" # staging: 1x0000000000000000000000000000000AA
+  }
 }

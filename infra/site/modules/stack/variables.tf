@@ -41,8 +41,14 @@ variable "paddle_client_token" {
   description = "Paddle CLIENT-SIDE token for the /checkout page's Paddle.js (public by design — 'safe to expose in frontend code', NOT the API key). Per-stack (sandbox test_… vs live live_…), exposed to the app as PUBLIC_PADDLE_CLIENT_TOKEN. Always set — production carries a self-naming placeholder until the live token exists."
 }
 
+variable "turnstile_site_key" {
+  type        = string
+  default     = ""
+  description = "Cloudflare Turnstile SITE key for the /contact form's widget — the public half of the pair (it is rendered into the page markup), so TF-managed alongside the Paddle client token rather than dashboard-set. Exposed to the app as PUBLIC_TURNSTILE_SITE_KEY. Empty = the contact form renders with no spam check, which the server logs loudly."
+}
+
 variable "manual_secrets" {
   type        = map(string)
   default     = {}
-  description = "Vercel env vars declared but whose value is set in the dashboard. The marketing site has NONE today (no DB, no API keys) — kept as an empty-by-default convention hook."
+  description = "Vercel env vars declared here but whose value is set in the Vercel dashboard (value changes are ignored — see vercel-env-vars.tf). The site's two are CD2_API_KEY (the transactional-mail sender key) and TURNSTILE_SECRET_KEY (the secret half of the Turnstile pair), both used only by the /contact action."
 }

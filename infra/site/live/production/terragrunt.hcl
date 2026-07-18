@@ -27,4 +27,16 @@ inputs = {
   # Paddle LIVE client-side token (live_…) for the /checkout page's Paddle.js. Minted via
   # `task backend:paddle:client-token` (ctkn_01kx2hw4dn0b5ypk51kcsnr2b3). Public by design.
   paddle_client_token = "live_64ce5712d4a5eebbf29c5796469"
+
+  # Cloudflare Turnstile SITE key for the /contact form (public half — it's rendered into the
+  # page). Self-naming placeholder until the Turnstile widget is created for coldstorage.sh;
+  # with the placeholder in place the widget won't validate, so the form falls back to sending
+  # without a spam check and the server logs it. REPLACE BEFORE RELYING ON /contact.
+  turnstile_site_key = "SET_ME_turnstile_site_key_production"
+
+  # Declared here, valued in the Vercel dashboard (values are ignored by TF once set).
+  manual_secrets = {
+    CD2_API_KEY          = "SET_ME_in_vercel_dashboard"
+    TURNSTILE_SECRET_KEY = "SET_ME_in_vercel_dashboard"
+  }
 }
