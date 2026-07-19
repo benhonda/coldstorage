@@ -41,6 +41,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
         />
         {/* Blocking, no defer/async — sets the theme class on <html> before first paint. */}
         <script dangerouslySetInnerHTML={{ __html: blockingThemeScript }} />
+        {/* Favicons + PWA manifest (RealFaviconGenerator package, served from public/).
+            favicon.svg carries BOTH brand variants internally and swaps on the browser
+            chrome's prefers-color-scheme — which is why there's no dark-mode twin here.
+            .ico is the legacy fallback; the 96px PNG covers browsers without SVG icons. */}
+        <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+        <link rel="shortcut icon" href="/favicon.ico" />
+        <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+        <link rel="manifest" href="/site.webmanifest" />
+        <meta name="apple-mobile-web-app-title" content="ColdStorage" />
+        <meta name="theme-color" content="#EDF3F8" />
         {/* ColdStorage DS webfonts — Hanken Grotesk (UI), JetBrains Mono (technical),
             Material Symbols Rounded (icons). Loaded here (not via CSS @import, which can't
             be bundled) so app/styles/ds/fonts.css stays the design-of-record. */}

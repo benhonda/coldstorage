@@ -132,6 +132,9 @@ Fonts `@import` (design-preview convenience). For production, move to `<link rel
    and writes upstream files **verbatim** into `site/design-mirror/` (the committed
    design-of-record). No translation. Its job is to make any upstream change land as a
    **reviewable git diff**. (Verbatim tokens land directly in `app/styles/ds/` — one copy, see Layer A.)
+   One exception: `design-mirror/brand/` is **hand-delivered**, not pulled — the logo source and
+   favicon package, with the mark's light/dark deltas written down. DesignSync never touches it;
+   see its README before regenerating either.
 2. **Translate + integrate — an intelligent agent.** Converting mirror `.jsx` (inline styles,
    `window.*` globals, browser-Babel) → stack `.tsx` (ES modules, typed content, i18n, real DS
    components, SSR) requires judgment. Done first-time and on each re-pull.

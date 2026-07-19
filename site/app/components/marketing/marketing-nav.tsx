@@ -6,6 +6,7 @@
  */
 import "./marketing-nav.css";
 import * as React from "react";
+import { BrandMark } from "~/components/ds/brand-mark";
 import { Button } from "~/components/ds/button";
 import { csScrollTo } from "~/lib/marketing/site";
 
@@ -31,9 +32,7 @@ export function MarketingNav({ links, cta, solid }: MarketingNavProps) {
         {/* The wordmark goes home, the way a wordmark is expected to. It used to scroll to
             top, which did nothing on the pages that aren't the home page. */}
         <a className="csf-mktnav__brand" href="/" aria-label="ColdStorage — home">
-          <span className="csf-icon" aria-hidden="true">
-            ac_unit
-          </span>
+          <BrandMark className="csf-mktnav__mark" />
           <span className="csf-mktnav__word">ColdStorage</span>
         </a>
         <nav className="csf-mktnav__links" aria-label="Primary">

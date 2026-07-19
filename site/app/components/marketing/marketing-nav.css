@@ -28,9 +28,8 @@
   font: 600 var(--text-md) / 1 var(--font-ui);
   letter-spacing: var(--tracking-tight);
 }
-.csf-mktnav__brand .csf-icon {
-  font-size: 24px;
-  color: var(--accent);
+.csf-mktnav__mark {
+  height: 26px; /* the mark's artboard has shadow slack, so it reads ~24px optically */
 }
 .csf-mktnav__links {
   display: flex;

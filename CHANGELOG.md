@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-19
+
+- feat(site): real ice-cube brand mark — inline `BrandMark` DS component (one geometry, light/dark deltas as CSS vars) replaces the `ac_unit` icon in nav + footer, plus the favicon/PWA package in `public/` linked from `root.tsx`.
+
 ## 2026-07-18
 
 - feat(site): DS `Accordion` rows open independently and animate height via a `0fr → 1fr` grid panel; collapsed panels stay rendered with `inert` instead of `hidden`.

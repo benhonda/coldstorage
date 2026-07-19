@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" width="1000" height="1000"><metadata><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/"><rdf:Description><dc:creator>RealFaviconGenerator</dc:creator><dc:source>https://realfavicongenerator.net</dc:source></rdf:Description></rdf:RDF></metadata><style>
+    #light-icon {
+      display: inline;
+    }
+    #dark-icon {
+      display: none;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      #light-icon {
+        display: none;
+      }
+      #dark-icon {
+        display: inline;
+      }
+    }
+  </style><g id="light-icon"><svg xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" width="1000" height="1000"><g><g transform="matrix(9.433962264150944,0,0,9.433962264150944,37.73584905660374,-5.684341886080802e-14)"><svg xmlns="http://www.w3.org/2000/svg" width="98" height="106" viewBox="0 0 98 106" fill="none"><g filter="url(#filter0_d_76_688)">
+<path d="M48.8813 3.88135L91.8813 27.3813V74.3814L48.8813 97.8813L5.88135 74.3814V27.3813L48.8813 3.88135Z" stroke="#4DA2DA" stroke-width="5.76271" stroke-linejoin="round" shape-rendering="crispEdges"></path>
+</g><path d="M48.8812 6.63257L89.9701 28.8315L48.8812 51.0304L7.79236 28.8315L48.8812 6.63257Z" fill="white"></path><path d="M7.79236 28.8315L48.8812 51.0305V95.4283L7.79236 73.2294V28.8315Z" fill="#C1E4FB"></path><path d="M89.9702 28.8315L48.8813 51.0305V95.4283L89.9702 73.2294V28.8315Z" fill="#99CFF0"></path><defs>
+<filter id="filter0_d_76_688" x="0" y="0" width="97.7627" height="105.763" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"></feFlood>
+<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"></feColorMatrix>
+<feOffset dy="2"></feOffset>
+<feGaussianBlur stdDeviation="1.5"></feGaussianBlur>
+<feComposite in2="hardAlpha" operator="out"></feComposite>
+<feColorMatrix type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.25 0"></feColorMatrix>
+<feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_76_688"></feBlend>
+<feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_76_688" result="shape"></feBlend>
+</filter>
+</defs></svg></g></g></svg></g><g id="dark-icon"><svg xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" width="1000" height="1000"><g><g transform="matrix(9.174311926605505,0,0,9.174311926605505,36.69724770642199,0)"><svg xmlns="http://www.w3.org/2000/svg" width="101" height="109" viewBox="0 0 101 109" fill="none"><g filter="url(#filter0_d_76_667)">
+<path d="M50.189 5.18896L93.189 28.689V75.689L50.189 99.189L7.18896 75.689V28.689L50.189 5.18896Z" stroke="#2F668E" stroke-width="6.3779" stroke-linejoin="round" shape-rendering="crispEdges"></path>
+</g><path d="M50.189 7.94019L91.2779 30.1391L50.189 52.338L9.1001 30.1391L50.189 7.94019Z" fill="white"></path><path d="M9.1001 30.1389L50.189 52.3378V96.7357L9.1001 74.5368V30.1389Z" fill="#C1E4FB"></path><path d="M91.2778 30.1389L50.189 52.3378V96.7357L91.2778 74.5368V30.1389Z" fill="#99CFF0"></path><defs>
+<filter id="filter0_d_76_667" x="0" y="0" width="100.378" height="108.378" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"></feFlood>
+<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"></feColorMatrix>
+<feOffset dy="2"></feOffset>
+<feGaussianBlur stdDeviation="2"></feGaussianBlur>
+<feComposite in2="hardAlpha" operator="out"></feComposite>
+<feColorMatrix type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.6 0"></feColorMatrix>
+<feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_76_667"></feBlend>
+<feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_76_667" result="shape"></feBlend>
+</filter>
+</defs></svg></g></g></svg></g></svg>
