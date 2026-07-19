@@ -1,8 +1,10 @@
 /*
- * DS · Accordion — reimplemented from the compiled DS bundle's API. One-open Q&A
- * disclosure seeded by `defaultOpen`. Accessible (button headers + aria-expanded,
- * aria-controls). SSR-safe: initial render opens `defaultOpen`, matching the server;
- * every answer is in the DOM (collapsed, not removed) so content survives no-JS.
+ * DS · Accordion — reimplemented from the compiled DS bundle's API. Independent Q&A
+ * disclosures (opening one never closes another) seeded by `defaultOpen`. Accessible
+ * (button headers + aria-expanded, aria-controls). SSR-safe: initial render opens
+ * `defaultOpen`, matching the server; every answer is in the DOM (collapsed via CSS,
+ * never `hidden`/unmounted) so the panels can animate their height open and closed,
+ * and the content survives no-JS.
  */
 import "./accordion.css";
 import * as React from "react";
@@ -14,13 +16,23 @@ export type AccordionProps = {
 };
 
 export function Accordion({ items, defaultOpen }: AccordionProps) {
-  const [open, setOpen] = React.useState<number | null>(defaultOpen ?? null);
+  /** Every row is independent — a Set, not a single index, so opening one leaves the rest alone. */
+  const [open, setOpen] = React.useState<ReadonlySet<number>>(
+    () => new Set(defaultOpen === undefined ? [] : [defaultOpen]),
+  );
   const baseId = React.useId();
+
+  const toggle = (i: number) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(i)) next.add(i);
+      return next;
+    });
 
   return (
     <div className="csf-accordion">
       {items.map((it, i) => {
-        const isOpen = open === i;
+        const isOpen = open.has(i);
         const panelId = `${baseId}-panel-${i}`;
         const headId = `${baseId}-head-${i}`;
         return (
@@ -32,7 +44,7 @@ export function Accordion({ items, defaultOpen }: AccordionProps) {
                 className="csf-accordion__head"
                 aria-expanded={isOpen}
                 aria-controls={panelId}
-                onClick={() => setOpen(isOpen ? null : i)}
+                onClick={() => toggle(i)}
               >
                 <span className="csf-accordion__q">{it.question}</span>
                 <span
@@ -47,10 +59,14 @@ export function Accordion({ items, defaultOpen }: AccordionProps) {
               id={panelId}
               role="region"
               aria-labelledby={headId}
-              className="csf-accordion__panel"
-              hidden={!isOpen}
+              className={`csf-accordion__panel${isOpen ? " is-open" : ""}`}
+              /* Collapsed panels stay rendered so height can animate; `inert` keeps them out
+                 of the tab order and the a11y tree the way `hidden` used to. */
+              inert={!isOpen}
             >
-              <p className="csf-accordion__a">{it.answer}</p>
+              <div className="csf-accordion__panel-inner">
+                <p className="csf-accordion__a">{it.answer}</p>
+              </div>
             </div>
           </div>
         );

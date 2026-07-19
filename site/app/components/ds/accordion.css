@@ -47,8 +47,33 @@
 .csf-accordion__chev.is-open {
   transform: rotate(180deg);
 }
+/* Height animation without measuring in JS: the panel is a grid whose single row goes
+   0fr → 1fr, which interpolates against the inner element's natural height. The inner
+   wrapper owns `overflow: hidden` (and the padding, so it collapses to a true zero). */
 .csf-accordion__panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows var(--duration-slow) var(--ease-out),
+    opacity var(--duration-base) var(--ease-out);
+}
+.csf-accordion__panel.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  /* Fade in after the row has started opening; fade out immediately on close. */
+  transition-delay: 0s, 60ms;
+}
+/* Padding lives here (not on the panel) so the 0fr row clamps it away too — no residual
+   gap under a closed row, and nothing to animate separately. */
+.csf-accordion__panel-inner {
+  overflow: hidden;
   padding: 0 4px 24px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .csf-accordion__panel {
+    transition: none;
+  }
 }
 .csf-accordion__a {
   margin: 0;
