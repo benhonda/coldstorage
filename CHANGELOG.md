@@ -2,6 +2,8 @@
 
 ## 2026-07-19
 
+- feat(ui): `task ui:mac:release:publish` — finishes a release whose upload landed but never went live, without rebuilding or bumping.
+- refactor(ui): release verification moved from an inline `node -e` block in the Taskfile to typechecked `ui/scripts/verify-release.ts` (the inline version broke on an apostrophe).
 - feat(ui): `task ui:release` — one command for the whole release (bump → commit + push → sign → notarize → upload → verify → publish), all guards front-loaded.
 - fix(ui): the release path can no longer clobber a live update feed — `gh` is required, the bump guard blocks on an unreadable GitHub, and an already-published `v<version>` is refused.
 - refactor(ui): the release command is `ui:mac:release` (was `ui:release`) and picks the version interactively — shows live-vs-local, offers patch/minor/major or a typed version; `ui:version:bump` is gone, upload engine is `ui:mac:release:upload`.

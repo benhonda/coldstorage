@@ -1289,48 +1289,34 @@ tasks:
           exit 1
         }
       - task: ui:mac:release:upload
+      - task: ui:mac:release:publish
+
+  ui:mac:release:publish:
+    desc: "Verify the v<version> draft, then take it live (creates the tag, publishes the update feed). `ui:mac:release` ends by calling this — run it directly to FINISH a release whose upload succeeded but which never got published, without rebuilding or bumping the version."
+    dir: ui
+    cmds:
       - task: ui:mac:release:verify
       - |
         ver="$(node -p "require('./package.json').version")"
         gh release edit "v${ver}" --repo {{.GH_REPO}} --draft=false --latest
-        echo "🎉 v${ver} is live."
+        echo "🎉 v${ver} is live — installed apps pick it up on their next check (launch, or within 6h)."
 
   ui:mac:release:verify:
     desc: "Check the v<version> release has everything the auto-updater needs: latest-mac.yml + the .zip (what electron-updater actually applies) + the .dmg. Normally you don't run this yourself — `task ui:mac:release` runs it between uploading and publishing, so a half-finished upload can never go live."
     dir: ui
     cmds:
+      # The checking logic lives in scripts/verify-release.ts, not inline here — an earlier inline
+      # `node -e` version broke the moment its message text contained an apostrophe, and nothing
+      # typechecked it. Shell does the gh call; the script judges the assets.
       - |
-        command -v gh >/dev/null 2>&1 || { echo "✋ 'gh' (GitHub CLI) is required. Install: brew install gh"; exit 1; }
+        command -v gh >/dev/null 2>&1 || { echo "gh (GitHub CLI) is required. Install: brew install gh"; exit 1; }
         ver="$(node -p "require('./package.json').version")"
         tag="v${ver}"
         if ! json="$(gh release view "$tag" --repo {{.GH_REPO}} --json isDraft,assets 2>/dev/null)"; then
-          echo "✋ No release $tag on GitHub. Did 'task ui:mac:release' finish? (It uploads into a draft.)"
+          echo "No release $tag on GitHub yet — did the upload step finish? (It uploads into a draft.)"
           exit 1
         fi
-        echo "$json" | node -e '
-          const r = JSON.parse(require("fs").readFileSync(0, "utf8"));
-          const names = r.assets.map((a) => a.name);
-          // electron-updater needs the feed + the zip it applies from; the dmg is the human download path.
-          const need = [
-            { label: "latest-mac.yml (the update feed)", hit: (n) => n === "latest-mac.yml" },
-            { label: "a .zip (what electron-updater applies)", hit: (n) => n.endsWith(".zip") },
-            { label: "a .dmg (the download-page artifact)", hit: (n) => n.endsWith(".dmg") },
-          ];
-          console.log(`${names.length} asset(s) on ${r.isDraft ? "DRAFT" : "PUBLISHED"} release:`);
-          for (const n of names) console.log(`   · ${n}`);
-          const missing = need.filter((x) => !names.some(x.hit));
-          if (missing.length) {
-            console.error("\n✋ NOT safe to publish — missing:");
-            for (const m of missing) console.error(`   ✗ ${m.label}`);
-            console.error("\n   Re-run 'task ui:mac:release' (it re-uploads into the same draft).");
-            process.exit(1);
-          }
-          if (!r.isDraft) {
-            console.log("\n✓ assets complete — but this release is ALREADY PUBLISHED, so the feed is live.");
-            process.exit(0);
-          }
-          console.log("\n✓ Safe to publish. Publishing the draft on github.com creates the tag and takes the feed live for every installed app.");
-        '
+        printf '%s' "$json" | bun scripts/verify-release.ts
 
   ui:icon:build:
     desc: "Regenerate ui/build/icon.png — the macOS app icon (1024px; electron-builder rasterises every Apple size slot from it). Composites the designer-delivered mark from site/design-mirror/brand/ VERBATIM onto the brand tile, so the icon follows the mark automatically when it changes. Committed output — run this after any brand-mark update, not on every package."
