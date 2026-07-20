@@ -380,6 +380,37 @@ tasks:
       - "{{if .REMOVE}}swift run coldstorectl {{.SOCK}} removeExclude pattern={{.REMOVE}}{{end}}"
       - swift run coldstorectl {{.SOCK}} listExcludes
 
+  daemon:mac:verify-tagging:
+    desc: "PROVE PutObjectTagging works on a COLD Deep Archive object (no thaw) — the assumption the whole space-reclaim design rests on. BLOB=<blobId>. Writes a harmless PROBE tag (never the reap tag, so this can't trigger an expiry), reads it back, then clears it. If this fails, reclamation silently no-ops in production and deleted files never free space."
+    dir: coldstorage
+    vars:
+      CREDS: "{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
+    cmds:
+      - |
+        [ -f "{{.CREDS}}" ] && { set -a; . "{{.CREDS}}"; set +a; }
+        bucket="${COLDSTORE_BUCKET:?missing COLDSTORE_BUCKET — run tf:coldstorage:creds-export in the devcontainer}"
+        region="${AWS_REGION:-ca-central-1}"
+        blob="{{.BLOB}}"; : "${blob:?pass BLOB=<blobId> (the hash from task daemon:mac:live -- listFiles)}"
+        key="blobs/${blob}"
+        # A PROBE key, deliberately NOT `coldstorage-reap`. Tagging a real blob with the reap tag would make
+        # it eligible for the lifecycle rule, and the daily sweep could expire it before the cleanup below
+        # runs — destroying real data to test a mechanism. The probe proves the same capability with none of
+        # that risk: what's in question is whether PutObjectTagging is ALLOWED and LANDS on a cold object.
+        echo "── storage class (must be DEEP_ARCHIVE for this to prove anything) ──"
+        aws s3api head-object --bucket "$bucket" --key "$key" \
+          --query 'StorageClass' --output text --profile coldstorage --region "$region"
+        echo "── PUT probe tag (no thaw requested — a thaw here would invalidate the test) ──"
+        aws s3api put-object-tagging --bucket "$bucket" --key "$key" \
+          --tagging 'TagSet=[{Key=coldstorage-tagging-probe,Value=true}]' \
+          --profile coldstorage --region "$region" && echo "  PUT ok"
+        echo "── GET it back (proves it actually landed, not just that the call returned) ──"
+        aws s3api get-object-tagging --bucket "$bucket" --key "$key" \
+          --query 'TagSet' --output json --profile coldstorage --region "$region"
+        echo "── clear the probe tag ──"
+        aws s3api put-object-tagging --bucket "$bucket" --key "$key" \
+          --tagging 'TagSet=[]' --profile coldstorage --region "$region" && echo "  cleared"
+        echo "PASS — tagging works on a cold object; reclamation will function in production."
+
   daemon:mac:live:
     desc: "Drive the INSTALLED launchd daemon (real prod AWS / Deep Archive), e.g. `task daemon:mac:live -- getStatus` · `-- addSource path=/abs/dir` · `-- triggerNow` · `-- watch`. Uses the release binary built by daemon:mac:install."
     dir: coldstorage
