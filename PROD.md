@@ -540,7 +540,7 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      checks for it). **Remaining to fully close the phase gate (on-Mac, Ben):** ~~(a) publish the draft
      v0.1.0 release~~ — **DONE ✅ (2026-07-05):** v0.1.0 is published, the tag exists and the update feed is
      live (see 6b). *Consequence for the next release: the bump guard reads `releases/latest`, which counts
-     published releases only — so 0.1.0 can never be re-shipped. `task ui:release` (added 2026-07-19) now
+     published releases only — so 0.1.0 can never be re-shipped. `task ui:mac:release` (reworked 2026-07-19) now
      handles that end-to-end — bump → commit + push → sign → notarize → upload → verify → publish, one
      command, all guards front-loaded — so the next release is 0.1.1 automatically, and that bump doubles
      as the 6b self-update proof.* (b) install the `.dmg` + launch **Gatekeeper-clean on a
@@ -555,8 +555,9 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
    - **6b — auto-update via GitHub Releases: BUILT ✅ (2026-07-04) + FEED PUBLISHED ✅ (2026-07-05) — the
      self-update *apply* round trip is the last unproven step.** The first signed + notarized build published
      its `.dmg`/`.zip`/`latest-mac.yml` to the GitHub feed (6a), so the feed is real; what's left is to prove
-     a running app actually updates itself: install v0.1.0, bump `ui/package.json` → 0.1.1, `task ui:mac:release`
-     + publish, and confirm the running app surfaces **"Restart to update"** and relaunches on 0.1.1.
+     a running app actually updates itself: install v0.1.0, then `task ui:mac:release` (it picks the version,
+     bumps, publishes — no manual `package.json` edit or GitHub click since the 2026-07-19 rework), and confirm
+     the running app surfaces **"Restart to update"** and relaunches on the new version.
      Decision (Ben, 2026-07-04): **GitHub Releases** as the
      update feed — the repo is public → free, CDN-backed release assets, zero new infra, and it's
      electron-updater's best-supported provider (chosen over S3+CloudFront and serving-from-the-site).
@@ -595,7 +596,7 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      written by the dev-only `task ui:mac:config`, so a cold customer download launched, showed "connected",
      and had nowhere to store. **Fix (SSOT-driven):** `ui/src/main/config.ts` (new, pure/testable) resolves
      config as **baked base ← user override**. The baked base is `Contents/Resources/app-config.json`,
-     written at package time by **`task ui:config:bake`** (wired into `ui:mac:package`/`ui:mac:release`/
+     written at package time by **`task ui:config:bake`** (wired into `ui:mac:package`/`ui:mac:release:upload`/
      `ui:mac:release:dryrun` before electron-builder bundles it, `electron-builder.yml` extraResources) from the
      **same infra-outputs handoff** as `ui:mac:config` — SSOT-generated, gitignored (`ui/build/app-config.json`),
      PUBLIC values only (bucket/region/Cognito ids/sign-in domain+client/account-API). **`awsProfile` is

@@ -80,12 +80,17 @@ wired into `main/index.ts` packaged-only:
 - **Cutting a release — one command:**
 
   ```
-  task ui:release              # patch bump (default)
-  task ui:release LEVEL=minor  # or minor / major
+  task ui:mac:release                  # asks which version
+  task ui:mac:release VERSION=0.4.0    # or name it outright
+  task ui:mac:release LEVEL=minor      # or patch / minor / major
   ```
 
-  It confirms once, then does the whole thing: bump → commit + push → build → sign → notarize → upload →
-  verify the assets → publish. When it finishes, the tag exists and the feed is live.
+  It shows what's live on GitHub vs what's in `package.json`, asks which version to cut (the shorthands
+  compute the actual numbers; you can also just type one), then does the whole thing: bump → commit + push
+  → build → sign → notarize → upload → verify the assets → publish. When it finishes, the tag exists and
+  the feed is live. Picking the version *is* the go-ahead — there's no second confirmation to mash through.
+
+  macOS only, like everything else under `ui:mac:*` — signing and notarization need the Mac.
 
   It needs a **clean `main`, in sync with origin** — otherwise it prints one line saying what's wrong and
   exits, having done nothing. It does not touch your git state beyond committing the version bump: sorting
@@ -93,9 +98,9 @@ wired into `main/index.ts` packaged-only:
   and the tag GitHub creates points at `origin/main`'s head — so anything other than clean-and-in-sync ships
   a binary its own tag doesn't reproduce.)
 
-  The individual pieces (`ui:version:bump`, `ui:mac:release`, `ui:mac:release:verify`) still exist and are
-  still individually runnable, but they're the engine — reach for them when something has gone wrong midway,
-  not to cut a normal release.
+  The pieces underneath (`ui:mac:release:upload` = build/sign/notarize/upload-to-draft,
+  `ui:mac:release:verify` = asset check) are still individually runnable — reach for them when something
+  has gone wrong midway, not to cut a normal release.
 
   **macOS refuses to apply an update to an unsigned/ad-hoc app**, so end-to-end self-update only works once
   6a's Developer ID signing is in place — an `ui:mac:package:sign-adhoc` build can't self-update.

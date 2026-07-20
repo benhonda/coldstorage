@@ -77,6 +77,8 @@ dmg:
 # Auto-update feed (PROD.md Phase 6). electron-builder uploads the .dmg/.zip + the `latest-mac.yml` metadata
 # to a GitHub Release when built with `--publish always` (see `task ui:mac:release`); the packaged app's
 # electron-updater reads that same feed. Repo is public → the release assets are free, CDN-backed downloads.
+# Keep owner/repo in sync with the root Taskfile's GH_REPO var — the release tasks query and publish to
+# the same repo through `gh`, and a rename here without one there would upload to a different release.
 publish:
   provider: github
   owner: benhonda
