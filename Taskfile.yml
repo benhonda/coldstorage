@@ -1220,13 +1220,49 @@ tasks:
         # A dirty tree can't be auto-committed: the bump commit must contain the bump and nothing else, or
         # the tag ships code you never meant to release.
         if [ -n "$(git -C "{{.ROOT_DIR}}" status --porcelain)" ]; then
-          echo "✋ Uncommitted changes — commit or stash them first, then re-run. (The release commits only the version bump.)"
           git -C "{{.ROOT_DIR}}" status --short
+          echo ""
+          echo "✋ Uncommitted changes. This is the one thing the release won't decide for you:"
+          echo "     · commit them   → they ship in this release"
+          echo "     · stash them    → they don't"
+          echo "   Either way, re-run afterwards. (Auto-committing would sweep whatever's open into the"
+          echo "   release commit, and the tag would ship code you never chose to release.)"
           exit 1
         fi
         git -C "{{.ROOT_DIR}}" fetch --quiet origin main || { echo "✋ Couldn't reach origin — a release needs GitHub."; exit 1; }
-        [ "$(git -C "{{.ROOT_DIR}}" rev-parse HEAD)" = "$(git -C "{{.ROOT_DIR}}" rev-parse origin/main)" ] || {
-          echo "✋ Local main isn't in sync with origin/main. Push or pull first."; exit 1; }
+
+        # Ahead / behind are different problems and get different treatment. Unpushed commits are the
+        # ordinary "I already committed my work" case and the fix is unambiguous (push them — the release
+        # is about to push anyway), so ask rather than dead-end. Being BEHIND means someone else's commits
+        # are on main; merging is a judgement call, so that one stops. Same read/case convention as the
+        # other interactive tasks in this file.
+        counts="$(git -C "{{.ROOT_DIR}}" rev-list --left-right --count origin/main...HEAD)"
+        behind="$(echo "$counts" | cut -f1)"
+        ahead="$(echo "$counts" | cut -f2)"
+
+        if [ "$behind" -gt 0 ] && [ "$ahead" -gt 0 ]; then
+          echo "✋ main has diverged from origin/main ($ahead local, $behind remote). Reconcile them first — the tag lands on origin's head, so it must be a commit you've actually seen."
+          exit 1
+        fi
+        if [ "$behind" -gt 0 ]; then
+          echo "✋ main is $behind commit(s) BEHIND origin/main. Pull first — the tag attaches to origin's head, which would ship code you haven't built or tested."
+          exit 1
+        fi
+        if [ "$ahead" -gt 0 ]; then
+          echo "You have $ahead unpushed commit(s) on main:"
+          git -C "{{.ROOT_DIR}}" --no-pager log --oneline origin/main..HEAD
+          echo ""
+          if [ ! -t 0 ]; then
+            echo "✋ Not a terminal, so I can't ask — push them yourself and re-run."
+            exit 1
+          fi
+          printf "Push these and continue with the release? [y/N] "
+          read -r reply
+          case "$reply" in
+            [yY]*) git -C "{{.ROOT_DIR}}" push --quiet origin main && echo "✓ pushed." ;;
+            *)     echo "Stopped — nothing pushed, nothing released."; exit 1 ;;
+          esac
+        fi
         echo "✓ preflight clean — on main, in sync, creds present."
       - task: ui:version:bump
         vars: { LEVEL: "{{.LEVEL}}" }
