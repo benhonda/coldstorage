@@ -1,6 +1,6 @@
 {
   "name": "coldstorage-ui",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "//trustedDependencies": "Bun blocks postinstall scripts by default; Electron downloads its binary in one — without this, `task ui:mac:dev` fails with 'Electron uninstall'. Only the GUI launch needs the binary (build/typecheck/test don't).",
