@@ -43,6 +43,13 @@ Only the tile and the variant pairing are authored by us; the mark is never redr
 why the generator reads the SVG rather than copying its path data — re-run the task after any
 change here and the icon follows.
 
+**Forgetting that re-run is caught, not trusted.** `ui/build/icon.inputs.sha256` (committed next to
+the PNG) fingerprints the composed artwork — the delivered SVG plus every knob the generator owns.
+`task ui:icon:check` recomputes it, and `ui:mac:release:upload` runs that check before it builds, so
+a brand-mark edit that skips `task ui:icon:build` fails the release instead of silently shipping the
+old icon. It hashes the *inputs* rather than the PNG on purpose: sharp/libvips output isn't
+byte-stable across versions, so comparing rendered bytes would cry wolf on a dependency bump.
+
 electron-builder rasterises every Apple size slot from that single 1024px PNG (bundled resvg —
 no `iconutil`, no Xcode), so there is no `.icns` to hand-maintain. On macOS 26 the system wraps
 it in its own grey squircle until we ship an Icon Composer `.icon`; see PROD.md Phase 6a.

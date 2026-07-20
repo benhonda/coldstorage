@@ -976,16 +976,10 @@ tasks:
           echo "✋ Couldn't reach GitHub to read the latest published release. Refusing to release blind — the bump guard is what stops a live feed being overwritten. Check your connection / GH_TOKEN and retry."
           exit 1
         fi
-        if [ -z "$latest" ]; then
-          # Genuinely nothing published yet (first-ever release) — nothing to be ahead of.
-          echo "no published release yet — first release of $pkg, bump guard n/a."
-        elif node -e 'const p=process.argv[1].split(".").map(Number),l=process.argv[2].split(".").map(Number);if([...p,...l].some(Number.isNaN)){console.error("non-numeric semver — compare by hand");process.exit(2)};process.exit((p[0]!==l[0]?p[0]>l[0]:p[1]!==l[1]?p[1]>l[1]:p[2]>l[2])?0:1)' "$pkg" "$latest"; then
-          echo "version $pkg is ahead of the latest release ($latest) — ok to release."
-        else
-          echo "✋ Refusing to release: ui/package.json version ($pkg) is NOT ahead of the latest published release ($latest)."
-          echo "   Run 'task ui:mac:release' (it picks the version for you)."
-          exit 1
-        fi
+        bun scripts/assert-version-ahead.ts "$pkg" "$latest" || exit 1
+      # Cheap, and the last moment a stale app icon can still be caught for free — after this it's baked
+      # into a notarized binary that customers auto-update to.
+      - task: ui:icon:check
       - echo "Building a signed + notarized ColdStorage and publishing to GitHub Releases ({{.GH_REPO}})…"
       # Sync node_modules to the lockfile — electron-builder collects the app's production deps (electron-updater)
       # from node_modules, so a stale tree fails with "production dependency not found". Idempotent when in sync.
@@ -1220,64 +1214,14 @@ tasks:
         [ -z "$(git -C "{{.ROOT_DIR}}" status --porcelain)" ] || { echo "✋ uncommitted changes — commit or stash them first"; exit 1; }
         git -C "{{.ROOT_DIR}}" fetch --quiet origin main || { echo "✋ can't reach origin"; exit 1; }
         [ "$(git -C "{{.ROOT_DIR}}" rev-parse HEAD)" = "$(git -C "{{.ROOT_DIR}}" rev-parse origin/main)" ] || { echo "✋ main and origin/main differ — push or pull first"; exit 1; }
-      # Where we're at, then pick. Shows the resulting numbers rather than making you work out what "minor"
-      # means today, and shows what's currently LIVE so you can see the gap. Typing a version outright is
-      # allowed — the shorthands are a convenience, not a cage. Choosing IS the go-ahead: publishing is
-      # stated in the header, so a separate "are you sure" would just be a second key to mash.
+      # Version choice, validation and the package.json write all live in scripts/set-release-version.ts —
+      # not inline here. Inline `node -e` inside YAML inside shell has already broken once (an apostrophe in
+      # a message closed the shell's quoting mid-script), and nothing typechecks it.
       - |
         cur="$(node -p "require('./package.json').version")"
-        echo "$cur" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "✋ ui/package.json version '$cur' isn't a plain x.y.z — fix it before releasing."; exit 1; }
         live="$(gh api repos/{{.GH_REPO}}/releases/latest --jq '.tag_name' 2>/dev/null | sed 's/^v//')"
-        set -- $(node -e 'const [a,b,c]=process.argv[1].split(".").map(Number);console.log(`${a}.${b}.${c+1} ${a}.${b+1}.0 ${a+1}.0.0`)' "$cur")
-        patch=$1; minor=$2; major=$3
-
-        next=""
-        if [ -n "{{.VERSION}}" ]; then next="{{.VERSION}}"; fi
-        if [ -z "$next" ] && [ -n "{{.LEVEL}}" ]; then
-          case "{{.LEVEL}}" in
-            patch) next=$patch ;; minor) next=$minor ;; major) next=$major ;;
-            *) echo "✋ LEVEL must be patch|minor|major (got: {{.LEVEL}})"; exit 1 ;;
-          esac
-        fi
-        if [ -z "$next" ]; then
-          echo ""
-          echo "  live on GitHub:  ${live:+v}${live:-none yet}"
-          echo "  in package.json: v${cur}"
-          echo ""
-          echo "  1) patch → $patch"
-          echo "  2) minor → $minor"
-          echo "  3) major → $major"
-          echo "  …or type a version outright (e.g. 0.4.0)"
-          echo "  q) cancel"
-          echo ""
-          printf "release which? [1] "
-          read -r choice || choice=q
-          case "${choice:-1}" in
-            1|patch) next=$patch ;;
-            2|minor) next=$minor ;;
-            3|major) next=$major ;;
-            q|Q|"") echo "Cancelled."; exit 1 ;;
-            *) next="$choice" ;;
-          esac
-        fi
-        echo "$next" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "✋ '$next' isn't a valid x.y.z version."; exit 1; }
-        # Must move FORWARD, and this has to be checked here — the upload step's own bump guard runs after
-        # the bump has already been committed and pushed, so a typo like 0.0.1 would leave a junk commit on
-        # main before anything refused it. Compared against the live release too (not just package.json),
-        # since that's what electron-updater actually serves.
-        node -e '
-          const cmp = (a, b) => { const [x, y] = [a, b].map(v => v.split(".").map(Number));
-            for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
-          const [next, cur, live] = process.argv.slice(1);
-          if (cmp(next, cur) <= 0) { console.error(`✋ ${next} is not ahead of the current ${cur}.`); process.exit(1); }
-          if (live && cmp(next, live) <= 0) { console.error(`✋ ${next} is not ahead of the live release ${live}.`); process.exit(1); }
-        ' "$next" "$cur" "$live" || exit 1
-        node -e '
-          const fs = require("fs"), p = "./package.json";
-          const src = fs.readFileSync(p, "utf8");
-          fs.writeFileSync(p, src.replace(`"version": "${process.argv[1]}"`, `"version": "${process.argv[2]}"`));
-        ' "$cur" "$next"
-        echo "→ releasing v$next"
+        bun scripts/set-release-version.ts --current "$cur" --live "$live" \
+          {{if .VERSION}}--version "{{.VERSION}}"{{end}} {{if .LEVEL}}--level "{{.LEVEL}}"{{end}}
       # The bump commit is the one the published tag points at, so it lands alone.
       - |
         ver="$(node -p "require('./package.json').version")"
@@ -1317,6 +1261,12 @@ tasks:
           exit 1
         fi
         printf '%s' "$json" | bun scripts/verify-release.ts
+
+  ui:icon:check:
+    desc: "Fail if ui/build/icon.png is stale — i.e. the brand mark in site/design-mirror/brand/ (or a tile setting) changed without `task ui:icon:build` being re-run. Run by ui:mac:release:upload so a release can never ship a stale icon."
+    dir: ui
+    cmds:
+      - bun scripts/gen-icon.ts --check
 
   ui:icon:build:
     desc: "Regenerate ui/build/icon.png — the macOS app icon (1024px; electron-builder rasterises every Apple size slot from it). Composites the designer-delivered mark from site/design-mirror/brand/ VERBATIM onto the brand tile, so the icon follows the mark automatically when it changes. Committed output — run this after any brand-mark update, not on every package."

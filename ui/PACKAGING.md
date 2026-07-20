@@ -98,9 +98,22 @@ wired into `main/index.ts` packaged-only:
   and the tag GitHub creates points at `origin/main`'s head — so anything other than clean-and-in-sync ships
   a binary its own tag doesn't reproduce.)
 
-  The pieces underneath (`ui:mac:release:upload` = build/sign/notarize/upload-to-draft,
-  `ui:mac:release:verify` = asset check) are still individually runnable — reach for them when something
-  has gone wrong midway, not to cut a normal release.
+  The pieces underneath are still individually runnable — reach for them when something has gone wrong
+  midway, not to cut a normal release:
+
+  | Task | Does |
+  |---|---|
+  | `ui:mac:release:upload` | build → sign → notarize → upload into a draft |
+  | `ui:mac:release:verify` | asset check (`latest-mac.yml` + `.zip` + `.dmg`) |
+  | `ui:mac:release:publish` | verify, then take the draft live — **finishes a release whose upload succeeded but never published, without rebuilding or bumping** |
+  | `ui:icon:check` | fail if `build/icon.png` is stale vs the brand mark (run by `:upload`) |
+
+  Anything with real logic lives in `ui/scripts/*.ts`, not inline in the Taskfile — version arithmetic in
+  `set-release-version.ts` / `assert-version-ahead.ts` (sharing `lib/semver.ts`), the asset check in
+  `verify-release.ts`. That's not stylistic: the inline `node -e` version of the asset check silently broke
+  when a message string contained an apostrophe, which closed the shell's quoting mid-script. Shell is fine
+  for `gh` calls and git state; it is not where logic belongs, because nothing typechecks it and `bash -n`
+  does not catch that failure (verified — the shell stays syntactically valid).
 
   **macOS refuses to apply an update to an unsigned/ad-hoc app**, so end-to-end self-update only works once
   6a's Developer ID signing is in place — an `ui:mac:package:sign-adhoc` build can't self-update.

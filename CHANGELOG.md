@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-07-20
+
+- feat(ui): `task ui:icon:check` — `gen-icon.ts --check` compares `build/icon.inputs.sha256` so a release can't ship an icon that's stale vs the brand mark.
+- refactor(ui): release version arithmetic moved out of inline `node -e` into `scripts/set-release-version.ts` + `assert-version-ahead.ts` over a shared `lib/semver.ts`.
+
 ## 2026-07-19
 
 - feat(ui): `task ui:mac:release:publish` — finishes a release whose upload landed but never went live, without rebuilding or bumping.

@@ -24,13 +24,21 @@
  * deliberate later pass, tracked in PROD.md Phase 6a.
  */
 import sharp from 'sharp'
-import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const BRAND = resolve(HERE, '../../site/design-mirror/brand')
 const OUT = resolve(HERE, '../build/icon.png')
+/**
+ * Fingerprint of everything the icon is derived from, written beside it and committed. `--check`
+ * recomputes it, so a brand-mark edit that forgets `task ui:icon:build` fails loudly instead of
+ * shipping a stale icon. Hashing the INPUTS rather than the PNG is deliberate: sharp/libvips output
+ * isn't byte-stable across versions, so comparing rendered bytes would false-alarm on an upgrade.
+ */
+const STAMP = resolve(HERE, '../build/icon.inputs.sha256')
 
 const CANVAS = 1024
 const BODY = 824
@@ -134,5 +142,29 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${CANVAS}" height="$
   ${nestMark(MARK_VARIANT)}
 </svg>`
 
+/**
+ * Hash the composed SVG rather than just the source file: it already folds in the brand artwork AND
+ * every knob this script owns (gradient, scale, canvas/body geometry, squircle sampling), so there is
+ * no list of constants to remember to add here when one is introduced.
+ */
+const fingerprint = createHash('sha256').update(svg).digest('hex')
+
+if (process.argv.includes('--check')) {
+  if (!existsSync(STAMP)) {
+    console.error(`✋ ${STAMP} is missing — run 'task ui:icon:build' and commit the result.`)
+    process.exit(1)
+  }
+  const recorded = readFileSync(STAMP, 'utf8').trim()
+  if (recorded !== fingerprint) {
+    console.error("✋ ui/build/icon.png is STALE — the brand mark or the tile settings changed since it was generated.")
+    console.error(`   recorded ${recorded.slice(0, 12)}…  now ${fingerprint.slice(0, 12)}…`)
+    console.error("   Run 'task ui:icon:build' and commit the regenerated icon.")
+    process.exit(1)
+  }
+  console.log('✓ icon.png is up to date with the brand mark.')
+  process.exit(0)
+}
+
 await sharp(Buffer.from(svg)).png().toFile(OUT)
+writeFileSync(STAMP, `${fingerprint}\n`)
 console.log(`wrote ${OUT}  (${CANVAS}×${CANVAS}, ${MARK_VARIANT} on a ${from}→${to} tile)`)
