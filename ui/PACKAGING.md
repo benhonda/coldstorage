@@ -88,11 +88,25 @@ wired into `main/index.ts` packaged-only:
   verify the assets → publish. When it finishes, the tag exists and the feed is live.
 
   There is no ordering to remember, because there are no steps to order. Everything that can refuse runs
-  **before the first side effect**: `gh` present, notary + GitHub creds present, on `main`, clean tree, in
-  sync with origin. If any of those fail you get one line telling you what to fix, and nothing has happened
-  yet. The one thing it won't do for you is commit unrelated work — a dirty tree is a hard stop, because the
-  release commit must contain the version bump and nothing else or the tag ships code you didn't mean to
-  release.
+  **before the first side effect**, and where the fix is obvious it just asks instead of stopping:
+
+  | Repo state | What happens |
+  |---|---|
+  | Unpushed commits | Lists them, offers to push and carry on |
+  | Uncommitted changes | Offers to set them aside and release **what's committed** — restored automatically |
+  | Behind `origin/main` | Stops — pull first |
+  | Diverged from `origin/main` | Stops — reconcile first |
+  | Not on `main` / missing creds / no `gh` | Stops with the one line you need |
+
+  **Why dirty trees get stashed rather than ignored:** electron-builder builds the *working tree*, not `HEAD`.
+  Releasing dirty would bake your open edits into a binary whose tag points at the committed code — a tag that
+  doesn't reproduce its own binary. So "release what's committed" has to mean literally building the committed
+  state. The stash is registered under `defer:`, which Task runs even when the release fails or is interrupted,
+  so your changes come back whether notarization succeeded, blew up, or you Ctrl-C'd it. If the restore ever
+  conflicts, the task prints the exact `git stash pop <ref>` to recover — nothing is ever silently dropped.
+
+  Being **behind** or **diverged** still stops, because the tag attaches to origin's head: continuing would
+  ship someone else's commits that you never built or tested. That's a merge decision, not a release decision.
 
   The individual pieces (`ui:version:bump`, `ui:mac:release`, `ui:mac:release:verify`) still exist and are
   still individually runnable, but they're the engine — reach for them when something has gone wrong midway,

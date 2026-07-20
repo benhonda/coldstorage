@@ -1205,6 +1205,20 @@ tasks:
     vars:
       LEVEL: '{{.LEVEL | default "patch"}}'
     cmds:
+      # Registered FIRST so it unwinds LAST, and `defer` runs even when the task fails — so an auto-stashed
+      # working tree comes back whether the release succeeded, blew up in notarization, or was Ctrl-C'd.
+      # Matches our own stash by message rather than popping blind: `git stash pop` with no ref takes the
+      # top of the stack, which may not be ours if something else stashed in between.
+      - defer: |
+          ref="$(git -C "{{.ROOT_DIR}}" stash list --format='%gd %gs' | awk '/ui:release autostash/{print $1; exit}')"
+          if [ -n "$ref" ]; then
+            if git -C "{{.ROOT_DIR}}" stash pop "$ref" >/dev/null 2>&1; then
+              echo "✓ restored your uncommitted changes."
+            else
+              echo "⚠ couldn't auto-restore your stashed changes (likely a conflict with the release commit)."
+              echo "  They are safe — recover with:  git stash list  &&  git stash pop $ref"
+            fi
+          fi
       # Everything that can refuse runs BEFORE the first side effect (the version commit). A release that
       # dies halfway leaves a pushed bump with no release behind it — recoverable, but avoidable.
       - |
@@ -1219,15 +1233,30 @@ tasks:
 
         # A dirty tree can't be auto-committed: the bump commit must contain the bump and nothing else, or
         # the tag ships code you never meant to release.
+        # Uncommitted changes don't have to stop the release — but they can't come along either.
+        # electron-builder builds the WORKING TREE, so releasing dirty would bake your open edits into a
+        # binary whose tag points at the committed code. Releasing "what's committed" therefore means
+        # literally building the committed state: stash, build, restore (the defer above always restores).
         if [ -n "$(git -C "{{.ROOT_DIR}}" status --porcelain)" ]; then
           git -C "{{.ROOT_DIR}}" status --short
           echo ""
-          echo "✋ Uncommitted changes. This is the one thing the release won't decide for you:"
-          echo "     · commit them   → they ship in this release"
-          echo "     · stash them    → they don't"
-          echo "   Either way, re-run afterwards. (Auto-committing would sweep whatever's open into the"
-          echo "   release commit, and the tag would ship code you never chose to release.)"
-          exit 1
+          echo "Uncommitted changes — these will NOT be in the release."
+          echo "(The build reads your working tree, so they have to be set aside for it to ship the committed code.)"
+          echo ""
+          if [ ! -t 0 ]; then
+            echo "✋ Not a terminal, so I can't ask — commit or stash them yourself and re-run."
+            exit 1
+          fi
+          printf "Set them aside and release what's committed? They come back automatically. [y/N] "
+          read -r reply
+          case "$reply" in
+            [yY]*)
+              git -C "{{.ROOT_DIR}}" stash push --include-untracked --quiet -m "ui:release autostash" \
+                || { echo "✋ Couldn't stash — resolve by hand and re-run."; exit 1; }
+              echo "✓ set aside; releasing the committed state."
+              ;;
+            *) echo "Stopped — nothing changed."; exit 1 ;;
+          esac
         fi
         git -C "{{.ROOT_DIR}}" fetch --quiet origin main || { echo "✋ Couldn't reach origin — a release needs GitHub."; exit 1; }
 
