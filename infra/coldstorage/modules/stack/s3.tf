@@ -33,8 +33,13 @@ resource "aws_s3_bucket_ownership_controls" "vault" {
 
 # Versioning ON: this is the "stuff you can't lose" vault — insurance against an
 # accidental overwrite/delete bug. Blobs are content-addressed + the daemon is
-# idempotent, so in practice this adds ~no extra versions. We deliberately do NOT
-# expire noncurrent versions — nothing gets auto-deleted from the vault.
+# idempotent, so in practice this adds ~no extra versions.
+#
+# Noncurrent versions are NOT expired in general — nothing gets auto-deleted from the
+# vault — with exactly one exception: `expire-reclaimable-blobs` below expires the
+# noncurrent version of a blob the daemon has explicitly tagged as reclaimable. Without
+# that exception `expiration` on a versioned bucket only hides the object behind a delete
+# marker, so the user's quota would free while we kept paying for the bytes for ever.
 resource "aws_s3_bucket_versioning" "vault" {
   bucket = aws_s3_bucket.vault.id
   versioning_configuration {
@@ -54,8 +59,10 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "vault" {
   }
 }
 
-# Only lifecycle rule: reap orphaned multipart parts (never-completed uploads = garbage,
-# and they accrue storage cost). Completed objects/versions are NEVER auto-deleted.
+# Lifecycle rules. (1) reap orphaned multipart parts (never-completed uploads = garbage that accrues
+# storage cost). (2+3) expire blobs the daemon has explicitly tagged reclaimable, and the delete markers
+# that leaves behind. A completed object is auto-deleted ONLY when the daemon tagged it — i.e. only once
+# every file inside it was deleted by the user. Nothing else in the vault is ever removed automatically.
 resource "aws_s3_bucket_lifecycle_configuration" "vault" {
   bucket = aws_s3_bucket.vault.id
 
@@ -81,8 +88,10 @@ resource "aws_s3_bucket_lifecycle_configuration" "vault" {
   # machine erase the archive outright — the precise failure this product exists to prevent. A compromised
   # client can, at worst, queue a deletion that is visible in the object's tags.
   #
-  # Deep Archive bills a 180-day minimum, so expiring earlier reclaims the user's QUOTA, not our cost. That
-  # asymmetry is fine and deliberate: the capacity is what the customer is owed.
+  # Expiry is set TO the 180-day minimum, not earlier — so the object goes at the moment it stops being
+  # billable and never before. Giving the user their space back sooner than that is handled separately, in
+  # `Journal.reclaimedCreditBytes`, which credits at eligibility (AWS stops charging then, even if the sweep
+  # runs later). Keep the two straight: this rule controls OUR cost, the credit controls THEIR quota.
   #
   # The tag spelling is duplicated in `S3Store.reapTagKey`. A mismatch is silent — the object gets tagged,
   # this rule never matches, and the bytes bill forever while the journal believes they're gone.
@@ -99,10 +108,39 @@ resource "aws_s3_bucket_lifecycle_configuration" "vault" {
 
     # Measured from object CREATION, not from when the tag was applied — S3 offers no "days since tagged".
     # Any blob old enough to be worth reclaiming is already past this, so in practice the tag is the trigger
-    # and expiry lands on the next daily lifecycle sweep. Non-zero so a tag written against a brand-new
-    # object still leaves a window to notice and undo it.
+    # and expiry lands on the next daily lifecycle sweep.
     expiration {
       days = var.reclaimable_blob_expiry_days
+    }
+
+    # ── THIS BUCKET IS VERSIONED, which changes what `expiration` means ──────────────────────────────
+    # On a versioned bucket `expiration` does NOT delete bytes. It writes a delete marker and demotes the
+    # object to a NONCURRENT version — which the versioning block above deliberately never expires. The key
+    # stops appearing in ListObjectsV2, so the user's quota frees, while the bytes stay and keep billing.
+    # That is the worst possible failure for this feature: it hands back space we are still paying for,
+    # forever, which is precisely the churn hole the 180-day alignment exists to close.
+    #
+    # So the reap rule must expire the noncurrent version too. 1 day, not 0: it keeps a brief window in
+    # which a mistaken reap is still recoverable from the noncurrent version, and Deep Archive's 180-day
+    # minimum is already satisfied by the `expiration` above, so this adds no cost.
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+  }
+
+  # Delete markers left behind once the noncurrent version is gone. They hold no data and cost nothing, but
+  # an accumulating field of them slows every listing — and the quota gate runs a full listing. Separate
+  # rule because a delete marker carries no tags, so the reap rule's tag filter can never match one.
+  rule {
+    id     = "expire-orphaned-delete-markers"
+    status = "Enabled"
+
+    filter {
+      prefix = "blobs/"
+    }
+
+    expiration {
+      expired_object_delete_marker = true
     }
   }
 }
