@@ -1,6 +1,6 @@
 /*
  * Section — Closing CTA: accent-tinted centered band.
- * Ported from `design-mirror/marketing/v4-sections.jsx` → `SectionV4Close`.
+ * Ported from `Claude design · v4-sections.jsx` → `SectionV4Close`.
  * Replaces the old CtaPanel-based `SectionClosingSomewhereElse`; upstream traded the
  * panel for a full-bleed tinted band that closes the page.
  */

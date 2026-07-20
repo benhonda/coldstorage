@@ -1,5 +1,5 @@
 /* Base site styles — shared by the master page and every per-section preview
-   page. Ported VERBATIM from `design-mirror/marketing/shared/site-base.css`.
+   page. Ported VERBATIM from `Claude design · shared/site-base.css`.
    Per-variant CSS lives inside each section file (imported at the top). */
 
 html { scroll-behavior: smooth; }

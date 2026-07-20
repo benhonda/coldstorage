@@ -1,6 +1,6 @@
 /*
  * Section — Pricing · tabbed: storage sizes and retrieval costs on two tabs.
- * Ported from `design-mirror/marketing/master-sections.jsx` → `SectionMPricing`
+ * Ported from `Claude design · master-sections.jsx` → `SectionMPricing`
  * (+ its `MPricingStorage` / `MPricingRetrieval` panels): `csInjectStyle` → a co-located
  * stylesheet, `window` globals → imports, upstream `Chip` → our DS `Badge`.
  *

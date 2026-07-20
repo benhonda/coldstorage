@@ -1,4 +1,4 @@
-# ColdStorage Marketing Site — Build & Sync Spec
+# ColdStorage Marketing Site — Build & Design-Import Spec
 
 > **Status:** ✅ LIVE at [coldstorage.sh](https://coldstorage.sh) (2026-07-05) · Phases 1–4 done.
 > **Landing page recomposed from upstream 2026-07-18** — new positioning, new pricing model,
@@ -17,17 +17,27 @@
 ## Goal
 
 Stand up the ColdStorage **marketing site** (`coldstorage.sh`) as an RR7/adpharm-stack app
-that renders with the ColdStorage **Design System**, carries marketing sections **designed
-upstream** in Claude cloud design, and **hosts the checkout page** — with a sync mechanism
-that keeps upstream design and repo code aligned **without hand-maintained duplication**
-(PILLAR3).
+that renders with the ColdStorage **Design System** and **hosts the checkout page**.
+
+**This repo is the single source of truth for the site — all of it.** Tokens, DS components,
+marketing sections, copy: edit them here, freely, and the change is the truth. Claude cloud
+design is an **import source**, not an upstream owner: pull a section/page/component down when
+you want one, translate it in, and it becomes repo code like any other. There is no mirror, no
+reconciliation, no second copy to keep aligned — which is exactly what PILLAR3 asks for. One
+owner per artifact, and that owner is `site/`.
+
+> **This changed on 2026-07-20.** The site previously ran a sync loop: upstream design was the
+> SSOT for tokens and section layout, mirrored verbatim into `site/design-mirror/` and
+> re-reconciled on every upstream edit. That's two owners for one artifact. The mirror is
+> deleted (git history keeps it); `site/brand/` — real source assets the icon build reads, never
+> a mirror — was promoted out of it first.
 
 ## Where it lives · stack
 
 - **Location:** `site/` (monorepo subdir — `ui/` and `account-backend/` already exist). The
   root `Taskfile.yml` stays the one command surface; `site` gets dir-scoped tasks
-  (`start:site` / `link:site` / `pull:site`; the design-mirror pull is an **agent action**, not a
-  task — DesignSync is session-only, see the sync loop below), and the bare
+  (`start:site` / `link:site` / `pull:site`; a design import is an **agent action**, not a
+  task — DesignSync is session-only, see *Importing from Claude design* below), and the bare
   `start`/`link`/`pull` become app pickers over `ui` / `backend` / `site`.
 - **Stack:** RR7 (SSR) on Vercel, `~/*`→`app/*`, Tailwind v4, zod fail-fast env, its **own
   Vercel project** + **`infra/site/`** Terraform (prod + staging), package/state name
@@ -39,12 +49,16 @@ that keeps upstream design and repo code aligned **without hand-maintained dupli
 
 ## The four layers · one owner each (this is what kills drift)
 
-| Layer | What | Single source of truth | Sync direction |
+Every layer is owned **here**. The "origin" column is history — where the artifact first came
+from — and carries no authority: nothing re-reads it, and a repo edit never needs to be
+reconciled against it.
+
+| Layer | What | Single source of truth | Origin (history only) |
 | --- | --- | --- | --- |
-| **A. Tokens** | color / type / spacing / effects / radius / shadows | **pinned snapshot `_ds/…41ebafc1`** (verbatim, pull-managed → `app/styles/ds/`); `739a…` = origin to reconcile | code pulls down; a thin shadcn-alias layer maps DS vars → shadcn names |
-| **B. DS components** | Button, Card, Input, Nav, Footer… | **DS project `739a…`** component source | pulled down; not shared with Electron (coherence = shared tokens, not shared code) |
-| **C. Marketing sections** | hero, how, privacy, pricing, faq, closing — **layout only** | **marketing project `942990bc…`** (design) → repo `.tsx` (impl) | pull-only → mirror → agent-translate |
-| **D. Copy** | every word the site renders | **`app/lib/marketing/content.ts`** — authored here, not derived | none — it is the source |
+| **A. Tokens** | color / type / spacing / effects / radius / shadows | **`app/styles/ds/*.css`** — edit freely | imported from the pinned DS snapshot `_ds/…41ebafc1`; a thin shadcn-alias layer maps DS vars → shadcn names |
+| **B. DS components** | Button, Card, Input, Nav, Footer… | **`app/components/ds/*`** | imported from DS project `739a…`; not shared with Electron (coherence = shared tokens, not shared code) |
+| **C. Marketing sections** | hero, how, privacy, pricing, faq, closing | **`app/components/marketing/**/*.tsx`** | imported from marketing project `942990bc…`, then translated |
+| **D. Copy** | every word the site renders | **`app/lib/marketing/content.ts`** — authored here, never derived | — |
 
 ### Layer D — copy ownership (settled 2026-07-18)
 
@@ -64,14 +78,24 @@ Shipped copy is public words; it belongs in version control where it is reviewed
 | **Prices** | `account-backend/src/plan-sizes.ts` + `retrieval-pricing.ts` (code) |
 | **Legal prose** | `app/lib/marketing/legal.ts` (own SSOT, own review path) |
 
-**The design project's copy is a preview fixture, never a source.** `shared/landing-copy.jsx`
-(`LC`) and `shared/site-common.jsx`'s dead `CS_*` constants are mirrored verbatim so design
-diffs stay clean and the upstream previews render — they are *not* consulted for wording, and
-they will lag. Layer C pulls **layout** from upstream; it does not pull words.
+**The design project's copy is a preview fixture, never a source.** Upstream `.jsx` carries its
+own copy (`shared/landing-copy.jsx`'s `LC` object, `shared/site-common.jsx`'s `CS_*` constants)
+purely so its previews render. When you import a section, take its **layout** and drop its
+words on the floor — `content.ts` already has the real ones.
 
 Standing copy constraints (in the `content.ts` header, so they travel with the words): never
 name the backend provider in customer copy (legal disclosure is the carve-out); no
 fear-mongering or "safe"/"secure" claims; never claim past what the architecture does.
+
+**The wordmark is `coldstorage`; the product in prose is `ColdStorage` (Ben, 2026-07-20).**
+Both are correct in their own place — the wordmark is a drawn artifact that happens to be made
+of letters, so it doesn't take a capital at the start of a sentence, while the name written out
+in a paragraph does. The split is enforced from both ends rather than trusted to discipline:
+`<Wordmark>` (`components/ds/wordmark.tsx`) takes **no children**, so the logotype is
+unspellable-wrong and `task ssr:check:site` asserts the rendered nav/footer say `coldstorage`;
+`task copy:check:site` walks **every string** in `content.ts` — titles and headings included,
+which the curated scan list deliberately skips — and rejects a lowercase `coldstorage` in prose
+(URLs, domains and repo paths stripped first, since those are legitimately lowercase).
 
 **Published prices are the REAL prices, never tidied.** Retrieval runs at **0% margin**
 (`retrieval-pricing.ts`), so a rate rounded *down* is a subsidy paid out of storage margin and
@@ -93,61 +117,74 @@ over-claims; "encrypted" never "scrambled"; never framing our own cost as nothin
 expectation — cutting it is a regression, not an edit. Run it after touching copy. It is *not* a
 spell-check on the words; copy stays free to change, which is the point.
 
-**Why C's two representations aren't a DRY violation:** the upstream `.jsx` is the *design
-contract* (visual judgment), the repo `.tsx` is the *implementation* (types, i18n, routing,
-real DS components) — same split as Figma-vs-code. The only thing we refuse to duplicate is
-**token values**, and those travel verbatim.
+## Import sources (Claude cloud design)
 
-## Upstream projects
+Two projects worth pulling from. Neither owns anything here; they are catalogues you shop in.
 
-| Project | ID | Type | Sync mode |
+| Project | ID | Type | What it's good for |
 | --- | --- | --- | --- |
-| Cold Storage Design System | `739a4170-fac2-4727-a1e9-aa1b10705b35` | `DESIGN_SYSTEM` | round-trip capable (pull-dominant) |
-| Modern 2026 marketing website | `942990bc-2bee-4b0b-85b0-331bf79cf37f` | `PROJECT` | **pull-only** (correct — design lives upstream) |
+| Cold Storage Design System | `739a4170-fac2-4727-a1e9-aa1b10705b35` | `DESIGN_SYSTEM` | new DS components; token *ideas* |
+| Modern 2026 marketing website | `942990bc-2bee-4b0b-85b0-331bf79cf37f` | `PROJECT` | new marketing sections, pages, heroes |
 
-The marketing project vendors a **pinned DS snapshot** under
-`_ds/coldstorage-design-system-41ebafc1…/` (like a lockfile). The site is built against the
-snapshot the design actually uses; `739a…` is the origin the snapshot publishes from.
+The marketing project vendors a pinned DS snapshot under
+`_ds/coldstorage-design-system-41ebafc1…/`. Our tokens were imported from **that snapshot**, not
+from `739a…`, and the two diverged as of 2026-07-05: the snapshot is the "frost + iceberg"
+system (`--bg-app`, `--accent`, `--frost-*`, fluid `clamp()` type/space scales, `--type-*`,
+`--section-y`) that every section consumes, while `739a…`'s `colors.css` is an older
+warm-gray/`--ink` lineage.
 
-**Confirmed skew (2026-07-05):** the pinned snapshot has diverged from the current `739a…`
-tokens — the snapshot is the "frost + iceberg" system (`--bg-app`, `--accent`, `--frost-*`,
-fluid `clamp()` type/space scales, `--type-*`, `--section-y`) that every section consumes;
-`739a…`'s current `colors.css` is an older warm-gray/`--ink` lineage. **Build against the
-snapshot** — it is Layer A's effective SSOT. Tokens are pulled **verbatim** to
-`site/app/styles/ds/*.css` (pull-managed, header-marked "do not edit"), so the mirror and the
-app copy are the same bytes and there's no second hand-maintained owner. Reconciling snapshot
-↔ `739a…` origin is a later, separate concern.
+That skew used to be a problem to reconcile. It isn't any more — `app/styles/ds/*.css` is the
+SSOT and owes neither project an explanation. It matters only as a **compatibility note when
+importing**: a section pulled from the marketing project expects frost-era variable names and
+will drop straight in; anything pulled from `739a…` may reference the older names and needs
+them mapped to ours during translation.
 
-**Fonts:** the snapshot loads Hanken Grotesk / JetBrains Mono / Material Symbols via Google
-Fonts `@import` (design-preview convenience). For production, move to `<link rel="preconnect">`
-+ stylesheet or self-host (Fontsource) — a Phase 2 perf refinement, not a Phase 1 blocker.
+**Fonts (updated 2026-07-20):** four faces — **Outfit** (display: headings + wordmark),
+**Hanken Grotesk** (UI), **JetBrains Mono** (technical), **Material Symbols Rounded** (icons).
 
-> **Tooling note:** `DesignSync` is available only in the **top-level session**, not in
-> spawned subagents. The mirror pull is therefore run by the orchestrator, incrementally.
+The list lives in exactly one place: `DS_FONT_FAMILIES` in `app/root.tsx`, which builds a
+**single** `css2` request for all four behind `preconnect`. Upstream's `@import` convenience
+is gone (a remote `@import` can't be bundled and serialises behind its host stylesheet), and
+so is the four-`<link>` version that replaced it. `app/styles/ds/fonts.css` documents what
+each face is *for* and deliberately carries **no URLs** — it is not imported by `app.css`, and
+a second copy of the list would only be a second thing to forget. Self-hosting (Fontsource)
+remains an open perf option, not a blocker.
 
-## The sync loop
+**Which face a given piece of text gets is decided by the `--type-*` roles**, never at the call
+site. `--font-display` belongs to headings and the wordmark only; Outfit's wide geometry earns
+its keep at 40–64px and is a legibility downgrade at 13px. `--type-section-title` stays on the
+UI face for exactly that reason. Reaching past a role to set `font-family: var(--font-display)`
+on body copy or controls is the thing this layer exists to prevent.
 
-1. **Pull — mechanical, but agent-run.** DesignSync is a session-only tool (no CLI), so the
-   pull is an **agent action**, not a shell `task`: the orchestrator calls DesignSync `get_file`
-   and writes upstream files **verbatim** into `site/design-mirror/` (the committed
-   design-of-record). No translation. Its job is to make any upstream change land as a
-   **reviewable git diff**. (Verbatim tokens land directly in `app/styles/ds/` — one copy, see Layer A.)
-   One exception: `design-mirror/brand/` is **hand-delivered**, not pulled — the logo source and
-   favicon package, with the mark's light/dark deltas written down. DesignSync never touches it;
-   see its README before regenerating either.
-2. **Translate + integrate — an intelligent agent.** Converting mirror `.jsx` (inline styles,
-   `window.*` globals, browser-Babel) → stack `.tsx` (ES modules, typed content, i18n, real DS
-   components, SSR) requires judgment. Done first-time and on each re-pull.
-3. **Bounded re-sync.** The mirror diff scopes the agent to just what changed. The seam is
-   engineered so high-frequency churn stays near-mechanical:
-   - **copy/pricing** → a typed content module (also the i18n source): data edits
-   - **tokens** → verbatim; the alias layer absorbs them: zero judgment
-   - **reorder / variant swap** → edit the page's section list: mechanical
-   - **a section's visual internals** → the only real agent-judgment case (as it should be)
-4. **Translation contract.** The mapping rules (window-globals→imports, `site-common`→typed
-   content+i18n, DS-bundle components→our DS components, `csInjectStyle`→CSS) are written down
-   once (a short project skill / mirror README) so every re-sync applies the *same* rules —
-   agent-assisted, not improvised. Review-gated by design (never auto-overwrite a live site).
+## Importing from Claude design
+
+A one-way, one-time operation. You want a section/page/component that exists upstream; you pull
+it, translate it, and from that moment it is ordinary repo code. Nothing records where it came
+from except a comment, and nothing ever pulls it again.
+
+1. **Fetch to scratch — never to the repo.** `DesignSync` is a session-only agent tool (no CLI,
+   and unavailable inside spawned subagents, so the top-level session runs it). Call `get_file`
+   and write the raw `.jsx` to a **scratch directory outside `site/`**. It is working material,
+   not an artifact — committing it would recreate the second source of truth this design exists
+   to avoid.
+2. **Translate.** Upstream `.jsx` is browser-Babel: inline styles, `window.*` globals, its own
+   copy fixtures. Our `.tsx` is ES modules, typed, i18n'd, SSR-safe, on real DS components. The
+   standing mapping rules: `window`-globals → named imports · `csInjectStyle` → a sibling `.css`
+   file · upstream copy → `content.ts` (never carried over) · upstream DS-bundle components →
+   `app/components/ds/*` · older `--ink`-era tokens → our frost-era names.
+3. **Land it and delete the scratch copy.** Header comment naming the origin (`Claude design ·
+   v4-sections.jsx → SectionV4Hero`) for provenance, nothing more. Then `typecheck:site`,
+   `copy:check:site`, `ssr:check:site`.
+
+**Editing an already-imported file needs none of this.** Change it here. It's yours. If upstream
+later diverges, upstream is simply wrong — there is no drift to fix, because there is no second
+owner. Re-import a section only when you actually want to *replace* it, and treat that as a
+rewrite of that file, not a merge.
+
+**`site/brand/` is not part of this.** The logo SVGs and favicon package are hand-delivered
+source assets living in the repo, read live by `ui/scripts/gen-icon.ts` (and guarded by
+`task ui:icon:check`). DesignSync never touches them — see `site/brand/README.md` before
+regenerating either.
 
 ## What ships (the Master composition)
 
@@ -251,6 +288,7 @@ Every primary-nav destination is a **real page**, not an in-page anchor — so t
 | `/source` | **new 2026-07-18** — the repo, the license, and where the crypto lives | `ProsePage` |
 | `/help` | **new 2026-07-18** — the help center: longer answers than `/faq` | `HelpCenter` ×3 |
 | `/contact` | **new 2026-07-18** — the contact form (the app's only `action`) | `SectionContact` |
+| `/brand` | **new 2026-07-20** — the brand board: mark, wordmark, lockups, app icon, palette | `BrandBoard` |
 | `/privacy` · `/terms` · `/refunds` | legal prose | `LegalPage` |
 
 - **The wordmark links home** (`/`). It previously scrolled to top, which did nothing on any
@@ -270,6 +308,13 @@ Every primary-nav destination is a **real page**, not an in-page anchor — so t
   `sections/prose-page.tsx`, driven by the `ProsePageContent` shape in `content.ts` (PILLAR3).
   A fourth prose page is a content object plus a four-line route; the CTA target is a prop, so
   `/source` sends people to GitHub instead of to a download.
+- **`/brand` documents the brand by rendering it, not by describing it.** Every specimen is the
+  real `<BrandMark>`, and the palette swatches read `BRAND_MARK_PALETTE` — the same constants
+  the mark paints its cube faces with (`app/lib/brand/brand-palette.ts`). A hand-copied hex on a
+  brand page is the one place drift is least affordable, so there are none. The dark specimens
+  work by putting `.dark` on the tile, which the existing `brand-mark.css` already keys the
+  dark-cut outline off; no second SVG asset. `task ssr:check:site` asserts a swatch hex reaches
+  the HTML, so the wiring can't silently break.
 - **`/help` reuses the DS `Accordion`** — that's why `HelpItem` is a type alias of `FaqItem`.
   One disclosure implementation, one set of a11y behaviours, and every answer stays in the DOM
   for no-JS and for crawlers. It deliberately carries **no `FAQPage` JSON-LD**: `/faq` already

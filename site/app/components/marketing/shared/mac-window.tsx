@@ -1,6 +1,6 @@
 /*
  * Shared — simplified macOS Tahoe (Liquid Glass) window chrome. Ported VERBATIM from
- * `design-mirror/marketing/shared/macos-window.jsx`: the `window`-globals became named
+ * `Claude design · shared/macos-window.jsx`: the `window`-globals became named
  * exports and the loose scaffold props got light types. Raw hex/px are intentional
  * (@ds-adherence-ignore upstream) — this is a rendered mock, not product UI. No assets,
  * no deps. SSR-safe (pure render, no browser globals at module scope).

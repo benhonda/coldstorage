@@ -1,7 +1,7 @@
 /*
  * Section · PageHero — the standard head for every page that isn't the landing page.
  *
- * Ported from `design-mirror/marketing/page-heroes.jsx`, which ships three variants of the
+ * Ported from `Claude design · page-heroes.jsx`, which ships three variants of the
  * same contained, text-only header (A centered · B left · C split). We standardised on
  * **B · left-aligned**: it matches the reading flow of the prose, help and FAQ pages that sit
  * beneath it, and it holds up across titles and leads of very different lengths — which a

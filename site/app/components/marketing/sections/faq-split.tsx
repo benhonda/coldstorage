@@ -1,6 +1,6 @@
 /*
  * Section — FAQ · split: title left, accordion in a white card right.
- * Ported from `design-mirror/marketing/master-sections.jsx` → `SectionMFaq`:
+ * Ported from `Claude design · master-sections.jsx` → `SectionMFaq`:
  * `csInjectStyle` → a co-located stylesheet, `window` globals → imports.
  * Replaces the old full-width `SectionFaqFull` (same DS Accordion, new layout + copy).
  */

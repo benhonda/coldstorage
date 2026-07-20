@@ -1,6 +1,6 @@
 /*
  * Shared — the animated "vault" Mac-app mock (proof-of-safety UI) used by the app-mock
- * hero. Ported from `design-mirror/marketing/shared/vault-mock.jsx`: `window`-globals →
+ * hero. Ported from `Claude design · shared/vault-mock.jsx`: `window`-globals →
  * ES imports, `React.useLayoutEffect` → the isomorphic pattern from motion.tsx (SSR-safe),
  * `React.Fragment` → `<>`. Depends on mac-window.tsx (MacWindow, MacSidebarHeader) and the
  * DS Badge/Button. Structure + inline styles kept faithful so re-pulls stay a clean diff.

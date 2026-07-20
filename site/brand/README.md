@@ -1,8 +1,8 @@
 # Brand originals
 
-Designer-delivered brand source, kept verbatim. **Unlike the rest of `design-mirror/`, these
-are hand-delivered — `DesignSync` does not own or refresh them.** They are the reference to
-diff against when the mark changes.
+Designer-delivered brand source, and the source of truth for the mark. Hand-delivered — no
+tool refreshes these; a new mark lands here by being dropped in, and downstream consumers
+follow.
 
 One consumer reads them directly: **`task ui:icon:build`** composites a variant, unmodified,
 onto the app-icon tile (`ui/scripts/gen-icon.mjs` → `ui/build/icon.png`). So a change here

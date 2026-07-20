@@ -1,6 +1,6 @@
 /*
  * Section — Drag in: media left, copy right (the reversed how-it-works split).
- * Ported from `design-mirror/marketing/v4-sections.jsx` → `SectionV4DragIn`:
+ * Ported from `Claude design · v4-sections.jsx` → `SectionV4DragIn`:
  * `csInjectStyle` → a co-located stylesheet, `<image-slot>` → <MediaFrame>.
  * Replaces the old four-step `SectionHowList` — upstream cut the numbered steps down
  * to this single "just drag it in" statement.

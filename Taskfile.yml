@@ -1263,13 +1263,13 @@ tasks:
         printf '%s' "$json" | bun scripts/verify-release.ts
 
   ui:icon:check:
-    desc: "Fail if ui/build/icon.png is stale — i.e. the brand mark in site/design-mirror/brand/ (or a tile setting) changed without `task ui:icon:build` being re-run. Run by ui:mac:release:upload so a release can never ship a stale icon."
+    desc: "Fail if ui/build/icon.png is stale — i.e. the brand mark in site/brand/ (or a tile setting) changed without `task ui:icon:build` being re-run. Run by ui:mac:release:upload so a release can never ship a stale icon."
     dir: ui
     cmds:
       - bun scripts/gen-icon.ts --check
 
   ui:icon:build:
-    desc: "Regenerate ui/build/icon.png — the macOS app icon (1024px; electron-builder rasterises every Apple size slot from it). Composites the designer-delivered mark from site/design-mirror/brand/ VERBATIM onto the brand tile, so the icon follows the mark automatically when it changes. Committed output — run this after any brand-mark update, not on every package."
+    desc: "Regenerate ui/build/icon.png — the macOS app icon (1024px; electron-builder rasterises every Apple size slot from it). Composites the designer-delivered mark from site/brand/ VERBATIM onto the brand tile, so the icon follows the mark automatically when it changes. Committed output — run this after any brand-mark update, not on every package."
     dir: ui
     cmds:
       - bun scripts/gen-icon.ts

@@ -1,6 +1,6 @@
 /*
  * Section — Privacy · ledger: sticky statement left, numbered rows right.
- * Ported from `design-mirror/marketing/v3-sections.jsx` → `SectionV3Privacy`
+ * Ported from `Claude design · v3-sections.jsx` → `SectionV3Privacy`
  * (the Master composes Concept 3's privacy, not Concept 4's panel):
  * `csInjectStyle` → a co-located stylesheet, `window` globals → imports.
  *

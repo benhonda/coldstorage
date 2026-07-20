@@ -2,6 +2,7 @@
 
 ## 2026-07-20
 
+- refactor(site): `site/design-mirror/` retired — `site/` is the SSOT for the whole site; Claude cloud design is an import source, not a synced upstream. Brand originals promoted to `site/brand/`.
 - feat(ui): `task ui:icon:check` — `gen-icon.ts --check` compares `build/icon.inputs.sha256` so a release can't ship an icon that's stale vs the brand mark.
 - refactor(ui): release version arithmetic moved out of inline `node -e` into `scripts/set-release-version.ts` + `assert-version-ahead.ts` over a shared `lib/semver.ts`.
 

@@ -5,7 +5,7 @@
  * (bundled resvg — no iconutil, no Xcode), so this one file is the whole icon. See
  * electron-builder.yml `mac.icon`.
  *
- * The mark is NOT redrawn here. The designer-delivered SVG in site/design-mirror/brand/ is read
+ * The mark is NOT redrawn here. The designer-delivered SVG in site/brand/ is read
  * verbatim and nested unmodified into the tile — stroke colour, stroke weight and the mark's own
  * lift shadow all stay as delivered. The ONLY thing authored here is the tile beneath it.
  *
@@ -30,7 +30,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const BRAND = resolve(HERE, '../../site/design-mirror/brand')
+const BRAND = resolve(HERE, '../../site/brand')
 const OUT = resolve(HERE, '../build/icon.png')
 /**
  * Fingerprint of everything the icon is derived from, written beside it and committed. `--check`
@@ -49,7 +49,7 @@ const MARK_SCALE = 0.62
 /**
  * The dark-variant-on-dark-tile pairing is a design decision, not a toggle — a macOS app has exactly
  * one icon, so there is no light/dark counterpart to switch to. See the "app icon" section of
- * site/design-mirror/brand/README.md for why the dark mark's receding stroke wants this ground.
+ * site/brand/README.md for why the dark mark's receding stroke wants this ground.
  */
 const MARK_VARIANT = 'logo-for-darkmode.svg'
 const TILE_GRADIENT = ['#12395A', '#071B2B']
