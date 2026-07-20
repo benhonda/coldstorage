@@ -10,6 +10,13 @@ A control panel for `coldstored`: browse your files, drop files in to upload, re
 progress, and request a copy back. It holds **no upload/restore logic** — the Swift daemon owns
 scan/encrypt/upload/restore/journal. The UI reads state and sends commands.
 
+> **UI work is design-led — "it compiles and renders" is not done.** The product's job is emotional
+> ("I'll never lose these"), so feel and polish are the product, not decoration. Bind to the vendored DS
+> tokens (`src/renderer/src/styles/tokens/`, SSOT) rather than one-off values, and treat a visual change as
+> unfinished until it has been *looked at* on macOS. Corollary: if you're mid-way through non-UI work and
+> tempted to casually restyle something, flag it instead — drive-by UX changes are how a design system
+> quietly stops being one.
+
 > **VOICE — plain file-uploader, no reassurance theater (Ben, 2026-06-24).** Don't tell the user their
 > files are "safe," don't claim/advertise safety, don't editorialize ("steady", "reassuring"). Plain,
 > factual verbs: **upload** (not "archive" as the active verb), **stored** (not "safe"), **request a

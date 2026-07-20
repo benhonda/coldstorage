@@ -5,6 +5,12 @@
 > owns the *new* surface: identity, per-user storage isolation, zero-knowledge keys, billing, distribution.
 > Decisions here were locked with Ben on 2026-06-29; don't re-litigate them, refine the *how*.
 
+> **"It's only dogfooding" is not a reason to defer anything** [Ben, 2026-07-20]. The target is production
+> as soon as possible, so judge every fix on whether it is correct for a **paid production user** and build
+> it now. "There are no customers yet", "we can harden it later", "fine for V1" are can-kicking and violate
+> PILLAR2. The phrase *single-operator dogfooding* above describes where the code is coming FROM, never a
+> standard it is allowed to stay at.
+
 ## Decisions in force (locked 2026-06-29)
 - **Distribution: direct download, Developer ID + notarization.** NOT the Mac App Store — its App Sandbox
   would break our daemon + unix-socket + FSEvents + watch-any-folder architecture, and it mandates Apple
