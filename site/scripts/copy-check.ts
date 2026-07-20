@@ -30,6 +30,8 @@ import {
   HELP_PAGE,
   CONTACT_PAGE,
   REPO_LICENSE,
+  NAV_LINKS,
+  FOOTER,
 } from "../app/lib/marketing/content";
 import type { ProsePageContent } from "../app/lib/marketing/content";
 import { COMPARISON_VERIFIED_ON } from "../app/lib/marketing/content";
@@ -398,8 +400,79 @@ if (Number.isNaN(verifiedOn.getTime())) {
   }
 }
 
+/* ── 9 · No orphan pages ────────────────────────────────────────────────────
+   Being in the sitemap is not the same as being reachable. A page with no inbound link is an
+   orphan: crawlers treat zero internal links as a signal it doesn't matter, and no visitor can
+   reach it at all. This is exactly how `/compare` shipped — sitemapped, rendered, SSR-checked,
+   and linked from nowhere.
+
+   "Reachable" here means the site chrome points at it: the nav, the footer's columns, or the
+   footer's legal row. In-body prose links are deliberately NOT counted — prose gets rewritten,
+   and a page whose only route in is one sentence is one edit away from being orphaned again. */
+// `FooterLink.href` is optional (a column can carry a label with nothing behind it), so the
+// undefined ones are filtered out rather than cast away.
+const chromeHrefs = new Set<string>(
+  [
+    ...NAV_LINKS.map((l) => l.href),
+    ...FOOTER.columns.flatMap((c) => c.links.map((l) => l.href)),
+    ...FOOTER.legal.map((l) => l.href),
+  ].filter((href): href is string => typeof href === "string")
+);
+
+for (const { path } of INDEXABLE_ROUTES) {
+  // The home page is reached by the wordmark in the nav, which is a component, not a link entry.
+  if (path === "/") continue;
+  // `/download` is the CTA on every page (the primary conversion action), not a chrome link.
+  if (path === "/download") continue;
+
+  if (!chromeHrefs.has(path)) {
+    fail(
+      "no-orphan-pages",
+      `${path} is in INDEXABLE_ROUTES but nothing in the nav or footer links to it. It would ` +
+        `be sitemapped, crawlable, and unreachable. Add it to NAV_LINKS or FOOTER.columns.`
+    );
+  }
+}
+
+/* ── 10 · No unsubstantiated superlatives ───────────────────────────────────
+   CANON §6 bans these and nothing enforced it until now.
+
+   Two independent reasons, and the first is the one that matters: several would be **false**.
+   Running storage infrastructure yourself is genuinely cheaper than us, and an unlimited backup
+   plan wins at high terabyte counts — so "cheapest" is a comparative claim we'd lose. "Safest"
+   and "most secure" are unfalsifiable and invite a legal argument we have no reason to have.
+
+   The second: superlatives are the least citable thing a page can carry. Answer engines quote
+   figures and sourced statements; "we're the best" is filtered as marketing. The honest numeric
+   version of the claim outperforms the superlative at the very job the superlative was reached
+   for. See the "Is this the cheapest way to store my files?" FAQ entry for the pattern.
+
+   Scanned across every exported string, same sweep rule 4a uses — a superlative is just as
+   damaging in a help answer as in the hero. */
+const SUPERLATIVES =
+  /\b(cheapest|best|safest|most secure|unhackable|bulletproof|military[- ]grade|bank[- ]level|100% (safe|secure|private)|fastest|only .{0,20}(that can|who can))\b/i;
+
+for (const [where, text] of everyString) {
+  /* FAQ *questions* are exempt; FAQ *answers* are not.
+     A question is the visitor's words, not ours — "Is this the cheapest way to store my files?"
+     is the query people actually type, and matching that phrasing is exactly why the entry
+     earns the query. The claim would live in the answer, which is still scanned below, and
+     that answer is where the honest "cheaper than X, not cheaper than Y" belongs. */
+  if (/\.question$/.test(where)) continue;
+
+  const hit = text.match(SUPERLATIVES);
+  if (hit) {
+    fail(
+      "no-unsubstantiated-superlatives",
+      `${where} says "${hit[0]}". CANON §6 bans it — and for the cost claims it would also be ` +
+        `untrue (self-run infrastructure and unlimited plans both undercut us). State the ` +
+        `number and let it make the point.`
+    );
+  }
+}
+
 /* ── report ─────────────────────────────────────────────────────────────────── */
-const CHECKS = 16;
+const CHECKS = 18;
 if (failures.length === 0) {
   console.log(`✓ copy check passed — ${CHECKS} rules, ${PRICING.tiers.length} tiers verified`);
   process.exit(0);

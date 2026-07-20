@@ -385,9 +385,14 @@ export type Faq = { eyebrow: string; title: string; items: FaqItem[] };
  */
 export type ComparisonRow = { label: string; ours: string; theirs: string };
 
+/** One vendor's 2 TB price. `ours` tints the row so ColdStorage is findable without bolding. */
+export type PriceRow = { vendor: string; perYear: string; perMonth: string; ours?: boolean };
+
 export type ComparisonPage = PageHeadContent & {
   /** Prose above the table — what each tier is for. */
   blocks: ProseBlock[];
+  /** The money table: 2 TB a year, every vendor, one currency. */
+  prices: { heading: string; rows: PriceRow[] };
   table: { ourHead: string; theirHead: string; rows: ComparisonRow[] };
   /** Rendered under the table. Names the source and the date, because both matter. */
   sourceNote: string;
@@ -437,7 +442,7 @@ export const COMPARE_PAGE: ComparisonPage = {
   eyebrow: "Compare",
   title: "ColdStorage and instant-access storage",
   intro:
-    "Cloud storage comes in tiers. The familiar ones — iCloud, Google Drive, Dropbox — keep every file live, openable the second you want it. ColdStorage keeps files resting instead, and brings them back when you ask. Same category, different tier. The price follows from which one your files actually need.",
+    "Cloud storage comes in tiers. iCloud+, Google One and Dropbox keep every file live, openable the second you want it. ColdStorage keeps files resting instead, and brings them back when you ask. Same category, different tier — and for 2 TB, about a third of the price. Here's the whole comparison, including the parts where they win.",
   blocks: [
     {
       heading: "What keeping files live buys you",
@@ -454,11 +459,19 @@ export const COMPARE_PAGE: ComparisonPage = {
       ],
     },
   ],
+  prices: {
+    heading: "2 TB, a year",
+    rows: [
+      { vendor: "ColdStorage", perYear: "$36.99", perMonth: "$3.08", ours: true },
+      { vendor: "Google One (AI Plus)", perYear: "about $100", perMonth: "about $8.32" },
+      { vendor: "Dropbox Plus", perYear: "about $111", perMonth: "about $9.26" },
+      { vendor: "iCloud+", perYear: "$119.88", perMonth: "$9.99" },
+    ],
+  },
   table: {
     ourHead: "ColdStorage",
-    theirHead: "iCloud+ (2 TB)",
+    theirHead: "Instant-access storage",
     rows: [
-      { label: "2 TB, per year", ours: "$36.99", theirs: "$119.88 ($9.99/mo)" },
       { label: "Opening a file", ours: "Ready in about 48 hours", theirs: "Instantly" },
       { label: "Seeing what's stored", ours: "Instant", theirs: "Instant" },
       {
@@ -471,10 +484,10 @@ export const COMPARE_PAGE: ComparisonPage = {
         ours: "Billed at what it costs us, quoted first. 1 GB a month free",
         theirs: "Included",
       },
-      { label: "Free to start", ours: "25 GB, no card", theirs: "5 GB" },
+      { label: "Free to start", ours: "25 GB, no card", theirs: "5–15 GB" },
     ],
   },
-  sourceNote: `iCloud+ pricing from Apple's own page, checked ${COMPARISON_VERIFIED_ON}. Google Drive and Dropbox aren't listed with figures here because we'd rather quote nothing than quote a price we haven't confirmed ourselves.`,
+  sourceNote: `Prices checked ${COMPARISON_VERIFIED_ON}. iCloud+ is Apple's own US figure. Google One and Dropbox are converted from their Canadian prices at 0.713, so treat those two as close rather than exact — check their sites for the price where you are. Everything here is 2 TB billed yearly, in US dollars, which is what our own plans are priced in.`,
   blocksAfterTable: [
     {
       heading: "Which one you actually want",
@@ -500,6 +513,21 @@ export const FAQ: Faq = {
       question: "Can you see my files?",
       answer:
         "No. They're encrypted on your Mac before they upload, with a key only you hold. We never get the key, so we can't open them.",
+    },
+    /*
+     * Phrased as the question people actually type ("is this the cheapest…"), and answered with
+     * figures plus two concessions rather than a claim.
+     *
+     * Deliberately NOT "the cheapest cloud storage" — that would be false (running your own
+     * storage infrastructure is genuinely less, and an unlimited backup plan beats us at high
+     * terabyte counts), it's on the banned-superlative list, and an unsupported superlative is
+     * the least citable thing a page can contain. The qualified numeric answer is what gets
+     * quoted; the concessions are why it's believed.
+     */
+    {
+      question: "Is this the cheapest way to store my files?",
+      answer:
+        "Cheaper than keeping the same files live: 2 TB is $36.99 a year here, against roughly $100 to $120 on Google One, Dropbox or iCloud+. Not cheaper than running storage infrastructure yourself, which is genuinely less if you want to operate it — and if you've got a lot of terabytes sitting on one computer, an unlimited backup plan may come out lower. What this is built for is keeping files you rarely open, at a fair price, without you having to run anything.",
     },
     {
       question: "Is there a free plan?",
@@ -1019,6 +1047,9 @@ export const FOOTER: Footer = {
       links: [
         { label: "How it works", href: "/how-it-works" },
         { label: "Pricing", href: "/pricing" },
+        // Sits under Pricing on purpose: "how does this compare" is the question people ask
+        // immediately after seeing a number, and this is the page that answers it.
+        { label: "Compare", href: "/compare" },
         { label: "FAQ", href: "/faq" },
       ],
     },

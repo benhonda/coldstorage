@@ -13,11 +13,13 @@
  */
 import "./compare-page.css";
 import { PageHero } from "./page-hero";
+// `ProseBand` brings `prose-page.css` with it. Do not re-implement the prose markup here —
+// see the note on `ProseBand` for what happens when you do.
+import { ProseBand } from "./prose-page";
 import { Reveal } from "~/lib/marketing/motion";
 import { DOWNLOAD_START_PATH } from "~/lib/marketing/download";
 import { COMPARE_PAGE } from "~/lib/marketing/content";
 import { Button } from "~/components/ds/button";
-import type { ProseBlock } from "~/lib/marketing/content";
 
 export function ComparePage() {
   const content = COMPARE_PAGE;
@@ -37,8 +39,36 @@ export function ComparePage() {
       >
         <div className="csf-container">
           <div className="cs-compare">
+            {/* The money table. Its own table rather than a row in the one below, because four
+                vendors don't fit an ours-vs-theirs shape — and price is the row people came for. */}
             <Reveal y={16}>
               <div className="cs-compare__scroll">
+                <table className="cs-compare__table cs-compare__table--prices">
+                  <caption className="sr-only">
+                    Cost of 2 TB a year, billed yearly, in US dollars
+                  </caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">{content.prices.heading}</th>
+                      <th scope="col">Per year</th>
+                      <th scope="col">Per month</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {content.prices.rows.map((row) => (
+                      <tr key={row.vendor} className={row.ours ? "cs-compare__ours" : undefined}>
+                        <th scope="row">{row.vendor}</th>
+                        <td>{row.perYear}</td>
+                        <td>{row.perMonth}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Reveal>
+
+            <Reveal y={16}>
+              <div className="cs-compare__scroll cs-compare__scroll--second">
                 <table className="cs-compare__table">
                   <caption className="sr-only">
                     ColdStorage compared with instant-access cloud storage
@@ -105,42 +135,3 @@ export function ComparePage() {
   );
 }
 
-/** One headed prose band — same shape `ProsePage` uses, so the two pages read identically. */
-function ProseBand({ block, tinted }: { block: ProseBlock; tinted: boolean }) {
-  return (
-    <section
-      id={slugify(block.heading)}
-      className="csf-band"
-      data-screen-label={block.heading}
-      style={{
-        borderTop: "1px solid var(--border-subtle)",
-        ...(tinted ? { background: "var(--surface-raised)" } : {}),
-      }}
-    >
-      <div className="csf-container">
-        <div className="cs-prose">
-          <div className="cs-prose__head">
-            <h2 className="csf-title cs-prose__h2">{block.heading}</h2>
-          </div>
-          <Reveal y={16}>
-            <div className="cs-prose__body">
-              {block.body.map((p) => (
-                <p key={p} className="cs-prose__p">
-                  {p}
-                </p>
-              ))}
-            </div>
-          </Reveal>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/** Heading → anchor id, so each block is linkable. Mirrors `prose-page.tsx`. */
-function slugify(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-}

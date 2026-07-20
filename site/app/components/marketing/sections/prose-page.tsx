@@ -21,7 +21,7 @@ import "./prose-page.css";
 import { PageHero } from "./page-hero";
 import { Reveal } from "~/lib/marketing/motion";
 import { DOWNLOAD_START_PATH } from "~/lib/marketing/download";
-import type { ProsePageContent } from "~/lib/marketing/content";
+import type { ProseBlock, ProsePageContent } from "~/lib/marketing/content";
 import { Button } from "~/components/ds/button";
 
 export type ProsePageProps = {
@@ -54,37 +54,52 @@ function ProseBlocks({ content }: { content: ProsePageContent }) {
   return (
     <>
       {content.blocks.map((block, i) => (
-        <section
-          key={block.heading}
-          id={slugify(block.heading)}
-          className="csf-band"
-          data-screen-label={block.heading}
-          style={{
-            borderTop: "1px solid var(--border-subtle)",
-            // Tint every other block rather than every block — a wall of cards reads busier
-            // than plain prose, and these pages are prose.
-            ...(i % 2 === 1 ? { background: "var(--surface-raised)" } : {}),
-          }}
-        >
-          <div className="csf-container">
-            <div className="cs-prose">
-              <div className="cs-prose__head">
-                <h2 className="csf-title cs-prose__h2">{block.heading}</h2>
-              </div>
-              <Reveal y={16}>
-                <div className="cs-prose__body">
-                  {block.body.map((p) => (
-                    <p key={p} className="cs-prose__p">
-                      {p}
-                    </p>
-                  ))}
-                </div>
-              </Reveal>
-            </div>
-          </div>
-        </section>
+        // Tint every other block rather than every block — a wall of cards reads busier than
+        // plain prose, and these pages are prose.
+        <ProseBand key={block.heading} block={block} tinted={i % 2 === 1} />
       ))}
     </>
+  );
+}
+
+/**
+ * One headed prose band: heading left (sticky), body right, on the `.cs-prose` grid.
+ *
+ * Exported because `/compare` interleaves prose with its comparison table and so can't use
+ * `<ProsePage>` wholesale. It must be **imported**, never re-implemented — `/compare` originally
+ * carried a copy of this markup, which silently lost every `.cs-prose*` rule (the styles live in
+ * `prose-page.css`, imported at the top of this file). The result rendered at browser-default
+ * size, full-bleed to the container, with no gap under the heading. Importing the component
+ * carries its stylesheet with it; copying the JSX does not.
+ */
+export function ProseBand({ block, tinted = false }: { block: ProseBlock; tinted?: boolean }) {
+  return (
+    <section
+      id={slugify(block.heading)}
+      className="csf-band"
+      data-screen-label={block.heading}
+      style={{
+        borderTop: "1px solid var(--border-subtle)",
+        ...(tinted ? { background: "var(--surface-raised)" } : {}),
+      }}
+    >
+      <div className="csf-container">
+        <div className="cs-prose">
+          <div className="cs-prose__head">
+            <h2 className="csf-title cs-prose__h2">{block.heading}</h2>
+          </div>
+          <Reveal y={16}>
+            <div className="cs-prose__body">
+              {block.body.map((p) => (
+                <p key={p} className="cs-prose__p">
+                  {p}
+                </p>
+              ))}
+            </div>
+          </Reveal>
+        </div>
+      </div>
+    </section>
   );
 }
 

@@ -68,3 +68,20 @@
     padding: 12px;
   }
 }
+
+/* The price table sits above the qualitative one; give them room to read as two tables. */
+.cs-compare__scroll--second {
+  margin-top: 40px;
+}
+
+/* Prices are figures — tabular numerals so the columns line up digit-for-digit. */
+.cs-compare__table--prices td {
+  font-variant-numeric: tabular-nums;
+}
+
+/* On the price table the whole ColdStorage ROW is tinted (it's the row that matters), where on
+   the qualitative table it's the ColdStorage COLUMN. Same token, different axis. */
+.cs-compare__table--prices tr.cs-compare__ours th,
+.cs-compare__table--prices tr.cs-compare__ours td {
+  background: var(--accent-subtle);
+}

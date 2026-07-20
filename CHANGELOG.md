@@ -3,6 +3,10 @@
 ## 2026-07-20
 
 - fix(site): `/fr/*` no longer serves duplicate content — every page answered on two URLs with identical English HTML and no canonical. `pageMeta()` now canonicals French URLs to the English original until `TRANSLATIONS_LIVE` flips, at which point each self-canonicals and gains `hreflang` pairs.
+- fix(daemon): a deposit costs what the deposit costs — `UploadEngine.run` plans only files that aren't already archived, instead of re-grouping the whole scan and re-uploading verified blobs under fresh ids.
+- fix(daemon): orphans are repaired from journal membership (new `blob_members` table) before planning, `markBlobArchived` verifies + links in one transaction, and an archived file can never be flipped to `failed`.
+- feat(site): `/compare` gains a four-vendor price table above the qualitative one; `ProseBand` extracted from `prose-page` so the page stops re-implementing (and unstyling) it.
+- feat(site): `/compare` linked from the footer under Pricing, plus a `no-orphan-pages` guard — being in the sitemap is not the same as being reachable, and `/compare` shipped linked from nowhere.
 - feat(site): `/compare` — an honest comparison against instant-access storage, including where it's the better tool. One competitor figure (iCloud+, from Apple's own page), and `copy:check:site` fails the build if it goes 6 months unverified.
 - feat(site): machine-readable layer — generated `/robots.txt` (AI training vs. **search** vs. user-initiated crawlers, all allowed, search agents asserted by name) and `/sitemap.xml`, both built from a new `INDEXABLE_ROUTES` SSOT.
 - feat(site): `Organization` + `SoftwareApplication`/`Offer` JSON-LD on `/`, derived from `PRICING` so offers can't drift from `plan-sizes.ts`. No `aggregateRating`/`review` — there are no customers, and `seo:check:site` fails on either.
