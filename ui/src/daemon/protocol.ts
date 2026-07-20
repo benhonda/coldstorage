@@ -217,10 +217,22 @@ export interface Commands {
    * The tree is derived from file paths, so an empty folder otherwise has nothing to imply it. Idempotent
    * on `path` (a no-op if a real file already sits there). Emits `filesChanged`. */
   createFolder: { params: { path: string }; result: Ack };
-  /** Delete (tombstone) the subtree at `path` (file or folder): it drops from `listFiles`, but the row +
-   * blob mapping are kept (byte reclaim is a deferred repack/GC — deep storage has a 180-day minimum).
-   * Emits `filesChanged`. */
-  deletePath: { params: { path: string }; result: Ack };
+  /** Would a scan find this path again tomorrow — i.e. is it still on disk inside a live watched folder?
+   * Ask BEFORE deleting, so the confirm dialog can say so up front and offer `alsoIgnore` in the same
+   * step. Answered by looking at the filesystem, not by guessing from source config. */
+  pathIsWatched: { params: { path: string }; result: { isWatched: boolean } };
+  /** Delete (tombstone) the subtree at `path` (file or folder): it drops from `listFiles` immediately and
+   * a rescan can never resurrect it — only an explicit re-deposit can. Its bytes are reclaimed once every
+   * file sharing their blob is deleted; the space returns when Deep Archive's 180-day minimum on those
+   * bytes runs out (immediately, if they're already past it).
+   *
+   * `alsoIgnore` adds the watched-folder exclude in the same call — the second half of the one-button fix
+   * for "this is in a watched folder". Without it a deleted file stays permanently un-backed-up with
+   * nothing saying why. Emits `filesChanged`. */
+  deletePath: {
+    params: { path: string; alsoIgnore?: boolean };
+    result: { ok: boolean; isWatched: boolean; ignored: boolean };
+  };
   /** What restoring these files would take to serve — the input to the backend's `POST /retrieval/quote`
    * (root RETRIEVAL.md). Ask this BEFORE showing any price: a restore is billed on the whole BLOBS that
    * must be thawed (packed, so one photo can drag a 1 GiB blob with it) plus the bytes that come back —

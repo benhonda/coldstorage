@@ -159,15 +159,15 @@ public actor UploadEngine {
         }
 
         // ── PLAN ONLY WHAT ISN'T ALREADY STORED ────────────────────────────────────────────────────────
-        // Read the archived set AFTER the repair pass, so anything just re-linked is correctly excluded.
+        // Read the settled set AFTER the repair pass, so anything just re-linked is correctly excluded.
         //
         // An archived file's bytes are in S3 under a blob id derived from the membership it had when it was
         // sealed. Re-planning it alongside newly-arrived neighbours mints a DIFFERENT id, misses the
         // `isBlobVerified` short-circuit in `archive`, and re-uploads the whole group — orphaning the old
         // objects, which nothing ever deletes and which still consume the user's quota. One new photo in a
         // folder used to re-upload the entire folder for exactly this reason.
-        let archived = try journal.archivedFileIds()
-        let pending = items.filter { !archived.contains($0.id) }
+        let settled = try journal.settledFileIds()
+        let pending = items.filter { !settled.contains($0.id) }
         let plan = BlobPlanner().plan(pending, prefix: prefix)
         // Diagnostic: the batching shape (how N files map to M blobs) — a single failing blob sinks every file
         // batched into it, so the item-count per blob is exactly what explains an all-or-nothing deposit. Only

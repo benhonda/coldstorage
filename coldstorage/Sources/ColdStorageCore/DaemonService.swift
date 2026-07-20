@@ -153,6 +153,15 @@ public actor DaemonService {
         do {
             let session = try requireSession("deposit")
             let entries = paths.map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: $0), destDir: dir) }
+            // Re-depositing something you deleted is the ONE act that revives it. `upsert` refuses to let a
+            // rescan overwrite a tombstone (otherwise deleting from a watched folder is meaningless), so a
+            // dropped file that was previously deleted would land as a no-op and confuse the hell out of
+            // someone who just dragged it back in. Dropping it IS the explicit ask, so clear the tombstone.
+            for path in paths {
+                let vaultPath = dir.isEmpty ? URL(fileURLWithPath: path).lastPathComponent
+                                            : "\(dir)/\(URL(fileURLWithPath: path).lastPathComponent)"
+                try? session.journal.restorePath(vaultPath)
+            }
             let base = ExplicitPathsSource(entries: entries, exclude: excludeMatcher(session))
             // WAIT for any run in flight, then go — a deposit is the user's explicit action and must not be
             // dropped, but it also must not race a concurrent pass over the same journal.
@@ -400,6 +409,35 @@ public actor DaemonService {
     /// type trivial + lossless; the renderer owns ISO/display formatting (epoch × 1000 → JS `Date`).
     private struct FileDTO: Encodable { let id, relativePath: String; let size: Int; let status: String; let blobId: String?; let date: Int? }
     private struct AckDTO: Encodable { let ok: Bool }
+
+    /// The answer to "will this come back?", so the client can say so instead of letting the user find out.
+    /// `isWatched` = the file is still on disk inside a watched folder, so the folder would keep re-finding
+    /// it; `ignored` = we also added the exclude, so it won't.
+    private struct DeleteResultDTO: Encodable { let ok: Bool; let isWatched: Bool; let ignored: Bool }
+
+    /// Answer to `pathIsWatched` — "would a scan find this again tomorrow?"
+    private struct WatchedDTO: Encodable { let isWatched: Bool }
+
+    /// Is `path` (vault-relative) still present on disk inside a live watched folder?
+    ///
+    /// This is the *real* question behind the prompt — not "did it come from a folder source once", but
+    /// "would a scan find it again tomorrow". So it's answered by looking, mapping the vault path back
+    /// through the source's `mountPath` to its location on disk. A paused source can't rediscover anything,
+    /// so it doesn't count. Never throws for a missing/odd source; a source we can't resolve simply isn't a
+    /// match, which keeps the prompt quiet rather than crying wolf.
+    private func isUnderWatchedFolder(_ session: UserSession, _ path: String) throws -> Bool {
+        for source in try session.journal.listSources()
+        where source.kind == .folder && !source.paused {
+            guard let root = source.path else { continue }
+            let mount = source.mountPath
+            let prefix = mount.isEmpty ? "" : "\(mount)/"
+            guard path == mount || prefix.isEmpty || path.hasPrefix(prefix) else { continue }
+            let sub = path == mount ? "" : String(path.dropFirst(prefix.count))
+            let onDisk = sub.isEmpty ? root : "\(root)/\(sub)"
+            if FileManager.default.fileExists(atPath: onDisk) { return true }
+        }
+        return false
+    }
     /// `authenticate`'s result: the Cognito identity id this daemon's uploads are now scoped under
     /// (`blobs/<identityId>`) — surfaced mainly for the UI/logs, since the daemon itself just reads
     /// `cognitoAuth.vaultPrefix` on the next run.
@@ -428,7 +466,18 @@ public actor DaemonService {
         if let cached = cachedUsage, cached.prefix == prefix, Date().timeIntervalSince(cached.at) < usageCacheTTL {
             return cached.bytes
         }
-        let bytes = try await session.restoreEngine.store.usageBytes(prefix: prefix)
+        let listed = try await session.restoreEngine.store.usageBytes(prefix: prefix)
+        // S3 keeps listing an object until it is physically removed, and lifecycle runs once a day — so the
+        // listing lags reality by up to a day or more. Subtract blobs we've tagged whose 180-day minimum has
+        // already run out: AWS has stopped charging us for those, so the user should have the space back.
+        // Never credit a blob still inside its minimum — we're still paying, so they're still holding it.
+        //
+        // Credit is journal-derived and therefore per-device. A second Mac that didn't perform the delete
+        // won't credit it and will read usage HIGH until S3 drops the object — conservative, so the failure
+        // mode is a deposit refused slightly early, never a plan quietly overrun. Making this exact across
+        // devices needs a server-side index, not a bigger local sum.
+        let credit = (try? session.journal.reclaimedCreditBytes()) ?? 0
+        let bytes = max(0, listed - credit)
         cachedUsage = (prefix: prefix, bytes: bytes, at: Date())
         return bytes
     }
@@ -691,14 +740,35 @@ public actor DaemonService {
             try session.journal.createFolder(path: path)
             bus.publish(DaemonEvent("filesChanged", ["created": path]))
             return AnyEncodable(AckDTO(ok: true))
+        case "pathIsWatched":
+            // Asked BEFORE the delete, so the confirm dialog can state the consequence up front and offer
+            // the fix in the same breath — rather than deleting first and explaining afterwards, which is
+            // how you end up telling someone to go configure an exclusion themselves.
+            let session = try requireSession("pathIsWatched")
+            guard let path = p["path"] else { throw ColdStorageError.invalidRequest("pathIsWatched requires params.path (a vault-relative path)") }
+            return AnyEncodable(WatchedDTO(isWatched: try isUnderWatchedFolder(session, path)))
         case "deletePath":
             let session = try requireSession("deletePath")
-            // Tombstone the subtree at `path` (file or folder). The row + blob mapping are kept (bytes
-            // reclaim is a deferred repack/GC); the file just drops out of `listFiles`.
+            // Tombstone the subtree at `path` (file or folder): it leaves `listFiles` immediately, and its
+            // bytes are reclaimed once every file in their blob is gone (`UploadEngine.reapDeleted`).
             guard let path = p["path"] else { throw ColdStorageError.invalidRequest("deletePath requires params.path (a vault-relative path)") }
             try session.journal.deletePath(path)
+            // **Deleting something that lives in a watched folder, without also ignoring it, is a trap.** The
+            // folder is still watched and the file is still on disk, so every future scan would find it again.
+            // The tombstone now outranks a rescan (`Journal.upsert`), so it won't silently return — but it
+            // WOULD stay permanently un-backed-up with nothing saying why. So the client tells the user
+            // plainly and offers one button; `alsoIgnore` is that button, and we do the work rather than
+            // handing them a chore. `isWatched` lets the client know whether to ask at all.
+            let watched = try isUnderWatchedFolder(session, path)
+            if watched, p["alsoIgnore"] == "true" {
+                // The vault-relative path IS the pattern. Anything nested contains a `/` and so is matched
+                // anchored, exactly as intended. A root-level name has no `/` and becomes a name pattern
+                // (ExcludeMatcher's gitignore rule), which can match that name at any depth — broader than
+                // asked for, but still strictly "don't back this up", never the reverse.
+                try session.journal.addExclude(path)
+            }
             bus.publish(DaemonEvent("filesChanged", ["deleted": path]))
-            return AnyEncodable(AckDTO(ok: true))
+            return AnyEncodable(DeleteResultDTO(ok: true, isWatched: watched, ignored: watched && p["alsoIgnore"] == "true"))
         case "authenticate":
             // **Sign-in: where a session is born.** Exchange a Cognito User Pool ID token for real per-user
             // AWS credentials + the identity id our uploads are scoped under, then OPEN THAT USER'S STATE —

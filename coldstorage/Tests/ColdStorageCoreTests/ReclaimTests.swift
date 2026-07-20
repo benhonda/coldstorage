@@ -83,6 +83,71 @@ import Foundation
         #expect(f.store.reclaimableKeys.count == 1)
     }
 
+    /// **A delete must survive the next scan.** The daemon re-scans its sources every 300s (and on
+    /// FSEvents), and a deposited file usually still exists on disk — depositing doesn't remove it. If a
+    /// re-scan resurrects a tombstoned row, deleting from the vault means nothing: the file comes back, and
+    /// its old blob stops looking fully-deleted, so it is never reclaimed either.
+    @Test func deletingSurvivesARescanWhileTheFileIsStillOnDisk() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.base) }
+        let source = LocalDirSource(root: f.root)
+
+        try write("a.jpg", to: f.root)
+        _ = try await f.engine.run(source: source, prefix: .dev)
+        try f.journal.deletePath("a.jpg")
+        #expect(try f.journal.listFiles().isEmpty)          // gone from the tree
+
+        _ = try await f.engine.run(source: source, prefix: .dev)   // the file is STILL on disk
+
+        #expect(try f.journal.listFiles().isEmpty, "a deleted file was resurrected by the next scan — deleting from the vault does not stick")
+        #expect(f.store.createdKeys.count == 1, "the deleted file was re-uploaded")
+    }
+
+    /// The escape hatch that makes "a delete beats the scanner" safe to live with: **explicitly putting the
+    /// file back works.** A rescan can't revive a tombstone, but dragging the file in again is the user
+    /// asking for it, and `deposit` calls `restorePath` for exactly this. Without it, deleting something
+    /// would silently blacklist it forever and re-adding it would look like a broken app.
+    @Test func explicitlyRestoringADeletedPathReArchivesIt() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.base) }
+        let source = LocalDirSource(root: f.root)
+
+        try write("a.jpg", to: f.root)
+        _ = try await f.engine.run(source: source, prefix: .dev)
+        try f.journal.deletePath("a.jpg")
+        _ = try await f.engine.run(source: source, prefix: .dev)
+        #expect(try f.journal.listFiles().isEmpty)          // a rescan alone leaves it deleted
+
+        try f.journal.restorePath("a.jpg")                  // what an explicit re-deposit does
+        _ = try await f.engine.run(source: source, prefix: .dev)
+
+        #expect(try f.journal.listFiles().count == 1, "re-depositing a deleted file did not bring it back")
+        #expect(try f.journal.isFileArchived("a.jpg") == true)
+    }
+
+    /// **Space comes back when we stop paying — not when S3 gets round to it.** Lifecycle runs once a day
+    /// and removal lags further, so usage read straight off a listing would leave someone unable to
+    /// re-upload after clearing space, for reasons no one could explain. AWS stops charging at eligibility,
+    /// so that's when the user is credited.
+    @Test func anOldReapedBlobIsCreditedBackImmediately() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.base) }
+
+        try write("a.jpg", to: f.root)
+        _ = try await f.engine.run(source: LocalDirSource(root: f.root), prefix: .dev)
+        let blobId = try #require(try f.journal.listFiles().first?.blobId)
+        for row in try f.journal.listFiles() { try f.journal.deletePath(row.relativePath) }
+        await f.engine.reapDeleted()
+        #expect(try f.journal.isBlobVerified(blobId) == false)   // tagged
+
+        // Just-uploaded: inside the 180-day minimum, so we're still paying and they're still holding it.
+        #expect(try f.journal.reclaimedCreditBytes() == 0, "space was handed back for a blob we are still being billed for — that's the churn hole")
+
+        // Same blob viewed from past its minimum: AWS has stopped charging, so the user gets it back.
+        let later = Date().addingTimeInterval(Double(Journal.minimumStorageDays + 1) * 86_400)
+        #expect(try f.journal.reclaimedCreditBytes(now: later) > 0, "a blob we no longer pay for is still counting against the user's quota")
+    }
+
     /// Reaping is irreversible, so an incomplete journal must never authorise it. A member with no file row
     /// at all counts as ALIVE — we cannot prove those bytes are unwanted, so we keep them.
     @Test func aBlobWithAnUnknownMemberIsNeverReclaimed() async throws {

@@ -89,6 +89,10 @@ export const MyFilesView = ({
   const [quote, setQuote] = useState<RetrievalQuote | null>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<RowTarget[] | null>(null);
+  // Is anything being deleted still sitting in a watched folder? Asked before the dialog opens so it can
+  // state the consequence up front instead of after the fact. `null` = still asking.
+  const [deleteIsWatched, setDeleteIsWatched] = useState<boolean | null>(null);
+  const [alsoIgnore, setAlsoIgnore] = useState(true);
   const [moveTargets, setMoveTargets] = useState<RowTarget[] | null>(null);
   const [infoOpen, setInfoOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
@@ -229,14 +233,30 @@ export const MyFilesView = ({
   // Optimistic drop from the tree, then the REAL daemon `deletePath` per target.
   const doDelete = (targets: RowTarget[]): void => {
     filesApi.remove(targets);
-    exec(() => Promise.all(targets.map((t) => api.request("deletePath", { path: t.path }))));
+    // `alsoIgnore` only means anything for a watched path; the daemon ignores it otherwise. Sending it
+    // unconditionally keeps the call site honest about intent rather than duplicating the watched check.
+    exec(() =>
+      Promise.all(
+        targets.map((t) => api.request("deletePath", { path: t.path, alsoIgnore: alsoIgnore })),
+      ),
+    );
     setSelected(new Set());
     setConfirmDelete(null);
+    setDeleteIsWatched(null);
   };
   // Confirm only when there are real uploaded bytes at stake; an empty folder just goes.
   const requestDelete = (targets: RowTarget[]): void => {
-    if (filesForTargets(targets).length > 0) setConfirmDelete(targets);
-    else doDelete(targets);
+    if (filesForTargets(targets).length === 0) {
+      doDelete(targets);   // an empty folder has nothing at stake and nothing to come back
+      return;
+    }
+    setConfirmDelete(targets);
+    setDeleteIsWatched(null);
+    setAlsoIgnore(true);   // default to the option that makes the delete actually hold
+    // Resolve watched-ness while the dialog is already up, so opening it never blocks on IPC.
+    void Promise.all(targets.map((t) => api.request("pathIsWatched", { path: t.path })))
+      .then((rs) => setDeleteIsWatched(rs.some((r) => r.isWatched)))
+      .catch(() => setDeleteIsWatched(false));   // can't tell → don't claim anything
   };
   const clearSelection = (): void => setSelected(new Set());
   // Move each target's subtree under `toDir`. Optimistic re-parent, then the REAL daemon `movePath` per
@@ -659,8 +679,25 @@ export const MyFilesView = ({
         >
           <p className="cs-quote-lead">
             This removes {confirmDelete.length === 1 ? "it" : `${confirmDelete.length} items`} from your
-            files. It doesn't lower your cost for 180 days — deep storage has a minimum keep time.
+            files. Space comes back once the bytes pass 180 days in deep storage — right away for anything
+            you've had a while.
           </p>
+          {deleteIsWatched && (
+            <label className="cs-delete-watched">
+              <input
+                type="checkbox"
+                checked={alsoIgnore}
+                onChange={(e) => setAlsoIgnore(e.currentTarget.checked)}
+              />
+              <span>
+                <strong>Also stop backing this up.</strong>{" "}
+                {confirmDelete.length === 1 ? "It's" : "These are"} still in a folder you're watching, so
+                without this {confirmDelete.length === 1 ? "it stays" : "they stay"} on your Mac but{" "}
+                {confirmDelete.length === 1 ? "won't be" : "won't be"} backed up again — and nothing here
+                would say why.
+              </span>
+            </label>
+          )}
         </Modal>
       )}
 

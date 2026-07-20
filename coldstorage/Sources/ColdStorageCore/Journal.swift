@@ -109,6 +109,14 @@ public final class Journal: @unchecked Sendable {
         if !fileCols.contains("createdAt") {
             try exec("ALTER TABLE files ADD COLUMN createdAt INTEGER")
         }
+        // When a blob's object landed in S3 — the clock Deep Archive's 180-day minimum runs on, and
+        // therefore the clock the user's space comes back on. Nullable: a legacy blob's upload time is
+        // unknown, and `reclaimedCreditBytes` treats unknown as "not yet eligible" rather than guessing in
+        // the direction that would hand out space we're still paying for.
+        let blobCols = try run("PRAGMA table_info(blobs)").compactMap { $0["name"] as? String }
+        if !blobCols.contains("archivedAt") {
+            try exec("ALTER TABLE blobs ADD COLUMN archivedAt INTEGER")
+        }
     }
 
     // MARK: - tiny SQLite layer
@@ -173,6 +181,13 @@ public final class Journal: @unchecked Sendable {
             let cur = try run("SELECT status, contentHash FROM files WHERE id=?1", [.text(it.id)])
             if let r = cur.first, (r["status"] as? String) == FileStatus.archived.rawValue,
                (r["contentHash"] as? String) == it.content.planKey { continue }
+            // **A deletion outranks a rescan.** Depositing a file doesn't remove it from disk, so a watched
+            // folder keeps finding it forever. Letting discovery overwrite a tombstone made deleting
+            // meaningless — the file returned within the poll interval, was re-uploaded, and its old blob
+            // stopped counting as fully-deleted, so nothing was ever reclaimed either. The user's explicit
+            // "remove this" beats the scanner's "I can still see it". Re-adding is an explicit act:
+            // `restorePath` clears the tombstone, and the deposit command calls it.
+            if let r = cur.first, (r["status"] as? String) == FileStatus.deleted.rawValue { continue }
             // `createdAt` is captured here at discovery (the SSOT moment for intrinsic file metadata).
             // `size` is best-effort here — a Photos asset is size 0 until streamed; `markFileArchived`
             // overwrites it with the exact plaintext byte count once the bytes are sealed.
@@ -321,6 +336,20 @@ public final class Journal: @unchecked Sendable {
             """, [.text(FileStatus.deleted.rawValue), .text(path), .text("\(path)/")])
     }
 
+    /// Un-tombstone the subtree at `path` — the deliberate counterpart to `deletePath`, and the ONLY way a
+    /// deleted file comes back. A rescan can't do it (`upsert` skips tombstoned rows), because "the file is
+    /// still on disk" is not the user asking for it again; re-depositing it is. Rows return to `discovered`
+    /// so the next run re-archives them, whether or not the old bytes are still in S3 — the blob may already
+    /// have been reclaimed, and re-uploading is the only answer that's correct either way.
+    public func restorePath(_ path: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("""
+            UPDATE files SET status = ?1, blobId = NULL
+            WHERE (relativePath = ?2 OR substr(relativePath, 1, length(?2) + 1) = ?3) AND status = ?4
+            """, [.text(FileStatus.discovered.rawValue), .text(path), .text("\(path)/"),
+                  .text(FileStatus.deleted.rawValue)])
+    }
+
     /// Create the blob row **and record its membership**, in one transaction. Membership is written here —
     /// before a byte ships — because that is the only moment it is known for certain; `files.blobId` lags it
     /// by the whole upload, and a blob that dies in between would otherwise have no recoverable member list.
@@ -355,8 +384,9 @@ public final class Journal: @unchecked Sendable {
             SELECT DISTINCT m.blobId FROM blob_members m
               JOIN blobs b ON b.id = m.blobId
               LEFT JOIN files f ON f.id = m.fileId
-             WHERE b.status = ?1 AND (f.status IS NULL OR f.status != ?2)
-            """, [.text(BlobStatus.verified.rawValue), .text(FileStatus.archived.rawValue)])
+             WHERE b.status = ?1 AND (f.status IS NULL OR f.status NOT IN (?2, ?3))
+            """, [.text(BlobStatus.verified.rawValue), .text(FileStatus.archived.rawValue),
+                  .text(FileStatus.deleted.rawValue)])
             .compactMap { $0["blobId"] as? String }
     }
 
@@ -393,12 +423,49 @@ public final class Journal: @unchecked Sendable {
         try run("UPDATE blobs SET status=?1 WHERE id=?2", [.text(BlobStatus.reaped.rawValue), .text(blobId)])
     }
 
-    /// Every file already archived — what the planner must NOT re-plan. Their bytes are in S3 under a blob id
-    /// derived from the membership they had at the time, so re-planning them with newly-arrived neighbours
-    /// mints a different id, misses the `isBlobVerified` check, and re-uploads bytes that are already stored.
-    public func archivedFileIds() throws -> Set<String> {
+    /// Deep Archive's minimum billable storage duration. The clock the user's space comes back on, because
+    /// it is the clock our bill comes off.
+    public static let minimumStorageDays = 180
+
+    /// Bytes to give back to the user that S3 is still listing.
+    ///
+    /// **Why this exists.** Usage is measured from a live `ListObjectsV2`, which keeps returning an object
+    /// until it is physically removed — and S3 evaluates lifecycle rules only once a day, then removes
+    /// objects some time after that. Tying the user's free space to that schedule means deleting a folder
+    /// and immediately re-uploading fails for reasons no one could explain.
+    ///
+    /// **Why it's safe to give it back early.** AWS stops charging at *eligibility*, not at removal: "if an
+    /// object is scheduled to expire and Amazon S3 doesn't immediately expire the object, you won't be
+    /// charged for storage after the expiration time." So crediting at eligibility hands the user space at
+    /// the same moment our cost for it ends — not one second sooner, which is what makes churn unprofitable
+    /// to attempt.
+    ///
+    /// A reaped blob younger than the minimum is NOT credited: we are still paying for it, so the user is
+    /// still holding it. That is the whole anti-churn property, and it falls out of one `WHERE` clause.
+    public func reclaimedCreditBytes(now: Date = Date()) throws -> Int {
         lock.lock(); defer { lock.unlock() }
-        return Set(try run("SELECT id FROM files WHERE status=?1", [.text(FileStatus.archived.rawValue)])
+        let cutoff = Int(now.timeIntervalSince1970) - Self.minimumStorageDays * 86_400
+        let rows = try run("""
+            SELECT SUM(f.size) AS bytes FROM blobs b
+              JOIN blob_members m ON m.blobId = b.id
+              JOIN files f ON f.id = m.fileId
+             WHERE b.status = ?1 AND b.archivedAt IS NOT NULL AND b.archivedAt <= ?2
+            """, [.text(BlobStatus.reaped.rawValue), .int(cutoff)])
+        return (rows.first?["bytes"] as? Int) ?? 0
+    }
+
+    /// Files the planner must NOT plan, for two different reasons that both end in "leave it alone":
+    ///
+    /// - **`archived`** — the bytes are already in S3 under a blob id derived from the membership they had
+    ///   when sealed. Re-planning them alongside newly-arrived neighbours mints a different id, misses the
+    ///   `isBlobVerified` check, and re-uploads what's already stored.
+    /// - **`deleted`** — the user removed it. Skipping it in `upsert` is not enough on its own: the row
+    ///   would still be planned, uploaded, and marked `archived` again, resurrecting it through the back
+    ///   door. A deletion has to hold all the way through the pipeline, not just at discovery.
+    public func settledFileIds() throws -> Set<String> {
+        lock.lock(); defer { lock.unlock() }
+        return Set(try run("SELECT id FROM files WHERE status IN (?1, ?2)",
+                           [.text(FileStatus.archived.rawValue), .text(FileStatus.deleted.rawValue)])
             .compactMap { $0["id"] as? String })
     }
 
@@ -491,13 +558,15 @@ public final class Journal: @unchecked Sendable {
     public func markBlobArchived(_ blobId: String, spans: [FileSpan]) throws {
         lock.lock(); defer { lock.unlock() }
         try exec("BEGIN;")
-        try run("UPDATE blobs SET status=?1 WHERE id=?2", [.text(BlobStatus.verified.rawValue), .text(blobId)])
+        try run("UPDATE blobs SET status=?1, archivedAt=COALESCE(archivedAt, ?3) WHERE id=?2",
+                [.text(BlobStatus.verified.rawValue), .text(blobId), .int(Int(Date().timeIntervalSince1970))])
         for s in spans {
             try run("""
                 UPDATE files SET status=?1, blobId=?2, "offset"=?3, length=?4, firstFrame=?5, plaintextSha256=?6,
-                    size=?7, error=NULL WHERE id=?8
+                    size=?7, error=NULL WHERE id=?8 AND status!=?9
                 """, [.text(FileStatus.archived.rawValue), .text(blobId), .int(s.offset), .int(s.length),
-                      .int(s.firstFrame), .text(s.plaintextSha256), .int(s.size), .text(s.id)])
+                      .int(s.firstFrame), .text(s.plaintextSha256), .int(s.size), .text(s.id),
+                      .text(FileStatus.deleted.rawValue)])
         }
         try exec("COMMIT;")
     }

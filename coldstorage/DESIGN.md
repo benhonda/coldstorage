@@ -188,7 +188,7 @@ completed — so complete promptly, and the bucket has a **lifecycle rule aborti
 uploads after 14 days** (applied, `infra/coldstorage`).
 
 6. **A deposit costs the deposit, not the library.** The engine plans only files that are **not already
-   archived** (`Journal.archivedFileIds`). Blob ids are content-derived from their members, so planning over
+   archived** (`Journal.settledFileIds`). Blob ids are content-derived from their members, so planning over
    the whole scan meant one new file re-grouped its folder, minted fresh ids for already-verified blobs,
    missed the `isBlobVerified` short-circuit, and re-uploaded the lot — stranding the originals, which
    nothing deletes and which still consume the user's quota. Membership is recorded durably in
@@ -204,6 +204,21 @@ user's Mac with the user's own credentials, so it holds `s3:PutObjectTagging` an
 granularity, so it reclaims folder-shaped deletes (blobs are bucketed by folder) and **not** scattered
 deletes inside a still-live folder; that residue would need a repack, which Deep Archive makes uneconomic.
 Deep Archive's 180-day minimum means this returns the user's capacity, not our cost. See `ReclaimTests`.
+
+**When the space actually comes back.** The lifecycle rule expires at **180 days from upload** — Deep
+Archive's minimum billable duration — so a blob past its minimum expires on the next sweep, and a younger
+one expires exactly when we stop being billed for it. A user can never free space we are still paying for,
+which is what makes upload/delete churn unprofitable to attempt (deleting early bills the full 180 days
+anyway, so we'd gain nothing and hand out an abuse vector).
+
+Usage is read from a live `ListObjectsV2`, but S3 evaluates lifecycle **once a day** and physically removes
+objects some time after that — so the listing lags. `Journal.reclaimedCreditBytes` subtracts reaped blobs
+whose minimum has already run out, because [AWS stops charging at *eligibility*, not
+removal](https://docs.aws.amazon.com/AmazonS3/latest/userguide/lifecycle-expire-general-considerations.html).
+The user gets their space back the moment our cost ends, not a day or more later. The credit is
+journal-derived and so per-device: another Mac that didn't perform the delete reads usage HIGH until S3
+drops the object — conservative, so the failure is a deposit refused slightly early, never a plan overrun.
+Exactness across devices needs a server-side index.
 
 ## 6. Integrity — end to end
 

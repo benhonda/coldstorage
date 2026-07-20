@@ -3,6 +3,9 @@
 ## 2026-07-20
 
 - fix(site): `/fr/*` no longer serves duplicate content — every page answered on two URLs with identical English HTML and no canonical. `pageMeta()` now canonicals French URLs to the English original until `TRANSLATIONS_LIVE` flips, at which point each self-canonicals and gains `hreflang` pairs.
+- feat(daemon): deleting holds and pays off — a tombstone outranks a rescan (only a re-deposit revives it), the delete confirm offers "also stop backing this up", and `reclaimedCreditBytes` returns quota the moment AWS stops billing rather than when S3 stops listing.
+- refactor(daemon): `blobCap` 1 GiB → 64 MiB — a blob is the smallest unit of space reclaimable, so the cap is a deletion-granularity dial; 16× finer for well under a dollar per 500 GB.
+- chore(daemon): `task daemon:mac:verify-tagging` proves `PutObjectTagging` lands on a cold Deep Archive object without a thaw — the assumption the whole reclaim design rests on.
 - feat(daemon): deleting reclaims space — once every file in a blob is tombstoned the daemon tags its object `coldstorage-reap=true` and an `expire-reclaimable-blobs` lifecycle rule expires it. The daemon gets `s3:PutObjectTagging`, never `s3:DeleteObject`.
 - fix(daemon): a deposit costs what the deposit costs — `UploadEngine.run` plans only files that aren't already archived, instead of re-grouping the whole scan and re-uploading verified blobs under fresh ids.
 - fix(daemon): orphans are repaired from journal membership (new `blob_members` table) before planning, `markBlobArchived` verifies + links in one transaction, and an archived file can never be flipped to `failed`.

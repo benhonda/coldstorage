@@ -28,8 +28,21 @@ variable "abort_incomplete_multipart_days" {
 
 variable "reclaimable_blob_expiry_days" {
   type        = number
-  default     = 7
-  description = "Days after object CREATION before a blob tagged coldstorage-reap=true is expired. The daemon tags a blob only once every file in it has been deleted; this rule is the only thing that deletes, so a compromised client can queue a reclamation but never perform one. Most tagged blobs are already older than this, so the tag is effectively the trigger — the window exists so a tag written against a brand-new object is still undoable."
+  default     = 180
+  description = <<-EOT
+    Days after object CREATION before a blob tagged coldstorage-reap=true is expired. Set to Deep Archive's
+    180-day minimum ON PURPOSE, and the alignment does all the work:
+
+    - A blob older than 180 days is already past the threshold, so tagging expires it on the next daily
+      sweep — deleting genuinely-archived data returns the space within about a day.
+    - A blob younger than that expires exactly when its minimum runs out — which is exactly when we stop
+      being billed for it. A user cannot free space we are still paying for, so upload/delete churn can't
+      cost us more than they pay. Deleting early would bill the full 180 days anyway; we'd gain nothing and
+      hand out an abuse vector.
+
+    Because quota is measured from a live S3 listing, this also means the user's usage falls at precisely
+    the moment our cost does, with no separate accounting to keep in sync.
+  EOT
 }
 
 # ── Multi-user identity (Cognito — see cognito.tf / PROD.md). Auth is PASSWORDLESS (2026-07-02):

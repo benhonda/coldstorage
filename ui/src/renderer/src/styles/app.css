@@ -1017,6 +1017,12 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-quote { display: flex; flex-direction: column; gap: 2px; }
 .cs-quote .cs-kv { min-height: 0; padding: var(--space-1) 0; }
 .cs-quote-lead { font: var(--type-body); color: var(--text-secondary); margin-bottom: var(--space-2); }
+/* Delete confirm: the "also stop backing this up" opt-in, shown only when the target is still inside a
+   watched folder. Deliberately a plain checkbox row, not a callout — it's an option, not an alarm. */
+.cs-delete-watched { display: flex; gap: var(--space-2); align-items: flex-start; margin-top: var(--space-3); cursor: pointer; }
+.cs-delete-watched input { margin-top: 0.2em; flex: none; }
+.cs-delete-watched span { font: var(--type-label); color: var(--text-secondary); }
+.cs-delete-watched strong { color: var(--text-primary); font: var(--type-body-strong); }
 .cs-note { font: var(--type-label); color: var(--text-tertiary); margin-top: var(--space-2); line-height: var(--leading-normal); }
 
 /* deposit collision prompt — per-file Keep Both / Replace / Skip, with an apply-to-all row */

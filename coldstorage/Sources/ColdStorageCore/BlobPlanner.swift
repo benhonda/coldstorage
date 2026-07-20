@@ -8,7 +8,15 @@ import Crypto
 public struct BlobPlanner: Sendable {
     public let blobCap: Int
     public let smallFileMax: Int
-    public init(blobCap: Int = 1 << 30, smallFileMax: Int = 64 << 20) {
+    /// **`blobCap` is a deletion-granularity dial, not just an upload-batching one.** S3 deletes whole
+    /// objects, so a blob is the smallest unit of space a user can ever get back: bytes belonging to deleted
+    /// files sit there un-reclaimable until every file in the blob is gone. A 1 GiB cap (the original) meant
+    /// deleting a few files out of a big folder returned nothing.
+    ///
+    /// 64 MiB is the floor worth paying for. Ingest is billed per request, so smaller blobs cost more:
+    /// ~$0.42 per 500 GB at 1 GiB, ~$1.20 at 64 MiB, ~$4.80 at 16 MiB — against a $3.05/yr margin, 16 MiB
+    /// is off the table and 64 MiB buys 16× finer reclamation for well under a dollar.
+    public init(blobCap: Int = 64 << 20, smallFileMax: Int = 64 << 20) {
         self.blobCap = blobCap; self.smallFileMax = smallFileMax
     }
 
