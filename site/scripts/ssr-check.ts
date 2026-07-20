@@ -9,27 +9,56 @@
  * broken page. This calls the request handler directly — no port, no dev server, no waiting.
  */
 import { createRequestHandler } from "react-router";
+// Explicit .ts extension: this script runs under `node` (type-stripping), not bun, so it does
+// not do extensionless resolution the way `copy-check.ts` can.
+import { INDEXABLE_ROUTES } from "../app/lib/marketing/site-routes.ts";
 
 const BUILD = "../build/server/nodejs_eyJydW50aW1lIjoibm9kZWpzIn0/index.js";
 
-/** Routes to render, and a string that must appear in each one's HTML. */
-const ROUTES: { path: string; expect: string }[] = [
-  { path: "/", expect: "ColdStorage" },
-  { path: "/how-it-works", expect: "How deep storage works" },
-  { path: "/pricing", expect: "25 GB" },
-  { path: "/faq", expect: "Fair to ask" },
-  { path: "/about", expect: "Why we built it" },
-  { path: "/source", expect: "Functional Source License" },
+/**
+ * What must appear in each indexable page's HTML, keyed by path.
+ *
+ * The route SET is not listed here — it comes from `INDEXABLE_ROUTES` (site-routes.ts), the
+ * same list `/sitemap.xml` is built from. This file used to keep its own copy, which meant a
+ * new page could be added, shipped, and sitemapped while silently never being SSR-rendered by
+ * anything. One list, three consumers (PILLAR3).
+ *
+ * The assertion strings stay hand-written because a good one is a judgement call: it should be
+ * a string that only appears if the page's *data* actually reached the renderer, not just any
+ * word from the layout. Every indexable route must have one — a missing entry is a failure
+ * below, not a skip, so adding a page forces you to say how you'd know it rendered.
+ */
+const EXPECTED: Record<string, string> = {
+  "/": "ColdStorage",
+  "/how-it-works": "How deep storage works",
+  "/pricing": "25 GB",
+  "/compare": "Which one you actually want",
+  "/faq": "Fair to ask",
+  "/about": "Why we built it",
+  "/source": "Functional Source License",
   // Expects a swatch hex: it renders only if the palette constants reached the page, which is
   // the one thing /brand must never get wrong.
-  { path: "/brand", expect: "#C1E4FB" },
-  { path: "/help", expect: "Help center" },
-  { path: "/contact", expect: "Send message" },
-  { path: "/download", expect: "Download ColdStorage" },
-  { path: "/privacy", expect: "Privacy" },
-  { path: "/terms", expect: "Terms" },
-  { path: "/refunds", expect: "Refund" },
-];
+  "/brand": "#C1E4FB",
+  "/help": "Help center",
+  "/contact": "Send message",
+  "/download": "Download ColdStorage",
+  "/privacy": "Privacy",
+  "/terms": "Terms",
+  "/refunds": "Refund",
+};
+
+const ROUTES: { path: string; expect: string }[] = INDEXABLE_ROUTES.map(({ path }) => {
+  const expect = EXPECTED[path];
+  if (!expect) {
+    // Thrown rather than collected: without an assertion string there is nothing to check, so
+    // continuing would report a pass for a page nobody verified.
+    throw new Error(
+      `ssr-check: ${path} is in INDEXABLE_ROUTES but has no EXPECTED[] string. Add one — a ` +
+        `substring that appears ONLY if that page's content actually rendered.`
+    );
+  }
+  return { path, expect };
+});
 
 /**
  * Rules asserted against RENDERED HTML rather than against the copy objects. `copy-check.ts`

@@ -7,6 +7,8 @@ import { SectionPrivacyLedger } from "~/components/marketing/sections/privacy-le
 import { SectionPricingTabbed } from "~/components/marketing/sections/pricing-tabbed";
 import { SectionFaqSplit } from "~/components/marketing/sections/faq-split";
 import { SectionClosingBand } from "~/components/marketing/sections/closing-band";
+import { organizationSchema, softwareApplicationSchema } from "~/lib/marketing/structured-data";
+import { pageMeta } from "~/lib/marketing/page-meta";
 
 // The ($lang) optional segment carries the language: "/" is English, "/fr" is French.
 // fr-only is enforced in langUtils (i18n-utils.server).
@@ -14,16 +16,19 @@ import { SectionClosingBand } from "~/components/marketing/sections/closing-band
 // (`langUtils` lives in `*.server` and would pull server code into the client bundle).
 // Derive the language from params inline here; keep `langUtils` to loaders/actions.
 export function meta({ params }: Route.MetaArgs) {
-  const isFrench = params.lang === "fr";
-  return [
-    { title: "ColdStorage — private, cost-effective backup for Mac" },
-    {
-      name: "description",
-      content: isFrench
-        ? "ColdStorage sauvegarde vos photos et vos fichiers. Chiffrés sur votre Mac, avec une clé que vous seul détenez. 25 Go gratuits, sans carte."
-        : "ColdStorage backs up your photos and files, so a dead laptop or a wiped drive doesn't take them with it. Encrypted on your Mac. Free to start: 25 GB, no card.",
-    },
-  ];
+  const description = params.lang === "fr"
+    ? "ColdStorage sauvegarde vos photos et vos fichiers. Chiffrés sur votre Mac, avec une clé que vous seul détenez. 25 Go gratuits, sans carte."
+    : "ColdStorage backs up your photos and files, so a dead laptop or a wiped drive doesn't take them with it. Encrypted on your Mac. Free to start: 25 GB, no card.";
+
+  return pageMeta({
+    path: "/",
+    lang: params.lang,
+    title: "ColdStorage — private, cost-effective backup for Mac",
+    description,
+    // Entity + product, emitted once on the home page. Their `@id`s are what other pages'
+    // nodes reference, so these two live here rather than being repeated site-wide.
+    jsonLd: [organizationSchema(), softwareApplicationSchema()],
+  });
 }
 
 export function loader({ params }: Route.LoaderArgs) {

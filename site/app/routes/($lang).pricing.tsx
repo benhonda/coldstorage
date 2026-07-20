@@ -5,21 +5,21 @@ import { PageHero } from "~/components/marketing/sections/page-hero";
 import { SectionPricingTabbed } from "~/components/marketing/sections/pricing-tabbed";
 import { PRICING_PAGE } from "~/lib/marketing/content";
 import { SectionClosingBand } from "~/components/marketing/sections/closing-band";
+import { pageMeta } from "~/lib/marketing/page-meta";
 
 /**
  * `/pricing` — a canonical, standalone pricing page (the same section the home page shows at
  * #pricing, on its own stable URL). Paddle's domain review wants a clear pricing URL, and
  * review tooling doesn't reliably follow `#anchor` fragments — so this exists as a real route.
  */
-export function meta() {
-  return [
-    { title: "ColdStorage — Pricing" },
-    {
-      name: "description",
-      content:
-        "ColdStorage storage plans — priced by size. Start with 25 GB free, no card; paid sizes from $9.99 a year. Getting files back is passed through at cost.",
-    },
-  ];
+export function meta({ params }: Route.MetaArgs) {
+  return pageMeta({
+    path: "/pricing",
+    lang: params.lang,
+    title: "ColdStorage — Pricing",
+    description:
+      "ColdStorage storage plans — priced by size. Start with 25 GB free, no card; paid sizes from $9.99 a year. Getting files back is passed through at cost.",
+  });
 }
 
 export function loader({ params }: Route.LoaderArgs) {

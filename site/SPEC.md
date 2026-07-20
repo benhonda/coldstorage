@@ -72,11 +72,43 @@ Shipped copy is public words; it belongs in version control where it is reviewed
 
 | Question | Owner |
 | --- | --- |
-| What a page **argues** (framing) | `strategy/landing-framing.md` |
-| How it **sounds** (voice) | `strategy/BRAND-VOICE.md` + the `ben-prose` skill |
+| What a page **argues** (framing) | `strategy/CANON.md` §1/§4 |
+| How it **sounds** (voice) | `strategy/CANON.md` §5/§6 + the `ben-prose` skill |
 | The actual **words** | **`app/lib/marketing/content.ts`** |
 | **Prices** | `account-backend/src/plan-sizes.ts` + `retrieval-pricing.ts` (code) |
 | **Legal prose** | `app/lib/marketing/legal.ts` (own SSOT, own review path) |
+| **Which pages exist to be found** | `app/lib/marketing/site-routes.ts` (`INDEXABLE_ROUTES`) |
+| **What goes in a page's `<head>`** | `app/lib/marketing/page-meta.ts` (`pageMeta()`) |
+| **JSON-LD** | `app/lib/marketing/structured-data.ts` (derived from `PRICING`) |
+
+### The machine-readable layer
+
+Three surfaces exist for readers that aren't people — search crawlers, AI answer engines, and
+agents. All three are **generated**, never checked in as static files, because each one fails
+*silently*: a stale sitemap doesn't error, it just quietly stops pages being crawled.
+
+- **`/robots.txt`** (`app/routes/robots[.]txt.tsx`) — allows everything, naming each AI agent
+  explicitly. Read the header comment before editing: AI crawlers split into **training**
+  (GPTBot, ClaudeBot, Google-Extended), **search** (OAI-SearchBot, Claude-SearchBot,
+  PerplexityBot) and **user-initiated** (ChatGPT-User, Claude-User) — and it is the *search*
+  ones that produce citations. Blocking GPTBot does not stop ChatGPT citing us; blocking
+  OAI-SearchBot does. `task seo:check:site` asserts the search agents by name.
+- **`/sitemap.xml`** (`app/routes/sitemap[.]xml.tsx`) — built from `INDEXABLE_ROUTES`.
+- **JSON-LD** — `Organization` + `SoftwareApplication`/`Offer` on `/`, `FAQPage` on `/faq`,
+  `Table` on `/compare`. Offers are derived from `PRICING`, which `copy:check:site` already
+  pins to the code SSOT, so a price change can't reach the structured data by hand.
+  **No `aggregateRating` or `review` nodes** — there are no customers yet, and a rating in
+  JSON-LD is a machine-readable assertion that reviews exist. `seo:check:site` fails on either.
+
+**One route list, three consumers.** `INDEXABLE_ROUTES` feeds the sitemap, `copy-check`'s
+"every page is in the sitemap" rule, and `ssr-check`'s render loop. `ssr-check` used to keep its
+own copy, which meant a page could ship, be sitemapped, and never be rendered by any check.
+
+**`/fr` canonicals to English until translations ship.** The `($lang)` segment means every page
+answers on two URLs, and today both return identical English HTML — real duplicate content, not
+a hypothetical. `TRANSLATIONS_LIVE` in `page-meta.ts` is the single flag: false → French URLs
+canonical to the English original; true → each canonicals to itself and `hreflang` pairs appear.
+Flip it when `/fr` carries actual French copy.
 
 **The design project's copy is a preview fixture, never a source.** Upstream `.jsx` carries its
 own copy (`shared/landing-copy.jsx`'s `LC` object, `shared/site-common.jsx`'s `CS_*` constants)

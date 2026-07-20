@@ -14,6 +14,11 @@
     "esModuleInterop": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
+    // `scripts/ssr-check.ts` and `scripts/seo-check.ts` run under `node` (type stripping), not
+    // bun, so their relative imports must carry the real `.ts` extension or Node can't resolve
+    // them. Safe here because this config only ever typechecks — `noEmit` is on above, so tsc
+    // never has to rewrite the specifier.
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "strict": true

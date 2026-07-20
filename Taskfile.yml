@@ -1535,6 +1535,15 @@ tasks:
       # what `entry.server.tsx` renders through. Node runs the .ts directly (type stripping).
       - node scripts/ssr-check.ts
 
+  seo:check:site:
+    desc: Assert the machine-readable SEO surface renders correctly — /robots.txt, /sitemap.xml, and the home page's JSON-LD. These fail silently in a browser, so nothing else catches them.
+    dir: site
+    dotenv: *site-dotenv
+    deps: [build:site]
+    cmds:
+      # node, not bun — same reason as ssr:check:site (renderToPipeableStream).
+      - node scripts/seo-check.ts
+
   start:site:
     aliases: [dev:site]
     desc: Start the site (marketing) dev server

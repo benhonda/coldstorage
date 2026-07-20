@@ -7,6 +7,7 @@ import {
   SectionHelpContact,
 } from "~/components/marketing/sections/help-center";
 import { HELP_PAGE } from "~/lib/marketing/content";
+import { pageMeta } from "~/lib/marketing/page-meta";
 
 /**
  * `/help` — the help center, linked from the footer's Support column. Longer answers than
@@ -15,15 +16,14 @@ import { HELP_PAGE } from "~/lib/marketing/content";
  * No FAQPage JSON-LD here on purpose — `/faq` already carries it, and two competing FAQPage
  * blocks on one domain is worse for search than one clear one.
  */
-export function meta() {
-  return [
-    { title: "ColdStorage — Help center" },
-    {
-      name: "description",
-      content:
-        "How to install ColdStorage, what the recovery code is for, how to put files in, and what getting them back costs and takes.",
-    },
-  ];
+export function meta({ params }: Route.MetaArgs) {
+  return pageMeta({
+    path: "/help",
+    lang: params.lang,
+    title: "ColdStorage — Help center",
+    description:
+      "How to install ColdStorage, what the recovery code is for, how to put files in, and what getting them back costs and takes.",
+  });
 }
 
 export function loader({ params }: Route.LoaderArgs) {

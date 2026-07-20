@@ -5,6 +5,7 @@ import { MarketingPage } from "~/components/marketing/marketing-page";
 import { PageHero } from "~/components/marketing/sections/page-hero";
 import { SectionFaqSplit } from "~/components/marketing/sections/faq-split";
 import { SectionClosingBand } from "~/components/marketing/sections/closing-band";
+import { pageMeta } from "~/lib/marketing/page-meta";
 
 /**
  * `/faq` — the questions on their own URL. Renders the same `SectionFaqSplit` the home page
@@ -14,16 +15,15 @@ import { SectionClosingBand } from "~/components/marketing/sections/closing-band
  * The FAQ ships as JSON-LD too: every answer is already in the DOM (the accordion collapses
  * rather than unmounts), so the structured data describes what's actually on the page.
  */
-export function meta() {
-  return [
-    { title: "ColdStorage — Questions" },
-    {
-      name: "description",
-      content:
-        "Common questions about ColdStorage: how it differs from iCloud and Dropbox, whether we can read your files, what a recovery costs, and how to get everything back out.",
-    },
-    {
-      "script:ld+json": {
+export function meta({ params }: Route.MetaArgs) {
+  return pageMeta({
+    path: "/faq",
+    lang: params.lang,
+    title: "ColdStorage — Questions",
+    description:
+      "Common questions about ColdStorage: how it differs from iCloud and Dropbox, whether we can read your files, what a recovery costs, and how to get everything back out.",
+    jsonLd: [
+      {
         "@context": "https://schema.org",
         "@type": "FAQPage",
         mainEntity: FAQ.items.map((it) => ({
@@ -32,8 +32,8 @@ export function meta() {
           acceptedAnswer: { "@type": "Answer", text: it.answer },
         })),
       },
-    },
-  ];
+    ],
+  });
 }
 
 export function loader({ params }: Route.LoaderArgs) {

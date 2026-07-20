@@ -3,6 +3,7 @@ import { langUtils } from "~/lib/i18n/i18n-utils.server";
 import { MarketingPage } from "~/components/marketing/marketing-page";
 import { ProsePage } from "~/components/marketing/sections/prose-page";
 import { OPEN_SOURCE_PAGE, REPO_URL } from "~/lib/marketing/content";
+import { pageMeta } from "~/lib/marketing/page-meta";
 
 /**
  * `/source` — the "don't take our word for it" page. Its whole job is to point at the two
@@ -14,15 +15,14 @@ import { OPEN_SOURCE_PAGE, REPO_URL } from "~/lib/marketing/content";
  * misstate the very thing this page exists to be honest about. Copy is `OPEN_SOURCE_PAGE` in
  * content.ts — the export kept its name; the URL and the words are what changed.
  */
-export function meta() {
-  return [
-    { title: "ColdStorage — Source code" },
-    {
-      name: "description",
-      content:
-        "All of ColdStorage is on GitHub, including the encryption. Check the claims yourself instead of taking our word for them.",
-    },
-  ];
+export function meta({ params }: Route.MetaArgs) {
+  return pageMeta({
+    path: "/source",
+    lang: params.lang,
+    title: "ColdStorage — Source code",
+    description:
+      "All of ColdStorage is on GitHub, including the encryption. Check the claims yourself instead of taking our word for them.",
+  });
 }
 
 export function loader({ params }: Route.LoaderArgs) {

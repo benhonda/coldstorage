@@ -1,5 +1,6 @@
 import type { Route } from "./+types/($lang).download";
 import { langUtils } from "~/lib/i18n/i18n-utils.server";
+import { pageMeta } from "~/lib/marketing/page-meta";
 import { DOWNLOAD_DMG_PATH, RELEASES_LATEST_PAGE } from "~/lib/marketing/download";
 import { MarketingPage } from "~/components/marketing/marketing-page";
 import { PageHero } from "~/components/marketing/sections/page-hero";
@@ -21,15 +22,14 @@ import { DOWNLOAD_PAGE } from "~/lib/marketing/content";
  * The param is resolved in the loader so both `meta()` and the component read one decision,
  * and so the auto-start works with JS disabled.
  */
-export function meta({ data }: Route.MetaArgs) {
-  const base = [
-    { title: "ColdStorage — Download for Mac" },
-    {
-      name: "description",
-      content:
-        "Download ColdStorage for Mac — free app, macOS 14 or later. Storage from $9.99 a year.",
-    },
-  ];
+export function meta({ data, params }: Route.MetaArgs) {
+  const base = pageMeta({
+    path: "/download",
+    lang: params.lang,
+    title: "ColdStorage — Download for Mac",
+    description:
+      "Download ColdStorage for Mac — free app, macOS 14 or later. Storage from $9.99 a year.",
+  });
   // Only emit the refresh when the visitor actually asked for the file.
   return data?.autoStart
     ? [...base, { httpEquiv: "refresh", content: `1;url=${DOWNLOAD_DMG_PATH}` }]

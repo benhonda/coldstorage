@@ -4,6 +4,7 @@ import { MarketingPage } from "~/components/marketing/marketing-page";
 import { PageHero } from "~/components/marketing/sections/page-hero";
 import { BrandBoard } from "~/components/marketing/sections/brand-board";
 import { BRAND_PAGE } from "~/lib/marketing/content";
+import { pageMeta } from "~/lib/marketing/page-meta";
 
 /**
  * `/brand` — the brand board: mark, wordmark, lockups, app icon, palette. A reference page for
@@ -12,15 +13,14 @@ import { BRAND_PAGE } from "~/lib/marketing/content";
  * `BrandMark` and the real palette constants, so the page cannot drift from the brand it
  * documents.
  */
-export function meta() {
-  return [
-    { title: "ColdStorage — Brand" },
-    {
-      name: "description",
-      content:
-        "The ColdStorage logomark, wordmark, lockups, app icon and palette, with the rules for using them.",
-    },
-  ];
+export function meta({ params }: Route.MetaArgs) {
+  return pageMeta({
+    path: "/brand",
+    lang: params.lang,
+    title: "ColdStorage — Brand",
+    description:
+      "The ColdStorage logomark, wordmark, lockups, app icon and palette, with the rules for using them.",
+  });
 }
 
 export function loader({ params }: Route.LoaderArgs) {

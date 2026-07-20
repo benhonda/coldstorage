@@ -8,6 +8,7 @@ import { contactEnv } from "~/lib/env/contact-env.server";
 import { sendContactMessage, verifyTurnstile } from "~/lib/marketing/contact.server";
 import { CONTACT_FIELDS, contactSchema } from "~/lib/marketing/contact";
 import type { ContactFieldError, ContactResult } from "~/lib/marketing/contact";
+import { pageMeta } from "~/lib/marketing/page-meta";
 
 /**
  * `/contact` — the contact form, linked from the footer's Support column and from `/help`.
@@ -16,15 +17,14 @@ import type { ContactFieldError, ContactResult } from "~/lib/marketing/contact";
  * CD2 → Ben's inbox, with the sender's address as `replyTo`. Copy is `CONTACT_PAGE` in
  * content.ts; the validation contract is `contact.ts`, shared with the form component.
  */
-export function meta() {
-  return [
-    { title: "ColdStorage — Contact us" },
-    {
-      name: "description",
-      content:
-        "Questions about the app, your account, or a bill. Send a message and we'll reply by email.",
-    },
-  ];
+export function meta({ params }: Route.MetaArgs) {
+  return pageMeta({
+    path: "/contact",
+    lang: params.lang,
+    title: "ColdStorage — Contact us",
+    description:
+      "Questions about the app, your account, or a bill. Send a message and we'll reply by email.",
+  });
 }
 
 export function loader({ params }: Route.LoaderArgs) {
