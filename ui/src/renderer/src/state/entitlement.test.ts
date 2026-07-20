@@ -13,7 +13,10 @@ import { bytesAvailable, hasCapacityFor } from "./entitlement.ts";
 import type { EntitlementStatus } from "../../../shared/ipc.ts";
 
 const GB = 1_000_000_000;
-const FREE_TIER = GB; // matches the coded free tier (FREE_TIER_BYTES in the account backend)
+// A stand-in quota for the gate maths below — deliberately small so the arithmetic stays readable.
+// It is NOT the real free tier (that's 25 GB, FREE_TIER_BYTES in the account backend); nothing here
+// depends on the two matching.
+const FREE_TIER = GB;
 
 /** A signed-in account whose entitlement has landed. `active` is deliberately NOT a gate input. */
 const entitlement = (over: Partial<EntitlementStatus> = {}): EntitlementStatus => ({

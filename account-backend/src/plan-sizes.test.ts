@@ -6,10 +6,12 @@ import { describe, expect, test } from "bun:test";
 import { FREE_TIER_BYTES, PLAN_SIZES, resolveFreeTierBytes } from "./plan-sizes.js";
 
 describe("the free tier", () => {
-  // ⚠️ TEMPORARILY 1 GB (2026-07-13) to test the cap-reached gate. Real value: 25_000_000_000.
-  // Restore BOTH this assertion and `plan-sizes.ts` before merging to main.
-  test("⚠️ TEMP: free tier is shrunk to 1 GB for cap testing — REVERT to 25 GB before merge", () => {
-    expect(FREE_TIER_BYTES).toBe(1_000_000_000);
+  // "25 GB forever" is a published promise (the marketing hero says it), so the number is pinned
+  // here rather than left to whatever the const happens to say. It can only ever move UP.
+  // To test the cap-reached gate, use FREE_TIER_BYTES_OVERRIDE on a non-production deployment —
+  // do not edit the const (that is what happened 2026-07-13, and it shipped to staging).
+  test("is 25 GB", () => {
+    expect(FREE_TIER_BYTES).toBe(25_000_000_000);
   });
 
   // `scripts/seed-paddle-catalog.ts` and the plan picker both iterate PLAN_SIZES. A 25 GB row added there

@@ -28,9 +28,7 @@ export const PLAN_SIZES = [
  * "Forever" is a promise, so this number can only ever move UP. Deliberately started small (still above
  * Google's 15 GB); a maxed free account costs ~$0.30/yr on Deep Archive.
  */
-/* ⚠️⚠️ TEMPORARY — 2026-07-13, Ben: shrunk to 1 GB to test the cap-reached gate + restore in one sitting.
- *      THE REAL VALUE IS 25_000_000_000 (25 GB). REVERT THIS LINE BEFORE MERGING TO main. ⚠️⚠️ */
-export const FREE_TIER_BYTES = 1_000_000_000;
+export const FREE_TIER_BYTES = 25_000_000_000;
 
 /**
  * The free tier a given deployment actually hands out — `FREE_TIER_BYTES` unless a NON-PRODUCTION
