@@ -2,6 +2,9 @@
 
 ## 2026-07-20
 
+- fix(backend): `FREE_TIER_BYTES` back to 25 GB — the 2026-07-13 temporary 1 GB cap-test value shipped to staging; use `FREE_TIER_BYTES_OVERRIDE` instead, and the test now pins 25 GB.
+- feat(site): hero rewritten — "For the memories you can't afford to lose" over a price-carrying lead, with `copy:check:site` deriving the figure from `PLAN_SIZES` and banning anti-cloud positioning.
+- fix(site): nav CTA no longer collapses beside the wordmark under 720px — the auto margin moved onto the brand, which is always in the bar.
 - feat(site): `/brand` brand board — mark, `<Wordmark>`, lockups, app icon and the mark palette, off a new `app/lib/brand/brand-palette.ts` SSOT.
 - feat(site): Outfit display face + `--type-*` heading roles; the lowercase `coldstorage` logotype is now `<Wordmark>` only, enforced by `copy:check:site` + `ssr:check:site`.
 - feat(site): hero headline is a sentence — "Cost-effective encrypted backups for all your files", reveal stagger derived from word count.

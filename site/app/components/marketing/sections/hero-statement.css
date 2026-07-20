@@ -2,6 +2,27 @@
    Ported verbatim from the upstream `csInjectStyle("v4-hero-css", …)` block
    (`.csV4-stage`), renamed to the repo's `cs-` section convention. */
 
+/* The accented noun in the headline. */
+.cs-hero-accent {
+  color: var(--accent-text);
+}
+
+/*
+ * The lead carries the price ("…$9.99 per year for 500 GB"), and that clause has to stay on one
+ * line — a price split across a line break reads as two facts.
+ *
+ * Two things do the work together. `balance` evens the two lines, which puts the break after
+ * "files" and keeps the whole price clause on the second; the narrower measure stops the browser
+ * fitting enough onto line one to strand "500 GB" by itself. 38ch rather than the old 44ch
+ * because `ch` is the width of "0", wider than average lowercase — a 44ch measure renders more
+ * like 50 characters of real prose, which was enough to break the clause.
+ */
+.cs-hero-lead {
+  margin: 22px auto 0;
+  max-width: 38ch;
+  text-wrap: balance;
+}
+
 .cs-hero-stage {
   max-width: 1040px;
   margin: 56px auto 0;

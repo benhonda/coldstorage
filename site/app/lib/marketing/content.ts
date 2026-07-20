@@ -79,19 +79,26 @@ export type PageHeadContent = {
 /* ────────────────────────────────  Hero  ─────────────────────────────────── */
 
 export type Hero = {
-  /** Rendered as separately-revealed inline words. */
-  words: string[];
+  /** The headline, split so one word can carry the accent colour. */
+  headline: { before: string; accent: string; after: string };
   lead: string;
   cta: string;
   note: string;
 };
 
 export const HERO: Hero = {
-  // One sentence, revealed word by word (Ben, 2026-07-20 — replaces the three-adjective
-  // "Private. Cost-effective. Simple."). The reveal stagger is derived from the word count,
-  // so the headline can grow or shrink without the animation running past the CTA below it.
-  words: ["Cost-effective", "encrypted", "backups", "for", "all", "your", "files"],
-  lead: "ColdStorage backs up your photos and files, so a dead laptop or a wiped drive doesn't take them with it.",
+  // Ben, 2026-07-20. The ICP angle from strategy/landing-framing.md — "the stuff they'd hate to
+  // lose but open maybe once a year". A rotating noun was tried and cut the same day: one word,
+  // accented.
+  headline: {
+    before: "For the",
+    accent: "memories",
+    after: "you can't afford to lose",
+  },
+  // Carries a live price, so it is guarded: `task copy:check:site` re-derives both the figure and
+  // the size from `PLAN_SIZES` (the entry plan) every run. Same treatment as `PRICING.tiers` —
+  // a price written in copy that nothing checks is a price that goes stale silently.
+  lead: "Encrypted cloud backups for your files starting at $9.99 per year for 500 GB",
   cta: "Download for Mac",
   note: "Free to start: 25 GB, no card.",
 };

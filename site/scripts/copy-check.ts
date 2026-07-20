@@ -69,6 +69,35 @@ for (const tier of PRICING.tiers.filter((t) => !t.free)) {
   }
 }
 
+/* ── 1a · The hero's price matches the entry plan ────────────────────────────
+   HERO.lead quotes a live figure ("$9.99 per year for 500 GB"). That is the ladder's cheapest
+   paid row, so it is derived here rather than trusted — a headline price that drifts off the
+   pricing table is the most expensive kind of stale copy, and it sits on the first screen.
+   The check is on the STRINGS appearing in the lead, not on its wording, so the sentence stays
+   free to change. */
+const entryPlan = PLAN_SIZES.reduce((a, b) => (a.perYearCents <= b.perYearCents ? a : b));
+const entryPrice = centsToUsd(entryPlan.perYearCents);
+if (!HERO.lead.includes(entryPrice)) {
+  fail(
+    "hero-price-matches-entry-plan",
+    `HERO.lead should quote the entry plan's price ${entryPrice} (${entryPlan.size}) — it says "${HERO.lead}"`,
+  );
+}
+if (!HERO.lead.includes(entryPlan.size)) {
+  fail(
+    "hero-price-matches-entry-plan",
+    `HERO.lead quotes a price but not the size it buys — expected "${entryPlan.size}"`,
+  );
+}
+/* A bare "$9.99" reads as MONTHLY to anyone who has seen iCloud or Dropbox, which misprices us
+   by 12x on the first screen. The period has to be on the line. */
+if (!/\bper year\b|\ba year\b|\/yr\b|\byearly\b/i.test(HERO.lead)) {
+  fail(
+    "hero-price-states-the-period",
+    `HERO.lead quotes ${entryPrice} without saying it is yearly — a bare figure reads as monthly`,
+  );
+}
+
 /* ── 1b · Retrieval rates are the REAL, all-in rates ─────────────────────────
    Retrieval runs at 0% margin, so a published rate that's been tidied to a rounder number is
    either a subsidy out of storage margin or margin we said we don't take. Both directions are
@@ -110,7 +139,12 @@ if (!new RegExp(`${freeMb}\\s*MB`, "i").test(PRICING.finePrint)) {
    deliberately not scanned here. */
 const PROVIDER = /\b(aws|amazon|s3|glacier|deep archive)\b/i;
 const allCopy: [string, string][] = [
-  ["HERO", [HERO.lead, HERO.note, HERO.cta, ...HERO.words].join(" ")],
+  // The headline is reassembled from its three parts so the brand rules see the whole sentence,
+  // not the fragments — "can't afford" only reads right with the words either side of it.
+  [
+    "HERO",
+    [HERO.lead, HERO.note, HERO.cta, HERO.headline.before, HERO.headline.accent, HERO.headline.after].join(" "),
+  ],
   ["HOW", [HOW.title, HOW.body].join(" ")],
   ["PRIVACY", [PRIVACY.lead, ...PRIVACY.steps.flatMap((s) => [s.title, s.body])].join(" ")],
   ["PRICING", [PRICING.retrievalLead, PRICING.callout, PRICING.finePrint, PRICING.readyNote].join(" ")],
@@ -197,6 +231,27 @@ for (const [where, text] of allCopy) {
   const cheapHit = text.match(/\b(nearly free|basically nothing|costs us nothing|practically free)\b/i);
   if (cheapHit) {
     fail("no-costs-us-nothing", `${where} frames our cost as "${cheapHit[0]}" — explain cheapness comparatively`);
+  }
+}
+
+/* ── 3b · Never position against "the cloud" ─────────────────────────────────
+   We ARE cloud storage — files go over the internet to a data centre and sit on someone else's
+   hardware. Copy that treats "the cloud" as the other guy argues against the thing we sell, and
+   is simply untrue (Ben, 2026-07-20).
+
+   The real contrast is instant-access storage vs. storage for files you rarely open — two tiers
+   of one category, and we're the cheap one. So this bans the rejection constructions, not the
+   word: "most cloud storage keeps your files live" and "a cloud drive charges you to keep it all
+   awake" are correct and stay legal. */
+const ANTI_CLOUD =
+  /\b(?:(?:don'?t|doesn'?t|do not) need (?:the )?cloud|cheaper than (?:the )?cloud\b|instead of (?:the )?cloud|skip (?:the )?cloud|without (?:the )?cloud|not (?:the |a )?cloud\b|ditch (?:the )?cloud|beyond (?:the )?cloud)/i;
+for (const [where, text] of allCopy) {
+  const hit = text.match(ANTI_CLOUD);
+  if (hit) {
+    fail(
+      "never-position-against-the-cloud",
+      `${where} says "${hit[0]}" — we ARE cloud storage. Contrast instant-access vs. rarely-opened instead (see strategy/landing-framing.md)`,
+    );
   }
 }
 
@@ -291,7 +346,7 @@ for (const row of PRICING.retrievalRows) {
 }
 
 /* ── report ─────────────────────────────────────────────────────────────────── */
-const CHECKS = 11;
+const CHECKS = 14;
 if (failures.length === 0) {
   console.log(`✓ copy check passed — ${CHECKS} rules, ${PRICING.tiers.length} tiers verified`);
   process.exit(0);
