@@ -13,10 +13,10 @@
  * not prescribe artifacts. Shipped copy is public words in version control, reviewed in diffs.
  *
  * WHAT IS *NOT* A COPY SOURCE — do not port words from these, they will be stale:
- *  - `design-mirror/marketing/shared/landing-copy.jsx` (the `LC` object) and the design
+ *  - `Claude design · shared/landing-copy.jsx` (the `LC` object) and the design
  *    project it mirrors. That is a **preview fixture** so the upstream design renders. It is
  *    mirrored verbatim for clean design diffs, NOT consulted for wording.
- *  - `design-mirror/marketing/shared/site-common.jsx` — its `CS_*` copy constants are DEAD
+ *  - `Claude design · shared/site-common.jsx` — its `CS_*` copy constants are DEAD
  *    (superseded upstream). It is mirrored only for its helper functions.
  *
  * WHAT STILL OWNS SOMETHING ELSE:
@@ -41,6 +41,10 @@
  *    2026-07-02), so "only you hold the key" is now earned — but claims track the code.
  *  - **Terminology: say "encrypted", never "scrambled".** (Voice delta, 2026-07-17 — reverses
  *    the older "scrambled on your Mac" phrasing, which the design's `LC` still uses.)
+ *  - **In copy the product is `ColdStorage`, capitalised — always.** The lowercase
+ *    `coldstorage` is the WORDMARK only: a drawn brand artifact, rendered exclusively by the
+ *    `<Wordmark>` component, never typed as a string. Nothing in this file should ever say
+ *    "coldstorage" (Ben, 2026-07-20; `task ssr:check:site` asserts the rendered logotype).
  *  - **Never frame our own costs as "nearly free"/"basically nothing".** It reads as "then why
  *    am I paying you", and it isn't true — storage carries real cost plus a modest margin;
  *    only retrieval runs at zero markup. Explain cheapness comparatively.
@@ -53,6 +57,7 @@
 // contacts of record). Imported rather than retyped so the marketing pages and the legal
 // pages can never disagree about where to write.
 import { LEGAL_EMAIL, SUPPORT_EMAIL } from "~/lib/marketing/legal";
+import type { BrandColorKey } from "~/lib/brand/brand-palette";
 
 /* ──────────────────────────────  Page heads  ─────────────────────────────── */
 
@@ -82,7 +87,10 @@ export type Hero = {
 };
 
 export const HERO: Hero = {
-  words: ["Private.", "Cost-effective.", "Simple."],
+  // One sentence, revealed word by word (Ben, 2026-07-20 — replaces the three-adjective
+  // "Private. Cost-effective. Simple."). The reveal stagger is derived from the word count,
+  // so the headline can grow or shrink without the animation running past the CTA below it.
+  words: ["Cost-effective", "encrypted", "backups", "for", "all", "your", "files"],
   lead: "ColdStorage backs up your photos and files, so a dead laptop or a wiped drive doesn't take them with it.",
   cta: "Download for Mac",
   note: "Free to start: 25 GB, no card.",
@@ -791,6 +799,88 @@ export const DOWNLOAD_PAGE: DownloadPage = {
   },
 };
 
+/* ─────────────────────────────  Brand (/brand)  ──────────────────────────── */
+
+/*
+ * `/brand` — the brand board: the mark, the wordmark, the lockups, the app icon and the mark's
+ * palette. Translated from the "Coldstorage Brand Board" design (imported 2026-07-20).
+ *
+ * It is a reference page, not a sales page: it exists so anyone writing about ColdStorage or
+ * building a surface for it uses the right mark on the right ground. So the copy here is
+ * instructional rather than persuasive — it describes construction and states rules.
+ *
+ * The hex values are deliberately NOT here. They come from `brand-palette.ts`, the same
+ * constants the mark itself paints with; this file supplies only the words that label them.
+ */
+
+export type BrandSpecimen = {
+  heading: string;
+  /** The construction/usage rule shown under the specimen. */
+  note: string;
+};
+
+export type BrandPage = PageHeadContent & {
+  specimens: {
+    logomark: BrandSpecimen;
+    wordmark: BrandSpecimen;
+    lockupHorizontal: BrandSpecimen;
+    lockupStacked: BrandSpecimen;
+    appIcon: BrandSpecimen;
+    palette: BrandSpecimen;
+  };
+  /** Ground labels under each light/dark specimen pair. */
+  grounds: { light: string; dark: string };
+  /**
+   * One caption per mark colour. Typed as a TOTAL record, so adding a colour to
+   * `BRAND_MARK_PALETTE` breaks the build here until it has a name (PILLAR4).
+   */
+  swatches: Record<BrandColorKey, string>;
+  /** Scale labels beside the app-icon specimen. */
+  iconScales: { master: string; home: string };
+};
+
+export const BRAND_PAGE: BrandPage = {
+  eyebrow: "Brand",
+  title: "The ColdStorage brand",
+  intro:
+    "The mark, the wordmark and how they go together. If you're writing about ColdStorage or building something that shows it, take what you need from here.",
+  specimens: {
+    logomark: {
+      heading: "Logomark",
+      note: "Three frost planes inside a rounded keyline hex. The planes are identical in both cuts — only the outline changes, so the mark holds its weight on a dark ground instead of glaring.",
+    },
+    wordmark: {
+      heading: "Wordmark",
+      note: "Always lowercase — the wordmark is a drawn thing, so it doesn't take a capital at the start of a sentence. Written out in prose it's ColdStorage. Outfit at 600, tracking pulled to -0.015em, brand ink on light grounds and white on dark.",
+    },
+    lockupHorizontal: {
+      heading: "Horizontal lockup",
+      note: "The default pairing — navigation bars, letterheads, anywhere with more width than height. Mark at 1.4× the wordmark's cap height, with a gap of roughly half the mark's width.",
+    },
+    lockupStacked: {
+      heading: "Stacked lockup",
+      note: "For splash screens, merch and anywhere the horizontal lockup would have to shrink to fit.",
+    },
+    appIcon: {
+      heading: "App icon",
+      note: "The dark cut on the vault tile. One icon at every size — it holds together from the home screen down to a settings row.",
+    },
+    palette: {
+      heading: "Palette",
+      note: "The mark's own colours. These build the cube; the interface palette is a separate system.",
+    },
+  },
+  grounds: { light: "On light", dark: "On dark" },
+  swatches: {
+    cubeTop: "Cube top plane",
+    cubeLeft: "Cube left plane",
+    cubeRight: "Cube right plane",
+    outlineLight: "Outline — light ground",
+    outlineDark: "Outline — dark ground",
+  },
+  iconScales: { master: "1024 master", home: "Home screen" },
+};
+
 /* ────────────────────────────────  Footer  ──────────────────────────────── */
 
 export type FooterLink = { label: string; href?: string };
@@ -821,6 +911,7 @@ export const FOOTER: Footer = {
         { label: "About", href: "/about" },
         // Label says "Source code", not "Open source" — the license is source-available.
         { label: "Source code", href: "/source" },
+        { label: "Brand", href: "/brand" },
       ],
     },
     {

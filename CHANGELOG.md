@@ -2,6 +2,9 @@
 
 ## 2026-07-20
 
+- feat(site): `/brand` brand board — mark, `<Wordmark>`, lockups, app icon and the mark palette, off a new `app/lib/brand/brand-palette.ts` SSOT.
+- feat(site): Outfit display face + `--type-*` heading roles; the lowercase `coldstorage` logotype is now `<Wordmark>` only, enforced by `copy:check:site` + `ssr:check:site`.
+- feat(site): hero headline is a sentence — "Cost-effective encrypted backups for all your files", reveal stagger derived from word count.
 - refactor(site): `site/design-mirror/` retired — `site/` is the SSOT for the whole site; Claude cloud design is an import source, not a synced upstream. Brand originals promoted to `site/brand/`.
 - feat(ui): `task ui:icon:check` — `gen-icon.ts --check` compares `build/icon.inputs.sha256` so a release can't ship an icon that's stale vs the brand mark.
 - refactor(ui): release version arithmetic moved out of inline `node -e` into `scripts/set-release-version.ts` + `assert-version-ahead.ts` over a shared `lib/semver.ts`.

@@ -15,6 +15,7 @@
  */
 import "./brand-mark.css";
 import * as React from "react";
+import { BRAND_MARK_PALETTE } from "~/lib/brand/brand-palette";
 
 export type BrandMarkProps = {
   /** Extra class for caller-side sizing/positioning. */
@@ -61,10 +62,20 @@ export function BrandMark({ className, title }: BrandMarkProps) {
         strokeLinejoin="round"
         filter={`url(#${shadowId})`}
       />
-      {/* Cube faces — identical across both variants. */}
-      <path d="M48.8812 6.63257L89.9701 28.8315L48.8812 51.0304L7.79236 28.8315L48.8812 6.63257Z" fill="#FFFFFF" />
-      <path d="M7.79236 28.8315L48.8812 51.0305V95.4283L7.79236 73.2294V28.8315Z" fill="#C1E4FB" />
-      <path d="M89.9702 28.8315L48.8813 51.0305V95.4283L89.9702 73.2294V28.8315Z" fill="#99CFF0" />
+      {/* Cube faces — identical across both variants. Fills come from the brand palette so the
+          /brand page documents the same values this renders (see brand-palette.ts). */}
+      <path
+        d="M48.8812 6.63257L89.9701 28.8315L48.8812 51.0304L7.79236 28.8315L48.8812 6.63257Z"
+        fill={BRAND_MARK_PALETTE.cubeTop}
+      />
+      <path
+        d="M7.79236 28.8315L48.8812 51.0305V95.4283L7.79236 73.2294V28.8315Z"
+        fill={BRAND_MARK_PALETTE.cubeLeft}
+      />
+      <path
+        d="M89.9702 28.8315L48.8813 51.0305V95.4283L89.9702 73.2294V28.8315Z"
+        fill={BRAND_MARK_PALETTE.cubeRight}
+      />
     </svg>
   );
 }

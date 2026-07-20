@@ -13,6 +13,30 @@ import { getAllPublicEnv } from "~/lib/env/all-server-env";
 import { blockingThemeScript } from "~/lib/theme/blocking-theme-script";
 import "./app.css";
 
+/**
+ * The DS's webfont families, in Google Fonts `css2` query syntax. SSOT for what the site
+ * loads — `app/styles/ds/fonts.css` documents what each face is FOR, but carries no URLs,
+ * because a second copy of this list is a second thing to forget (PILLAR3).
+ *
+ * Loaded via <link> rather than a CSS `@import`: a remote @import can't be bundled, and it
+ * serialises behind the stylesheet that contains it.
+ */
+const DS_FONT_FAMILIES = [
+  "Outfit:wght@400;500;600;700", // display — headings + wordmark
+  "Hanken Grotesk:wght@400;500;600;700", // UI — body, labels, controls
+  "JetBrains Mono:wght@400;500;600", // technical — ids, sizes, checksums, paths
+  "Material Symbols Rounded:opsz,wght,FILL,GRAD@20..48,300..600,0..1,0", // icons
+] as const;
+
+/**
+ * One request for every family — `css2` accepts repeated `family` params, so this is a
+ * single round trip instead of one per face.
+ */
+const DS_FONT_HREF = `https://fonts.googleapis.com/css2?${DS_FONT_FAMILIES.map(
+  // Spaces become `+`; `: ; @ , .` must stay literal, so no encodeURIComponent here.
+  (f) => `family=${f.replace(/ /g, "+")}`,
+).join("&")}&display=swap`;
+
 export function loader({ request }: Route.LoaderArgs) {
   const preferences = getPreferencesFromRequest(request);
   // PUBLIC_-prefixed env for the browser, exposed on window.env (see the script in Layout).
@@ -52,23 +76,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <link rel="manifest" href="/site.webmanifest" />
         <meta name="apple-mobile-web-app-title" content="ColdStorage" />
         <meta name="theme-color" content="#EDF3F8" />
-        {/* ColdStorage DS webfonts — Hanken Grotesk (UI), JetBrains Mono (technical),
-            Material Symbols Rounded (icons). Loaded here (not via CSS @import, which can't
-            be bundled) so app/styles/ds/fonts.css stays the design-of-record. */}
+        {/* ColdStorage DS webfonts — see DS_FONT_FAMILIES. */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&display=swap"
-        />
-        <link
-          rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap"
-        />
-        <link
-          rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,300..600,0..1,0"
-        />
+        <link rel="stylesheet" href={DS_FONT_HREF} />
         <Meta />
         <Links />
       </head>

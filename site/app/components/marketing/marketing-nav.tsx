@@ -7,6 +7,7 @@
 import "./marketing-nav.css";
 import * as React from "react";
 import { BrandMark } from "~/components/ds/brand-mark";
+import { Wordmark } from "~/components/ds/wordmark";
 import { Button } from "~/components/ds/button";
 import { csScrollTo } from "~/lib/marketing/site";
 
@@ -33,7 +34,7 @@ export function MarketingNav({ links, cta, solid }: MarketingNavProps) {
             top, which did nothing on the pages that aren't the home page. */}
         <a className="csf-mktnav__brand" href="/" aria-label="ColdStorage — home">
           <BrandMark className="csf-mktnav__mark" />
-          <span className="csf-mktnav__word">ColdStorage</span>
+          <Wordmark />
         </a>
         <nav className="csf-mktnav__links" aria-label="Primary">
           {links.map((l) => (

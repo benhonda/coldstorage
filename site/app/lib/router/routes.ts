@@ -10,6 +10,7 @@ export const routePaths = [
   "/",
   "/:lang",
   "/:lang/about",
+  "/:lang/brand",
   "/:lang/checkout",
   "/:lang/contact",
   "/:lang/download",
@@ -22,6 +23,7 @@ export const routePaths = [
   "/:lang/source",
   "/:lang/terms",
   "/about",
+  "/brand",
   "/checkout",
   "/contact",
   "/download",
@@ -41,6 +43,7 @@ export type Path = (typeof routePaths)[number];
 export type Params = {
   "/:lang": { lang: string };
   "/:lang/about": { lang: string };
+  "/:lang/brand": { lang: string };
   "/:lang/checkout": { lang: string };
   "/:lang/contact": { lang: string };
   "/:lang/download": { lang: string };

@@ -1,0 +1,10 @@
+/* DS · Wordmark — the logotype's one type rule. Size is caller-set (the nav and footer take
+   the role's own --text-md; /brand's specimens scale it up); colour is inherited so the same
+   markup works on light and dark grounds. */
+.csf-wordmark {
+  font: var(--type-wordmark);
+  /* Tighter than --tracking-tight: the brand board specifies -0.015em for the logotype
+     specifically, which is a drawing decision about this word, not the DS text scale. */
+  letter-spacing: -0.015em;
+  color: inherit;
+}

@@ -17,6 +17,7 @@ import {
   ALLOWANCE_BYTES_FREE,
 } from "../../account-backend/src/retrieval-pricing";
 import {
+  BRAND_PAGE,
   FAQ,
   HOW_PAGE,
   PRICING,
@@ -31,6 +32,9 @@ import {
   REPO_LICENSE,
 } from "../app/lib/marketing/content";
 import type { ProsePageContent } from "../app/lib/marketing/content";
+// Namespace import as well as the named ones: rule 4a scans every exported string, so it must
+// see exports nobody thought to enumerate.
+import * as CONTENT from "../app/lib/marketing/content";
 
 type Failure = { rule: string; detail: string };
 const failures: Failure[] = [];
@@ -119,6 +123,9 @@ const allCopy: [string, string][] = [
   ["OPEN_SOURCE_PAGE", prose(OPEN_SOURCE_PAGE)],
   ["HELP_PAGE", [HELP_PAGE.intro, ...HELP_PAGE.groups.flatMap((g) => [g.heading, ...g.items.flatMap((i) => [i.question, i.answer])])].join(" ")],
   ["CONTACT_PAGE", [CONTACT_PAGE.intro, CONTACT_PAGE.responseNote, ...CONTACT_PAGE.addresses.map((a) => a.note)].join(" ")],
+  // /brand (2026-07-20). Instructional rather than persuasive, but it is still rendered copy,
+  // so the standing rules apply — including the casing rule it happens to describe.
+  ["BRAND_PAGE", [BRAND_PAGE.intro, ...Object.values(BRAND_PAGE.specimens).flatMap((s) => [s.heading, s.note]), ...Object.values(BRAND_PAGE.swatches)].join(" ")],
 ];
 
 /** Flatten a headed-prose page (title excluded — the intro and blocks are the copy). */
@@ -193,6 +200,43 @@ for (const [where, text] of allCopy) {
   }
 }
 
+/* ── 4a · The product name is capitalised in prose ───────────────────────────
+   `coldstorage` lowercase is the WORDMARK — a drawn artifact rendered only by <Wordmark>.
+   Written out in a sentence the product is `ColdStorage` (Ben, 2026-07-20).
+
+   This scans the WHOLE content module rather than the curated `allCopy` list, because that
+   list deliberately skips page titles and headings — and a heading is exactly where a
+   lowercase brand would look most deliberate and be least questioned. Stringifying every
+   export means a string added next month is covered without anyone remembering to add it.
+   Domains and repo paths are legitimately lowercase, so URLs are stripped first. The rendered
+   logotype is asserted separately, in `task ssr:check:site`. */
+/** Every string reachable from the content module, with its path (e.g. `BRAND_PAGE.intro`). */
+function collectStrings(node: unknown, at: string, out: [string, string][]): void {
+  if (typeof node === "string") out.push([at, node]);
+  else if (Array.isArray(node)) node.forEach((v, i) => collectStrings(v, `${at}[${i}]`, out));
+  else if (node && typeof node === "object") {
+    for (const [k, v] of Object.entries(node)) collectStrings(v, at ? `${at}.${k}` : k, out);
+  }
+}
+const everyString: [string, string][] = [];
+collectStrings(CONTENT, "", everyString);
+
+for (const [where, value] of everyString) {
+  // Domains, repo paths and mail addresses are legitimately lowercase — drop them, then look
+  // at what is left, which is prose.
+  const prose = value
+    // Any token carrying a slash: URLs, and repo paths like `github.com/benhonda/coldstorage`.
+    .replace(/\S*\/\S*/g, " ")
+    .replace(/\b[\w-]+\.(?:sh|com|io|dev)\b/gi, " ")
+    .replace(/\S+@\S+/g, " ");
+  if (/\bcoldstorage\b/.test(prose)) {
+    fail(
+      "product-name-is-capitalised",
+      `${where} writes "coldstorage" in prose — the product is "ColdStorage"; lowercase is the wordmark only`,
+    );
+  }
+}
+
 /* ── 4b · Money is always written in dollars ─────────────────────────────────
    A sub-dollar rate goes as "$0.0974", not "9.74¢" — mixing units in one table makes two
    prices look like two different kinds of thing. Precision is kept; only the unit is fixed. */
@@ -247,7 +291,7 @@ for (const row of PRICING.retrievalRows) {
 }
 
 /* ── report ─────────────────────────────────────────────────────────────────── */
-const CHECKS = 10;
+const CHECKS = 11;
 if (failures.length === 0) {
   console.log(`✓ copy check passed — ${CHECKS} rules, ${PRICING.tiers.length} tiers verified`);
   process.exit(0);

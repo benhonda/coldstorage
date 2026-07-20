@@ -1,8 +1,18 @@
-/* coldstoragefiles — webfonts.
-   UI face: Hanken Grotesk (Google Fonts) — a clean, slightly humanist grotesque
-   with sturdy number forms; the brand's neutral workhorse.
+/* coldstoragefiles — webfonts: what each face is FOR.
+
+   Display face: Outfit — geometric, wide-apertured, even colour at large sizes; carries
+   headings and the wordmark. It pairs with the UI face rather than replacing it: the
+   geometry reads as brand at 40–64px and would be a legibility downgrade at 13px.
+   UI face: Hanken Grotesk — a clean, slightly humanist grotesque with sturdy number
+   forms; the brand's neutral workhorse for body, labels and controls.
    Mono face: JetBrains Mono — for object IDs, file sizes, checksums and paths.
-   Icon face: Material Symbols Rounded — filled, rounded glyph style. */
-@import url("https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&display=swap");
-@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap");
-@import url("https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,300..600,0..1,0");
+   Icon face: Material Symbols Rounded — filled, rounded glyph style.
+
+   NO @import HERE, AND NO URLS. The families and their weight axes live in exactly one
+   place — `DS_FONT_FAMILIES` in app/root.tsx, which loads them all in a single <link>.
+   A remote @import can't be bundled and serialises behind its host stylesheet, so this
+   file is deliberately not imported by app.css; duplicating the URLs here just to look
+   complete would be a second list to forget to update (PILLAR3).
+
+   Which face a given piece of text gets is not decided here either — it is encoded in the
+   `--type-*` roles in typography.css. Pick the right role and the face follows. */

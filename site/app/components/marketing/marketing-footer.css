@@ -14,8 +14,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font: 600 var(--text-md) / 1 var(--font-ui);
-  letter-spacing: var(--tracking-tight);
+  /* Layout + ink only — the logotype's own type comes from <Wordmark>. */
   color: var(--text-primary);
 }
 .csf-footer__mark {

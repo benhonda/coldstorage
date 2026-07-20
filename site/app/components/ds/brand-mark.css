@@ -3,9 +3,9 @@
  * dark-bg mark. Everything else (geometry, cube-face fills) is shared and lives in
  * brand-mark.tsx.
  *
- * These are deliberately NOT in app/styles/ds/ — that layer is pull-managed from the
- * upstream DS project and must not be hand-edited (see site/SPEC.md). The mark's own
- * theming is stack-owned, so it lives beside the component.
+ * These live beside the component rather than in app/styles/ds/ because that layer is the
+ * shared token vocabulary, and these four values are the mark's own internals — nothing
+ * else consumes them.
  *
  * The DS is light-only today (`color-scheme: light` in ds/colors.css), so the `.dark`
  * block below is inert for now. It costs four lines and means the dark-bg variant Ben
@@ -13,7 +13,9 @@
  * the resolved `light`/`dark` class on <html> pre-paint.
  */
 .csf-brandmark {
-  /* Light-bg variant (logo-for-lightmode.svg). */
+  /* Light-bg variant (logo-for-lightmode.svg).
+     `outlineLight` in app/lib/brand/brand-palette.ts — the documented SSOT. It is restated
+     here because the light/dark cut flips on a class, which only CSS can do. Change both. */
   --brandmark-stroke: #4da2da;
   --brandmark-stroke-width: 5.76271;
   --brandmark-shadow-opacity: 0.25;
@@ -29,7 +31,7 @@
 
 .dark .csf-brandmark {
   /* Dark-bg variant (logo-for-darkmode.svg): the stroke recedes so the bright cube
-     faces carry the mark, and the lift shadow deepens. */
+     faces carry the mark, and the lift shadow deepens. `outlineDark` in brand-palette.ts. */
   --brandmark-stroke: #2f668e;
   --brandmark-stroke-width: 6.3779;
   --brandmark-shadow-opacity: 0.6;

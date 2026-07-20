@@ -20,6 +20,9 @@ const ROUTES: { path: string; expect: string }[] = [
   { path: "/faq", expect: "Fair to ask" },
   { path: "/about", expect: "Why we built it" },
   { path: "/source", expect: "Functional Source License" },
+  // Expects a swatch hex: it renders only if the palette constants reached the page, which is
+  // the one thing /brand must never get wrong.
+  { path: "/brand", expect: "#C1E4FB" },
   { path: "/help", expect: "Help center" },
   { path: "/contact", expect: "Send message" },
   { path: "/download", expect: "Download ColdStorage" },
@@ -35,7 +38,7 @@ const ROUTES: { path: string; expect: string }[] = [
  */
 const HTML_RULES: { path: string; rule: string; forbid: RegExp }[] = [
   // The provider is never named in customer copy. Checked on the pages most likely to slip.
-  ...["/", "/how-it-works", "/about", "/source", "/help", "/faq"].map((path) => ({
+  ...["/", "/how-it-works", "/about", "/source", "/help", "/faq", "/brand"].map((path) => ({
     path,
     rule: "never-name-the-provider",
     forbid: /\b(aws|amazon s3|glacier|deep archive)\b/i,
@@ -87,6 +90,24 @@ for (const { path, rule, forbid } of HTML_RULES) {
   if (!body) continue; // the route already failed above; don't pile on
   const hit = body.match(forbid);
   if (hit) failures.push(`${rule}: ${path} renders "${hit[0]}"`);
+}
+
+/*
+ * The wordmark is lowercase `coldstorage`; the product name in prose is `ColdStorage` (Ben,
+ * 2026-07-20). The <Wordmark> component makes the wrong casing unspellable — it takes no
+ * children — but nothing stops someone dropping a plain <span> back into the nav. This asserts
+ * the rendered logotype on every page, which is the thing a reader actually sees.
+ */
+for (const [path, body] of html) {
+  const marks = [...body.matchAll(/<span class="csf-wordmark[^"]*">([^<]*)<\/span>/g)];
+  if (marks.length === 0) {
+    failures.push(`wordmark-is-lowercase: ${path} renders no <Wordmark> (nav + footer expected)`);
+    continue;
+  }
+  const wrong = marks.find((m) => m[1] !== "coldstorage");
+  if (wrong) {
+    failures.push(`wordmark-is-lowercase: ${path} renders the wordmark as "${wrong[1]}"`);
+  }
 }
 
 for (const { path } of ROUTES) {

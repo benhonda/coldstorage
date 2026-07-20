@@ -1,0 +1,205 @@
+/* Section · BrandBoard — specimen grid for /brand.
+   Surfaces, radii, shadows and type all come from DS tokens; the ONE local value is the dark
+   vault ground, because the DS is light-only and defines no dark surface (see the component
+   header). Sizes here are specimen sizes — how big the mark is drawn on a display board — not
+   DS scale, so they are plain px on purpose. */
+
+.cs-brand {
+  padding-bottom: var(--section-y);
+}
+
+/* Auto-fit rather than fixed columns: the board is a set of independent specimens, so it
+   should reflow to whatever width it gets instead of carrying breakpoints per card. */
+.cs-brand__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: var(--block-gap);
+  align-items: start;
+}
+.cs-brand__card--wide {
+  grid-column: span 2;
+}
+
+.cs-brand__card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+}
+.cs-brand__card-h {
+  margin: 0;
+  font: var(--type-card-title);
+  letter-spacing: var(--tracking-tight);
+  color: var(--text-primary);
+}
+.cs-brand__note {
+  margin: 0;
+  font: var(--type-label);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  text-wrap: pretty;
+}
+.cs-brand__demo {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ── grounds: the light/dark pair every mark specimen sits on ── */
+.cs-brand__pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.cs-brand__ground {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 168px;
+  padding: 26px 16px 12px;
+  border-radius: var(--radius-lg);
+}
+.cs-brand__ground-body {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+}
+.cs-brand__ground--light {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+}
+/* The vault ground — the only colour authored in this file. It is the same gradient the app
+   icon tile uses (ui/scripts/gen-icon.ts TILE_GRADIENT); if that changes, this follows. */
+.cs-brand__ground--dark,
+.cs-brand__tile {
+  background: linear-gradient(150deg, #12395a, #071b2b 80%);
+  color: #ffffff;
+}
+.cs-brand__ground-label {
+  font: var(--type-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-normal);
+  color: var(--text-tertiary);
+}
+.cs-brand__ground--dark .cs-brand__ground-label {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+/* ── the specimens themselves ── */
+.cs-brand__mark--lg {
+  height: 84px;
+}
+.cs-brand__mark--md {
+  height: 40px;
+}
+/* Specimen sizes only — <Wordmark> carries the face, weight and tracking. */
+.cs-brand__word--lg {
+  font-size: 32px;
+}
+.cs-brand__word--md {
+  font-size: 26px;
+}
+.cs-brand__lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+}
+.cs-brand__lockup--stacked {
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ── app icon ── */
+.cs-brand__icons {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 28px;
+  padding: 24px 16px 12px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+.cs-brand__icon-fig {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.cs-brand__tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 24% ≈ the macOS/iOS squircle corner ratio at these sizes. */
+  border-radius: 24%;
+  box-shadow: var(--shadow-card);
+}
+.cs-brand__tile--lg {
+  width: 132px;
+  height: 132px;
+}
+.cs-brand__tile--lg .csf-brandmark {
+  height: 78px;
+}
+.cs-brand__tile--sm {
+  width: 60px;
+  height: 60px;
+}
+.cs-brand__tile--sm .csf-brandmark {
+  height: 36px;
+}
+
+/* ── palette ── */
+.cs-brand__swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px 24px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cs-brand__swatch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.cs-brand__chip {
+  width: 44px;
+  height: 32px;
+  flex: none;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+}
+.cs-brand__hex {
+  font: var(--type-mono);
+  color: var(--text-primary);
+  /* Fixed width so the role labels line up into a column. `ch` on a mono face is exact. */
+  width: 8ch;
+}
+.cs-brand__role {
+  font: var(--type-label);
+  color: var(--text-secondary);
+}
+
+@media (max-width: 880px) {
+  .cs-brand__card--wide {
+    grid-column: span 1;
+  }
+}
+@media (max-width: 520px) {
+  .cs-brand__pair {
+    grid-template-columns: 1fr;
+  }
+  .cs-brand__icons {
+    gap: 20px;
+  }
+}

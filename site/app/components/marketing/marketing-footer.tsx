@@ -6,6 +6,7 @@
 import "./marketing-footer.css";
 import * as React from "react";
 import { BrandMark } from "~/components/ds/brand-mark";
+import { Wordmark } from "~/components/ds/wordmark";
 import type { Footer } from "~/lib/marketing/content";
 import { csScrollTo } from "~/lib/marketing/site";
 
@@ -23,7 +24,7 @@ export function MarketingFooter({ tagline, columns, legal, copyright }: Footer) 
         <div className="csf-footer__brand">
           <div className="csf-footer__word">
             <BrandMark className="csf-footer__mark" />
-            ColdStorage
+            <Wordmark />
           </div>
           <p className="csf-footer__tagline">{tagline}</p>
         </div>

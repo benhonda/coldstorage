@@ -24,9 +24,8 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  /* Layout + ink only — the logotype's own type comes from <Wordmark>. */
   color: var(--text-primary);
-  font: 600 var(--text-md) / 1 var(--font-ui);
-  letter-spacing: var(--tracking-tight);
 }
 .csf-mktnav__mark {
   height: 26px; /* the mark's artboard has shadow slack, so it reads ~24px optically */
