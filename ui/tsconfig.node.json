@@ -4,6 +4,6 @@
     "lib": ["ES2023"],
     "types": ["node"]
   },
-  "include": ["src/main", "src/preload", "src/daemon", "src/shared", "electron.vite.config.ts"],
+  "include": ["src/main", "src/preload", "src/daemon", "src/shared", "electron.vite.config.ts", "scripts"],
   "exclude": ["**/*.test.ts"]
 }

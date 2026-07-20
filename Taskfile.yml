@@ -1295,7 +1295,7 @@ tasks:
     desc: "Regenerate ui/build/icon.png — the macOS app icon (1024px; electron-builder rasterises every Apple size slot from it). Composites the designer-delivered mark from site/design-mirror/brand/ VERBATIM onto the brand tile, so the icon follows the mark automatically when it changes. Committed output — run this after any brand-mark update, not on every package."
     dir: ui
     cmds:
-      - bun scripts/gen-icon.mjs
+      - bun scripts/gen-icon.ts
 
   ui:mac:bootstrap:
     desc: "One-shot setup so the packaged ColdStorage.app can upload: seed creds (Keychain + `coldstorage` profile) → write the app's config.json. Run once after `task tf:coldstorage:creds-export` (devcontainer). The .app analogue of daemon:mac:bootstrap."
