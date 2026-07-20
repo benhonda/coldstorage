@@ -20,8 +20,8 @@
  *    (superseded upstream). It is mirrored only for its helper functions.
  *
  * WHAT STILL OWNS SOMETHING ELSE:
- *  - **Framing** (what a page argues) → `strategy/landing-framing.md`.
- *  - **Voice** (how it sounds) → `strategy/BRAND-VOICE.md` + the `ben-prose` skill.
+ *  - **Framing** (what a page argues) → `strategy/CANON.md` §1/§4.
+ *  - **Voice** (how it sounds) → `strategy/CANON.md` §5/§6 + the `ben-prose` skill.
  *  - **Prices** → `account-backend/src/plan-sizes.ts` (generator: `$0.018/GB/yr + $0.99`) and
  *    `account-backend/src/retrieval-pricing.ts` (`quoteCents()`). The numbers in `PRICING`
  *    below mirror those. `task copy:check:site` re-derives them from the code every run, so a
@@ -87,7 +87,7 @@ export type Hero = {
 };
 
 export const HERO: Hero = {
-  // Ben, 2026-07-20. The ICP angle from strategy/landing-framing.md — "the stuff they'd hate to
+  // Ben, 2026-07-20. The ICP angle from strategy/CANON.md §2 — "the stuff they'd hate to
   // lose but open maybe once a year". A rotating noun was tried and cut the same day: one word,
   // accented.
   headline: {
@@ -374,6 +374,118 @@ export type Faq = { eyebrow: string; title: string; items: FaqItem[] };
  *  - Is there a Windows app?
  *  - Where are my files actually stored?   ← answer WITHOUT naming the provider (see header)
  */
+
+/* ────────────────────────────  Compare (/compare)  ──────────────────────── */
+
+/**
+ * A row of the comparison table. `ours` and `theirs` are prose, not just numbers — the
+ * interesting differences here (when you get files back, who holds the key, what leaving
+ * costs) don't reduce to a figure, and a table of ticks and crosses would flatten exactly the
+ * nuance that makes this page worth citing.
+ */
+export type ComparisonRow = { label: string; ours: string; theirs: string };
+
+export type ComparisonPage = PageHeadContent & {
+  /** Prose above the table — what each tier is for. */
+  blocks: ProseBlock[];
+  table: { ourHead: string; theirHead: string; rows: ComparisonRow[] };
+  /** Rendered under the table. Names the source and the date, because both matter. */
+  sourceNote: string;
+  /**
+   * Prose below the table. Split from `blocks` because order carries the argument here: the
+   * "which one you want" honesty only lands once the reader has seen the numbers it's
+   * qualifying. Above the table it reads as hedging; below it reads as fair.
+   */
+  blocksAfterTable: ProseBlock[];
+  cta: { label: string; note: string };
+};
+
+/*
+ * `/compare` — the "is this cheaper than what I already pay for" page.
+ *
+ * Comparison pages are the single most-cited content format in AI answers, and this is the
+ * question a person actually types. It exists to be the page that answers it properly.
+ *
+ * ── Rules specific to this page, beyond the file-header ones ──────────────────────────────
+ *
+ * 1. **One named competitor, one verified number.** iCloud+ is priced from Apple's own page
+ *    (apple.com/icloud, checked 2026-07-20): 2 TB at $9.99/mo = $119.88/yr. Google One and
+ *    Dropbox are referred to generically and WITHOUT figures — their US pricing could not be
+ *    confirmed from a primary source (Dropbox's page geo-served CA$; Google One had an
+ *    unresolved promo-vs-renewal split). A wrong competitor price on a public comparison page
+ *    is a claim someone can challenge, and it would undercut the one thing this brand sells.
+ *    **Do not add a figure here from a blog post or from memory — only from the vendor's own
+ *    pricing page, and update `COMPARISON_VERIFIED_ON` when you do.**
+ *
+ * 2. **Be fair, and say plainly when they're the better choice.** The "which one you want"
+ *    block tells people with actively-used files to stay where they are. That is not a
+ *    concession — a comparison that never concedes anything reads as an ad and gets treated
+ *    as one. It's also just true.
+ *
+ * 3. **The table includes what we're worse at.** Instant access and free egress are real
+ *    advantages of a live drive, and they're in the table as such. Omitting them would be the
+ *    kind of quiet over-claim the transparency pillar exists to prevent.
+ *
+ * 4. **Never anti-cloud.** We ARE cloud storage; the axis is live-and-openable vs. resting.
+ *    `copy-check.ts` enforces this and will fail the build on "cheaper than the cloud" phrasing.
+ */
+
+/** When the competitor pricing below was last checked against the vendor's own page. */
+export const COMPARISON_VERIFIED_ON = "2026-07-20";
+
+export const COMPARE_PAGE: ComparisonPage = {
+  eyebrow: "Compare",
+  title: "ColdStorage and instant-access storage",
+  intro:
+    "Cloud storage comes in tiers. The familiar ones — iCloud, Google Drive, Dropbox — keep every file live, openable the second you want it. ColdStorage keeps files resting instead, and brings them back when you ask. Same category, different tier. The price follows from which one your files actually need.",
+  blocks: [
+    {
+      heading: "What keeping files live buys you",
+      body: [
+        "When a file is live, it sits on hardware running around the clock so it's there the instant you tap it. That's genuinely worth having. If you're opening documents on your phone, sharing folders with people, or working out of the same folder every day, that's the tool for the job.",
+        "The thing to know is that you pay that rate for every file on the plan — the ones you open daily and the ones you haven't touched since 2019, at exactly the same price.",
+      ],
+    },
+    {
+      heading: "What ColdStorage does instead",
+      body: [
+        "ColdStorage is built for the second pile. Files rest on low-power storage that isn't kept spinning and waiting, which costs far less to run, and that's where the lower price comes from. Ask for something back and it's brought up and made ready, usually in about two days.",
+        "Everything is encrypted on your Mac before it leaves your computer, and the key stays on your device — what we're holding is a pile of files we can't open. Browsing what you've stored is instant either way; only getting files back involves the wait.",
+      ],
+    },
+  ],
+  table: {
+    ourHead: "ColdStorage",
+    theirHead: "iCloud+ (2 TB)",
+    rows: [
+      { label: "2 TB, per year", ours: "$36.99", theirs: "$119.88 ($9.99/mo)" },
+      { label: "Opening a file", ours: "Ready in about 48 hours", theirs: "Instantly" },
+      { label: "Seeing what's stored", ours: "Instant", theirs: "Instant" },
+      {
+        label: "Who holds the key",
+        ours: "You. Encrypted on your Mac; we can't open your files",
+        theirs: "Depends on the provider and your settings",
+      },
+      {
+        label: "Pulling a lot back out",
+        ours: "Billed at what it costs us, quoted first. 1 GB a month free",
+        theirs: "Included",
+      },
+      { label: "Free to start", ours: "25 GB, no card", theirs: "5 GB" },
+    ],
+  },
+  sourceNote: `iCloud+ pricing from Apple's own page, checked ${COMPARISON_VERIFIED_ON}. Google Drive and Dropbox aren't listed with figures here because we'd rather quote nothing than quote a price we haven't confirmed ourselves.`,
+  blocksAfterTable: [
+    {
+      heading: "Which one you actually want",
+      body: [
+        "If you open these files regularly, or you need them on your phone at a moment's notice, an instant-access plan is the right tool and we'd rather you kept it. Paying for live access to files you genuinely use live is not overpaying — it's buying the thing you need.",
+        "ColdStorage is for the other pile: the photos you'd hate to lose, the folders you've carried between four laptops, the things you want kept but won't open this year. Plenty of people end up with both — the live drive for what's in flight, ColdStorage for what's finished.",
+      ],
+    },
+  ],
+  cta: { label: "Download for Mac", note: "Start with 25 GB free." },
+};
 
 export const FAQ: Faq = {
   eyebrow: "Questions",

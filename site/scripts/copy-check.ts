@@ -32,6 +32,9 @@ import {
   REPO_LICENSE,
 } from "../app/lib/marketing/content";
 import type { ProsePageContent } from "../app/lib/marketing/content";
+import { COMPARISON_VERIFIED_ON } from "../app/lib/marketing/content";
+import { INDEXABLE_ROUTES, NON_INDEXABLE_ROUTES } from "../app/lib/marketing/site-routes";
+import { readdirSync } from "node:fs";
 // Namespace import as well as the named ones: rule 4a scans every exported string, so it must
 // see exports nobody thought to enumerate.
 import * as CONTENT from "../app/lib/marketing/content";
@@ -250,7 +253,7 @@ for (const [where, text] of allCopy) {
   if (hit) {
     fail(
       "never-position-against-the-cloud",
-      `${where} says "${hit[0]}" — we ARE cloud storage. Contrast instant-access vs. rarely-opened instead (see strategy/landing-framing.md)`,
+      `${where} says "${hit[0]}" — we ARE cloud storage. Contrast instant-access vs. rarely-opened instead (see strategy/CANON.md §4)`,
     );
   }
 }
@@ -345,8 +348,58 @@ for (const row of PRICING.retrievalRows) {
   }
 }
 
+/* ── 7 · The sitemap knows about every page ─────────────────────────────────
+   `INDEXABLE_ROUTES` is what `/sitemap.xml` is built from, so a page missing from it is a page
+   crawlers are never told about. That failure is invisible — the page works, it just never gets
+   found — which is exactly the kind of thing a guard is for. Anything deliberately left out has
+   to say so in `NON_INDEXABLE_ROUTES`, so "omitted on purpose" and "forgotten" look different. */
+const routeFiles = readdirSync(new URL("../app/routes/", import.meta.url));
+const listedPaths = new Set(INDEXABLE_ROUTES.map((r) => r.path));
+
+for (const file of routeFiles) {
+  if (!file.endsWith(".tsx")) continue;
+  // `($lang).how-it-works.tsx` → `/how-it-works`; `($lang)._index.tsx` → `/`.
+  // Resource routes escape the dot (`sitemap[.]xml.tsx`) and aren't pages.
+  if (file.includes("[.]")) continue;
+  const path = file
+    .replace(/^\(\$lang\)\./, "")
+    .replace(/\.tsx$/, "")
+    .replace(/^_index$/, "/")
+    .replace(/^(?!\/)/, "/");
+
+  if (!listedPaths.has(path) && !(path in NON_INDEXABLE_ROUTES)) {
+    fail(
+      "sitemap-covers-every-page",
+      `${file} renders ${path}, which is in neither INDEXABLE_ROUTES nor NON_INDEXABLE_ROUTES ` +
+        `(site-routes.ts) — so it will never appear in /sitemap.xml. Add it to one of them.`
+    );
+  }
+}
+
+/* ── 8 · Competitor pricing hasn't gone stale ───────────────────────────────
+   `/compare` states a competitor's price, which is the one number on this site that no SSOT of
+   ours can generate and no test can verify — it changes when they decide it does. (It already
+   moved once: Dropbox and Google One both drifted out of the range our own strategy doc had
+   recorded.) A wrong price on a comparison page is a claim someone can challenge, so the only
+   real defence is forcing a human to re-check it on a clock. Six months is the window. */
+const COMPETITOR_PRICE_MAX_AGE_DAYS = 183;
+const verifiedOn = new Date(`${COMPARISON_VERIFIED_ON}T00:00:00Z`);
+if (Number.isNaN(verifiedOn.getTime())) {
+  fail("competitor-pricing-freshness", `COMPARISON_VERIFIED_ON is not a date: ${COMPARISON_VERIFIED_ON}`);
+} else {
+  const ageDays = Math.floor((Date.now() - verifiedOn.getTime()) / 86_400_000);
+  if (ageDays > COMPETITOR_PRICE_MAX_AGE_DAYS) {
+    fail(
+      "competitor-pricing-freshness",
+      `/compare quotes competitor pricing last checked ${COMPARISON_VERIFIED_ON} (${ageDays} days ago). ` +
+        `Re-check it against the vendor's OWN pricing page — never a blog or memory — then update ` +
+        `COMPARE_PAGE.table and COMPARISON_VERIFIED_ON in content.ts.`
+    );
+  }
+}
+
 /* ── report ─────────────────────────────────────────────────────────────────── */
-const CHECKS = 14;
+const CHECKS = 16;
 if (failures.length === 0) {
   console.log(`✓ copy check passed — ${CHECKS} rules, ${PRICING.tiers.length} tiers verified`);
   process.exit(0);

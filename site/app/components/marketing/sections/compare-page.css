@@ -1,0 +1,70 @@
+/*
+ * Section · ComparePage — the comparison table on `/compare`.
+ *
+ * Built from the same tokens and `csf-*` layout classes every other ported section uses, so it
+ * reads as part of the system rather than a one-off. No upstream design counterpart yet;
+ * flagged for a design pass alongside `prose-page` (see SPEC "Open decisions").
+ */
+
+.cs-compare {
+  width: 100%;
+  /* The table is the citable artifact on this page, so it gets to be wide — but never wider
+     than the prose it sits between, or the page loses its centre line. */
+  max-width: 62rem;
+  margin-inline: auto;
+}
+
+/* Horizontal scroll lives on a wrapper, not the table, so the table keeps its own borders and
+   the page body never scrolls sideways on a phone. */
+.cs-compare__scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cs-compare__table {
+  width: 100%;
+  border-collapse: collapse;
+  /* Below this the three columns start wrapping every cell to two words; scroll instead. */
+  min-width: 34rem;
+  font: 400 15px/1.5 var(--font-ui);
+}
+
+.cs-compare__table th,
+.cs-compare__table td {
+  text-align: left;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top;
+}
+
+.cs-compare__table thead th {
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom-width: 2px;
+}
+
+/* The row label column — quieter than the two answer columns it introduces. */
+.cs-compare__table tbody th {
+  font-weight: 500;
+  color: var(--text-secondary);
+  width: 30%;
+}
+
+/* Our column carries a tint so the eye can find it without us bolding a claim. */
+.cs-compare__ours {
+  background: var(--accent-subtle);
+  color: var(--text-primary);
+}
+
+.cs-compare__note {
+  margin-top: 16px;
+  font: 400 13px/1.5 var(--font-ui);
+  color: var(--text-secondary);
+}
+
+@media (max-width: 40rem) {
+  .cs-compare__table th,
+  .cs-compare__table td {
+    padding: 12px;
+  }
+}

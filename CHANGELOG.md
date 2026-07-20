@@ -2,6 +2,14 @@
 
 ## 2026-07-20
 
+- fix(site): `/fr/*` no longer serves duplicate content — every page answered on two URLs with identical English HTML and no canonical. `pageMeta()` now canonicals French URLs to the English original until `TRANSLATIONS_LIVE` flips, at which point each self-canonicals and gains `hreflang` pairs.
+- feat(site): `/compare` — an honest comparison against instant-access storage, including where it's the better tool. One competitor figure (iCloud+, from Apple's own page), and `copy:check:site` fails the build if it goes 6 months unverified.
+- feat(site): machine-readable layer — generated `/robots.txt` (AI training vs. **search** vs. user-initiated crawlers, all allowed, search agents asserted by name) and `/sitemap.xml`, both built from a new `INDEXABLE_ROUTES` SSOT.
+- feat(site): `Organization` + `SoftwareApplication`/`Offer` JSON-LD on `/`, derived from `PRICING` so offers can't drift from `plan-sizes.ts`. No `aggregateRating`/`review` — there are no customers, and `seo:check:site` fails on either.
+- feat(site): `task seo:check:site` — renders robots/sitemap/JSON-LD through the production build and asserts they're well-formed. All three fail silently in a browser, so nothing else caught them.
+- refactor(site): every route's `<head>` comes from one `pageMeta()` builder — canonical, Open Graph and JSON-LD included. The three legal pages had no meta description at all.
+- refactor(site): `ssr-check` derives its route list from `INDEXABLE_ROUTES` instead of keeping a third copy — a new page could previously ship, be sitemapped, and never be rendered by any check.
+- docs: `strategy/` consolidated from six time-layered docs into one `strategy/CANON.md`; positioning fork resolved (emotional lead backed by affordability, "elsewhere" demoted to objection-handling). All inbound refs across code and docs repointed.
 - fix(backend): `FREE_TIER_BYTES` back to 25 GB — the 2026-07-13 temporary 1 GB cap-test value shipped to staging; use `FREE_TIER_BYTES_OVERRIDE` instead, and the test now pins 25 GB.
 - feat(site): hero rewritten — "For the memories you can't afford to lose" over a price-carrying lead, with `copy:check:site` deriving the figure from `PLAN_SIZES` and banning anti-cloud positioning.
 - fix(site): nav CTA no longer collapses beside the wordmark under 720px — the auto margin moved onto the brand, which is always in the bar.
