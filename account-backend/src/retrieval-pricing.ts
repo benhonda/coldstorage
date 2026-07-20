@@ -1,6 +1,6 @@
 /**
  * Retrieval pricing SSOT (PROD.md free-tier plan phase A; spec in root `RETRIEVAL.md`, money model in
- * private `strategy/retrieval-economics.md`). Pure + dependency-free so it unit-tests without the SDK —
+ * private `strategy/CANON.md` §7). Pure + dependency-free so it unit-tests without the SDK —
  * the live Paddle calls live in `retrieval.server.ts`, exactly like `catalog.ts` / `catalog.server.ts`.
  *
  * THE RULE (settled 2026-07-12, Ben): **retrieval runs at 0% margin — charge the user everything,
@@ -48,7 +48,7 @@ const PADDLE_FIXED_USD = 0.5;
 /* ── The free rolling allowance — the one accepted subsidy ───────────────────────────────────────── */
 /** Rolling window the allowance refreshes over. A 30-day WINDOW (not an annual pool) is deliberate:
  *  same worst case, ~12× lower expected cost, because it bounds what any single restore event can take
- *  for free and lets unused months expire. See `strategy/retrieval-economics.md` "Why a monthly window". */
+ *  for free and lets unused months expire. See `strategy/CANON.md` §7 "Why a monthly window". */
 export const ALLOWANCE_WINDOW_DAYS = 30;
 /** Paid plans: 1 GB per window. Funded by storage margin — consistent with the rule. */
 export const ALLOWANCE_BYTES_SUBSCRIBED = 1_000_000_000;

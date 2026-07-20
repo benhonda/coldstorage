@@ -20,7 +20,7 @@ product catalog (price ids), how to reseed it, and what's wired where.
 
 `[reshaped 2026-07-12, superseding the 3×4/12-price matrix below]` **5 products (storage sizes),
 one annual recurring price each = 5 prices.** Tax category **`saas`**. No terms — annual only, no
-multi-year discount (SPEC.md §5). Pricing mirrors `account-backend/src/plan-sizes.ts` (the true
+multi-year discount (strategy/CANON.md §7). Pricing mirrors `account-backend/src/plan-sizes.ts` (the true
 SSOT) / `site/app/lib/marketing/content.ts` (marketing display — **upstream-owned, pull-managed**,
 not in scope for the reshape below; see "Site marketing copy" note). Quantity capped at 1; no
 trial (the 14-day money-back guarantee is a refund, not a Paddle trial).
@@ -146,7 +146,7 @@ The decided spec, kept for reference (what's built matches it):
   (`1 TB · $18.99/yr`). No usage-based nudge (decided: neutral pick). Default-select **1 TB**.
 - **Live price** below = annual total + per-month equivalent (`$18.99 · $1.58/mo`).
 - Button `Subscribe to <size>`. `[terms removed 2026-07-12]` the old "term segmented row" and
-  "longer terms lock today's rate" line are gone along with multi-year terms (SPEC.md §5). Keep
+  "longer terms lock today's rate" line are gone along with multi-year terms (strategy/CANON.md §7). Keep
   the existing "already-stored stays restorable" reassurance.
 
 **Backend** (`account-backend/src`):
@@ -169,5 +169,5 @@ still show the old 3-tier/4-term shape. That file is explicitly **verbatim-porte
 Claude-cloud design project** (its own docstring: "do not paraphrase or improve it here; edit it
 upstream and re-pull"; `site/SPEC.md`: "copy + the pricing matrix are already written and voiced
 upstream") — hand-editing it here would fight that pipeline and get reverted on the next pull. The
-5-tier annual-only ladder (SPEC.md §5) needs to go through the upstream design session before a
+5-tier annual-only ladder (strategy/CANON.md §7) needs to go through the upstream design session before a
 re-pull updates this file; not done as part of the 2026-07-12 reshape.

@@ -52,7 +52,7 @@ export async function getRetrievalProductId(): Promise<string> {
 }
 
 /** Human-readable line item. The user sees this on the Paddle receipt, so it says what they bought in
- *  plain words — not "retrieval_job_a1b2" (BRAND-VOICE: plain, factual, no jargon). */
+ *  plain words — not "retrieval_job_a1b2" (CANON §5: plain, factual, no jargon). */
 function describe(bytes: number): string {
   const gb = bytes / 1024 ** 3;
   const size = gb < 1 ? `${Math.max(1, Math.round(gb * 1024))} MB` : `${gb.toFixed(gb < 10 ? 1 : 0)} GB`;

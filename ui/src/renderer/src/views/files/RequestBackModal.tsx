@@ -12,7 +12,7 @@
  *
  * Most restores land free: they fit inside the monthly allowance, and the dialog just says so. Only when
  * there's genuinely something to pay does it show a price — and then it says the number plainly, with no
- * apology and no drama (BRAND-VOICE).
+ * apology and no drama (CANON §5).
  */
 import { useEffect, useState } from "react";
 import type { RetrievalQuote } from "../../../../shared/ipc.ts";

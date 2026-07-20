@@ -1,6 +1,6 @@
 /**
  * Seed the ColdStorage product catalog in Paddle — 5 products (storage sizes), one annual
- * recurring price each = 5 prices total. No terms — annual only (SPEC.md §5, decided 2026-07-12
+ * recurring price each = 5 prices total. No terms — annual only (strategy/CANON.md §7, decided 2026-07-12
  * / site/app/lib/marketing/content.ts is the pricing SSOT this mirrors).
  *
  * SAFE BY DEFAULT: with no `--apply` flag it PLANS only (reads the account, prints what it

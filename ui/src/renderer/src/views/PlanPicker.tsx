@@ -2,7 +2,7 @@
  * The size plan picker (PADDLE.md "Multi-plan picker" UX) — shared by the paywall's
  * SubscribeModal and the account card's ChangePlanModal so the two can never drift. Renders the
  * size cards (annual rate) and the live price line; selection state lives here, reported up
- * through `onSelect`. No term selector — every plan is annual (SPEC.md §5, decided 2026-07-12).
+ * through `onSelect`. No term selector — every plan is annual (strategy/CANON.md §7, decided 2026-07-12).
  */
 import { useEffect, useState } from "react";
 import type { CatalogPlan } from "../../../shared/ipc.ts";

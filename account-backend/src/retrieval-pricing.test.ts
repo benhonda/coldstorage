@@ -24,7 +24,7 @@ const awsCostUsd = (thawBytes: number, egressBytes: number) =>
   (thawBytes / GIB) * THAW_USD_PER_GIB + (egressBytes / GIB) * EGRESS_USD_PER_GIB;
 
 describe("quoteCents — the 0% margin rule", () => {
-  // THE load-bearing invariant (strategy/retrieval-economics.md): a quote recovers AWS's cost + both
+  // THE load-bearing invariant (strategy/CANON.md §7): a quote recovers AWS's cost + both
   // halves of Paddle's fee, and NOTHING more. Deliberately NOT a hardcoded-number test — it re-derives
   // the economics from list prices and asserts what we NET lands on our cost, within the 1¢ that
   // rounding up to a chargeable amount necessarily leaves.

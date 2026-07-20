@@ -86,7 +86,7 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
   *no-device-left* lockout case only. We have no such handshake, so we push a break-glass action onto an
   everyday event. **Fix = build device-to-device trust**; the recovery code then drops back to lockout-only,
   matching Apple/1Password. This is the *same primitive* as the trusted/recovery-contacts safety net
-  (roadmap in `strategy/SPEC.md`) — and Apple's ADP *requires* a second recovery method (recovery contact
+  (roadmap in `strategy/CANON.md`) — and Apple's ADP *requires* a second recovery method (recovery contact
   **or** recovery key) before ZK can even be enabled — so one build closes both gaps. Not yet scheduled;
   sits alongside the R2/portability piece in the ZK-hardening line (below).
 - New `KeyProvider` impl: **`UserMasterKeyProvider`** — **built** (Phase 3; Argon2id via swift-sodium,
@@ -306,7 +306,7 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
    **Staging lane STOOD UP end-to-end (2026-07-02, Ben-executed; the four ex-blockers are done):**
    Neon project created (staging DB; schema pushed via `task link`/`pull`/`backend:db:push` — the
    pull mechanics verified for real); Paddle **sandbox** account live with the product catalog
-   (3 tiers × 4 term prices at the NEW no-multi-year-discount pricing — see `strategy/SPEC.md` §5,
+   (3 tiers × 4 term prices at the NEW no-multi-year-discount pricing — see `strategy/CANON.md` §7,
    re-decided 2026-07-01: terms are exactly N× the yearly rate, multi-year = rate-lock, not discount),
    a zero-permission API key, and a webhook destination for the nine `subscription.*` events pointed
    at `https://api-staging.coldstorage.sh/webhooks/paddle`; staging's 3 Vercel secrets set for real
@@ -689,7 +689,7 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
   Implementation plan (**DRAFT 2026-07-12**, hardest-first; builds on the quota-enforcement work
   above, so that lands first):
   - **A. Retrieval pass-through — BUILT ✅ (2026-07-13), all four layers green; NOT yet exercised
-    end-to-end.** Spec: root `RETRIEVAL.md`; margin model: private `strategy/retrieval-economics.md`
+    end-to-end.** Spec: root `RETRIEVAL.md`; margin model: private `strategy/CANON.md` §7
     (verdict: included egress beyond a tiny allowance structurally cannot fit the rate-locked
     margins). **The big find: retrieval could not be soft-gated.** The Cognito user role held
     `s3:RestoreObject`, so any tampered client could thaw + download a whole vault while WE paid the
@@ -712,7 +712,7 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
     deferred (stored-value ledger + balance liability not warranted by bimodal cold-archive
     retrieval; drops in on the same meter later if usage asks). **Allowance size DECIDED
     (2026-07-13, Ben): 1 GB per 30-day window paid, 200 MB free** — as already shipped in
-    `retrieval-pricing.ts`; sizing math in `strategy/retrieval-economics.md`. [assumption]
+    `retrieval-pricing.ts`; sizing math in `strategy/CANON.md` §7. [assumption]
     bulk retrieval tier only at first (48 h, cheapest); standard (12 h) as a priced option later.
   - **B. Free-tier entitlement flip — BUILT ✅ (2026-07-13). NOT yet launched: launch still gates on A
     being exercised end-to-end, since until one real restore has been billed, a free account's

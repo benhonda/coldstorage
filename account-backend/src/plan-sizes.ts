@@ -4,7 +4,7 @@
  * `scripts/seed-paddle-catalog.ts` (writes the Paddle catalog) and `catalog.ts` (maps it back),
  * so the size labels and their byte counts can never drift apart.
  *
- * Prices are generator-derived (SPEC.md §5): `perYearCents = round(1.8 * bytes/1e9 + 99)`, i.e.
+ * Prices are generator-derived (strategy/CANON.md §7): `perYearCents = round(1.8 * bytes/1e9 + 99)`, i.e.
  * $0.018/GB/yr + a $0.99 fixed per-account component. Never hand-type a new row's price — derive
  * it from that formula so the ladder can't drift off its own pricing logic.
  */

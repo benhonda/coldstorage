@@ -10,7 +10,7 @@
 > sandbox. Until that runs, treat the flow below as designed-and-typechecked, not proven.
 
 The engineering half of PROD.md's "retrieval pass-through steel thread" (phase A of the
-free-tier plan). The pricing/margin model behind it is private (`strategy/retrieval-economics.md`);
+free-tier plan). The pricing/margin model behind it is private (`strategy/CANON.md` §7);
 this doc never needs those numbers — the backend quotes a price, everything else treats it as
 opaque cents.
 
@@ -20,7 +20,7 @@ opaque cents.
   nothing**: the quote recovers AWS's retrieval + egress AND both halves of Paddle's fee (5% +
   $0.50). We absorb costs only where margin exists to absorb them (subscriptions); retrieval has
   no margin, so it recovers exactly. Formula + worked numbers in
-  `strategy/retrieval-economics.md`; effectively ~$0.0974/GB + ~$0.53 per retrieval. Compute the
+  `strategy/CANON.md` §7; effectively ~$0.0974/GB + ~$0.53 per retrieval. Compute the
   quote exactly — do NOT round the per-GB rate up to a clean number, that books margin on
   retrieval. The backend owns this math; the daemon and app treat a quote as opaque cents.
 - A **small free rolling allowance** makes tiny restores — a photo, an album — cost nothing and need
