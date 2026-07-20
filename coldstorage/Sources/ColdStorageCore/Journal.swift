@@ -74,6 +74,13 @@ public final class Journal: @unchecked Sendable {
             CREATE TABLE IF NOT EXISTS parts(
               blobId TEXT NOT NULL, partNumber INTEGER NOT NULL, eTag TEXT NOT NULL,
               sha256 TEXT NOT NULL, status TEXT NOT NULL, PRIMARY KEY(blobId, partNumber));
+            -- Blob membership, recorded at `ensureBlob` (blob creation) rather than inferred later from
+            -- `files.blobId`. `files.blobId` is only written once a file is ARCHIVED, so it cannot describe a
+            -- blob that is mid-flight or verified-but-unlinked — which is exactly the state a repair pass has
+            -- to reason about. Durable membership is what lets the planner stop re-deriving it from a full
+            -- re-scan (see `UploadEngine.run`); without it, planning is the only place a blob's members exist.
+            CREATE TABLE IF NOT EXISTS blob_members(
+              blobId TEXT NOT NULL, fileId TEXT NOT NULL, PRIMARY KEY(blobId, fileId));
             CREATE TABLE IF NOT EXISTS sources(
               id TEXT PRIMARY KEY, kind TEXT NOT NULL, path TEXT, addedAt INTEGER NOT NULL DEFAULT 0,
               mountPath TEXT NOT NULL DEFAULT '', paused INTEGER NOT NULL DEFAULT 0);
@@ -314,12 +321,52 @@ public final class Journal: @unchecked Sendable {
             """, [.text(FileStatus.deleted.rawValue), .text(path), .text("\(path)/")])
     }
 
+    /// Create the blob row **and record its membership**, in one transaction. Membership is written here —
+    /// before a byte ships — because that is the only moment it is known for certain; `files.blobId` lags it
+    /// by the whole upload, and a blob that dies in between would otherwise have no recoverable member list.
     public func ensureBlob(_ plan: BlobPlan, noncePrefix: Data, wrappedDEK: Data) throws {
         lock.lock(); defer { lock.unlock() }
+        try exec("BEGIN;")
         try run("""
             INSERT INTO blobs(id, s3Key, status, noncePrefix, wrappedDEK) VALUES(?1,?2,?3,?4,?5)
             ON CONFLICT(id) DO NOTHING
             """, [.text(plan.id), .text(plan.s3Key), .text(BlobStatus.open.rawValue), .blob(noncePrefix), .blob(wrappedDEK)])
+        for item in plan.items {
+            try run("INSERT INTO blob_members(blobId, fileId) VALUES(?1,?2) ON CONFLICT DO NOTHING",
+                    [.text(plan.id), .text(item.id)])
+        }
+        try exec("COMMIT;")
+    }
+
+    /// The file ids a blob was planned to hold — journal truth, independent of how far the upload got.
+    public func blobMembers(_ blobId: String) throws -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return try run("SELECT fileId FROM blob_members WHERE blobId=?1", [.text(blobId)])
+            .compactMap { $0["fileId"] as? String }
+    }
+
+    /// Verified blobs holding at least one file that never got linked into the tree — the ORPHAN set. The
+    /// bytes are in S3 and safe; the tree just doesn't show them. `UploadEngine.run` repairs these from
+    /// journal state before it plans anything, so a repair never depends on the planner happening to
+    /// re-derive the same blob id.
+    public func orphanedBlobIds() throws -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return try run("""
+            SELECT DISTINCT m.blobId FROM blob_members m
+              JOIN blobs b ON b.id = m.blobId
+              LEFT JOIN files f ON f.id = m.fileId
+             WHERE b.status = ?1 AND (f.status IS NULL OR f.status != ?2)
+            """, [.text(BlobStatus.verified.rawValue), .text(FileStatus.archived.rawValue)])
+            .compactMap { $0["blobId"] as? String }
+    }
+
+    /// Every file already archived — what the planner must NOT re-plan. Their bytes are in S3 under a blob id
+    /// derived from the membership they had at the time, so re-planning them with newly-arrived neighbours
+    /// mints a different id, misses the `isBlobVerified` check, and re-uploads bytes that are already stored.
+    public func archivedFileIds() throws -> Set<String> {
+        lock.lock(); defer { lock.unlock() }
+        return Set(try run("SELECT id FROM files WHERE status=?1", [.text(FileStatus.archived.rawValue)])
+            .compactMap { $0["id"] as? String })
     }
 
     public func uploadId(of blobId: String) throws -> String? {
@@ -398,6 +445,30 @@ public final class Journal: @unchecked Sendable {
         try run("UPDATE blobs SET status=?1 WHERE id=?2", [.text(BlobStatus.verified.rawValue), .text(blobId)])
     }
 
+    /// Mark a blob verified AND link every one of its files into the tree, **atomically**.
+    ///
+    /// These used to be separate writes — `markBlobVerified`, then a `markFileArchived` loop — and a crash in
+    /// between produced an orphan: bytes verified in S3, tree showing nothing. One transaction closes that
+    /// window, so a blob is either fully linked or not verified at all, and the file set of a verified blob is
+    /// never partial. That totality is what lets the planner safely exclude archived files: membership splits
+    /// cleanly into "all archived" or "none", never halfway through a blob.
+    ///
+    /// Idempotent, and safe on the repair path — re-asserting `verified` on an already-verified blob is a
+    /// no-op, so this is also how a recovered orphan gets re-linked.
+    public func markBlobArchived(_ blobId: String, spans: [FileSpan]) throws {
+        lock.lock(); defer { lock.unlock() }
+        try exec("BEGIN;")
+        try run("UPDATE blobs SET status=?1 WHERE id=?2", [.text(BlobStatus.verified.rawValue), .text(blobId)])
+        for s in spans {
+            try run("""
+                UPDATE files SET status=?1, blobId=?2, "offset"=?3, length=?4, firstFrame=?5, plaintextSha256=?6,
+                    size=?7, error=NULL WHERE id=?8
+                """, [.text(FileStatus.archived.rawValue), .text(blobId), .int(s.offset), .int(s.length),
+                      .int(s.firstFrame), .text(s.plaintextSha256), .int(s.size), .text(s.id)])
+        }
+        try exec("COMMIT;")
+    }
+
     /// `size` is the EXACT plaintext byte count measured while staging — the SSOT for the file's real size.
     /// It overwrites the discovery-time estimate, which is 0 for a Photos asset (unknown until streamed) and
     /// only stat-derived for a local file. `length` is the *ciphertext* span and is unrelated (it's larger:
@@ -417,8 +488,13 @@ public final class Journal: @unchecked Sendable {
         guard !ids.isEmpty else { return }
         lock.lock(); defer { lock.unlock() }
         for id in ids {
-            try run("UPDATE files SET status=?1, error=?2 WHERE id=?3",
-                    [.text(FileStatus.failed.rawValue), .text(error), .text(id)])
+            // **Never flip an ARCHIVED file to failed.** A file whose bytes are verified in S3 is archived,
+            // full stop — a *later* blob's failure says nothing about it. Without this guard, any blob that
+            // re-plans an already-stored file (and then fails, or is refused over quota) marks that file ⚠ in
+            // the tree, telling the user a backup they already have didn't happen. The bytes are fine either
+            // way; the lie is the damage, and it is the one claim this product cannot afford to get wrong.
+            try run("UPDATE files SET status=?1, error=?2 WHERE id=?3 AND status!=?4",
+                    [.text(FileStatus.failed.rawValue), .text(error), .text(id), .text(FileStatus.archived.rawValue)])
         }
     }
 

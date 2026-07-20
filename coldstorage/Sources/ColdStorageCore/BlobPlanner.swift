@@ -44,10 +44,15 @@ public struct BlobPlanner: Sendable {
     /// fragmented plan turns a deposit into a latency queue: 1000 files became thousands of round trips and
     /// took minutes no matter how fast the link was (observed 2026-07-14).
     ///
-    /// **Blob ids are derived from their members, so changing the grouping changes the ids.** Files already
-    /// archived under the old, fragmented ids will be re-uploaded once under their new batched ones, and the
-    /// old objects are orphaned in S3 (harmless — they're unreferenced, and the abort/lifecycle rules apply).
-    /// A one-time cost, paid before any customer exists.
+    /// **Blob ids are derived from their members, so changing the grouping changes the ids** — which is why
+    /// `UploadEngine.run` hands this function only the files that are NOT yet archived. Re-grouping is correct
+    /// behaviour for a planner; it is only destructive when applied to bytes already in S3, and the engine is
+    /// what prevents that. Do not "fix" it here by making ids order-independent: the id IS the resume key.
+    ///
+    /// Orphaned objects are **not** harmless, and the abort/lifecycle rules do not cover them — those sweep
+    /// incomplete multipart uploads, while an orphan is a completed object. Nothing in this codebase deletes
+    /// from S3, orphans count against the user's quota (`used` is seeded from a live S3 listing), and Deep
+    /// Archive bills a 180-day minimum regardless. There is still no reaper; see `IncrementalDepositTests`.
     ///
     /// `prefix` namespaces every produced blob's S3 key (a signed-in user's `blobs/<identity-id>`). It does
     /// NOT affect the content-derived blob `id` — only where the object lands — so the same files

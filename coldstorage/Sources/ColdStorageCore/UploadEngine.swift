@@ -133,12 +133,55 @@ public actor UploadEngine {
         // `prefix` lands every blob under the caller's own S3 namespace (`blobs/<cognito-identity-id>`) —
         // the per-user isolation the IAM role enforces. The journal records the resulting full `s3Key`,
         // which restore reads back (SSOT) — see RestoreEngine.
-        let plan = BlobPlanner().plan(items, prefix: prefix)
+        // ── REPAIR BEFORE PLANNING ─────────────────────────────────────────────────────────────────────
+        // Orphans (verified blob, unlinked files) are repaired from JOURNAL membership, not by hoping the
+        // planner re-derives the same blob id. It used to work that way, and that coupling is precisely what
+        // made the planner unable to skip archived files: excluding them would change a blob's membership,
+        // change its content-derived id, and strand the orphan forever.
+        //
+        // A blob is only repairable if EVERY member is still in the scan, in the order it was sealed —
+        // spans are positional, so a missing or reordered member yields offsets that don't match the
+        // ciphertext in S3. `newestFirst` is the order `plan` bucketed them in, so re-applying it reproduces
+        // the original layout exactly. A blob that fails this test is left alone and named in the log rather
+        // than "repaired" into a tree that would restore garbage.
+        let scanned = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for blobId in try journal.orphanedBlobIds() {
+            let members = try journal.blobMembers(blobId)
+            let present = members.compactMap { scanned[$0] }
+            guard present.count == members.count else {
+                log("UploadEngine: orphan blob \(blobId) NOT repairable — \(members.count - present.count) of \(members.count) member(s) missing from the scan; leaving it linked as-is")
+                continue
+            }
+            let repair = BlobPlan(id: blobId, items: present.sorted(by: BlobPlanner.newestFirst), prefix: prefix)
+            log("UploadEngine: orphan blob \(blobId) — re-linking \(present.count) file(s) (no re-upload)")
+            do { _ = try await archive(repair, onFileArchived: onFileArchived) }
+            catch { log("UploadEngine: orphan blob \(blobId) re-link FAILED: \(error)") }
+        }
+
+        // ── PLAN ONLY WHAT ISN'T ALREADY STORED ────────────────────────────────────────────────────────
+        // Read the archived set AFTER the repair pass, so anything just re-linked is correctly excluded.
+        //
+        // An archived file's bytes are in S3 under a blob id derived from the membership it had when it was
+        // sealed. Re-planning it alongside newly-arrived neighbours mints a DIFFERENT id, misses the
+        // `isBlobVerified` short-circuit in `archive`, and re-uploads the whole group — orphaning the old
+        // objects, which nothing ever deletes and which still consume the user's quota. One new photo in a
+        // folder used to re-upload the entire folder for exactly this reason.
+        let archived = try journal.archivedFileIds()
+        let pending = items.filter { !archived.contains($0.id) }
+        let plan = BlobPlanner().plan(pending, prefix: prefix)
         // Diagnostic: the batching shape (how N files map to M blobs) — a single failing blob sinks every file
         // batched into it, so the item-count per blob is exactly what explains an all-or-nothing deposit. Only
         // when there's work to plan, so an idle periodic re-scan stays silent instead of logging every interval.
-        if !items.isEmpty {
-            log("UploadEngine: \(items.count) item(s) → \(plan.count) blob(s) [\(plan.map { "\($0.items.count)" }.joined(separator: ","))]")
+        if !pending.isEmpty {
+            // Packing density, not just shape. Now that archived files are never re-planned, a deposit can only
+            // ever ADD blobs — so a library fed a few files at a time accumulates small objects instead of
+            // rewriting big ones. That's the trade this change makes deliberately, and it's cheap (~40 KB of S3
+            // overhead per object, plus a PUT), but it is unbounded over years. Logging blobs-per-GB is what
+            // makes a library drifting toward pathological fragmentation visible here, long before it shows up
+            // as a slow restore or a surprising bill.
+            let gb = Double(pending.reduce(0) { $0 + $1.size }) / 1_073_741_824
+            let density = gb > 0.001 ? String(format: " — %.1f blob(s)/GB", Double(plan.count) / gb) : ""
+            log("UploadEngine: \(pending.count) new item(s) of \(items.count) scanned → \(plan.count) blob(s)\(density) [\(plan.map { "\($0.items.count)" }.joined(separator: ","))]")
         }
         // Run-wide progress. `bytesTotal` is what the plan will actually ship: each item is sealed into its own
         // frames (the carry resets per item), so the blob's ciphertext is the sum of its items' encrypted
@@ -329,13 +372,17 @@ public actor UploadEngine {
                 // short-circuits on a zero-length span rather than asking S3 for a backwards byte range.
                 log("UploadEngine: blob \(blob.id) — no bytes (every item is empty); nothing to upload")
             }
-            try journal.markBlobVerified(blob.id)
         }
 
-        // Record file→blob mapping (archived = verified). ALWAYS runs — this is the step that links a file
-        // into the tree, so running it on the orphan-repair path too is exactly what un-strands a dead deposit.
+        // Verify + link in ONE transaction. ALWAYS runs — this is the step that links a file into the tree, so
+        // running it on the orphan-repair path too is exactly what un-strands a dead deposit. Atomicity is what
+        // stops this pass from *creating* the next orphan: there is no longer an instant where the blob reads
+        // verified while its files read unlinked.
+        try journal.markBlobArchived(blob.id, spans: spans.map {
+            FileSpan(id: $0.id, offset: $0.off, length: $0.len,
+                     firstFrame: Int($0.firstFrame), plaintextSha256: $0.sha, size: $0.size)
+        })
         for s in spans {
-            try journal.markFileArchived(s.id, blobId: blob.id, offset: s.off, length: s.len, firstFrame: Int(s.firstFrame), plaintextSha256: s.sha, size: s.size)
             await onFileArchived?(s.id, blob.id)
             await reporter?.fileArchived()
         }

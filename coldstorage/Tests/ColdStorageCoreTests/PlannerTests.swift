@@ -31,4 +31,15 @@ private func item(_ id: String, size: Int, created: TimeInterval, favorite: Bool
         let b = item("b", size: 1 << 20, created: 2)
         #expect(BlobPlanner().plan([a, b], prefix: .dev).map(\.id) == BlobPlanner().plan([a, b], prefix: .dev).map(\.id))
     }
+
+    /// `plan` is a PURE function of the items handed to it, and re-grouping when the item set changes is
+    /// correct behaviour for it — a bucket really is different once a new neighbour arrives. Keeping
+    /// already-archived files OUT of that item set is the engine's job, not the planner's; the guarantee
+    /// that a deposit doesn't re-upload the library therefore lives in `IncrementalDepositTests`.
+    @Test func aChangedItemSetLegitimatelyRegroups() {
+        let library = (0..<3).map { item("f\($0)", size: 1 << 20, created: TimeInterval($0), dir: "Pictures") }
+        let before = Set(BlobPlanner().plan(library, prefix: .dev).map(\.id))
+        let after = Set(BlobPlanner().plan(library + [item("new", size: 1 << 20, created: 1000, dir: "Pictures")], prefix: .dev).map(\.id))
+        #expect(before != after)   // documents WHY the engine must filter, rather than asserting the planner is wrong
+    }
 }

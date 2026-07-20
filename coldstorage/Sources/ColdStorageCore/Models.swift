@@ -97,6 +97,22 @@ public struct SourceRow: Sendable {
 /// `archived`, `failed`, `deleted` and `folder` (plus `discovered` as the decoder's fallback). They're the
 /// hooks for a future per-file progress state. A `staging` case sat here too until the upload engine stopped
 /// staging (2026-07-14) — it named a step that no longer exists, so it's gone.
+/// Where one logical file's bytes live inside its blob's ciphertext — measured while sealing, written when
+/// the blob is archived. Carried as a value type so the whole blob's links can be committed in one
+/// transaction (see `Journal.markBlobArchived`) rather than file-by-file.
+public struct FileSpan: Sendable {
+    public let id: String
+    public let offset: Int
+    public let length: Int
+    public let firstFrame: Int
+    public let plaintextSha256: String
+    public let size: Int
+    public init(id: String, offset: Int, length: Int, firstFrame: Int, plaintextSha256: String, size: Int) {
+        self.id = id; self.offset = offset; self.length = length
+        self.firstFrame = firstFrame; self.plaintextSha256 = plaintextSha256; self.size = size
+    }
+}
+
 public enum FileStatus: String, Codable, Sendable { case discovered, planned, uploading, verifying, archived, failed, deleted, folder }
 public enum BlobStatus: String, Codable, Sendable { case open, uploading, completed, verified, aborted }
 public enum PartStatus: String, Codable, Sendable { case pending, uploaded, verified }
