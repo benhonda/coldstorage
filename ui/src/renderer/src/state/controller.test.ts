@@ -41,6 +41,9 @@ const makeApi = (initial: ConnectionState) => {
   let sources: Source[] = [{ id: "s1", kind: "folder", path: "/a", mountPath: "a", paused: false }];
   let statusOverride: Status | null = null;
   let files: ListedFile[] = [{ id: "f1", relativePath: "a/b.jpg", size: 10, status: "archived", blobId: "blob-1", date: null }];
+  // Seeded defaults, as a signed-IN daemon answers. Signed out it answers `[]` — successfully — which is
+  // the whole trap the excludes regression test below covers.
+  let excludes: string[] = ["node_modules", ".DS_Store", "*.tmp", ".git", "caches"];
   const calls: string[] = [];
   let eventCb: ((name: never, data: never) => void) | null = null;
   let lifeCb: ((s: ConnectionState) => void) | null = null;
@@ -56,6 +59,7 @@ const makeApi = (initial: ConnectionState) => {
       if (method === "getStatus") return Promise.resolve(statusOverride ?? status(sources));
       if (method === "listSources") return Promise.resolve(sources);
       if (method === "listFiles") return Promise.resolve(files);
+      if (method === "listExcludes") return Promise.resolve(excludes);
       return Promise.resolve({ ok: true });
     }) as ColdstoreApi["request"],
     getConnectionState: () => Promise.resolve(connectionState),
@@ -118,6 +122,7 @@ const makeApi = (initial: ConnectionState) => {
     setSources: (s: Source[]) => (sources = s),
     setStatus: (s: Status | null) => (statusOverride = s),
     setFiles: (f: ListedFile[]) => (files = f),
+    setExcludes: (e: string[]) => (excludes = e),
     fireLifecycle: (s: ConnectionState) => {
       connectionState = s;
       lifeCb?.(s);
@@ -206,6 +211,31 @@ describe("controller sync policy", () => {
     await tick();
     expect(store.getState().status?.signedIn).toBe(true);
     expect(store.getState().status?.bytesStored).toBe(1000);
+  });
+
+  // Regression (2026-07-20): Settings' "Don't back up" card was empty for the whole session — the five
+  // seeded defaults were in the journal the entire time. Same shape as the 2026-07-18 bug above and missed
+  // by the same fix: a session-less `listExcludes` returns `[]` SUCCESSFULLY, so the connect→refresh (which
+  // beats `authenticate`) cached an empty list and nothing retried. Unlike the status figures there was no
+  // periodic self-correction either — `excludesChanged` only fires on a user edit, so it stayed empty until
+  // a reconnect. An empty list is also a legitimate state (you can delete all five), which is exactly why
+  // it went unnoticed: broken and correct render identically.
+  test("filesChanged re-reads the excludes — a listExcludes taken before the session was established is empty", async () => {
+    const f = makeApi("connected");
+    const store = createStore();
+    // Connect lands before the daemon has a session: the read succeeds and answers with nothing.
+    f.setStatus(sessionlessStatus());
+    f.setExcludes([]);
+    connectController(f.api, store);
+    await tick();
+    expect(store.getState().excludes).toEqual([]);
+
+    // `authenticate` completes; the daemon establishes the session and publishes filesChanged.
+    f.setStatus(null);
+    f.setExcludes(["node_modules", ".DS_Store"]);
+    f.fireEvent("filesChanged", { signedIn: "true" });
+    await tick();
+    expect(store.getState().excludes).toEqual(["node_modules", ".DS_Store"]);
   });
 
   test("does NOT fetch while disconnected, then refetches on (re)connect", async () => {

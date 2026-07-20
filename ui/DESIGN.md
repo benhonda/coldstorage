@@ -87,9 +87,13 @@ Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-cl
 - **Manipulation = standard Finder gestures:** rename (press-and-hold the name → inline edit, or the
   menu — NOT double-click, which opens), new folder, drag-to-move (spring-loaded: hold over a
   folder/crumb and it opens under the drag), delete (⌫ → confirm). **Delete =
-  instant tombstone** with honest copy: *"removes it from your files; it doesn't lower your cost for
-  180 days"* (Deep Archive minimum-duration; never imply delete-to-save-money). Byte reclamation is
-  deferred/rare (thaw-to-repack — backend concern, invisible here).
+  instant tombstone**, and it sticks — a rescan can never resurrect it, only an explicit re-deposit.
+  Honest copy: *"Space comes back once the bytes pass 180 days in deep storage — right away for anything
+  you've had a while"* (Deep Archive minimum-duration; never imply delete-to-save-money). If the target is
+  still inside a **watched folder** the confirm asks `pathIsWatched` before opening and offers **"Also stop
+  backing this up"** (on by default), which adds the ignore rule in the same call — otherwise the file would
+  sit there un-backed-up with nothing saying why. Bytes are reclaimed once every file sharing their blob is
+  deleted (daemon tags the object; a lifecycle rule expires it) — invisible here.
 
 ## Deposit flow (the hero)
 1. **Drop** anywhere (or ⊕ Add) → *"Drop to upload"*; items land in the currently-viewed folder. The ⊕ Add
@@ -240,7 +244,7 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   is the hand-kept TS mirror.
 - **Commands (SSOT = `DaemonService.handle`):** `ping · getStatus · listSources · listFiles ·
   listExcludes · addSource · removeSource · addExclude · removeExclude · restorePlan · restore ·
-  deposit · depositPhotos · previewDeposit · movePath · createFolder · deletePath · authenticate ·
+  deposit · depositPhotos · previewDeposit · movePath · createFolder · deletePath · pathIsWatched · authenticate ·
   deauthenticate · mintVault · unlockVault · unlockVaultWithRecoveryCode · lockVault · triggerNow ·
   pauseSource · resumeSource`. (`authenticate`/`deauthenticate` = the **session** opened/closed —
   per-user S3 creds plus the user's journal, staging dir and key holder; the `*Vault*` four = the

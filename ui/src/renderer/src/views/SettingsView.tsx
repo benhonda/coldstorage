@@ -282,13 +282,20 @@ export const SettingsView = ({
       {/* Always-visible chips, deliberately NOT folded behind a disclosure: in a backup product, what's
           NOT being uploaded is the most dangerous setting in the app — it stays in plain sight. */}
       <Card title="Don't back up" description="coldstorage skips these everywhere — caches and junk you never mean to keep.">
-        <div className="cs-chips">
-          {settings.excludes.map((p) => (
-            <Chip key={p} mono onRemove={() => settings.removeExclude(p)}>
-              {p}
-            </Chip>
-          ))}
-        </div>
+        {settings.excludes.length === 0 ? (
+          // An empty list is a real, reachable state (remove all five defaults and they don't come back —
+          // seeding is one-shot per journal). Say so plainly rather than rendering a blank card, which
+          // reads as "still loading" and hides the fact that nothing is being filtered at all.
+          <p className="cs-muted">Nothing excluded — everything in your watched folders gets backed up.</p>
+        ) : (
+          <div className="cs-chips">
+            {settings.excludes.map((p) => (
+              <Chip key={p} mono onRemove={() => settings.removeExclude(p)}>
+                {p}
+              </Chip>
+            ))}
+          </div>
+        )}
         <div className="cs-stack" style={{ marginTop: "var(--space-4)" }}>
           <Field
             label="Add a pattern"

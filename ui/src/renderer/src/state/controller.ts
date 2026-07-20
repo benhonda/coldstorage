@@ -57,9 +57,14 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
     // nothing looked broken and nothing retried. The storage figures then stayed empty until the next
     // `runFinished`, up to COLDSTORE_INTERVAL (300 s) later. Re-reading the snapshot here costs one cheap
     // call on an event that is already a resync, and closes that window.
+    // Excludes have the identical soft-fail shape: a session-less `listExcludes` answers SUCCESSFULLY
+    // with `[]`, so a pre-auth read is indistinguishable from "the user deleted all five defaults" and
+    // nothing ever retried — the card stayed empty for the whole session. Same for an account switch,
+    // where the reducer clears the slice and `beginSession` is again the only signal it's refillable.
     else if (name === "filesChanged") {
       void refreshStatus();
       void refreshFiles();
+      void refreshExcludes();
     }
     // A finished run may have archived new files / changed their status — re-read both the counts
     // (getStatus) and the tree (listFiles).

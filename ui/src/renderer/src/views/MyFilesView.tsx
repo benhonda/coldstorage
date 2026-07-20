@@ -93,6 +93,10 @@ export const MyFilesView = ({
   // state the consequence up front instead of after the fact. `null` = still asking.
   const [deleteIsWatched, setDeleteIsWatched] = useState<boolean | null>(null);
   const [alsoIgnore, setAlsoIgnore] = useState(true);
+  // Which delete the in-flight `pathIsWatched` belongs to. Without it, cancelling a delete for a WATCHED
+  // file and immediately opening one for an unwatched file lets the first answer land second — the second
+  // dialog then shows a pre-checked "also stop backing this up" for a file that isn't in a watched folder.
+  const watchProbe = useRef(0);
   const [moveTargets, setMoveTargets] = useState<RowTarget[] | null>(null);
   const [infoOpen, setInfoOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
@@ -229,20 +233,28 @@ export const MyFilesView = ({
     exec(() => api.request("createFolder", { path }));
     startRename(`folder:${path}`);
   };
-  // Delete = tombstone each target's subtree in the journal (bytes aren't reclaimed — deferred repack/GC).
+  // Delete = tombstone each target's subtree in the journal. Bytes are reclaimed once every file sharing
+  // their blob is deleted; the space returns when Deep Archive's 180-day minimum on them runs out.
   // Optimistic drop from the tree, then the REAL daemon `deletePath` per target.
   const doDelete = (targets: RowTarget[]): void => {
     filesApi.remove(targets);
-    // `alsoIgnore` only means anything for a watched path; the daemon ignores it otherwise. Sending it
-    // unconditionally keeps the call site honest about intent rather than duplicating the watched check.
+    // Send `alsoIgnore` ONLY when the checkbox was actually on screen. It defaults to true, and the daemon
+    // evaluates watched-ness itself — so sending it unconditionally would add an exclude in the two windows
+    // where the user never saw the choice: while the probe is still in flight, and when the probe failed.
+    // An exclude is a lasting decision about what gets backed up; it needs to have been offered.
+    const ignoreParam = deleteIsWatched === true ? ({ alsoIgnore: alsoIgnore ? "true" : "false" } as const) : {};
     exec(() =>
-      Promise.all(
-        targets.map((t) => api.request("deletePath", { path: t.path, alsoIgnore: alsoIgnore })),
-      ),
+      Promise.all(targets.map((t) => api.request("deletePath", { path: t.path, ...ignoreParam }))),
     );
     setSelected(new Set());
+    closeDeleteConfirm();
+  };
+  /** One place to drop the confirm state, so cancelling can't leave a stale watched-flag behind. */
+  const closeDeleteConfirm = (): void => {
+    watchProbe.current++;   // orphan any in-flight probe
     setConfirmDelete(null);
     setDeleteIsWatched(null);
+    setAlsoIgnore(true);
   };
   // Confirm only when there are real uploaded bytes at stake; an empty folder just goes.
   const requestDelete = (targets: RowTarget[]): void => {
@@ -253,10 +265,19 @@ export const MyFilesView = ({
     setConfirmDelete(targets);
     setDeleteIsWatched(null);
     setAlsoIgnore(true);   // default to the option that makes the delete actually hold
-    // Resolve watched-ness while the dialog is already up, so opening it never blocks on IPC.
+    // Resolve watched-ness while the dialog is already up, so opening it never blocks on IPC. The
+    // generation token discards an answer that arrives after this dialog is gone (see `watchProbe`).
+    const gen = ++watchProbe.current;
     void Promise.all(targets.map((t) => api.request("pathIsWatched", { path: t.path })))
-      .then((rs) => setDeleteIsWatched(rs.some((r) => r.isWatched)))
-      .catch(() => setDeleteIsWatched(false));   // can't tell → don't claim anything
+      .then((rs) => {
+        if (watchProbe.current === gen) setDeleteIsWatched(rs.some((r) => r.isWatched));
+      })
+      .catch((e: unknown) => {
+        // Can't tell → claim nothing, and say so rather than failing silently: the delete still works,
+        // it just won't offer the exclude, and a swallowed error here is invisible work going wrong.
+        console.warn("pathIsWatched failed — delete will not offer the watched-folder option", e);
+        if (watchProbe.current === gen) setDeleteIsWatched(false);
+      });
   };
   const clearSelection = (): void => setSelected(new Set());
   // Move each target's subtree under `toDir`. Optimistic re-parent, then the REAL daemon `movePath` per
@@ -665,10 +686,10 @@ export const MyFilesView = ({
         <Modal
           title="Delete from your files?"
           icon="delete"
-          onClose={() => setConfirmDelete(null)}
+          onClose={closeDeleteConfirm}
           footer={
             <>
-              <Button variant="ghost" onClick={() => setConfirmDelete(null)}>
+              <Button variant="ghost" onClick={closeDeleteConfirm}>
                 Keep
               </Button>
               <Button variant="danger" icon="delete" onClick={() => doDelete(confirmDelete)}>
@@ -691,10 +712,9 @@ export const MyFilesView = ({
               />
               <span>
                 <strong>Also stop backing this up.</strong>{" "}
-                {confirmDelete.length === 1 ? "It's" : "These are"} still in a folder you're watching, so
-                without this {confirmDelete.length === 1 ? "it stays" : "they stay"} on your Mac but{" "}
-                {confirmDelete.length === 1 ? "won't be" : "won't be"} backed up again — and nothing here
-                would say why.
+                {confirmDelete.length === 1 ? "It's" : "Some of these are"} still in a folder you're
+                watching, so without this {confirmDelete.length === 1 ? "it stays" : "they stay"} on your
+                Mac but won't be backed up again — and nothing here would say why.
               </span>
             </label>
           )}

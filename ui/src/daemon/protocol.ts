@@ -230,12 +230,16 @@ export interface Commands {
    * for "this is in a watched folder". Without it a deleted file stays permanently un-backed-up with
    * nothing saying why. Emits `filesChanged`. */
   deletePath: {
-    params: { path: string; alsoIgnore?: boolean };
-    result: { ok: boolean; isWatched: boolean; ignored: boolean };
+    /** `alsoIgnore` is `"true"`/`"false"`, NOT a boolean — the control wire is `[String:String]` (see the
+     * note on `opsLimit`/`memLimit` below). A JSON bool fails `ControlRequest` decoding outright, and the
+     * daemon's malformed-request reply carries `id: 0`, which no client request can ever match — so the
+     * call hangs to its timeout with no error. `ParamsArg` now rejects non-string params at compile time. */
+    params: { path: string; alsoIgnore?: "true" | "false" };
+    result: { ok: boolean; ignored: boolean };
   };
   /** What restoring these files would take to serve — the input to the backend's `POST /retrieval/quote`
    * (root RETRIEVAL.md). Ask this BEFORE showing any price: a restore is billed on the whole BLOBS that
-   * must be thawed (packed, so one photo can drag a 1 GiB blob with it) plus the bytes that come back —
+   * must be thawed (packed, so one photo can drag a 256 MiB blob with it) plus the bytes that come back —
    * neither of which the renderer can work out. `blobKeys` is deduped (one thaw per blob, however many
    * files ride in it). Read-only: touches the journal, never S3. */
   restorePlan: {
@@ -307,7 +311,18 @@ export type Method = keyof Commands;
  * its params object. Drives the variadic signature of both the layer-1 client and the IPC bridge.
  */
 export type ParamsArg<M extends Method> =
-  Commands[M]["params"] extends Record<string, never> ? [] : [params: Commands[M]["params"]];
+  Commands[M]["params"] extends Record<string, never>
+    ? []
+    : [params: Commands[M]["params"] & StringParams];
+
+/**
+ * Every param value crosses the socket inside a Swift `[String: String]` (`ControlProtocol.swift`), so a
+ * number or boolean doesn't just coerce — it fails the whole `ControlRequest` decode and the command never
+ * runs. Intersecting params with this in `ParamsArg` turns that into a compile error at the call site
+ * instead of a silent 10-second timeout in front of a user. Numbers/booleans go as strings and the daemon
+ * re-parses them (see `opsLimit`/`memLimit`, and `deletePath`'s `alsoIgnore`).
+ */
+type StringParams = Record<string, string | undefined>;
 
 // ── Events (DaemonEvent call sites) ──────────────────────────────────────────
 

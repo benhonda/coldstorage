@@ -142,7 +142,9 @@ export class DaemonClient {
         return;
       }
       const id = this.nextId++;
-      const params = args[0] as Record<string, string> | undefined;
+      // No cast: `ParamsArg` now guarantees every value is a string (see `StringParams` in protocol.ts).
+      // The cast that used to live here is what let a boolean param compile and break the wire.
+      const params: Record<string, string | undefined> | undefined = args[0];
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`request '${method}' (id ${id}) timed out after ${this.requestTimeoutMs}ms`));
