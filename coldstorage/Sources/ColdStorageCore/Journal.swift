@@ -360,6 +360,39 @@ public final class Journal: @unchecked Sendable {
             .compactMap { $0["blobId"] as? String }
     }
 
+    /// Verified blobs whose members are **all** tombstoned — the only bytes that can be reclaimed at object
+    /// granularity, and the reap pass's whole input.
+    ///
+    /// **Why this catches most real deletions.** A blob holds one folder's files (`BlobPlanner` buckets by
+    /// folder), and people delete folders — "I don't need the 2019 shoot any more". That deletion shape lines
+    /// up with blob boundaries, so whole blobs go dead together. Scattered deletes inside a folder that's
+    /// still live reclaim nothing, because a blob is one S3 object and its live members are in it; that
+    /// residue needs a repack, which Deep Archive makes uneconomic (reading the bytes back to rewrite them
+    /// costs ~90× a year of storing them). So: reap what the shape gives us, and be honest about the rest.
+    ///
+    /// Deliberately conservative — a member with NO file row at all counts as alive, so a journal that has
+    /// lost track of a file can never cause its bytes to be reclaimed. Reaping is irreversible; guessing isn't
+    /// allowed.
+    public func fullyDeletedBlobIds() throws -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return try run("""
+            SELECT m.blobId FROM blob_members m
+              JOIN blobs b ON b.id = m.blobId
+              LEFT JOIN files f ON f.id = m.fileId
+             WHERE b.status = ?1
+             GROUP BY m.blobId
+            HAVING SUM(CASE WHEN f.status IS NULL OR f.status != ?2 THEN 1 ELSE 0 END) = 0
+            """, [.text(BlobStatus.verified.rawValue), .text(FileStatus.deleted.rawValue)])
+            .compactMap { $0["blobId"] as? String }
+    }
+
+    /// Record that a blob's object has been tagged for lifecycle expiry. Moves it out of `verified`, so
+    /// `fullyDeletedBlobIds` won't hand it back and the next pass won't re-tag it.
+    public func markBlobReaped(_ blobId: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("UPDATE blobs SET status=?1 WHERE id=?2", [.text(BlobStatus.reaped.rawValue), .text(blobId)])
+    }
+
     /// Every file already archived — what the planner must NOT re-plan. Their bytes are in S3 under a blob id
     /// derived from the membership they had at the time, so re-planning them with newly-arrived neighbours
     /// mints a different id, misses the `isBlobVerified` check, and re-uploads bytes that are already stored.

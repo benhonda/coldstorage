@@ -225,8 +225,41 @@ public actor UploadEngine {
                 // open multipart upload on S3, which the bucket's 14-day abort lifecycle reaps (see DESIGN.md).
             }
         }
+        await reapDeleted()
         log("UploadEngine: run finished — RSS \(ProcessMemory.resident)")
         return failures
+    }
+
+    /// Reclaim blobs whose every file has been deleted, by tagging their objects for lifecycle expiry.
+    ///
+    /// **Why this has to exist.** Quota is measured from a live S3 listing, so bytes that no file references
+    /// still consume the user's plan. Without reclamation a deleted file frees nothing, ever — a vault
+    /// silently fills with the ghosts of things the user thought they'd removed, and eventually refuses new
+    /// deposits while showing a tree that's half the size. Deleting has to mean something.
+    ///
+    /// Best-effort and non-fatal: reclamation is housekeeping, and a tagging failure must never take down a
+    /// run that is otherwise archiving files correctly. Anything that fails is simply retried next pass —
+    /// the journal only advances a blob to `reaped` once its tag is actually written.
+    func reapDeleted() async {
+        let dead = (try? journal.fullyDeletedBlobIds()) ?? []
+        guard !dead.isEmpty else { return }
+        var reaped = 0
+        for blobId in dead {
+            guard let key = try? journal.blobS3Key(blobId) else {
+                log("UploadEngine: blob \(blobId) is fully deleted but has no recorded s3Key — cannot reclaim; leaving it")
+                continue
+            }
+            do {
+                try await store.markReclaimable(key: key)
+                try journal.markBlobReaped(blobId)
+                reaped += 1
+            } catch {
+                // Left `verified`, so the next pass picks it up again. Named in the log because otherwise this
+                // is invisible work whose failure shows up only as a quota that never goes down.
+                log("UploadEngine: blob \(blobId) reclaim FAILED (will retry next pass): \(error)")
+            }
+        }
+        log("UploadEngine: reclaimed \(reaped) of \(dead.count) fully-deleted blob(s) — tagged for lifecycle expiry")
     }
 
     /// `onProgress` reports resumable-multipart progress as a determinate fraction of the *encrypted* blob —

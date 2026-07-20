@@ -75,6 +75,12 @@ final class FakeVault: Vault, @unchecked Sendable {
             _objects[key] = byNumber.keys.sorted().reduce(Data()) { $0 + byNumber[$1]! }
         }
     }
+    private var _reclaimable: Set<String> = []
+    /// Keys the engine asked to have reclaimed — the fake never deletes, matching production, where a
+    /// lifecycle rule does the expiry and the client only ever tags.
+    var reclaimableKeys: Set<String> { lock.withLock { _reclaimable } }
+    func markReclaimable(key: String) async throws { lock.withLock { _ = _reclaimable.insert(key) } }
+
     func verify(key: String) async throws {
         guard !retainParts || lock.withLock({ _objects[key] != nil }) else { throw ColdStorageError.s3("no such object \(key)") }
     }

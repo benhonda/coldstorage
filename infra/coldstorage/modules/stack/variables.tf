@@ -26,6 +26,12 @@ variable "abort_incomplete_multipart_days" {
   description = "Server-side cleanup of orphaned multipart parts (the daemon reuses uploadIds across crashes, but never-completed uploads are garbage). Days after initiation."
 }
 
+variable "reclaimable_blob_expiry_days" {
+  type        = number
+  default     = 7
+  description = "Days after object CREATION before a blob tagged coldstorage-reap=true is expired. The daemon tags a blob only once every file in it has been deleted; this rule is the only thing that deletes, so a compromised client can queue a reclamation but never perform one. Most tagged blobs are already older than this, so the tag is effectively the trigger — the window exists so a tag written against a brand-new object is still undoable."
+}
+
 # ── Multi-user identity (Cognito — see cognito.tf / PROD.md). Auth is PASSWORDLESS (2026-07-02):
 #    Google is the primary login, native email-OTP the fallback. Both IdPs are opt-in gates: they need
 #    external creds (Ben provides), so they default off to keep the plan clean until the creds exist. ──

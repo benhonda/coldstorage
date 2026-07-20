@@ -3,6 +3,7 @@
 ## 2026-07-20
 
 - fix(site): `/fr/*` no longer serves duplicate content — every page answered on two URLs with identical English HTML and no canonical. `pageMeta()` now canonicals French URLs to the English original until `TRANSLATIONS_LIVE` flips, at which point each self-canonicals and gains `hreflang` pairs.
+- feat(daemon): deleting reclaims space — once every file in a blob is tombstoned the daemon tags its object `coldstorage-reap=true` and an `expire-reclaimable-blobs` lifecycle rule expires it. The daemon gets `s3:PutObjectTagging`, never `s3:DeleteObject`.
 - fix(daemon): a deposit costs what the deposit costs — `UploadEngine.run` plans only files that aren't already archived, instead of re-grouping the whole scan and re-uploading verified blobs under fresh ids.
 - fix(daemon): orphans are repaired from journal membership (new `blob_members` table) before planning, `markBlobArchived` verifies + links in one transaction, and an archived file can never be flipped to `failed`.
 - feat(site): `/compare` gains a four-vendor price table above the qualitative one; `ProseBand` extracted from `prose-page` so the page stops re-implementing (and unstyling) it.

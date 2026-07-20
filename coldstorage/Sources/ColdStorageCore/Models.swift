@@ -114,7 +114,11 @@ public struct FileSpan: Sendable {
 }
 
 public enum FileStatus: String, Codable, Sendable { case discovered, planned, uploading, verifying, archived, failed, deleted, folder }
-public enum BlobStatus: String, Codable, Sendable { case open, uploading, completed, verified, aborted }
+/// `reaped` = every file in the blob was deleted and the object has been tagged for lifecycle expiry. A
+/// terminal state, distinct from `aborted` (which is an upload that never landed): the bytes DID land, were
+/// whole, and are now being reclaimed. Kept as a row rather than dropped so a second pass doesn't re-tag it,
+/// and so the history of what happened to those bytes survives.
+public enum BlobStatus: String, Codable, Sendable { case open, uploading, completed, verified, aborted, reaped }
 public enum PartStatus: String, Codable, Sendable { case pending, uploaded, verified }
 
 public enum ColdStorageError: Error, CustomStringConvertible {

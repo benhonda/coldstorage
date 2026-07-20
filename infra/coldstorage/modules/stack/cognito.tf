@@ -248,6 +248,20 @@ data "aws_iam_policy_document" "user_s3" {
     actions = [
       "s3:PutObject",
       "s3:GetObject", # + HeadObject. Useless on an un-thawed Deep Archive object — see the note above.
+
+      # PutObjectTagging is how the daemon reclaims space, and it is deliberately granted INSTEAD OF
+      # s3:DeleteObject — which appears nowhere in this policy and must not be added.
+      #
+      # The daemon runs on the user's Mac holding the user's own credentials. Delete rights there mean
+      # anything that compromises that machine can erase the archive outright, which is the exact failure
+      # this product exists to prevent and one no client-side care can mitigate. Tagging is the weakest
+      # capability that still expresses "these bytes are unwanted": it mutates metadata only, works on a cold
+      # object without a thaw, and hands the actual expiry to the bucket lifecycle rule
+      # (`expire-reclaimable-blobs` in s3.tf), whose credentials the client never sees.
+      #
+      # Worst case under a compromised client is therefore a queued deletion that is visible in the object's
+      # tags and reversible until the sweep runs — not an erased vault.
+      "s3:PutObjectTagging",
     ]
     resources = ["${aws_s3_bucket.vault.arn}/blobs/$${cognito-identity.amazonaws.com:sub}/*"]
   }

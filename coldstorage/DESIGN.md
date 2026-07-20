@@ -187,6 +187,24 @@ On daemon start and after every outage/crash:
 completed — so complete promptly, and the bucket has a **lifecycle rule aborting incomplete multipart
 uploads after 14 days** (applied, `infra/coldstorage`).
 
+6. **A deposit costs the deposit, not the library.** The engine plans only files that are **not already
+   archived** (`Journal.archivedFileIds`). Blob ids are content-derived from their members, so planning over
+   the whole scan meant one new file re-grouped its folder, minted fresh ids for already-verified blobs,
+   missed the `isBlobVerified` short-circuit, and re-uploaded the lot — stranding the originals, which
+   nothing deletes and which still consume the user's quota. Membership is recorded durably in
+   `blob_members` at blob creation, and verify+link commit in **one transaction**, so a verified blob's
+   files are all linked or none are. Guarded by `IncrementalDepositTests`.
+
+**Reclaiming deleted data.** Quota is measured from a live S3 listing, so bytes nothing references still
+consume the user's plan — a delete that frees nothing eventually fills a vault with ghosts and refuses new
+deposits. Once **every** file in a blob is tombstoned, the daemon **tags** its object (`coldstorage-reap=true`)
+and a bucket lifecycle rule expires it. Reclamation is a tag and never a delete: the daemon runs on the
+user's Mac with the user's own credentials, so it holds `s3:PutObjectTagging` and deliberately **not**
+`s3:DeleteObject` — a compromised client can queue a reclamation, never perform one. This works at object
+granularity, so it reclaims folder-shaped deletes (blobs are bucketed by folder) and **not** scattered
+deletes inside a still-live folder; that residue would need a repack, which Deep Archive makes uneconomic.
+Deep Archive's 180-day minimum means this returns the user's capacity, not our cost. See `ReclaimTests`.
+
 ## 6. Integrity — end to end
 
 1. Stream-hash each file's plaintext on read → `plaintext_sha256` in the journal.
@@ -275,6 +293,7 @@ Secrets live in Keychain, never in the UI.
 | S3 namespace | **`VaultPrefix`** (`blobs/<identityId>`) | typed: keys unslashed, listings slashed — the IAM `s3:prefix` condition needs the slash |
 | Multipart | **Low-level** (`CreateMultipartUpload`/`UploadPart`/`Complete`) | Transfer Manager hides `uploadId`/ETags; we persist them for cross-reboot resume |
 | Abort lifecycle | **14 days** | caps the Deep Archive staging-cost bleed |
+| Reclaiming deletes | **tag + lifecycle expiry**, never `s3:DeleteObject` | the daemon holds the user's creds on their Mac; delete rights there would let malware erase the vault |
 
 ### TL;DR
 A launchd Swift daemon owns ingest→encrypt→upload; Electron is a thin observer. It acts as exactly one

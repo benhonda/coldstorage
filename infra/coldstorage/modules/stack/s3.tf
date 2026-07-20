@@ -69,4 +69,40 @@ resource "aws_s3_bucket_lifecycle_configuration" "vault" {
       days_after_initiation = var.abort_incomplete_multipart_days
     }
   }
+
+  # ── Reclaiming deleted data ────────────────────────────────────────────────────────────────────────
+  # Quota is measured from a live listing of the user's prefix, so bytes nothing references still consume
+  # the plan they paid for. Without this rule a deleted file frees nothing, ever: the vault fills with the
+  # ghosts of things the user removed and eventually refuses new deposits while showing a tree half its size.
+  #
+  # **The daemon tags; only this rule deletes.** It runs with the bucket's own credentials, which the client
+  # never holds. That is the entire point of expressing reclamation as a tag: the daemon lives on the user's
+  # Mac with the user's credentials, and `s3:DeleteObject` there would let anything that compromises that
+  # machine erase the archive outright — the precise failure this product exists to prevent. A compromised
+  # client can, at worst, queue a deletion that is visible in the object's tags.
+  #
+  # Deep Archive bills a 180-day minimum, so expiring earlier reclaims the user's QUOTA, not our cost. That
+  # asymmetry is fine and deliberate: the capacity is what the customer is owed.
+  #
+  # The tag spelling is duplicated in `S3Store.reapTagKey`. A mismatch is silent — the object gets tagged,
+  # this rule never matches, and the bytes bill forever while the journal believes they're gone.
+  rule {
+    id     = "expire-reclaimable-blobs"
+    status = "Enabled"
+
+    filter {
+      tag {
+        key   = "coldstorage-reap"
+        value = "true"
+      }
+    }
+
+    # Measured from object CREATION, not from when the tag was applied — S3 offers no "days since tagged".
+    # Any blob old enough to be worth reclaiming is already past this, so in practice the tag is the trigger
+    # and expiry lands on the next daily lifecycle sweep. Non-zero so a tag written against a brand-new
+    # object still leaves a window to notice and undo it.
+    expiration {
+      days = var.reclaimable_blob_expiry_days
+    }
+  }
 }

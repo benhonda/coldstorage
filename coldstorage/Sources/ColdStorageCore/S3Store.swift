@@ -13,6 +13,18 @@ public protocol BlobStore: Sendable {
     func uploadPart(key: String, uploadId: String, number: Int, data: Data) async throws -> (etag: String, sha: String)
     func complete(key: String, uploadId: String, parts: [PartRow]) async throws
     func verify(key: String) async throws
+    /// Mark a blob as reclaimable. **Tagging, not deleting** — deliberately.
+    ///
+    /// The daemon holds the user's own credentials on their Mac. Granting it `s3:DeleteObject` would mean
+    /// anything that compromises that machine can erase the archive outright — the precise failure this
+    /// product exists to prevent, and one no amount of client-side care can mitigate. So the daemon may only
+    /// *mark*: it writes the reap tag, and a bucket lifecycle rule (infra, credentials the client never sees)
+    /// performs the expiry. The worst a compromised client can do is queue a deletion that is visible in the
+    /// object's tags and reversible until the lifecycle sweep runs.
+    ///
+    /// Reclaims nothing before Deep Archive's 180-day minimum — expiring early still bills it. This stops the
+    /// *ongoing* charge and frees the user's quota; it is not a refund.
+    func markReclaimable(key: String) async throws
 }
 
 /// The other half of the same seam: what the RESTORE path needs (thaw + ranged read), plus the
@@ -75,6 +87,21 @@ public struct S3Store: Vault {
 
     /// "Archived" means verified-present, not "PUT 200".
     public func verify(key: String) async throws { _ = try await client.headObject(input: .init(bucket: bucket, key: key)) }
+
+    /// The tag the bucket's lifecycle rule filters on (`infra/coldstorage/modules/stack/s3.tf`). One SSOT for
+    /// the spelling — a typo here is silent: the object is tagged, the rule never matches, and the bytes bill
+    /// forever while the journal believes they're gone.
+    public static let reapTagKey = "coldstorage-reap"
+    public static let reapTagValue = "true"
+
+    /// `PutObjectTagging` is a metadata write — it does NOT read the object body, so it works on a Deep
+    /// Archive object without a thaw. That's the property this whole design rests on: it's the only mutation
+    /// a client can make to cold data cheaply, which is why reclamation is expressed as a tag.
+    public func markReclaimable(key: String) async throws {
+        _ = try await client.putObjectTagging(input: .init(
+            bucket: bucket, key: key,
+            tagging: .init(tagSet: [.init(key: Self.reapTagKey, value: Self.reapTagValue)])))
+    }
 
     /// Sums `Size` (ciphertext bytes, as actually billed/stored) across every object under `prefix` —
     /// storage-quota enforcement's source of truth. Deliberately NOT the local journal: the journal is
