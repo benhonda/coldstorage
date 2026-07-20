@@ -30,7 +30,7 @@ import Foundation
 
         let blobs = BlobPlanner().plan(items, prefix: .dev)
 
-        // 4 folders × 20 MB total — nowhere near the 1 GiB cap, so this is one blob per folder.
+        // 4 folders × 20 MB total — nowhere near the 256 MiB cap, so this is one blob per folder.
         #expect(blobs.count == folders.count,
                 "100 small files across \(folders.count) folders produced \(blobs.count) blobs — each one is 4 S3 round trips")
         #expect(blobs.allSatisfy { !$0.items.isEmpty })

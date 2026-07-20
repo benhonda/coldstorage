@@ -472,6 +472,12 @@ public actor DaemonService {
         // already run out: AWS has stopped charging us for those, so the user should have the space back.
         // Never credit a blob still inside its minimum — we're still paying, so they're still holding it.
         //
+        // KNOWN IMPRECISION, deliberately conservative: `f.size` is PLAINTEXT bytes while `listed` is
+        // ciphertext, so the credit under-shoots by the AEAD tag overhead (~4 ppm). And the credit expires on
+        // a time window rather than on the object actually leaving the listing. Both err the same way — usage
+        // reads slightly HIGH — so a deposit is refused marginally early rather than a plan being overrun.
+        // The exact fix is to have `usageBytes` return key→size and credit only listed reaped objects.
+        //
         // Credit is journal-derived and therefore per-device. A second Mac that didn't perform the delete
         // won't credit it and will read usage HIGH until S3 drops the object — conservative, so the failure
         // mode is a deposit refused slightly early, never a plan quietly overrun. Making this exact across
@@ -637,7 +643,7 @@ public actor DaemonService {
             // What restoring these files would actually COST US to serve — the input to the account
             // backend's `POST /retrieval/quote` (root RETRIEVAL.md). The app calls this BEFORE it shows a
             // price, because a restore is priced on two things the renderer cannot know: the whole BLOB
-            // objects that must be thawed (blobs are packed, so one photo can drag a 1 GiB blob with it)
+            // objects that must be thawed (blobs are packed, so one photo can drag a 256 MiB blob with it)
             // and the bytes that actually come back.
             //
             // Blob keys are DEDUPED: several files usually share one blob, and that blob is thawed — and
@@ -766,6 +772,10 @@ public actor DaemonService {
                 // (ExcludeMatcher's gitignore rule), which can match that name at any depth — broader than
                 // asked for, but still strictly "don't back this up", never the reverse.
                 try session.journal.addExclude(path)
+                // Same event every other exclude mutation publishes — the Settings "Don't back up" card
+                // learns about this one through its own channel, rather than relying on a listExcludes
+                // refresh piggybacking on `filesChanged`.
+                bus.publish(DaemonEvent("excludesChanged", ["added": path]))
             }
             bus.publish(DaemonEvent("filesChanged", ["deleted": path]))
             return AnyEncodable(DeleteResultDTO(ok: true, isWatched: watched, ignored: watched && p["alsoIgnore"] == "true"))

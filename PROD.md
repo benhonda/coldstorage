@@ -11,6 +11,33 @@
 > PILLAR2. The phrase *single-operator dogfooding* above describes where the code is coming FROM, never a
 > standard it is allowed to stay at.
 
+## Known gaps in deletion / space reclamation [audited 2026-07-20]
+
+Fixed and tested; these are what the audit left open, in severity order:
+
+- **Quota credit is approximate, deliberately.** `Journal.reclaimedCreditBytes` sums PLAINTEXT bytes
+  (`files.size`) against a CIPHERTEXT listing, and expires on a 7-day window rather than on the object
+  actually leaving the listing. Both err the same way — usage reads slightly HIGH — so a deposit is refused
+  marginally early rather than a plan overrun. The exact fix is to have `S3Store.usageBytes` return key→size
+  and credit only listed reaped objects; that also removes the window guess.
+- **No test covers `DaemonService.currentUsageBytes`.** The credit meets the S3 listing there, and that is
+  where both imprecisions above actually bite. `ReclaimTests` proves the journal half only.
+- **The reap tag and the 180-day minimum are spelled in four hand-maintained places** — `S3Store.reapTagKey`,
+  `s3.tf`, `Taskfile.yml` (×2), and `Journal.minimumStorageDays` vs `var.reclaimable_blob_expiry_days`. A
+  mismatch is SILENT: objects get tagged, the rule never matches, bytes bill forever. Wants one checked-in
+  constants file read by Swift, TF and the Taskfile, with a test asserting they agree (PILLAR3).
+- **`iam.tf` (the retired pre-Cognito IAM user) lacks `s3:PutObjectTagging`.** Harmless while the daemon
+  authenticates through Cognito — which it has since 2026-07-14 — but anything falling back to that user
+  reclaims nothing and logs "will retry next pass" for ever.
+- **An unrepairable orphan re-logs on every pass.** A `blob_members` row whose file row is gone can never
+  satisfy the repair precondition, so it warns indefinitely and reads like a transient fault.
+- **`gate-test` assert 4 cascades**: it tags the probe object from assert 1, so a PutObject denial is
+  reported as a tagging failure. Its cleanup also uses `aws s3 rm` on a versioned bucket, leaving a
+  noncurrent DEEP_ARCHIVE version per run.
+- **Residue and multi-device usage both need a server-side index**, not a per-device journal. Scattered
+  deletes inside a live folder reclaim less than the full amount (bounded by the 256 MiB blob), and a second
+  Mac reads usage high until S3 drops the object.
+
 ## Decisions in force (locked 2026-06-29)
 - **Distribution: direct download, Developer ID + notarization.** NOT the Mac App Store — its App Sandbox
   would break our daemon + unix-socket + FSEvents + watch-any-folder architecture, and it mandates Apple

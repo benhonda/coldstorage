@@ -80,7 +80,8 @@ import Foundation
         await f.engine.reapDeleted()
         #expect(try f.journal.fullyDeletedBlobIds().isEmpty, "a reclaimed blob is still being offered for reclamation — the next pass will tag it again")
         await f.engine.reapDeleted()   // must be a clean no-op
-        #expect(f.store.reclaimableKeys.count == 1)
+        // CALLS, not distinct keys: a Set would hide a second tag on the same object entirely.
+        #expect(f.store.reclaimCalls.count == 1, "the blob was tagged again on the next pass")
     }
 
     /// **A delete must survive the next scan.** The daemon re-scans its sources every 300s (and on
@@ -146,6 +147,49 @@ import Foundation
         // Same blob viewed from past its minimum: AWS has stopped charging, so the user gets it back.
         let later = Date().addingTimeInterval(Double(Journal.minimumStorageDays + 1) * 86_400)
         #expect(try f.journal.reclaimedCreditBytes(now: later) > 0, "a blob we no longer pay for is still counting against the user's quota")
+    }
+
+    /// **The credit must RETIRE.** It only bridges the gap between AWS ending the charge and S3's daily
+    /// sweep removing the object. Once the object is gone from the listing, `listed` has already dropped by
+    /// those bytes — so a credit that never expires subtracts them a second time, for ever, and the error
+    /// compounds with every delete until the quota ceiling means nothing.
+    @Test func theQuotaCreditExpiresOnceS3HasCertainlySwept() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.base) }
+
+        try write("a.jpg", to: f.root)
+        _ = try await f.engine.run(source: LocalDirSource(root: f.root), prefix: .dev)
+        for row in try f.journal.listFiles() { try f.journal.deletePath(row.relativePath) }
+        await f.engine.reapDeleted()
+
+        let day = 86_400.0
+        let justEligible = Date().addingTimeInterval(Double(Journal.minimumStorageDays) * day + 60)
+        let longSwept = Date().addingTimeInterval(
+            Double(Journal.minimumStorageDays + Journal.creditGraceDays) * day + day)
+
+        #expect(try f.journal.reclaimedCreditBytes(now: justEligible) > 0,
+                "no credit while the object is eligible but still listed — the user waits on S3's sweep for space we've stopped paying for")
+        #expect(try f.journal.reclaimedCreditBytes(now: longSwept) == 0,
+                "the credit outlived the sweep — those bytes are now subtracted twice and usage under-reports for ever")
+    }
+
+    /// Re-depositing a deleted file must stop crediting it: its bytes are back in S3 under a new blob, while
+    /// its `blob_members` row still points at the old reaped one. Crediting both is free storage.
+    @Test func restoringADeletedFileStopsCreditingIt() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.base) }
+
+        try write("a.jpg", to: f.root)
+        _ = try await f.engine.run(source: LocalDirSource(root: f.root), prefix: .dev)
+        try f.journal.deletePath("a.jpg")
+        await f.engine.reapDeleted()
+
+        let eligible = Date().addingTimeInterval(Double(Journal.minimumStorageDays) * 86_400 + 60)
+        #expect(try f.journal.reclaimedCreditBytes(now: eligible) > 0)
+
+        try f.journal.restorePath("a.jpg")   // the user drags it back in
+        #expect(try f.journal.reclaimedCreditBytes(now: eligible) == 0,
+                "a restored file is still credited as reclaimed — its bytes are counted as freed while it is being stored again")
     }
 
     /// Reaping is irreversible, so an incomplete journal must never authorise it. A member with no file row

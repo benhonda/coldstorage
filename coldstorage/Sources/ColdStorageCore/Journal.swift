@@ -80,7 +80,8 @@ public final class Journal: @unchecked Sendable {
             -- to reason about. Durable membership is what lets the planner stop re-deriving it from a full
             -- re-scan (see `UploadEngine.run`); without it, planning is the only place a blob's members exist.
             CREATE TABLE IF NOT EXISTS blob_members(
-              blobId TEXT NOT NULL, fileId TEXT NOT NULL, PRIMARY KEY(blobId, fileId));
+              blobId TEXT NOT NULL, fileId TEXT NOT NULL, ordinal INTEGER NOT NULL DEFAULT 0,
+              PRIMARY KEY(blobId, fileId));
             CREATE TABLE IF NOT EXISTS sources(
               id TEXT PRIMARY KEY, kind TEXT NOT NULL, path TEXT, addedAt INTEGER NOT NULL DEFAULT 0,
               mountPath TEXT NOT NULL DEFAULT '', paused INTEGER NOT NULL DEFAULT 0);
@@ -113,6 +114,10 @@ public final class Journal: @unchecked Sendable {
         // therefore the clock the user's space comes back on. Nullable: a legacy blob's upload time is
         // unknown, and `reclaimedCreditBytes` treats unknown as "not yet eligible" rather than guessing in
         // the direction that would hand out space we're still paying for.
+        let memberCols = try run("PRAGMA table_info(blob_members)").compactMap { $0["name"] as? String }
+        if !memberCols.contains("ordinal") {
+            try exec("ALTER TABLE blob_members ADD COLUMN ordinal INTEGER NOT NULL DEFAULT 0")
+        }
         let blobCols = try run("PRAGMA table_info(blobs)").compactMap { $0["name"] as? String }
         if !blobCols.contains("archivedAt") {
             try exec("ALTER TABLE blobs ADD COLUMN archivedAt INTEGER")
@@ -127,6 +132,27 @@ public final class Journal: @unchecked Sendable {
         guard sqlite3_exec(db, sql, nil, nil, &err) == SQLITE_OK else {
             let m = err.map { String(cString: $0) } ?? "unknown"; sqlite3_free(err)
             throw ColdStorageError.invalidRequest("sqlite exec: \(m)")
+        }
+    }
+
+    /// Run `body` inside a SQLite transaction, rolling back if it throws.
+    ///
+    /// The rollback is the entire point. `run` throws on any non-`SQLITE_DONE` step, and `try` propagates
+    /// straight past a trailing `COMMIT` — so a hand-rolled BEGIN/COMMIT pair leaves the transaction OPEN on
+    /// this shared connection. Every later write then silently joins that uncommitted transaction (and the
+    /// next `BEGIN` fails with "cannot start a transaction within a transaction"), appearing to succeed and
+    /// vanishing when the daemon exits. That is exactly the silent data loss this journal exists to refuse.
+    ///
+    /// Caller holds `lock`; this does not take it.
+    private func transaction<T>(_ body: () throws -> T) throws -> T {
+        try exec("BEGIN;")
+        do {
+            let result = try body()
+            try exec("COMMIT;")
+            return result
+        } catch {
+            try? exec("ROLLBACK;")   // best-effort: the original error is what the caller needs to see
+            throw error
         }
     }
 
@@ -176,7 +202,7 @@ public final class Journal: @unchecked Sendable {
     /// Upsert discovered files; skip ones already archived with the same hash (idempotent re-scan).
     public func upsert(_ items: [IngestItem]) throws {
         lock.lock(); defer { lock.unlock() }
-        try exec("BEGIN;")
+        try transaction {
         for it in items {
             let cur = try run("SELECT status, contentHash FROM files WHERE id=?1", [.text(it.id)])
             if let r = cur.first, (r["status"] as? String) == FileStatus.archived.rawValue,
@@ -198,7 +224,7 @@ public final class Journal: @unchecked Sendable {
                 """, [.text(it.id), .text(it.relativePath), .int(it.size), .text(it.content.planKey), .text(FileStatus.planned.rawValue),
                       it.createdAt.map { .int(Int($0.timeIntervalSince1970)) } ?? .null])
         }
-        try exec("COMMIT;")
+        }
     }
 
     /// Anchor an EMPTY folder so it survives a reload — a path-only marker row (status `folder`, size 0, no
@@ -324,9 +350,10 @@ public final class Journal: @unchecked Sendable {
     }
 
     /// Tombstone the subtree rooted at `path` (status → `.deleted`) — the journal edit behind a file/folder
-    /// delete. The row and its blob mapping are KEPT, not removed: the encrypted bytes stay in S3 until a
-    /// future repack/GC reclaims them (deep storage's 180-day minimum makes eager deletion pointless, and
-    /// the kept mapping is how that GC will find them). Tombstoned files drop out of `listFiles` + the file
+    /// delete. The row and its blob mapping are KEPT, not removed: the encrypted bytes stay in S3 until every file sharing
+    /// their blob is deleted too, at which point `UploadEngine.reapDeleted` tags the object for lifecycle
+    /// expiry (deep storage's 180-day minimum makes eager deletion pointless, and the kept mapping is how
+    /// `fullyDeletedBlobIds` finds them). Tombstoned files drop out of `listFiles` + the file
     /// count. Sweeps `path` and every descendant; already-tombstoned rows are skipped (idempotent).
     public func deletePath(_ path: String) throws {
         lock.lock(); defer { lock.unlock() }
@@ -355,22 +382,29 @@ public final class Journal: @unchecked Sendable {
     /// by the whole upload, and a blob that dies in between would otherwise have no recoverable member list.
     public func ensureBlob(_ plan: BlobPlan, noncePrefix: Data, wrappedDEK: Data) throws {
         lock.lock(); defer { lock.unlock() }
-        try exec("BEGIN;")
-        try run("""
-            INSERT INTO blobs(id, s3Key, status, noncePrefix, wrappedDEK) VALUES(?1,?2,?3,?4,?5)
-            ON CONFLICT(id) DO NOTHING
-            """, [.text(plan.id), .text(plan.s3Key), .text(BlobStatus.open.rawValue), .blob(noncePrefix), .blob(wrappedDEK)])
-        for item in plan.items {
-            try run("INSERT INTO blob_members(blobId, fileId) VALUES(?1,?2) ON CONFLICT DO NOTHING",
-                    [.text(plan.id), .text(item.id)])
+        try transaction {
+            try run("""
+                INSERT INTO blobs(id, s3Key, status, noncePrefix, wrappedDEK) VALUES(?1,?2,?3,?4,?5)
+                ON CONFLICT(id) DO NOTHING
+                """, [.text(plan.id), .text(plan.s3Key), .text(BlobStatus.open.rawValue), .blob(noncePrefix), .blob(wrappedDEK)])
+            // `ordinal` pins the SEAL ORDER. Spans are positional, and the repair pass used to re-derive
+            // order with `newestFirst` — which sorts on `isFavorite`, a flag the user can toggle in Photos at
+            // any time. Toggle it between the original seal and a repair and the members re-order, so
+            // recomputed offsets point into the wrong place in ciphertext that is already in S3. The repair
+            // path skips verify, so nothing would catch it; it surfaces at restore, as garbage.
+            for (i, item) in plan.items.enumerated() {
+                try run("INSERT INTO blob_members(blobId, fileId, ordinal) VALUES(?1,?2,?3) ON CONFLICT DO NOTHING",
+                        [.text(plan.id), .text(item.id), .int(i)])
+            }
         }
-        try exec("COMMIT;")
     }
 
     /// The file ids a blob was planned to hold — journal truth, independent of how far the upload got.
     public func blobMembers(_ blobId: String) throws -> [String] {
         lock.lock(); defer { lock.unlock() }
-        return try run("SELECT fileId FROM blob_members WHERE blobId=?1", [.text(blobId)])
+        // ORDER BY ordinal — the order the blob was SEALED in, which is what its byte offsets were measured
+        // against. Never re-derive this by sorting the items again (see `ensureBlob`).
+        return try run("SELECT fileId FROM blob_members WHERE blobId=?1 ORDER BY ordinal", [.text(blobId)])
             .compactMap { $0["fileId"] as? String }
     }
 
@@ -442,15 +476,32 @@ public final class Journal: @unchecked Sendable {
     ///
     /// A reaped blob younger than the minimum is NOT credited: we are still paying for it, so the user is
     /// still holding it. That is the whole anti-churn property, and it falls out of one `WHERE` clause.
+    /// How long a credit stays valid after the blob became eligible. The credit exists ONLY to bridge the
+    /// gap between "AWS stopped charging" (eligibility) and "S3 stopped listing it" (the sweep, which runs
+    /// once a day). Once the object is gone from the listing, `listed` has already dropped by those bytes —
+    /// so a credit that never expires subtracts them a SECOND time, permanently, and the error compounds
+    /// with every delete until the quota ceiling is meaningless.
+    ///
+    /// A week is generous for a daily sweep. Erring past the window under-credits (the user briefly sees
+    /// usage they've actually freed) rather than over-crediting, which would let them overrun their plan.
+    /// The exact alternative is to credit only blobs whose key is still in the listing — see the note in
+    /// `DaemonService.currentUsageBytes`.
+    public static let creditGraceDays = 7
+
     public func reclaimedCreditBytes(now: Date = Date()) throws -> Int {
         lock.lock(); defer { lock.unlock() }
-        let cutoff = Int(now.timeIntervalSince1970) - Self.minimumStorageDays * 86_400
+        let nowSecs = Int(now.timeIntervalSince1970)
+        let eligibleBefore = nowSecs - Self.minimumStorageDays * 86_400
+        let staleBefore = nowSecs - (Self.minimumStorageDays + Self.creditGraceDays) * 86_400
         let rows = try run("""
             SELECT SUM(f.size) AS bytes FROM blobs b
               JOIN blob_members m ON m.blobId = b.id
               JOIN files f ON f.id = m.fileId
-             WHERE b.status = ?1 AND b.archivedAt IS NOT NULL AND b.archivedAt <= ?2
-            """, [.text(BlobStatus.reaped.rawValue), .int(cutoff)])
+             WHERE b.status = ?1 AND b.archivedAt IS NOT NULL
+               AND b.archivedAt <= ?2 AND b.archivedAt > ?3
+               AND f.status = ?4
+            """, [.text(BlobStatus.reaped.rawValue), .int(eligibleBefore), .int(staleBefore),
+                  .text(FileStatus.deleted.rawValue)])
         return (rows.first?["bytes"] as? Int) ?? 0
     }
 
@@ -557,7 +608,7 @@ public final class Journal: @unchecked Sendable {
     /// no-op, so this is also how a recovered orphan gets re-linked.
     public func markBlobArchived(_ blobId: String, spans: [FileSpan]) throws {
         lock.lock(); defer { lock.unlock() }
-        try exec("BEGIN;")
+        try transaction {
         try run("UPDATE blobs SET status=?1, archivedAt=COALESCE(archivedAt, ?3) WHERE id=?2",
                 [.text(BlobStatus.verified.rawValue), .text(blobId), .int(Int(Date().timeIntervalSince1970))])
         for s in spans {
@@ -568,7 +619,7 @@ public final class Journal: @unchecked Sendable {
                       .int(s.firstFrame), .text(s.plaintextSha256), .int(s.size), .text(s.id),
                       .text(FileStatus.deleted.rawValue)])
         }
-        try exec("COMMIT;")
+        }
     }
 
     /// `size` is the EXACT plaintext byte count measured while staging — the SSOT for the file's real size.

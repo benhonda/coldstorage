@@ -94,7 +94,7 @@ import Foundation
         // Gone from the browse tree + the count…
         #expect(try j.listFiles().isEmpty)
         #expect(try j.summary().total == 0)
-        // …but the row + its blob mapping survive (for a future repack/GC): restore can still locate it.
+        // …but the row + its blob mapping survive (so the blob can be reclaimed once every member is deleted): restore can still locate it.
         #expect(try j.fileMapping("a/x.jpg")?.blobId == "blob-1")
     }
 

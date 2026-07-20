@@ -78,8 +78,11 @@ engines. `DaemonService` holds a single `private var session: UserSession?` and 
 | **Frame** | fixed 4 MiB plaintext chunk, AEAD-sealed individually | the **integrity + encryption granularity** |
 | **Part** | S3 multipart part (64 MiB = 16 frames) | the **upload + resume + ETag granularity** |
 
-**Blob sizing:** small files batch into blobs **capped ~1 GB**, grouped by locality (same folder/album) so a
-folder-restore pulls few blobs; large files get their own blob. Over-retrieval from batching is economically
+**Blob sizing:** small files batch into blobs **capped at 256 MiB**, grouped by locality (same folder/album)
+so a folder-restore pulls few blobs; large files get their own blob. The cap is set by two forces pulling
+opposite ways: smaller blobs reclaim deleted space more finely (S3 deletes whole objects), but a cap at or
+below `partSize` (64 MiB) makes every batched blob a single part, so `maxPartsInFlight` never fills and a
+deposit serialises. 256 MiB = 4 parts, which fills the window and is still 4× finer than the old 1 GiB. Over-retrieval from batching is economically
 negligible (Deep Archive retrieval is $0.0025/GB and egress is ranged to the file's bytes) — blobs stay
 bounded for latency sanity, not cost.
 

@@ -68,7 +68,7 @@ export function allowanceBytesFor(subscriptionActive: boolean): number {
  * TWO cost drivers, not one, because a restore spends AWS money in two different shapes:
  *
  *   - `thawBytes` — the **whole blob objects** that have to be thawed out of Deep Archive. S3's
- *     RestoreObject works on whole objects, and blobs are packed up to 1 GiB (`BlobPlanner.blobCap`),
+ *     RestoreObject works on whole objects, and blobs are packed up to 256 MiB (`BlobPlanner.blobCap`),
  *     so getting one 5 MB photo back means thawing the entire 1 GiB blob it happens to sit in. We pay
  *     for all of it.
  *   - `egressBytes` — what the user actually downloads (the ranged GETs of their files).

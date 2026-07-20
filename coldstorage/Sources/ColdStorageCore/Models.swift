@@ -84,19 +84,6 @@ public struct SourceRow: Sendable {
     }
 }
 
-/// `deleted` is a TOMBSTONE: the user removed the file from their tree, but its row + blob mapping are
-/// kept (bytes reclaim is deferred to a future repack/GC — deep storage has a 180-day minimum, so eager
-/// deletion saves nothing). Tombstoned files drop out of `listFiles` and the file count.
-///
-/// `folder` is a FOLDER MARKER: a path-only row (size 0, no blob) that anchors a just-created EMPTY folder
-/// so it survives a reload — otherwise an empty folder, having no files beneath it to imply its path, would
-/// vanish (the tree is derived from file paths). The marker is excluded from the file count and never
-/// becomes a browsable file; `movePath`/`deletePath` sweep it by path like any other row. Once real files
-/// land under the folder the marker is redundant (the path is implied) but harmless — the UI dedups by name.
-/// `uploading`/`verifying` are declared but never persisted — the journal only ever writes `planned`,
-/// `archived`, `failed`, `deleted` and `folder` (plus `discovered` as the decoder's fallback). They're the
-/// hooks for a future per-file progress state. A `staging` case sat here too until the upload engine stopped
-/// staging (2026-07-14) — it named a step that no longer exists, so it's gone.
 /// Where one logical file's bytes live inside its blob's ciphertext — measured while sealing, written when
 /// the blob is archived. Carried as a value type so the whole blob's links can be committed in one
 /// transaction (see `Journal.markBlobArchived`) rather than file-by-file.
@@ -113,6 +100,19 @@ public struct FileSpan: Sendable {
     }
 }
 
+/// `deleted` is a TOMBSTONE: the user removed the file from their tree, but its row + blob mapping are
+/// kept (bytes are reclaimed once every file sharing their blob is deleted — see `UploadEngine.reapDeleted` — deep storage has a 180-day minimum, so eager
+/// deletion saves nothing). Tombstoned files drop out of `listFiles` and the file count.
+///
+/// `folder` is a FOLDER MARKER: a path-only row (size 0, no blob) that anchors a just-created EMPTY folder
+/// so it survives a reload — otherwise an empty folder, having no files beneath it to imply its path, would
+/// vanish (the tree is derived from file paths). The marker is excluded from the file count and never
+/// becomes a browsable file; `movePath`/`deletePath` sweep it by path like any other row. Once real files
+/// land under the folder the marker is redundant (the path is implied) but harmless — the UI dedups by name.
+/// `uploading`/`verifying` are declared but never persisted — the journal only ever writes `planned`,
+/// `archived`, `failed`, `deleted` and `folder` (plus `discovered` as the decoder's fallback). They're the
+/// hooks for a future per-file progress state. A `staging` case sat here too until the upload engine stopped
+/// staging (2026-07-14) — it named a step that no longer exists, so it's gone.
 public enum FileStatus: String, Codable, Sendable { case discovered, planned, uploading, verifying, archived, failed, deleted, folder }
 /// `reaped` = every file in the blob was deleted and the object has been tagged for lifecycle expiry. A
 /// terminal state, distinct from `aborted` (which is an upload that never landed): the bytes DID land, were

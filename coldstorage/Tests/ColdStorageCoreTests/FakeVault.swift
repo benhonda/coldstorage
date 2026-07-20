@@ -30,13 +30,17 @@ final class FakeVault: Vault, @unchecked Sendable {
     /// Hold each `uploadPart` this long, so uploads genuinely overlap in flight — the knob the concurrency
     /// and run-overlap tests need. 0 = instant (the default; parts drain before the next dispatches).
     let delayMs: Int
+    /// Parts to hold concurrently before any is allowed to complete — see `uploadPart`. 0/1 disables.
+    let gateUntilConcurrent: Int
 
     private var _current = 0
     /// High-water mark of concurrent `uploadPart` calls — how the concurrency tests prove parallelism is real
     /// and stays within the cap, without timing.
     private(set) var maxConcurrentParts = 0
 
-    init(failKeys: Set<String> = [], alreadyOnS3: Set<Int> = [], retainParts: Bool = true, delayMs: Int = 0) {
+    init(failKeys: Set<String> = [], alreadyOnS3: Set<Int> = [], retainParts: Bool = true, delayMs: Int = 0,
+         gateUntilConcurrent: Int = 0) {
+        self.gateUntilConcurrent = gateUntilConcurrent
         self.failKeys = failKeys; self.alreadyOnS3 = alreadyOnS3
         self.retainParts = retainParts; self.delayMs = delayMs
     }
@@ -61,6 +65,18 @@ final class FakeVault: Vault, @unchecked Sendable {
     func uploadPart(key: String, uploadId: String, number: Int, data: Data) async throws -> (etag: String, sha: String) {
         if failKeys.contains(key) { throw ColdStorageError.s3("InvalidStorageClass (simulated permanent)") }
         lock.withLock { _current += 1; maxConcurrentParts = max(maxConcurrentParts, _current) }
+        // **Hold each part until `gateUntilConcurrent` of them are in flight together.** A fixed sleep only
+        // *probably* overlaps: the engine has to encrypt the next part within the delay window, and on a
+        // loaded machine it sometimes doesn't — so the high-water mark reads 1 and a real, working
+        // implementation fails the test. (Observed: 1 failure in 3 runs.) Waiting on the actual condition
+        // makes the assertion deterministic, and a genuinely sequential shipper can never satisfy it: it
+        // waits out the timeout and the test fails for the right reason.
+        if gateUntilConcurrent > 1 {
+            let deadline = Date().addingTimeInterval(5)
+            while lock.withLock({ _current }) < gateUntilConcurrent, Date() < deadline {
+                try await Task.sleep(for: .milliseconds(2))
+            }
+        }
         if delayMs > 0 { try await Task.sleep(for: .milliseconds(delayMs)) }
         lock.withLock {
             _current -= 1
@@ -75,11 +91,14 @@ final class FakeVault: Vault, @unchecked Sendable {
             _objects[key] = byNumber.keys.sorted().reduce(Data()) { $0 + byNumber[$1]! }
         }
     }
-    private var _reclaimable: Set<String> = []
+    /// Every `markReclaimable` CALL, in order — not a Set. A Set made a second tag on the same key
+    /// invisible, so `aReclaimedBlobIsNotTaggedTwice` passed whether or not the blob was re-tagged.
+    private var _reclaimCalls: [String] = []
     /// Keys the engine asked to have reclaimed — the fake never deletes, matching production, where a
     /// lifecycle rule does the expiry and the client only ever tags.
-    var reclaimableKeys: Set<String> { lock.withLock { _reclaimable } }
-    func markReclaimable(key: String) async throws { lock.withLock { _ = _reclaimable.insert(key) } }
+    var reclaimableKeys: Set<String> { lock.withLock { Set(_reclaimCalls) } }
+    var reclaimCalls: [String] { lock.withLock { _reclaimCalls } }
+    func markReclaimable(key: String) async throws { lock.withLock { _reclaimCalls.append(key) } }
 
     func verify(key: String) async throws {
         guard !retainParts || lock.withLock({ _objects[key] != nil }) else { throw ColdStorageError.s3("no such object \(key)") }

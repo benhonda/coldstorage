@@ -1,7 +1,7 @@
 import Foundation
 import Crypto
 
-/// Batches small files into locality-grouped blobs (cap ~1 GB), large files solo, ordered
+/// Batches small files into locality-grouped blobs (cap 256 MiB — see `init`), large files solo, ordered
 /// newest/most-precious-first so "your last 30 days are safe ✓" lands quickly. Pure + deterministic:
 /// the SAME files always produce the SAME blob ids, which is what lets a killed upload RESUME on
 /// re-run (the journal lookup hits) instead of restarting.
@@ -13,10 +13,20 @@ public struct BlobPlanner: Sendable {
     /// files sit there un-reclaimable until every file in the blob is gone. A 1 GiB cap (the original) meant
     /// deleting a few files out of a big folder returned nothing.
     ///
-    /// 64 MiB is the floor worth paying for. Ingest is billed per request, so smaller blobs cost more:
-    /// ~$0.42 per 500 GB at 1 GiB, ~$1.20 at 64 MiB, ~$4.80 at 16 MiB — against a $3.05/yr margin, 16 MiB
-    /// is off the table and 64 MiB buys 16× finer reclamation for well under a dollar.
-    public init(blobCap: Int = 64 << 20, smallFileMax: Int = 64 << 20) {
+    /// **256 MiB — the smallest cap that keeps the upload parallel.** Ingest is billed per request, so
+    /// smaller blobs cost more (~$0.42 per 500 GB at 1 GiB, ~$0.60 at 256 MiB, ~$1.20 at 64 MiB), and all
+    /// of those fit the margin. Cost is not what sets the floor — CONCURRENCY is.
+    ///
+    /// A blob is uploaded in `S3Store.partSize` (64 MiB) parts, up to `maxPartsInFlight` (4) at a time, and
+    /// V1 ships one blob at a time. So a cap OF 64 MiB makes every batched blob exactly ONE part: the
+    /// in-flight window can never fill, and a photo deposit degrades to four sequential round trips per
+    /// 64 MiB with no overlap at all — precisely the latency queue §3 warns about, on the path this design
+    /// calls the crown jewel. 256 MiB gives 4 parts, so the window fills, while still being 4× finer than
+    /// the original 1 GiB for reclaiming deleted space.
+    ///
+    /// Going finer than this needs cross-blob concurrency first (§2, "a tunable later"); until that exists,
+    /// blob size and upload throughput are the same dial.
+    public init(blobCap: Int = 256 << 20, smallFileMax: Int = 64 << 20) {
         self.blobCap = blobCap; self.smallFileMax = smallFileMax
     }
 
@@ -57,10 +67,11 @@ public struct BlobPlanner: Sendable {
     /// behaviour for a planner; it is only destructive when applied to bytes already in S3, and the engine is
     /// what prevents that. Do not "fix" it here by making ids order-independent: the id IS the resume key.
     ///
-    /// Orphaned objects are **not** harmless, and the abort/lifecycle rules do not cover them — those sweep
-    /// incomplete multipart uploads, while an orphan is a completed object. Nothing in this codebase deletes
-    /// from S3, orphans count against the user's quota (`used` is seeded from a live S3 listing), and Deep
-    /// Archive bills a 180-day minimum regardless. There is still no reaper; see `IncrementalDepositTests`.
+    /// Orphaned objects count against the user's quota (`used` is seeded from a live S3 listing) and bill for
+    /// Deep Archive's 180-day minimum regardless, so they are not harmless. `UploadEngine.reapDeleted` now
+    /// reclaims them — but only once EVERY file in a blob is deleted, so an orphan produced by re-grouping
+    /// (whose members are still live in their new blob) is never reclaimed. Not re-planning archived files is
+    /// what stops those existing in the first place; see `IncrementalDepositTests`.
     ///
     /// `prefix` namespaces every produced blob's S3 key (a signed-in user's `blobs/<identity-id>`). It does
     /// NOT affect the content-derived blob `id` — only where the object lands — so the same files

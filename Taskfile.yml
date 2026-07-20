@@ -230,7 +230,9 @@ tasks:
         FOREIGN_KEY=$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix blobs/ --query "Contents[?!starts_with(Key, 'blobs/$IDENTITY/')] | [0].Key" --output text --profile {{.AWS_PROFILE}})
         PASS_ALL=1
         echo "── assert 1: PUT own prefix → ALLOWED ──"
-        if aws s3api put-object --bucket "$BUCKET" --key "blobs/$IDENTITY/gate-probe.bin" --body "$TMP/probe" --region "$REGION" > /dev/null 2>"$TMP/e1"; then
+        # DEEP_ARCHIVE, deliberately: assert 4 tags this object, and tagging a STANDARD object would prove
+        # nothing about whether tagging works on COLD data — which is what space reclamation depends on.
+        if aws s3api put-object --bucket "$BUCKET" --key "blobs/$IDENTITY/gate-probe.bin" --body "$TMP/probe" --storage-class DEEP_ARCHIVE --region "$REGION" > /dev/null 2>"$TMP/e1"; then
           echo "✓ allowed"; else echo "✗ FAIL — own-prefix PUT denied: $(cat "$TMP/e1")"; PASS_ALL=0; fi
         echo "── assert 2: PUT another user's prefix → DENIED ──"
         if aws s3api put-object --bucket "$BUCKET" --key "blobs/ca-central-1:00000000-dead-beef-0000-000000000000/gate-probe.bin" --body "$TMP/probe" --region "$REGION" > /dev/null 2>"$TMP/e2"; then
@@ -244,7 +246,28 @@ tasks:
         else
           echo "── assert 3 skipped: no foreign object in the vault to probe ──"
         fi
-        [ "$PASS_ALL" = "1" ] && echo "GATE PASSED — per-user boundary holds" || { echo "GATE FAILED"; exit 1; }
+        echo "── assert 4: TAG own COLD object → ALLOWED (space reclamation depends on this) ──"
+        # The whole delete-frees-space design rests on the daemon being able to tag a Deep Archive object
+        # WITHOUT a thaw: the daemon may only mark bytes reclaimable (s3:PutObjectTagging), never delete
+        # them, and a bucket lifecycle rule does the expiry. If this is denied, or the tag silently fails to
+        # land, deleted files never free space and nothing anywhere would say so.
+        #
+        # Tested HERE rather than from the Mac because this runs as the real Cognito identity. The Mac-side
+        # aws CLI authenticates as the legacy `-daemon` IAM user, which the daemon has not used since
+        # 2026-07-14 — a check against that principal proves nothing about production either way.
+        if aws s3api put-object-tagging --bucket "$BUCKET" --key "blobs/$IDENTITY/gate-probe.bin" \
+             --tagging 'TagSet=[{Key=coldstorage-reap,Value=true}]' --region "$REGION" > /dev/null 2>"$TMP/e4"; then
+          # Read it back with the ADMIN profile, not the test identity: proving the tag LANDED shouldn't
+          # require granting the daemon s3:GetObjectTagging it has no runtime use for (least privilege).
+          GOT=$(aws s3api get-object-tagging --bucket "$BUCKET" --key "blobs/$IDENTITY/gate-probe.bin" \
+                  --query "TagSet[?Key=='coldstorage-reap'].Value | [0]" --output text \
+                  --profile {{.AWS_PROFILE}} --region "$REGION" 2>/dev/null)
+          [ "$GOT" = "true" ] && echo "✓ tagged + verified on a DEEP_ARCHIVE object (no thaw)" \
+            || { echo "✗ FAIL — PutObjectTagging returned OK but the tag is not on the object (got: $GOT)"; PASS_ALL=0; }
+        else
+          echo "✗ FAIL — could not tag own cold object: $(cat "$TMP/e4")"; PASS_ALL=0
+        fi
+        [ "$PASS_ALL" = "1" ] && echo "GATE PASSED — per-user boundary holds + reclamation can mark bytes" || { echo "GATE FAILED"; exit 1; }
 
   daemon:reset:vault:
     desc: "[devcontainer] DESTRUCTIVE: delete every object under blobs/ in the REAL production vault (the pre-auth dogfood uploads at blobs/<hash> AND any per-user blobs/<identityId>/ objects). Confirm by typing the bucket name. Deep Archive objects delete fine (early-delete fee is pennies at dogfood scale)."
@@ -380,47 +403,6 @@ tasks:
       - "{{if .REMOVE}}swift run coldstorectl {{.SOCK}} removeExclude pattern={{.REMOVE}}{{end}}"
       - swift run coldstorectl {{.SOCK}} listExcludes
 
-  daemon:mac:verify-tagging:
-    desc: "PROVE PutObjectTagging works on a COLD Deep Archive object (no thaw) — the assumption the whole space-reclaim design rests on. Picks a blob from the running daemon automatically (BLOB=<id> to override). Writes a harmless PROBE tag (never the reap tag, so this can't trigger an expiry), reads it back, then clears it. If this fails, reclamation silently no-ops in production and deleted files never free space."
-    dir: coldstorage
-    vars:
-      CREDS: "{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
-    cmds:
-      - |
-        [ -f "{{.CREDS}}" ] && { set -a; . "{{.CREDS}}"; set +a; }
-        bucket="${COLDSTORE_BUCKET:?missing COLDSTORE_BUCKET — run tf:coldstorage:creds-export in the devcontainer}"
-        region="${AWS_REGION:-ca-central-1}"
-        # BLOB is OPTIONAL: with none given, ask the running daemon for the first file that HAS a blob and
-        # use that. Nobody should have to eyeball a hash out of a listFiles dump to run a health check.
-        blob="{{.BLOB}}"
-        if [ -z "$blob" ]; then
-          sock="{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
-          test -S "$sock" || { echo "no BLOB given and no running daemon at $sock — pass BLOB=<blobId>, or start the daemon (task daemon:mac:bootstrap)"; exit 1; }
-          blob="$(./.build/release/coldstorectl "$sock" listFiles \
-            | python3 -c "import json,sys;d=json.load(sys.stdin);r=[f for f in (d.get('result') or []) if f.get('blobId')];print(r[0]['blobId'] if r else '')")"
-          : "${blob:?the vault has no archived files yet — deposit something first, then re-run}"
-          echo "using blob $blob (first archived file the daemon reports)"
-        fi
-        key="blobs/${blob}"
-        # A PROBE key, deliberately NOT `coldstorage-reap`. Tagging a real blob with the reap tag would make
-        # it eligible for the lifecycle rule, and the daily sweep could expire it before the cleanup below
-        # runs — destroying real data to test a mechanism. The probe proves the same capability with none of
-        # that risk: what's in question is whether PutObjectTagging is ALLOWED and LANDS on a cold object.
-        echo "── storage class (must be DEEP_ARCHIVE for this to prove anything) ──"
-        aws s3api head-object --bucket "$bucket" --key "$key" \
-          --query 'StorageClass' --output text --profile coldstorage --region "$region"
-        echo "── PUT probe tag (no thaw requested — a thaw here would invalidate the test) ──"
-        aws s3api put-object-tagging --bucket "$bucket" --key "$key" \
-          --tagging 'TagSet=[{Key=coldstorage-tagging-probe,Value=true}]' \
-          --profile coldstorage --region "$region" && echo "  PUT ok"
-        echo "── GET it back (proves it actually landed, not just that the call returned) ──"
-        aws s3api get-object-tagging --bucket "$bucket" --key "$key" \
-          --query 'TagSet' --output json --profile coldstorage --region "$region"
-        echo "── clear the probe tag ──"
-        aws s3api put-object-tagging --bucket "$bucket" --key "$key" \
-          --tagging 'TagSet=[]' --profile coldstorage --region "$region" && echo "  cleared"
-        echo "PASS — tagging works on a cold object; reclamation will function in production."
-
   daemon:mac:live:
     desc: "Drive the INSTALLED launchd daemon (real prod AWS / Deep Archive), e.g. `task daemon:mac:live -- getStatus` · `-- addSource path=/abs/dir` · `-- triggerNow` · `-- watch`. Uses the release binary built by daemon:mac:install."
     dir: coldstorage
@@ -440,17 +422,9 @@ tasks:
         [ -f "{{.CREDS}}" ] && { set -a; . "{{.CREDS}}"; set +a; }
         bucket="${COLDSTORE_BUCKET:?missing COLDSTORE_BUCKET — run tf:coldstorage:creds-export in the devcontainer}"
         region="${AWS_REGION:-ca-central-1}"
-        blob="{{.BLOB}}"
-        if [ -z "$blob" ]; then
-          sock="{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
-          test -S "$sock" || { echo "no BLOB given and no running daemon at $sock — pass BLOB=<blobId>, or start the daemon (task daemon:mac:bootstrap)"; exit 1; }
-          blob="$(./.build/release/coldstorectl "$sock" listFiles \
-            | python3 -c "import json,sys;d=json.load(sys.stdin);r=[f for f in (d.get('result') or []) if f.get('blobId')];print(r[0]['blobId'] if r else '')")"
-          : "${blob:?the vault has no archived files yet — deposit something first, then re-run}"
-          echo "using blob $blob (first archived file the daemon reports)"
-        fi
-        echo "── HEAD s3://${bucket}/blobs/${blob} ──"
-        aws s3api head-object --bucket "$bucket" --key "blobs/${blob}" \
+        key="$(./scripts/resolve-blob-key.sh "{{.BLOB}}")" || exit 1
+        echo "── HEAD s3://${bucket}/${key} ──"
+        aws s3api head-object --bucket "$bucket" --key "$key" \
           --query '{StorageClass:StorageClass,Size:ContentLength,Restore:Restore}' \
           --output table --profile coldstorage --region "$region"
 

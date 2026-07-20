@@ -149,10 +149,14 @@ public actor UploadEngine {
             let members = try journal.blobMembers(blobId)
             let present = members.compactMap { scanned[$0] }
             guard present.count == members.count else {
-                log("UploadEngine: orphan blob \(blobId) NOT repairable — \(members.count - present.count) of \(members.count) member(s) missing from the scan; leaving it linked as-is")
+                log("UploadEngine: orphan blob \(blobId) NOT repairable — \(members.count - present.count) of \(members.count) member(s) missing from the scan; its files stay UNLINKED until they are back")
                 continue
             }
-            let repair = BlobPlan(id: blobId, items: present.sorted(by: BlobPlanner.newestFirst), prefix: prefix)
+            // Members come back in SEAL order (`blob_members.ordinal`), so `present` is already correct.
+            // This used to re-sort with `newestFirst`, which reads `isFavorite` — a flag the user can toggle
+            // at any time, silently re-ordering the blob and pointing every recomputed span at the wrong
+            // bytes. Order is journal truth now, not a re-computation over inputs that are free to change.
+            let repair = BlobPlan(id: blobId, items: present, prefix: prefix)
             log("UploadEngine: orphan blob \(blobId) — re-linking \(present.count) file(s) (no re-upload)")
             do { _ = try await archive(repair, onFileArchived: onFileArchived) }
             catch { log("UploadEngine: orphan blob \(blobId) re-link FAILED: \(error)") }

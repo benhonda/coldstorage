@@ -5,7 +5,8 @@ import Foundation
 /// Parts go up in parallel now — a link with headroom is filled instead of sitting idle between one-part-at-
 /// a-time round trips. These pin the two things that make that safe rather than reckless: it ACTUALLY
 /// overlaps (or there's no speedup), and it never exceeds the in-flight cap (or memory is unbounded and we're
-/// back to the crash). Counting, not timing — deterministic.
+/// back to the crash). The overlap assertion waits on the real condition rather than a sleep, so a loaded
+/// machine can't make a working implementation look sequential.
 @Suite struct ConcurrentUploadTests {
 
     /// A file several parts long, uploaded through a delaying `FakeVault` (which tracks the concurrency
@@ -26,7 +27,8 @@ import Foundation
         for _ in 0..<(6 * 64) { try fh.write(contentsOf: mib) }
         try fh.close()
 
-        let probe = FakeVault(delayMs: 20)
+        // Gate on the CONDITION (2 parts in flight), not on a sleep long enough to probably overlap.
+        let probe = FakeVault(delayMs: 20, gateUntilConcurrent: 2)
         let journal = try Journal(path: base.appendingPathComponent("j.sqlite").path)
         let engine = UploadEngine(journal: journal, store: probe,
                                   keys: LocalFileKEK(path: base.appendingPathComponent("kek.bin").path))
