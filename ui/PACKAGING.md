@@ -87,26 +87,11 @@ wired into `main/index.ts` packaged-only:
   It confirms once, then does the whole thing: bump → commit + push → build → sign → notarize → upload →
   verify the assets → publish. When it finishes, the tag exists and the feed is live.
 
-  There is no ordering to remember, because there are no steps to order. Everything that can refuse runs
-  **before the first side effect**, and where the fix is obvious it just asks instead of stopping:
-
-  | Repo state | What happens |
-  |---|---|
-  | Unpushed commits | Lists them, offers to push and carry on |
-  | Uncommitted changes | Offers to set them aside and release **what's committed** — restored automatically |
-  | Behind `origin/main` | Stops — pull first |
-  | Diverged from `origin/main` | Stops — reconcile first |
-  | Not on `main` / missing creds / no `gh` | Stops with the one line you need |
-
-  **Why dirty trees get stashed rather than ignored:** electron-builder builds the *working tree*, not `HEAD`.
-  Releasing dirty would bake your open edits into a binary whose tag points at the committed code — a tag that
-  doesn't reproduce its own binary. So "release what's committed" has to mean literally building the committed
-  state. The stash is registered under `defer:`, which Task runs even when the release fails or is interrupted,
-  so your changes come back whether notarization succeeded, blew up, or you Ctrl-C'd it. If the restore ever
-  conflicts, the task prints the exact `git stash pop <ref>` to recover — nothing is ever silently dropped.
-
-  Being **behind** or **diverged** still stops, because the tag attaches to origin's head: continuing would
-  ship someone else's commits that you never built or tested. That's a merge decision, not a release decision.
+  It needs a **clean `main`, in sync with origin** — otherwise it prints one line saying what's wrong and
+  exits, having done nothing. It does not touch your git state beyond committing the version bump: sorting
+  out a dirty tree or unpushed commits is yours. (Why it insists: electron-builder builds the *working tree*,
+  and the tag GitHub creates points at `origin/main`'s head — so anything other than clean-and-in-sync ships
+  a binary its own tag doesn't reproduce.)
 
   The individual pieces (`ui:version:bump`, `ui:mac:release`, `ui:mac:release:verify`) still exist and are
   still individually runnable, but they're the engine — reach for them when something has gone wrong midway,
@@ -120,16 +105,10 @@ wired into `main/index.ts` packaged-only:
   commits would ship a binary that no tag reproduces (bad for a feed users auto-pull). Bypass with
   `RELEASE_FORCE=1` if you truly mean to. To rehearse a signed + notarized build **without** publishing (no
   release, no tag, no `GH_TOKEN`, no guard), use **`task ui:mac:release:dryrun`** → `ui/dist/`.
-- **Can't clobber a live release.** Three layers, all failing *closed* (2026-07-19 — the bump guard and the
-  draft pre-create both used to warn-and-continue when `gh` was missing, which was the one path that could
-  overwrite a published feed):
-  1. `gh` is **required** — it backs the other two, so its absence is a hard stop, not a skipped check.
-  2. **Bump guard** — refuses unless `ui/package.json`'s version is strictly ahead of `releases/latest`.
-     A GitHub read that fails now blocks rather than skipping; a guard that opts out when it can't see is
-     no guard.
-  3. **Draft pre-create** — refuses if `v<version>` exists and is already **published**. This catches what
-     the bump guard structurally can't: `releases/latest` ignores *prereleases*, so a published prerelease
-     at the same version would otherwise slip through and have its live assets overwritten.
+- **Can't ship the same version twice** (2026-07-19). `gh` is required, the bump guard refuses unless
+  `ui/package.json` is strictly ahead of `releases/latest`, and the draft pre-create refuses if
+  `v<version>` already exists and is published. All three fail closed — previously the first two
+  warn-and-continued when `gh` was missing, which could overwrite a live feed.
 
 ## Step #2 — app owns its daemon (approach **B**): CONNECT ✅, IDENTITY ❌
 

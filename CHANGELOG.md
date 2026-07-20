@@ -4,8 +4,7 @@
 
 - feat(ui): `task ui:release` — one command for the whole release (bump → commit + push → sign → notarize → upload → verify → publish), all guards front-loaded.
 - fix(ui): the release path can no longer clobber a live update feed — `gh` is required, the bump guard blocks on an unreadable GitHub, and an already-published `v<version>` is refused.
-- fix(ui): `ui:release` preflight tells ahead from behind — unpushed commits prompt to push, diverged/behind still stop.
-- feat(ui): `ui:release` offers to autostash a dirty tree and release the committed state — restored via `defer:` even on failure or Ctrl-C.
+- refactor(ui): `ui:release` refuses on anything git-shaped instead of driving git for you — the autostash/`defer:` restore and the push/stash prompts are gone (the autostash stranded a stash on its first real run).
 - feat(ui): real macOS app icon — `task ui:icon:build` composites the delivered mark onto the brand tile into `build/icon.png` (no `.icns`, no Xcode).
 - feat(site): real ice-cube brand mark — inline `BrandMark` DS component (one geometry, light/dark deltas as CSS vars) replaces the `ac_unit` icon in nav + footer, plus the favicon/PWA package in `public/` linked from `root.tsx`.
 
