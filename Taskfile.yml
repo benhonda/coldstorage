@@ -919,7 +919,7 @@ tasks:
         : "${APPLE_APP_SPECIFIC_PASSWORD:?missing — an app-specific password from appleid.apple.com (see ui/PACKAGING.md)}"
 
   ui:mac:release:
-    desc: "[Mode 2: packaged app] Build + SIGN + NOTARIZE ColdStorage.app, then PUBLISH the .dmg/.zip + `latest-mac.yml` update feed to a GitHub Release (PROD.md Phase 6 — the auto-updater reads this feed). Bump `ui/package.json` version first. REFUSES unless you're on a clean, pushed `main`: GitHub tags main's latest REMOTE commit, so a dirty / wrong-branch / unpushed tree would ship a binary no tag reproduces (bypass with RELEASE_FORCE=1). For a signed build WITHOUT publishing, use ui:mac:release:dryrun. Needs the Developer ID cert + notary creds + GH_TOKEN (env or .env). See ui/PACKAGING.md."
+    desc: "[engine — you probably want `task ui:release`] Build + SIGN + NOTARIZE ColdStorage.app and upload the .dmg/.zip + `latest-mac.yml` to a DRAFT GitHub Release (PROD.md Phase 6 — the auto-updater reads this feed). Leaves the draft unpublished; `ui:release` wraps this with the bump, the asset check and the publish. Bump `ui/package.json` version first if running it bare. REFUSES unless you're on a clean, pushed `main`: GitHub tags main's latest REMOTE commit, so a dirty / wrong-branch / unpushed tree would ship a binary no tag reproduces (bypass with RELEASE_FORCE=1). For a signed build WITHOUT publishing, use ui:mac:release:dryrun. Needs the Developer ID cert + notary creds + GH_TOKEN (env or .env). See ui/PACKAGING.md."
     dir: ui
     deps: [ui:_ensure-electron, ui:_require-apple-creds]
     vars:
@@ -948,22 +948,37 @@ tasks:
         fi
       - |
         : "${GH_TOKEN:?missing — a GitHub token with 'repo' scope to publish the release; see ui/PACKAGING.md}"
+      # `gh` is REQUIRED, not optional. It backs two things that both fail dangerously without it: the bump
+      # guard below, and the draft pre-create further down. This used to warn-and-continue, and that combination
+      # is the one path that can overwrite a LIVE release: no bump guard → electron-builder uploads onto the
+      # already-published v<same-version> release → `latest-mac.yml` is rewritten for a version already in the
+      # wild, and every installed app reads the clobbered feed. Hard-fail instead: a missing CLI is a 30-second
+      # fix, a clobbered update feed is not.
+      - |
+        command -v gh >/dev/null 2>&1 || {
+          echo "✋ 'gh' (GitHub CLI) is required to release — it backs the version-bump guard and the draft pre-create."
+          echo "   Without it a forgotten bump can overwrite the LIVE release's update feed. Install: brew install gh"
+          exit 1
+        }
       # Bump guard (dummy-proofing): refuse unless ui/package.json's version is strictly AHEAD of the latest
       # PUBLISHED GitHub release, so re-running ui:mac:release WITHOUT bumping can't republish / no-op the same
       # version. `releases/latest` ignores drafts + prereleases. Fails fast — before the minutes-long
-      # build/sign/notarize. If GitHub can't be read (no gh / none published yet / offline), it warns +
-      # continues rather than block (the common footgun — "forgot to bump" — needs a successful read anyway).
+      # build/sign/notarize. A GitHub read that fails now BLOCKS (see the gh guard above): the whole point of
+      # this check is the "forgot to bump" footgun, and a guard that skips itself when it can't see is no guard.
       - |
         pkg="$(node -p "require('./package.json').version")"
-        latest=""
-        command -v gh >/dev/null 2>&1 && latest="$(gh api repos/benhonda/coldstorage/releases/latest --jq '.tag_name' 2>/dev/null | sed 's/^v//')"
+        if ! latest="$(gh api repos/benhonda/coldstorage/releases/latest --jq '.tag_name' 2>/dev/null | sed 's/^v//')"; then
+          echo "✋ Couldn't reach GitHub to read the latest published release. Refusing to release blind — the bump guard is what stops a live feed being overwritten. Check your connection / GH_TOKEN and retry."
+          exit 1
+        fi
         if [ -z "$latest" ]; then
-          echo "⚠ couldn't read the latest published release from GitHub (no gh / none published / offline) — skipping the bump guard for $pkg."
-        elif node -e 'const p=process.argv[1].split(".").map(Number),l=process.argv[2].split(".").map(Number);process.exit((p[0]!==l[0]?p[0]>l[0]:p[1]!==l[1]?p[1]>l[1]:p[2]>l[2])?0:1)' "$pkg" "$latest"; then
+          # Genuinely nothing published yet (first-ever release) — nothing to be ahead of.
+          echo "no published release yet — first release of $pkg, bump guard n/a."
+        elif node -e 'const p=process.argv[1].split(".").map(Number),l=process.argv[2].split(".").map(Number);if([...p,...l].some(Number.isNaN)){console.error("non-numeric semver — compare by hand");process.exit(2)};process.exit((p[0]!==l[0]?p[0]>l[0]:p[1]!==l[1]?p[1]>l[1]:p[2]>l[2])?0:1)' "$pkg" "$latest"; then
           echo "version $pkg is ahead of the latest release ($latest) — ok to release."
         else
           echo "✋ Refusing to release: ui/package.json version ($pkg) is NOT ahead of the latest published release ($latest)."
-          echo "   Bump \"version\" in ui/package.json to a higher patch/minor/major, commit + push, then re-run 'task ui:mac:release'."
+          echo "   Run 'task ui:version:bump LEVEL=patch', commit + push, then re-run 'task ui:mac:release'."
           exit 1
         fi
       - echo "Building a signed + notarized ColdStorage and publishing to GitHub Releases (benhonda/coldstorage)…"
@@ -975,15 +990,21 @@ tasks:
       # Pre-create the draft release so electron-builder finds ONE release to upload to. A draft has no git
       # tag, so electron-builder's find-by-tag misses it and its CONCURRENT asset uploads each create a fresh
       # draft (electron-builder #6676) — you get duplicate v<version> drafts with the assets split across them.
-      # Idempotent: skipped if the draft already exists. Needs gh (authed via GH_TOKEN, required above); if gh
-      # is absent we warn + continue (electron-builder still publishes, just with the duplicate-draft risk).
+      # Idempotent: reuses the draft if it already exists (gh is guaranteed present — required above).
+      # Last line of defence: if v<version> exists but is ALREADY PUBLISHED, refuse. The bump guard above
+      # normally catches this, but it compares against `releases/latest`, which ignores PREreleases — so a
+      # published prerelease at this exact version would slip past it and get its live assets overwritten.
       - |
         ver="$(node -p "require('./package.json').version")"   # bare semver, e.g. 0.1.0
         tag="v${ver}"                                          # git tag, e.g. v0.1.0 (electron-builder's default)
-        if ! command -v gh >/dev/null 2>&1; then
-          echo "⚠ gh not found — skipping draft pre-create; electron-builder may create duplicate $tag drafts (#6676). Install gh to prevent it."
-        elif gh release view "$tag" --repo benhonda/coldstorage >/dev/null 2>&1; then
-          echo "release $tag already exists — electron-builder will upload to it"
+        if state="$(gh release view "$tag" --repo benhonda/coldstorage --json isDraft --jq '.isDraft' 2>/dev/null)"; then
+          if [ "$state" != "true" ]; then
+            echo "✋ Refusing to release: $tag already exists on GitHub and is PUBLISHED (not a draft)."
+            echo "   Uploading onto it would overwrite the live update feed for a version already in the wild."
+            echo "   Run 'task ui:version:bump LEVEL=patch', commit + push, then re-run."
+            exit 1
+          fi
+          echo "draft $tag already exists — electron-builder will upload to it"
         else
           # tag = v<semver>, title = bare <semver> — matches how electron-builder names them (no mixed v0.1.0 / 0.1.0).
           gh release create "$tag" --repo benhonda/coldstorage --draft --title "$ver" \
@@ -1176,6 +1197,128 @@ tasks:
         printf '{\n  "bucket": "%s",\n  "region": "%s",\n  "cognitoIdentityPoolId": "%s",\n  "cognitoUserPoolProvider": "%s",\n  "cognitoDomain": "%s",\n  "cognitoClientId": "%s",\n  "accountApiBaseUrl": "%s"\n}\n' \
           "$bucket" "$region" "$cognito_pool_id" "$cognito_provider" "$cognito_domain" "$cognito_client_id" "$account_api" > "{{.OUT}}"
         echo "baked {{.OUT}}  (ENV={{.ENV}} bucket=$bucket region=$region cognito=${cognito_pool_id:+configured}${cognito_pool_id:-NOT configured} sign-in=${cognito_domain:+configured}${cognito_domain:-NOT configured} account-api=$account_api)"
+
+  ui:release:
+    desc: "☆ SHIP IT — the one release command. Bumps the version, commits + pushes it, builds + signs + notarizes, uploads, verifies the assets, and PUBLISHES the GitHub release so the update feed goes live. LEVEL=patch (default)|minor|major. Everything is checked up front and it stops before doing anything irreversible if the repo isn't in a releasable state. For a signed build WITHOUT publishing, use ui:mac:release:dryrun."
+    dir: ui
+    prompt: "This PUBLISHES a release — every installed app will auto-update to it. Continue?"
+    vars:
+      LEVEL: '{{.LEVEL | default "patch"}}'
+    cmds:
+      # Everything that can refuse runs BEFORE the first side effect (the version commit). A release that
+      # dies halfway leaves a pushed bump with no release behind it — recoverable, but avoidable.
+      - |
+        command -v gh >/dev/null 2>&1 || { echo "✋ 'gh' (GitHub CLI) is required. Install: brew install gh"; exit 1; }
+        : "${GH_TOKEN:?missing — a GitHub token with 'repo' scope; see ui/PACKAGING.md}"
+        : "${APPLE_ID:?missing — your Apple ID email; set it in the env or the gitignored .env (see ui/PACKAGING.md)}"
+        : "${APPLE_TEAM_ID:?missing — your 10-char Apple Developer Team ID (see ui/PACKAGING.md)}"
+        : "${APPLE_APP_SPECIFIC_PASSWORD:?missing — an app-specific password from appleid.apple.com (see ui/PACKAGING.md)}"
+
+        branch=$(git -C "{{.ROOT_DIR}}" rev-parse --abbrev-ref HEAD)
+        [ "$branch" = "main" ] || { echo "✋ On '$branch' — releases are cut from main (GitHub attaches the tag to main's head)."; exit 1; }
+
+        # A dirty tree can't be auto-committed: the bump commit must contain the bump and nothing else, or
+        # the tag ships code you never meant to release.
+        if [ -n "$(git -C "{{.ROOT_DIR}}" status --porcelain)" ]; then
+          echo "✋ Uncommitted changes — commit or stash them first, then re-run. (The release commits only the version bump.)"
+          git -C "{{.ROOT_DIR}}" status --short
+          exit 1
+        fi
+        git -C "{{.ROOT_DIR}}" fetch --quiet origin main || { echo "✋ Couldn't reach origin — a release needs GitHub."; exit 1; }
+        [ "$(git -C "{{.ROOT_DIR}}" rev-parse HEAD)" = "$(git -C "{{.ROOT_DIR}}" rev-parse origin/main)" ] || {
+          echo "✋ Local main isn't in sync with origin/main. Push or pull first."; exit 1; }
+        echo "✓ preflight clean — on main, in sync, creds present."
+      - task: ui:version:bump
+        vars: { LEVEL: "{{.LEVEL}}" }
+      # Commit + push the bump ALONE. This is what the published tag will point at.
+      - |
+        ver="$(node -p "require('./package.json').version")"
+        git -C "{{.ROOT_DIR}}" add ui/package.json
+        git -C "{{.ROOT_DIR}}" commit -m "chore(ui): release v${ver}" --quiet
+        git -C "{{.ROOT_DIR}}" push --quiet origin main
+        echo "✓ pushed the v${ver} bump — the tag will land on this commit."
+      # The engine: build → sign → notarize → upload into a draft (re-runs its own guards; all satisfied above).
+      - task: ui:mac:release
+      - task: ui:mac:release:verify
+      # Flip the verified draft live. `--latest` is what makes `releases/latest` (and the bump guard) move.
+      - |
+        ver="$(node -p "require('./package.json').version")"
+        gh release edit "v${ver}" --repo benhonda/coldstorage --draft=false --latest
+        echo ""
+        echo "🎉 v${ver} is LIVE — tag created, update feed published."
+        echo "   Installed apps pick it up on their next check (launch, or within 6h)."
+
+  ui:version:bump:
+    desc: "Bump ui/package.json's version — LEVEL=patch|minor|major. Normally you don't run this yourself; `task ui:release` does. Edits the file ONLY (no commit, no tag — the tag must come from GitHub publishing the draft)."
+    internal: false
+    dir: ui
+    requires:
+      vars: [LEVEL]
+    cmds:
+      - 'case "{{.LEVEL}}" in patch|minor|major) ;; *) echo "LEVEL must be patch|minor|major (got: {{.LEVEL}})"; exit 1 ;; esac'
+      - |
+        # Rewrites only the "version" value, preserving the file's formatting — `bun pm version` would
+        # also create a git tag, and the tag must come from GitHub publishing the draft (it attaches to
+        # origin/main's head), never from a local `git tag` that could disagree with the built binary.
+        node -e '
+          const fs = require("fs");
+          const path = "./package.json";
+          const src = fs.readFileSync(path, "utf8");
+          const cur = JSON.parse(src).version;
+          const parts = cur.split(".").map(Number);
+          if (parts.length !== 3 || parts.some(Number.isNaN)) {
+            console.error(`✋ current version "${cur}" is not a plain x.y.z — bump it by hand.`);
+            process.exit(1);
+          }
+          const [maj, min, pat] = parts;
+          const next = { patch: [maj, min, pat + 1], minor: [maj, min + 1, 0], major: [maj + 1, 0, 0] }["{{.LEVEL}}"].join(".");
+          fs.writeFileSync(path, src.replace(`"version": "${cur}"`, `"version": "${next}"`));
+          console.log(`ui/package.json: ${cur} → ${next}`);
+        '
+      - echo "→ commit + push, then 'task ui:mac:release'. (Release refuses a dirty or unpushed tree, so it will tell you if you skip a step.)"
+
+  ui:mac:release:verify:
+    desc: "Check the v<version> release has everything the auto-updater needs: latest-mac.yml + the .zip (what electron-updater actually applies) + the .dmg. Normally you don't run this yourself — `task ui:release` runs it between uploading and publishing, so a half-finished upload can never go live."
+    dir: ui
+    cmds:
+      - |
+        command -v gh >/dev/null 2>&1 || { echo "✋ 'gh' (GitHub CLI) is required. Install: brew install gh"; exit 1; }
+        ver="$(node -p "require('./package.json').version")"
+        tag="v${ver}"
+        if ! json="$(gh release view "$tag" --repo benhonda/coldstorage --json isDraft,assets 2>/dev/null)"; then
+          echo "✋ No release $tag on GitHub. Did 'task ui:mac:release' finish? (It uploads into a draft.)"
+          exit 1
+        fi
+        echo "$json" | node -e '
+          const r = JSON.parse(require("fs").readFileSync(0, "utf8"));
+          const names = r.assets.map((a) => a.name);
+          // electron-updater needs the feed + the zip it applies from; the dmg is the human download path.
+          const need = [
+            { label: "latest-mac.yml (the update feed)", hit: (n) => n === "latest-mac.yml" },
+            { label: "a .zip (what electron-updater applies)", hit: (n) => n.endsWith(".zip") },
+            { label: "a .dmg (the download-page artifact)", hit: (n) => n.endsWith(".dmg") },
+          ];
+          console.log(`${names.length} asset(s) on ${r.isDraft ? "DRAFT" : "PUBLISHED"} release:`);
+          for (const n of names) console.log(`   · ${n}`);
+          const missing = need.filter((x) => !names.some(x.hit));
+          if (missing.length) {
+            console.error("\n✋ NOT safe to publish — missing:");
+            for (const m of missing) console.error(`   ✗ ${m.label}`);
+            console.error("\n   Re-run 'task ui:mac:release' (it re-uploads into the same draft).");
+            process.exit(1);
+          }
+          if (!r.isDraft) {
+            console.log("\n✓ assets complete — but this release is ALREADY PUBLISHED, so the feed is live.");
+            process.exit(0);
+          }
+          console.log("\n✓ Safe to publish. Publishing the draft on github.com creates the tag and takes the feed live for every installed app.");
+        '
+
+  ui:icon:build:
+    desc: "Regenerate ui/build/icon.png — the macOS app icon (1024px; electron-builder rasterises every Apple size slot from it). Composites the designer-delivered mark from site/design-mirror/brand/ VERBATIM onto the brand tile, so the icon follows the mark automatically when it changes. Committed output — run this after any brand-mark update, not on every package."
+    dir: ui
+    cmds:
+      - bun scripts/gen-icon.mjs
 
   ui:mac:bootstrap:
     desc: "One-shot setup so the packaged ColdStorage.app can upload: seed creds (Keychain + `coldstorage` profile) → write the app's config.json. Run once after `task tf:coldstorage:creds-export` (devcontainer). The .app analogue of daemon:mac:bootstrap."

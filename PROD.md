@@ -537,14 +537,21 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      (3) notarization rejected **every** binary as "not signed with a valid Developer ID certificate" — Ben
      had an *Apple Development* cert, not a *Developer ID Application* one (the only type valid for notarized
      distribution); created the Developer ID cert → clean pass (new **`ui:mac:sign:doctor`** lists identities +
-     checks for it). **Remaining to fully close the phase gate (on-Mac, Ben):** (a) **publish the draft**
-     v0.1.0 release on GitHub (electron-builder's default `releaseType` is *draft* — the feed isn't live and
-     no `v0.1.0` tag exists until it's published); (b) install the `.dmg` + launch **Gatekeeper-clean on a
+     checks for it). **Remaining to fully close the phase gate (on-Mac, Ben):** ~~(a) publish the draft
+     v0.1.0 release~~ — **DONE ✅ (2026-07-05):** v0.1.0 is published, the tag exists and the update feed is
+     live (see 6b). *Consequence for the next release: the bump guard reads `releases/latest`, which counts
+     published releases only — so 0.1.0 can never be re-shipped. `task ui:release` (added 2026-07-19) now
+     handles that end-to-end — bump → commit + push → sign → notarize → upload → verify → publish, one
+     command, all guards front-loaded — so the next release is 0.1.1 automatically, and that bump doubles
+     as the 6b self-update proof.* (b) install the `.dmg` + launch **Gatekeeper-clean on a
      NON-dev Mac**; (c) confirm System Settings ▸ Photos now shows **"ColdStorage"** not **"coldstored"** —
      the original screenshot problem (PACKAGING.md lists the fallbacks if a signed child still mis-labels:
      disclaim-responsibility launcher / embedded Info.plist / SMAppService); (d) prove the **self-update
-     round trip** (see 6b). Still needs `build/icon.icns` (1024px, from the DS — else the stock Electron
-     icon, which is also the Photos-pane icon).
+     round trip** (see 6b). ~~Still needs `build/icon.icns`.~~ **App icon DONE ✅ (2026-07-19):**
+     `ui/build/icon.png` (1024px) via `task ui:icon:build` — the delivered mark composited verbatim onto
+     the brand tile; electron-builder rasterises the Apple size slots from the PNG, so there is no `.icns`
+     and no Xcode dependency. (macOS 26 grey-squircles any classic icon until we ship an Icon Composer
+     `.icon`; deferred deliberately — it would add an Xcode-26-on-the-builder requirement.)
    - **6b — auto-update via GitHub Releases: BUILT ✅ (2026-07-04) + FEED PUBLISHED ✅ (2026-07-05) — the
      self-update *apply* round trip is the last unproven step.** The first signed + notarized build published
      its `.dmg`/`.zip`/`latest-mac.yml` to the GitHub feed (6a), so the feed is real; what's left is to prove
