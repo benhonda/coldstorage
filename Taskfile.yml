@@ -381,7 +381,7 @@ tasks:
       - swift run coldstorectl {{.SOCK}} listExcludes
 
   daemon:mac:verify-tagging:
-    desc: "PROVE PutObjectTagging works on a COLD Deep Archive object (no thaw) — the assumption the whole space-reclaim design rests on. BLOB=<blobId>. Writes a harmless PROBE tag (never the reap tag, so this can't trigger an expiry), reads it back, then clears it. If this fails, reclamation silently no-ops in production and deleted files never free space."
+    desc: "PROVE PutObjectTagging works on a COLD Deep Archive object (no thaw) — the assumption the whole space-reclaim design rests on. Picks a blob from the running daemon automatically (BLOB=<id> to override). Writes a harmless PROBE tag (never the reap tag, so this can't trigger an expiry), reads it back, then clears it. If this fails, reclamation silently no-ops in production and deleted files never free space."
     dir: coldstorage
     vars:
       CREDS: "{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
@@ -390,7 +390,17 @@ tasks:
         [ -f "{{.CREDS}}" ] && { set -a; . "{{.CREDS}}"; set +a; }
         bucket="${COLDSTORE_BUCKET:?missing COLDSTORE_BUCKET — run tf:coldstorage:creds-export in the devcontainer}"
         region="${AWS_REGION:-ca-central-1}"
-        blob="{{.BLOB}}"; : "${blob:?pass BLOB=<blobId> (the hash from task daemon:mac:live -- listFiles)}"
+        # BLOB is OPTIONAL: with none given, ask the running daemon for the first file that HAS a blob and
+        # use that. Nobody should have to eyeball a hash out of a listFiles dump to run a health check.
+        blob="{{.BLOB}}"
+        if [ -z "$blob" ]; then
+          sock="{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
+          test -S "$sock" || { echo "no BLOB given and no running daemon at $sock — pass BLOB=<blobId>, or start the daemon (task daemon:mac:bootstrap)"; exit 1; }
+          blob="$(./.build/release/coldstorectl "$sock" listFiles \
+            | python3 -c "import json,sys;d=json.load(sys.stdin);r=[f for f in (d.get('result') or []) if f.get('blobId')];print(r[0]['blobId'] if r else '')")"
+          : "${blob:?the vault has no archived files yet — deposit something first, then re-run}"
+          echo "using blob $blob (first archived file the daemon reports)"
+        fi
         key="blobs/${blob}"
         # A PROBE key, deliberately NOT `coldstorage-reap`. Tagging a real blob with the reap tag would make
         # it eligible for the lifecycle rule, and the daily sweep could expire it before the cleanup below
@@ -421,7 +431,7 @@ tasks:
       - ./.build/release/coldstorectl "{{.SOCK}}" {{.CLI_ARGS | default "getStatus"}}
 
   daemon:mac:verify-aws:
-    desc: 'HEAD a single LIVE vault blob directly in S3 (bypasses the daemon) to confirm StorageClass=DEEP_ARCHIVE + see the Restore (thaw) status. BLOB=<blobId> (the hash from listFiles). Uses head-object, so it stays within the daemon''s least-priv GetObject grant (no ListBucket). Also the way to poll a thaw: re-run until Restore shows ongoing-request="false".'
+    desc: 'HEAD a single LIVE vault blob directly in S3 (bypasses the daemon) to confirm StorageClass=DEEP_ARCHIVE + see the Restore (thaw) status. Picks a blob from the running daemon automatically (BLOB=<id> to override). Uses head-object, so it stays within the daemon''s least-priv GetObject grant (no ListBucket). Also the way to poll a thaw: re-run until Restore shows ongoing-request="false".'
     dir: coldstorage
     vars:
       CREDS: "{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
@@ -430,7 +440,15 @@ tasks:
         [ -f "{{.CREDS}}" ] && { set -a; . "{{.CREDS}}"; set +a; }
         bucket="${COLDSTORE_BUCKET:?missing COLDSTORE_BUCKET — run tf:coldstorage:creds-export in the devcontainer}"
         region="${AWS_REGION:-ca-central-1}"
-        blob="{{.BLOB}}"; : "${blob:?pass BLOB=<blobId> (the hash from task daemon:mac:live -- listFiles)}"
+        blob="{{.BLOB}}"
+        if [ -z "$blob" ]; then
+          sock="{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
+          test -S "$sock" || { echo "no BLOB given and no running daemon at $sock — pass BLOB=<blobId>, or start the daemon (task daemon:mac:bootstrap)"; exit 1; }
+          blob="$(./.build/release/coldstorectl "$sock" listFiles \
+            | python3 -c "import json,sys;d=json.load(sys.stdin);r=[f for f in (d.get('result') or []) if f.get('blobId')];print(r[0]['blobId'] if r else '')")"
+          : "${blob:?the vault has no archived files yet — deposit something first, then re-run}"
+          echo "using blob $blob (first archived file the daemon reports)"
+        fi
         echo "── HEAD s3://${bucket}/blobs/${blob} ──"
         aws s3api head-object --bucket "$bucket" --key "blobs/${blob}" \
           --query '{StorageClass:StorageClass,Size:ContentLength,Restore:Restore}' \
