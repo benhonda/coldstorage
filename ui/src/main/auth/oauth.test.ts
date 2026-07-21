@@ -1,6 +1,6 @@
 /** OAuth URL building/parsing — the pure halves of the sign-in flow (no fetch, no Electron). */
 import { describe, expect, test } from "bun:test";
-import { buildAuthorizeUrl, decodeJwtClaims, isFirstLinkError, parseCallbackUrl, SCHEME_REDIRECT_URI, type OAuthConfig } from "./oauth.ts";
+import { buildAuthorizeUrl, decodeJwtClaims, isFirstLinkError, parseCallbackUrl, SCHEME_REDIRECT_URI, schemeRedirectUri, type OAuthConfig } from "./oauth.ts";
 
 const cfg: OAuthConfig = {
   domain: "example.auth.ca-central-1.amazoncognito.com",
@@ -40,6 +40,14 @@ describe("parseCallbackUrl", () => {
     });
   });
 
+  test("parses a staging-lane deep link — its own scheme routes back to the staging install", () => {
+    expect(parseCallbackUrl("coldstorage-staging://auth/callback?code=abc&state=xyz")).toEqual({
+      kind: "code",
+      code: "abc",
+      state: "xyz",
+    });
+  });
+
   test("parses the dev loopback shape", () => {
     expect(parseCallbackUrl("http://localhost:53682/auth/callback?code=abc&state=xyz")).toEqual({
       kind: "code",
@@ -63,8 +71,17 @@ describe("parseCallbackUrl", () => {
 
   test("non-auth URLs are not ours (future deep links, random garbage)", () => {
     expect(parseCallbackUrl("coldstorage://checkout-complete")).toBeNull();
+    expect(parseCallbackUrl("coldstorage-staging://checkout-complete")).toBeNull();
     expect(parseCallbackUrl("https://example.com/auth")).toBeNull();
     expect(parseCallbackUrl("not a url")).toBeNull();
+  });
+});
+
+describe("schemeRedirectUri", () => {
+  test("builds the per-lane callback URL that must be a registered Cognito callback", () => {
+    expect(schemeRedirectUri("coldstorage")).toBe("coldstorage://auth/callback");
+    expect(schemeRedirectUri("coldstorage-staging")).toBe("coldstorage-staging://auth/callback");
+    expect(SCHEME_REDIRECT_URI).toBe("coldstorage://auth/callback");
   });
 });
 

@@ -13,6 +13,13 @@ import { readFileSync } from "node:fs";
 /** The packaged app's per-user config. Every value is public (bucket/region/Cognito ids are client
  * config, not secrets — see cognito.tf); `awsProfile` is the dogfood-only credential_process path. */
 export type AppConfig = {
+  /** App INSTALL IDENTITY for this build's lane (baked from ui/identity.json by `task ui:config:bake`).
+   * `productName` pins {@link app.setName} → the userData dir (data/socket/logs/vault); `scheme` is the
+   * deep-link + OAuth-redirect URL scheme. Distinct per lane so a staging build installs alongside prod.
+   * Absent in dev (unpackaged, no baked file) ⇒ prod identity (ColdStorage / coldstorage). (The bundle's
+   * matching `appId` is baked too but the runtime doesn't need it, so it's not parsed here.) */
+  productName?: string | undefined;
+  scheme?: string | undefined;
   bucket?: string | undefined;
   region?: string | undefined;
   awsProfile?: string | undefined;
@@ -27,6 +34,8 @@ export type AppConfig = {
 
 /** The keys we accept, in one place so parse + merge stay in lockstep. */
 const CONFIG_KEYS = [
+  "productName",
+  "scheme",
   "bucket",
   "region",
   "awsProfile",

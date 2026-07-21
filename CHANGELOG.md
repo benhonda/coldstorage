@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-07-21
+
+- feat(ui): staging builds install alongside prod — a new `ui/identity.json` gives each lane its own productName/appId/URL scheme, baked into `app-config.json` so the bundle (`electron-builder.cjs`, was `.yml`) and runtime can't disagree; OAuth callback + data dir + deep-link scheme all follow the lane.
+- feat(infra): `coldstorage-staging://auth/callback` registered as a Cognito callback URL so the staging lane's sign-in routes to the staging install.
+
 ## 2026-07-20
 
 - fix(site): `/fr/*` no longer serves duplicate content — every page answered on two URLs with identical English HTML and no canonical. `pageMeta()` now canonicals French URLs to the English original until `TRANSLATIONS_LIVE` flips, at which point each self-canonicals and gains `hreflang` pairs.

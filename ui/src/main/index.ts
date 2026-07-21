@@ -22,7 +22,7 @@ import electronUpdater from "electron-updater";
 import { DaemonClient } from "../daemon/client.ts";
 import { registerBridge } from "./bridge.ts";
 import { registerSystemHandlers } from "./system.ts";
-import { startDaemon, daemonSocketPath } from "./daemon.ts";
+import { startDaemon, daemonSocketPath, appIdentity } from "./daemon.ts";
 import { AuthManager } from "./auth/manager.ts";
 import { resolveOAuthConfig } from "./auth/config.ts";
 import { registerAuthIpc } from "./auth/ipc.ts";
@@ -38,11 +38,16 @@ import { registerAccountIpc } from "./account/ipc.ts";
 import { UpdateManager, type UpdaterPort } from "./updater/manager.ts";
 import { registerUpdateIpc } from "./updater/ipc.ts";
 
+// The build's install identity (productName + deep-link scheme), from the baked config (ui/identity.json →
+// bake). Per lane, so a staging build is "ColdStorage Staging.app" with its own data dir + coldstorage-staging://
+// scheme and installs alongside prod. Resolved ONCE here; the whole main process reads these two.
+const { productName, scheme } = appIdentity();
+
 // Pin the app name BEFORE any `getPath("userData")` call. The client resolves the socket path at module
 // load and the daemon supervisor resolves it in `whenReady`; both derive from userData (= appData + app
 // name). If the name weren't settled identically at both moments the two paths could diverge and never
 // meet (→ stuck "connecting"). Pinning it to the productName makes userData deterministic from the start.
-app.setName("ColdStorage");
+app.setName(productName);
 
 // Packaged: the app OWNS its daemon (spawned as a child → app's TCC identity, see daemon.ts), so dial the
 // per-user socket it creates. Dev: the daemon runs standalone (`task daemon:run`); use the env/default path.
@@ -119,7 +124,7 @@ let pendingDeepLink: string | null = null;
 // Route a deep link: the checkout-complete nudge → an entitlement re-check; everything else → the auth
 // callback handler (which ignores non-auth URLs).
 const handleDeepLink = (url: string): void => {
-  if (url.startsWith("coldstorage://checkout-complete")) {
+  if (url.startsWith(`${scheme}://checkout-complete`)) {
     entitlement.notifyCheckoutComplete();
     focusMainWindow();
     return;
@@ -131,7 +136,7 @@ app.on("open-url", (event, url) => {
   if (app.isReady()) handleDeepLink(url);
   else pendingDeepLink = url;
 });
-if (app.isPackaged) app.setAsDefaultProtocolClient("coldstorage");
+if (app.isPackaged) app.setAsDefaultProtocolClient(scheme);
 
 // Single-instance hygiene. macOS Launch Services already routes protocol URLs to the running instance
 // (as open-url), but the lock guards CLI double-launches — and on Win/Linux (if we ever ship there)
@@ -140,7 +145,7 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on("second-instance", (_event, argv) => {
-    const url = argv.find((a) => a.startsWith("coldstorage://"));
+    const url = argv.find((a) => a.startsWith(`${scheme}://`));
     if (url) handleDeepLink(url);
     focusMainWindow();
   });
@@ -224,7 +229,7 @@ const createWindow = (): void => {
     width: 980,
     height: 720,
     show: false,
-    title: "ColdStorage",
+    title: productName, // staging window reads "ColdStorage Staging" so you can tell the two installs apart
     webPreferences: {
       preload: join(import.meta.dirname, "../preload/index.mjs"),
       contextIsolation: true,

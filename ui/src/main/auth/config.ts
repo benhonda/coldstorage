@@ -8,9 +8,9 @@
  * unpackaged Electron can't receive custom-scheme deep links on macOS (see loopback.ts).
  */
 import { app } from "electron";
-import { dataDir, readAppConfig } from "../daemon.ts";
+import { appIdentity, dataDir, readAppConfig } from "../daemon.ts";
 import { LOOPBACK_REDIRECT_URI } from "./loopback.ts";
-import { SCHEME_REDIRECT_URI, type OAuthConfig } from "./oauth.ts";
+import { schemeRedirectUri, type OAuthConfig } from "./oauth.ts";
 
 const nonEmpty = (v: string | undefined): string | undefined => (v && v.length > 0 ? v : undefined);
 
@@ -27,7 +27,10 @@ export const resolveOAuthConfig = (): OAuthConfig | null => {
   return {
     domain,
     clientId,
-    redirectUri: packaged ? SCHEME_REDIRECT_URI : LOOPBACK_REDIRECT_URI,
+    // Packaged: this lane's own scheme (coldstorage:// or coldstorage-staging://), so a staging sign-in
+    // callback routes back to the staging app, not prod. Must be a registered Cognito callback URL (infra
+    // `app_oauth_callback_urls`). Dev: the loopback listener (unpackaged Electron can't receive deep links).
+    redirectUri: packaged ? schemeRedirectUri(appIdentity().scheme) : LOOPBACK_REDIRECT_URI,
     region: regionFromDomain(domain),
   };
 };

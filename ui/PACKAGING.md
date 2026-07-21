@@ -21,9 +21,20 @@ then move the daemon inside it as an SMAppService helper (#2).
 
 ## What's scaffolded here
 
-- `electron-builder.yml` — appId `com.theadpharm.coldstorage`, productName **ColdStorage**, mac target
-  (dmg + zip), hardened runtime, entitlements, and the release Swift binaries bundled to
-  `Contents/Resources/bin/`. (electron-builder **v26** syntax — signing fields top-level under `mac`.)
+- `electron-builder.cjs` — the build config (CommonJS; was `electron-builder.yml`, became code so identity
+  is per-lane). mac target (dmg + zip), hardened runtime, entitlements, and the release Swift binaries
+  bundled to `Contents/Resources/bin/`. (electron-builder **v26** syntax — signing fields top-level under
+  `mac`.) **appId / productName / URL scheme are NOT hardcoded here** — they come from the just-baked
+  `build/app-config.json` (the bake resolved them from `ui/identity.json` for the lane): prod →
+  `com.theadpharm.coldstorage` / **ColdStorage** / `coldstorage`, staging → `com.theadpharm.coldstorage.staging`
+  / **ColdStorage Staging** / `coldstorage-staging`. `notarize` is driven by `COLDSTORE_NOTARIZE` (release sets
+  it true) since a `-c` nested override can't coexist with `--config electron-builder.cjs`. Invoked with an
+  explicit `--config electron-builder.cjs` (the default config name is still `.yml`, so it's not auto-detected).
+- `identity.json` — **SSOT for the app's install identity**, keyed by lane. Adding/renaming a lane is a
+  one-file edit; a new scheme also needs its `<scheme>://auth/callback` added to the Cognito callback URLs
+  (`infra/coldstorage/modules/stack/variables.tf` `app_oauth_callback_urls`). This is what lets staging and
+  prod **install side-by-side** — distinct `.app`, bundle id, data dir (`~/Library/Application Support/<name>`
+  → separate socket/logs/vault/auth), and deep-link scheme.
 - `build/entitlements.mac.plist` — hardened-runtime entitlements Electron needs (JIT heap, dyld env,
   library-validation off); deliberately **not** sandboxed (the app opens the unix control socket + spawns
   the bundled helpers).
@@ -140,8 +151,12 @@ daemon runs while the app runs (menu-bar/Backblaze model), not as an independent
   (`~/Library/Application Support/ColdStorage` — same `DATA_DIR` `task daemon:mac:logs` tails).
 - Socket SSOT: `daemonSocketPath()` feeds both the daemon's `COLDSTORE_SOCKET` and `new DaemonClient({…})`,
   so the packaged app dials the child it just launched (this is what fixed "Connecting…").
-- `app.setName("ColdStorage")` pins userData so the client's (module-load) and daemon's (whenReady) socket
-  paths can't diverge; `app.setLoginItemSettings({ openAtLogin: true })` for reboot persistence.
+- `app.setName(productName)` pins userData so the client's (module-load) and daemon's (whenReady) socket
+  paths can't diverge; `app.setLoginItemSettings({ openAtLogin: true })` for reboot persistence. The name
+  (and the deep-link scheme) come from `appIdentity()` (baked `app-config.json`, from `ui/identity.json`) —
+  prod "ColdStorage"/"coldstorage", staging "ColdStorage Staging"/"coldstorage-staging" — so a staging install
+  runs against its OWN data dir + scheme and coexists with prod. Read BAKED-only (never the user `config.json`):
+  a dogfood override must not repoint the data dir the app is already on.
 
 ### Identity — UNRESOLVED (the original "coldstored" screenshot is still open)
 
@@ -186,17 +201,20 @@ build — defer it to the signing milestone. Prioritize the two things that bloc
   user override**. The baked base is **`Contents/Resources/app-config.json`**, written at package time by
   **`task ui:config:bake ENV=production|staging`** (run automatically inside the packaging tasks) from the
   **same infra-outputs handoff** as `ui:mac:config` — so it's SSOT-generated, never hand-maintained, and
-  gitignored (`ui/build/app-config.json`). It carries only PUBLIC config (bucket, region, Cognito ids,
-  sign-in domain/client, account-API URL) — **`awsProfile` is deliberately omitted**: a customer has no local
+  gitignored (`ui/build/app-config.json`). It carries PUBLIC config (bucket, region, Cognito ids,
+  sign-in domain/client, account-API URL) **plus the app INSTALL IDENTITY** (productName/appId/scheme, from
+  `ui/identity.json`) — **`awsProfile` is deliberately omitted**: a customer has no local
   profile, they sign in and get scoped short-lived STS creds via Cognito (`coldstored/main.swift`). The
-  user's `config.json` (when present) still overrides per-key, so dogfood/dev testing is unchanged. Net
-  effect: **sign-in is the only customer setup.**
-  - **Two lanes, explicit (no silent default):** the account-backend URL is the ONLY thing that differs
-    between a customer and a dogfood build (Cognito + the vault bucket are shared) — and the key-blob lives in
-    whichever lane's DB, so they must never cross. **`ui:mac:release`/`ui:mac:release:dryrun` bake `production`**
-    (`api.coldstorage.sh` — the published customer build; requires the prod account-backend lane up first);
-    **`ui:mac:package` bakes `staging`** (`api-staging.coldstorage.sh` — Ben's local dogfood build, sandbox
-    Paddle, never published). `ENV` is required, so a customer build can't accidentally ship staging-wired.
+  user's `config.json` (when present) still overrides per-key *for the public config* (identity is baked-only),
+  so dogfood/dev testing is unchanged. Net effect: **sign-in is the only customer setup.**
+  - **Two lanes, explicit (no silent default):** per lane the bake picks the account-backend URL AND the
+    install identity — **`ui:mac:release`/`ui:mac:release:dryrun` bake `production`** (`api.coldstorage.sh` +
+    `ColdStorage`/`coldstorage`; the published customer build; requires the prod account-backend lane up first);
+    **`ui:mac:package` bakes `staging`** (`api-staging.coldstorage.sh` + **ColdStorage Staging** — Ben's local
+    dogfood build, sandbox Paddle, never published, and installs alongside the prod app). Cognito + the vault
+    bucket are shared across lanes; the key-blob lives in whichever lane's DB, so they must never cross. `ENV`
+    is required, so a customer build can't accidentally ship staging-wired — and identity flows through the
+    SAME baked file, so the bundle and runtime can't disagree on which app they are.
   - When the handoff is absent at package time, bake writes just `accountApiBaseUrl` (a cert-less dogfood
     build with no bucket/Cognito — the runtime falls back to `config.json`, exactly as before).
   **Ben to verify on Mac:** a fresh customer `.dmg` on a machine with NO `config.json` → launch → sign in →

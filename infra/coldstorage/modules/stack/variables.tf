@@ -90,6 +90,10 @@ variable "app_oauth_callback_urls" {
   default = [
     # Packaged app: the custom scheme electron-builder registers in the app's Info.plist (Phase 5).
     "coldstorage://auth/callback",
+    # Staging dogfood build (ui/identity.json): its own scheme so it installs alongside prod and its sign-in
+    # callback routes to the staging install, not prod. Cognito is shared across lanes, so this must be an
+    # allowed callback here for staging sign-in to work; additive, no effect on the prod app's flow.
+    "coldstorage-staging://auth/callback",
     # Dev (`task ui:mac:dev`): custom-scheme deep links can't reach an unpackaged Electron on macOS (the
     # running Electron.app's Info.plist has no `coldstorage` scheme — Electron docs are explicit), so
     # dev sign-in redirects to a throwaway 127.0.0.1 listener the app binds per sign-in. Cognito allows

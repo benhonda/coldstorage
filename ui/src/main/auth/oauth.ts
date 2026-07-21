@@ -42,11 +42,16 @@ export type CallbackResult =
   | { kind: "code"; code: string; state: string }
   | { kind: "error"; error: string; description: string | null; state: string | null };
 
-/** The two redirect shapes we register: the packaged app's custom scheme and the dev loopback. */
-export const SCHEME_REDIRECT_URI = "coldstorage://auth/callback";
+/** The packaged app's OAuth redirect for a given URL scheme, e.g. `coldstorage://auth/callback` (prod) or
+ * `coldstorage-staging://auth/callback` (staging). The scheme is per-lane (ui/identity.json); the built URI
+ * must byte-match a registered Cognito callback URL (infra `app_oauth_callback_urls`). */
+export const schemeRedirectUri = (scheme: string): string => `${scheme}://auth/callback`;
 
-/** True if `raw` is a sign-in redirect (either shape). Other deep links (future `coldstorage://…`
- * routes) parse to null and are ignored by the auth layer. */
+/** The prod default redirect — kept for tests and as the fallback scheme. */
+export const SCHEME_REDIRECT_URI = schemeRedirectUri("coldstorage");
+
+/** True if `raw` is a sign-in redirect (either shape). Other deep links (`<scheme>://checkout-complete`
+ * and future routes) parse to null and are ignored by the auth layer. */
 export const parseCallbackUrl = (raw: string): CallbackResult | null => {
   let url: URL;
   try {
@@ -54,8 +59,11 @@ export const parseCallbackUrl = (raw: string): CallbackResult | null => {
   } catch {
     return null;
   }
-  // coldstorage://auth/callback → host "auth" + path "/callback"; loopback → path "/auth/callback".
-  const isScheme = url.protocol === "coldstorage:" && url.host === "auth" && url.pathname === "/callback";
+  // Custom scheme (<scheme>://auth/callback → host "auth" + path "/callback") — scheme-agnostic so both the
+  // prod `coldstorage:` and staging `coldstorage-staging:` builds parse their own callback; macOS only ever
+  // delivers a scheme the app itself registered, so accepting any non-http(s) scheme here is safe. Loopback
+  // (dev) → path "/auth/callback".
+  const isScheme = url.protocol !== "http:" && url.protocol !== "https:" && url.host === "auth" && url.pathname === "/callback";
   const isLoopback = (url.protocol === "http:" || url.protocol === "https:") && url.pathname === "/auth/callback";
   if (!isScheme && !isLoopback) return null;
 

@@ -640,10 +640,15 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
      merged result transparently — **net effect: sign-in is the only customer setup.** The customer
      *credential* path itself was already built (`coldstored/main.swift` signs S3 as the signed-in Cognito
      user; Phase 5 gates met). **Remaining (Ben, Mac):** verify a config-less `.dmg` can sign in → subscribe →
-     deposit end-to-end. **Two build lanes (`ui:config:bake ENV=production|staging`):** the account-backend
-     URL is the ONLY thing that differs between a customer build and a dogfood build (Cognito + the vault
-     bucket are shared across lanes — cognito.tf), and the key-blob lives in whichever lane's DB, so the two
-     must never cross (onboarding on staging would strand a user's encrypted MK in the test DB). ENV is
+     deposit end-to-end. **Two build lanes (`ui:config:bake ENV=production|staging`):** the per-lane differences
+     are (1) the account-backend URL (Cognito + the vault bucket are shared across lanes — cognito.tf) and
+     (2) the app INSTALL IDENTITY (productName/appId/URL scheme, from `ui/identity.json`) so a staging build
+     installs alongside prod — `ColdStorage Staging.app`, own bundle id, own `~/Library/Application
+     Support/ColdStorage Staging`, own `coldstorage-staging://` scheme (registered as a Cognito callback URL,
+     variables.tf `app_oauth_callback_urls`). The bake writes both into `build/app-config.json`, which the
+     bundle (`electron-builder.cjs`) and the runtime both read, so they can't diverge. The key-blob lives in
+     whichever lane's DB, so the two must never cross (onboarding on staging would strand a user's encrypted
+     MK in the test DB). ENV is
      REQUIRED — no silent default — so a customer build can't accidentally ship staging-wired: **`ui:mac:release`
      (+ `ui:mac:release:dryrun`) bake `production` → `api.coldstorage.sh`** (the published customer build);
      **`ui:mac:package` bakes `staging` → `api-staging.coldstorage.sh`** (Ben's local dogfood build — sandbox

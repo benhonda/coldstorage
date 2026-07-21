@@ -895,7 +895,7 @@ tasks:
       - task: daemon:mac:uninstall
       # Bundles a freshly-built daemon from current source, and bakes ENV=staging itself.
       - task: ui:mac:package
-      - echo "→ ui/dist/ColdStorage.app (staging-wired). Mode 1 is uninstalled; 'task daemon:mac:bootstrap' restores it."
+      - echo "→ ui/dist/'ColdStorage Staging.app' (staging-wired, own bundle id + data dir — installs alongside prod ColdStorage.app). Mode 1 is uninstalled; 'task daemon:mac:bootstrap' restores it."
 
   app:mac:package:production:
     desc: "[Mode 2 · ⚠️ LIVE MONEY, not published] Build the PRODUCTION-wired ColdStorage.app — signed + notarized, but NOT published to GitHub (that's ui:mac:release). Live Paddle: anything you buy in it is a real charge. Uninstalls the Mode 1 daemon first (socket collision). Needs the Developer ID cert + notary creds. GATED against origin/main."
@@ -933,7 +933,7 @@ tasks:
       - task: ui:config:bake
         vars:
           ENV: staging
-      - bunx electron-builder --mac # node CLI (not --bun); reads electron-builder.yml → ui/dist/ColdStorage.app + dmg/zip
+      - bunx electron-builder --mac --config electron-builder.cjs # node CLI (not --bun); identity comes from the just-baked build/app-config.json (staging) → ui/dist/"ColdStorage Staging.app" + dmg/zip
 
   ui:_require-apple-creds:
     # Shared preflight for ui:mac:release + ui:mac:release:dryrun. `${VAR:?msg}` errors + exits non-zero when the
@@ -1038,9 +1038,10 @@ tasks:
       - task: ui:config:bake
         vars:
           ENV: production
-      # --publish always → upload the .dmg/.zip + latest-mac.yml. -c.mac.notarize=true → notarize THIS build
-      # (the yml default is false so plain `ui:mac:package` stays cert-free).
-      - bunx electron-builder --mac --publish always -c.mac.notarize=true
+      # --publish always → upload the .dmg/.zip + latest-mac.yml. COLDSTORE_NOTARIZE=true → notarize THIS build
+      # (the config default is false so plain `ui:mac:package` stays cert-free; replaces `-c.mac.notarize=true`,
+      # which a `-c` nested override can't be alongside `--config <file>`). Bakes production → prod identity.
+      - COLDSTORE_NOTARIZE=true bunx electron-builder --mac --config electron-builder.cjs --publish always
 
   ui:mac:release:dryrun:
     desc: "[Mode 2: packaged app] Full signed-artifact rehearsal of ui:mac:release: build + SIGN + NOTARIZE ColdStorage.app locally but DON'T publish (no GitHub release, no git tag, no GH_TOKEN — hence no provenance guard, run it dirty/any-branch freely). Output: ui/dist/. Needs the Developer ID cert + notary creds (APPLE_ID/APPLE_TEAM_ID/APPLE_APP_SPECIFIC_PASSWORD). See ui/PACKAGING.md."
@@ -1058,8 +1059,9 @@ tasks:
       - task: ui:config:bake
         vars:
           ENV: production
-      # --publish never → build + sign + notarize only; nothing is uploaded or tagged.
-      - bunx electron-builder --mac --publish never -c.mac.notarize=true
+      # --publish never → build + sign + notarize only; nothing is uploaded or tagged. COLDSTORE_NOTARIZE=true
+      # replaces the old `-c.mac.notarize=true` (a `-c` nested override can't coexist with `--config <file>`).
+      - COLDSTORE_NOTARIZE=true bunx electron-builder --mac --config electron-builder.cjs --publish never
 
   ui:mac:notarize:doctor:
     desc: "Diagnose a notarization 401 from ui:mac:release: probe the Apple notary creds (APPLE_ID/APPLE_TEAM_ID/APPLE_APP_SPECIFIC_PASSWORD — the SAME env/.env values ui:mac:release uses) directly against Apple via `notarytool history`. Prints a non-secret shape check, then a clean auth probe (passes with valid creds, 401 with bad ones) so you can fix creds WITHOUT rebuilding the app each time."
@@ -1112,8 +1114,9 @@ tasks:
     dir: ui
     cmds:
       - |
-        app=$(find dist -maxdepth 3 -name 'ColdStorage.app' -type d 2>/dev/null | head -1)
-        [ -n "$app" ] || { echo "no ColdStorage.app under dist/ — run 'task ui:mac:package' first"; exit 1; }
+        # Name-agnostic: `ui:mac:package` bakes staging → "ColdStorage Staging.app" (release → ColdStorage.app).
+        app=$(find dist -maxdepth 3 -name '*.app' -type d 2>/dev/null | head -1)
+        [ -n "$app" ] || { echo "no .app under dist/ — run 'task ui:mac:package' first"; exit 1; }
         echo "app: $app"
         echo "── bundled binaries (expect coldstored + helpers) ──"
         ls -la "$app/Contents/Resources/bin" || { echo "MISSING bin/ — extraResources didn't copy"; exit 1; }
@@ -1125,8 +1128,9 @@ tasks:
     dir: ui
     cmds:
       - |
-        app=$(find dist -maxdepth 3 -name 'ColdStorage.app' -type d 2>/dev/null | head -1)
-        [ -n "$app" ] || { echo "no ColdStorage.app under dist/ — run 'task ui:mac:package' first"; exit 1; }
+        # Name-agnostic: `ui:mac:package` bakes staging → "ColdStorage Staging.app" (release → ColdStorage.app).
+        app=$(find dist -maxdepth 3 -name '*.app' -type d 2>/dev/null | head -1)
+        [ -n "$app" ] || { echo "no .app under dist/ — run 'task ui:mac:package' first"; exit 1; }
         # Sign the nested helpers FIRST (inside-out), then the app — codesign requires nested code be sealed
         # before the outer bundle. `-s -` = ad-hoc (no cert needed, just enough for AMFI to let arm64 run).
         for b in "$app/Contents/Resources/bin/coldstored" \
@@ -1179,7 +1183,7 @@ tasks:
         echo "creds: ensure 'task daemon:mac:creds' wired the '$profile' profile + Keychain (one-time). Verify: task ui:mac:package:doctor"
 
   ui:config:bake:
-    desc: "Bake the PUBLIC app config into ui/build/app-config.json (bundled at Contents/Resources/app-config.json) so a config-less download self-configures — sign-in is the only setup (PROD.md Phase 6d). ENV=production|staging picks the account-backend lane (prod → api.coldstorage.sh, staging → api-staging.coldstorage.sh) — the ONLY thing that differs between a customer build and a dogfood build (Cognito + vault bucket are shared). REQUIRED + explicit: there is no silent default, so a customer build can never accidentally ship staging-wired. Sourced from the SAME infra-outputs handoff as ui:mac:config but PUBLIC-ONLY: no awsProfile (customers get creds via Cognito STS). Run automatically by ui:mac:release (production) / ui:mac:package (staging)."
+    desc: "Bake the PUBLIC app config into ui/build/app-config.json (bundled at Contents/Resources/app-config.json) so a config-less download self-configures — sign-in is the only setup (PROD.md Phase 6d). ENV=production|staging picks (a) the account-backend lane (prod → api.coldstorage.sh, staging → api-staging.coldstorage.sh; Cognito + vault bucket are shared) and (b) the app INSTALL IDENTITY from ui/identity.json (productName/appId/scheme) — so a staging build installs alongside prod. Both the bundle (electron-builder.cjs) and the runtime read this baked file, so they can't disagree. REQUIRED + explicit: there is no silent default, so a customer build can never accidentally ship staging-wired. Sourced from the SAME infra-outputs handoff as ui:mac:config but PUBLIC-ONLY: no awsProfile (customers get creds via Cognito STS). Run automatically by ui:mac:release (production) / ui:mac:package (staging)."
     dir: coldstorage
     requires:
       vars: [ENV]
@@ -1199,14 +1203,26 @@ tasks:
         esac
         account_api="${COLDSTORE_ACCOUNT_API:-$default_api}"
 
+        # App INSTALL IDENTITY for this lane, from the SSOT (ui/identity.json). Baked into app-config.json so
+        # BOTH the bundle (electron-builder.cjs) and the runtime (main app.setName + deep-link scheme,
+        # auth/config.ts redirect_uri) read the SAME values — a staging build gets "ColdStorage Staging.app" +
+        # its own bundle id + its own "~/Library/Application Support/ColdStorage Staging" + its own
+        # coldstorage-staging:// scheme, so it installs alongside prod. ENV is validated production|staging above.
+        ID_FILE="{{.ROOT_DIR}}/ui/identity.json"
+        product_name="$(node -p "require('$ID_FILE')['{{.ENV}}'].productName")"
+        app_id="$(node -p "require('$ID_FILE')['{{.ENV}}'].appId")"
+        scheme="$(node -p "require('$ID_FILE')['{{.ENV}}'].scheme")"
+
         # Same SSOT as ui:mac:config (the handoff written by `task tf:coldstorage:creds-export`), but PUBLIC
         # values ONLY — this file ships inside the .dmg, so awsProfile (the dogfood credential_process path)
         # is deliberately omitted; a customer signs in and gets scoped STS creds. Cognito + bucket are
         # lane-independent, so they come from the handoff unchanged for both ENVs.
         CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
         if [ ! -f "$CREDS" ]; then
-          printf '{\n  "accountApiBaseUrl": "%s"\n}\n' "$account_api" > "{{.OUT}}"
-          echo "⚠ no handoff ($CREDS) — baked only accountApiBaseUrl=$account_api (no bucket/Cognito). This build can't upload/sign-in (dogfood: relies on 'task ui:mac:config'). Run 'task tf:coldstorage:creds-export' in the devcontainer for a real build."
+          # Identity still ships (it's what makes side-by-side installs work) even on a handoff-less dogfood build.
+          printf '{\n  "productName": "%s",\n  "appId": "%s",\n  "scheme": "%s",\n  "accountApiBaseUrl": "%s"\n}\n' \
+            "$product_name" "$app_id" "$scheme" "$account_api" > "{{.OUT}}"
+          echo "⚠ no handoff ($CREDS) — baked identity (productName=$product_name scheme=$scheme) + accountApiBaseUrl=$account_api (no bucket/Cognito). This build can't upload/sign-in (dogfood: relies on 'task ui:mac:config'). Run 'task tf:coldstorage:creds-export' in the devcontainer for a real build."
           exit 0
         fi
         set -a; . "$CREDS"; set +a
@@ -1216,9 +1232,9 @@ tasks:
         cognito_provider="${COLDSTORE_COGNITO_USER_POOL_PROVIDER:-}"
         cognito_domain="${COLDSTORE_COGNITO_DOMAIN:-}"
         cognito_client_id="${COLDSTORE_COGNITO_CLIENT_ID:-}"
-        printf '{\n  "bucket": "%s",\n  "region": "%s",\n  "cognitoIdentityPoolId": "%s",\n  "cognitoUserPoolProvider": "%s",\n  "cognitoDomain": "%s",\n  "cognitoClientId": "%s",\n  "accountApiBaseUrl": "%s"\n}\n' \
-          "$bucket" "$region" "$cognito_pool_id" "$cognito_provider" "$cognito_domain" "$cognito_client_id" "$account_api" > "{{.OUT}}"
-        echo "baked {{.OUT}}  (ENV={{.ENV}} bucket=$bucket region=$region cognito=${cognito_pool_id:+configured}${cognito_pool_id:-NOT configured} sign-in=${cognito_domain:+configured}${cognito_domain:-NOT configured} account-api=$account_api)"
+        printf '{\n  "productName": "%s",\n  "appId": "%s",\n  "scheme": "%s",\n  "bucket": "%s",\n  "region": "%s",\n  "cognitoIdentityPoolId": "%s",\n  "cognitoUserPoolProvider": "%s",\n  "cognitoDomain": "%s",\n  "cognitoClientId": "%s",\n  "accountApiBaseUrl": "%s"\n}\n' \
+          "$product_name" "$app_id" "$scheme" "$bucket" "$region" "$cognito_pool_id" "$cognito_provider" "$cognito_domain" "$cognito_client_id" "$account_api" > "{{.OUT}}"
+        echo "baked {{.OUT}}  (ENV={{.ENV}} identity=$product_name/$scheme bucket=$bucket region=$region cognito=${cognito_pool_id:+configured}${cognito_pool_id:-NOT configured} sign-in=${cognito_domain:+configured}${cognito_domain:-NOT configured} account-api=$account_api)"
 
   ui:mac:release:
     desc: "☆ SHIP IT (macOS only) — shows where you're at, asks which version, then bumps, builds, signs, notarizes, uploads, verifies and PUBLISHES. Pass VERSION=x.y.z or LEVEL=patch|minor|major to skip the picker. Requires a clean, pushed main — git is yours to sort out; this just refuses and says which. For a signed build without publishing: ui:mac:release:dryrun."

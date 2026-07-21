@@ -18,7 +18,8 @@ import { type AppConfig, mergeAppConfig, readConfigFile } from "./config.ts";
 export type { AppConfig } from "./config.ts";
 
 /** Per-user data dir — the SSOT for everything the daemon persists. `userData` resolves to
- * `~/Library/Application Support/ColdStorage` (the productName), which is ALSO the `DATA_DIR` that
+ * `~/Library/Application Support/<productName>` (default ColdStorage; "ColdStorage Staging" on a staging
+ * build), which is ALSO the `DATA_DIR` that
  * `task daemon:mac:logs` tails — so the packaged daemon's logs land where the existing ops task expects.
  * Exported for the auth config resolver (config.json is the packaged app's whole config seam). */
 export const dataDir = (): string => app.getPath("userData");
@@ -35,6 +36,17 @@ const coldstoredPath = (): string => join(process.resourcesPath, "bin", "coldsto
  * public prod defaults (bucket/region/Cognito/sign-in/account-API) so a stranger's download self-configures
  * — sign-in is the only setup left (PROD.md Phase 6d). Only present in a packaged build. */
 const bakedConfigPath = (): string => join(process.resourcesPath, "app-config.json");
+
+/** The build's INSTALL IDENTITY (productName + deep-link scheme), read from the BAKED config ONLY — NOT
+ * merged with the user's `config.json`, because `productName` selects the userData dir the app is already
+ * running on (via {@link app.setName} in index.ts); letting a dogfood override repoint it mid-flight would
+ * strand data/socket. Dev (unpackaged, no baked file) ⇒ prod identity, matching the historical hardcoded
+ * "ColdStorage" / "coldstorage". SSOT: `ui/identity.json` → `task ui:config:bake` → this baked file. The
+ * bundle's Info.plist (electron-builder.cjs) reads the SAME baked file, so name/scheme can't diverge. */
+export const appIdentity = (): { productName: string; scheme: string } => {
+  const baked = app.isPackaged ? readConfigFile(bakedConfigPath()) : {};
+  return { productName: baked.productName ?? "ColdStorage", scheme: baked.scheme ?? "coldstorage" };
+};
 
 /** The packaged app's per-user config, resolved as **baked base ← user override**:
  *   - baked  = `Contents/Resources/app-config.json` (the public prod config, packaged builds only) — the

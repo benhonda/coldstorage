@@ -1,0 +1,13 @@
+{
+  "_comment": "SSOT for the app's INSTALL IDENTITY, keyed by lane (the same production|staging switch as ui:config:bake's ENV). `task ui:config:bake` resolves the lane's entry into ui/build/app-config.json; from there BOTH the bundle (electron-builder.cjs → appId/productName/URL scheme) and the runtime (main/index.ts → app.setName + deep-link scheme, auth/config.ts → OAuth redirect_uri) consume it — so a staging build gets its own /Applications/<name>.app, its own bundle id (Launch Services dedupes by it), its own ~/Library/Application Support/<name> (data dir + socket + logs follow the name), and its own coldstorage-staging:// deep-link scheme, and installs SAFELY ALONGSIDE prod. Keep prod as-is; edit staging freely. NOTE: adding/changing a scheme means its `<scheme>://auth/callback` must be a registered Cognito callback URL — see infra/coldstorage/modules/stack/variables.tf `app_oauth_callback_urls`.",
+  "production": {
+    "productName": "ColdStorage",
+    "appId": "com.theadpharm.coldstorage",
+    "scheme": "coldstorage"
+  },
+  "staging": {
+    "productName": "ColdStorage Staging",
+    "appId": "com.theadpharm.coldstorage.staging",
+    "scheme": "coldstorage-staging"
+  }
+}
