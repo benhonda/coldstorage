@@ -10,21 +10,26 @@
 import type { ConflictPolicy, ListedFile } from "../../../../shared/ipc.ts";
 
 /**
- * Per-file state — the journal `FileStatus` folded with live restore activity.
+ * Per-file state — the journal `FileStatus` folded with the file's live transfer, if it has one.
  * - `frozen` — stored in deep storage (the common at-rest state; shows a quiet ✓).
  * - `uploading` — in the upload pipeline, incl. a transient retry (the daemon/SDK keep trying).
  * - `failed` — upload couldn't complete and the daemon stopped retrying (permanent/stuck) — needs
  *   attention. Transient blips are NOT this; they stay `uploading` until they self-heal or go permanent.
- * - `gettingBack` / `here` — restore activity (a copy on its way / saved on this Mac), overlaid live.
+ * - `pending` / `transferring` / `here` — transfer activity, overlaid from the daemon's restores list.
+ *
+ * `pending` and `transferring` are two states because they are two different things, and conflating them
+ * was a lie the UI told for a month: a Deep Archive thaw takes ~48 hours during which NOTHING moves, and
+ * calling that "Transferring" left people watching a transfer that never budged. `pending` = deep storage
+ * is waking up; `transferring` = bytes are actually moving. (`gettingBack`, which meant both, is gone.)
  */
-export type FileStatus = "frozen" | "uploading" | "failed" | "gettingBack" | "here";
+export type FileStatus = "frozen" | "uploading" | "failed" | "pending" | "transferring" | "here";
 
 /** Coarse type, drives the row icon (and, when R2 lands, whether a thumbnail exists). */
 export type FileKind = "photo" | "video" | "audio" | "document" | "archive" | "other";
 
 /** One archived file — the journal row the browser draws. Mirrors the future `listFiles` element. */
 export interface ArchivedFile {
-  /** Stable file id = the journal key; also the `file` param of the `restore` control command. */
+  /** Stable file id = the journal key; also the `file` param of the `requestRestore` control command. */
   id: string;
   /** POSIX path relative to the vault root, e.g. "Photos/2019/beach.jpg". The journal SSOT for the tree. */
   relativePath: string;
@@ -34,8 +39,9 @@ export interface ArchivedFile {
   kind: FileKind;
   /** Archived/modified instant (ISO), or null if the journal doesn't expose one. */
   date: string | null;
-  /** When `gettingBack`: quoted ready-by (ISO). */
-  readyBy?: string | null;
+  /** When `pending`/`transferring`: the id of the transfer bringing it back — the handle the row's
+   * "Transfers" affordance deep-links with. */
+  transferId?: string | null;
   /** When `here`: the local path the thawed bytes landed at. */
   localPath?: string | null;
   /** For an optimistic (not-yet-uploaded) drop: the local absolute source path, so a failed upload can be
@@ -53,7 +59,7 @@ export interface FolderRow {
   size: number;
   /** Descendant file count. */
   count: number;
-  /** Aggregate status (active wins: uploading ▸ gettingBack ▸ here-if-all ▸ frozen). */
+  /** Aggregate status (active wins: uploading ▸ transferring ▸ pending ▸ here-if-all ▸ frozen). */
   status: FileStatus;
   /** True for a just-created, still-empty folder (virtual path, no files yet). */
   empty: boolean;
@@ -203,19 +209,24 @@ export const moveIsNoop = (targets: readonly RowTarget[], toDir: string): boolea
 
 /**
  * Rollup for a folder's aggregate status. `failed` wins first — a stuck upload inside is the thing that
- * won't resolve itself, so the folder flags it so the user can drill in and find it. Then active states
- * (uploading/gettingBack), then all-here, else `frozen` (stored).
+ * won't resolve itself, so the folder flags it so the user can drill in and find it. Then the active
+ * states, then all-here, else `frozen` (stored).
+ *
+ * `transferring` outranks `pending`: if anything under this folder is actually moving bytes, that's the
+ * more specific truth, and the folder should not read as merely waiting.
  */
 const rollupStatus = (s: Set<FileStatus>): FileStatus =>
   s.has("failed")
     ? "failed"
     : s.has("uploading")
       ? "uploading"
-      : s.has("gettingBack")
-        ? "gettingBack"
-        : s.size === 1 && s.has("here")
-          ? "here"
-          : "frozen";
+      : s.has("transferring")
+        ? "transferring"
+        : s.has("pending")
+          ? "pending"
+          : s.size === 1 && s.has("here")
+            ? "here"
+            : "frozen";
 
 /**
  * The rows shown at directory `dir` (root = ""): immediate subfolders (aggregated) then files, each
@@ -363,8 +374,9 @@ export const uploadPercent = (
 };
 
 /**
- * Coarsen the daemon's raw journal `FileStatus` to the browser's status. `gettingBack`/`here` are NOT
- * journal states — they're overlaid live from restore activity (see useFiles), never produced here.
+ * Coarsen the daemon's raw journal `FileStatus` to the browser's status. `pending`/`transferring`/`here`
+ * are NOT journal file states — they're overlaid from the daemon's restores list (see useFiles), never
+ * produced here.
  * The journal persists `planned` (queued), `archived` (at rest), and `failed` (a permanent upload fault —
  * the daemon stopped retrying and marked the file, so the ⚠ row is journal truth that survives a refresh
  * and a restart); the remaining states are mapped forward-looking. `failed` → `failed` (needs attention).

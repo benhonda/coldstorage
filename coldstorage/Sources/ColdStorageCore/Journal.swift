@@ -87,6 +87,15 @@ public final class Journal: @unchecked Sendable {
               mountPath TEXT NOT NULL DEFAULT '', paused INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS excludes(
               pattern TEXT PRIMARY KEY, addedAt INTEGER NOT NULL DEFAULT 0);
+            -- Requested transfers (getting a copy back onto this Mac). Journal-backed, not app-held, for
+            -- three reasons that were each a real bug: an app-held transfer vanished on sign-out, vanished
+            -- on restart, and could never progress while the app was closed — though the request modal
+            -- promises it will. The daemon's run loop drives these forward (see `restorePass`).
+            CREATE TABLE IF NOT EXISTS restores(
+              id TEXT PRIMARY KEY, fileId TEXT NOT NULL, out TEXT NOT NULL, jobId TEXT,
+              state TEXT NOT NULL, tier TEXT NOT NULL, bytes INTEGER NOT NULL DEFAULT 0,
+              requestedAt INTEGER NOT NULL, readyAt INTEGER, completedAt INTEGER, error TEXT);
+            CREATE INDEX IF NOT EXISTS restores_state ON restores(state);
             """)
         if excludesIsNew {
             for p in Self.defaultExcludes {
@@ -299,6 +308,97 @@ public final class Journal: @unchecked Sendable {
     public func listExcludes() throws -> [String] {
         lock.lock(); defer { lock.unlock() }
         return try run("SELECT pattern FROM excludes ORDER BY pattern").compactMap { $0["pattern"] as? String }
+    }
+
+    // MARK: - restores registry (requested transfers; the SSOT behind the app's Transfers page)
+
+    private func restoreRow(_ r: [String: Any]) -> RestoreRow {
+        RestoreRow(id: r["id"] as? String ?? "",
+                   fileId: r["fileId"] as? String ?? "",
+                   out: r["out"] as? String ?? "",
+                   jobId: r["jobId"] as? String,
+                   // Unknown/garbage state defaults to `failed`, not `pending`: a row we can't read must not
+                   // masquerade as live work the run loop will keep poking at forever.
+                   state: RestoreState(rawValue: r["state"] as? String ?? "") ?? .failed,
+                   tier: RestoreTier(rawValue: r["tier"] as? String ?? "") ?? .bulk,
+                   bytes: r["bytes"] as? Int ?? 0,
+                   requestedAt: r["requestedAt"] as? Int ?? 0,
+                   readyAt: r["readyAt"] as? Int,
+                   completedAt: r["completedAt"] as? Int,
+                   error: r["error"] as? String)
+    }
+
+    /// Record a newly requested transfer. The app calls this the moment a restore is authorized (paid, or
+    /// free under the allowance), so the transfer is durable BEFORE any thaw is polled — a crash between
+    /// paying and recording would otherwise lose a transfer the user was charged for.
+    public func addRestore(_ r: RestoreRow) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("""
+            INSERT INTO restores(id, fileId, out, jobId, state, tier, bytes, requestedAt, readyAt, completedAt, error)
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+            """, [.text(r.id), .text(r.fileId), .text(r.out), r.jobId.map(Bind.text) ?? .null,
+                  .text(r.state.rawValue), .text(r.tier.rawValue), .int(r.bytes), .int(r.requestedAt),
+                  r.readyAt.map(Bind.int) ?? .null, r.completedAt.map(Bind.int) ?? .null,
+                  r.error.map(Bind.text) ?? .null])
+    }
+
+    /// Newest first — the order the Transfers page renders in (Active on top, then history).
+    public func listRestores() throws -> [RestoreRow] {
+        lock.lock(); defer { lock.unlock() }
+        return try run("""
+            SELECT id, fileId, out, jobId, state, tier, bytes, requestedAt, readyAt, completedAt, error
+            FROM restores ORDER BY requestedAt DESC, id DESC
+            """).map(restoreRow)
+    }
+
+    public func restore(id: String) throws -> RestoreRow? {
+        lock.lock(); defer { lock.unlock() }
+        return try run("""
+            SELECT id, fileId, out, jobId, state, tier, bytes, requestedAt, readyAt, completedAt, error
+            FROM restores WHERE id=?1
+            """, [.text(id)]).first.map(restoreRow)
+    }
+
+    /// The transfers the run loop should push forward this pass — everything still working. Ordered oldest
+    /// first so the longest-waiting transfer is served first.
+    public func activeRestores() throws -> [RestoreRow] {
+        lock.lock(); defer { lock.unlock() }
+        let states = RestoreState.allCases.filter(\.isActive).map(\.rawValue)
+        let holes = states.indices.map { "?\($0 + 1)" }.joined(separator: ",")
+        return try run("""
+            SELECT id, fileId, out, jobId, state, tier, bytes, requestedAt, readyAt, completedAt, error
+            FROM restores WHERE state IN (\(holes)) ORDER BY requestedAt ASC, id ASC
+            """, states.map(Bind.text)).map(restoreRow)
+    }
+
+    /// Advance one transfer. `readyAt`/`completedAt`/`error` are only ever SET here, never cleared by a
+    /// `nil` argument — `nil` means "leave it alone", so a `pending → transferring` step can't erase the
+    /// `readyAt` that a free resume is decided from. Clearing on retry is explicit (`reopenRestore`).
+    public func setRestoreState(_ id: String, _ state: RestoreState,
+                                readyAt: Int? = nil, completedAt: Int? = nil, error: String? = nil) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("""
+            UPDATE restores SET state=?2,
+              readyAt=COALESCE(?3, readyAt), completedAt=COALESCE(?4, completedAt), error=COALESCE(?5, error)
+            WHERE id=?1
+            """, [.text(id), .text(state.rawValue), readyAt.map(Bind.int) ?? .null,
+                  completedAt.map(Bind.int) ?? .null, error.map(Bind.text) ?? .null])
+    }
+
+    /// Put a stopped/failed transfer back to work: clear the stale error so the row doesn't carry the last
+    /// failure forward as if it were current. `readyAt` deliberately SURVIVES — the blob is still warm, and
+    /// that fact is exactly what makes this resume free (see `RestoreRow.isResumable`).
+    public func reopenRestore(_ id: String, _ state: RestoreState) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("UPDATE restores SET state=?2, error=NULL, completedAt=NULL WHERE id=?1",
+                [.text(id), .text(state.rawValue)])
+    }
+
+    /// Drop a transfer from the history list. The bytes it already wrote are the user's file and stay put —
+    /// this forgets the RECORD, not the copy on disk.
+    public func deleteRestore(_ id: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("DELETE FROM restores WHERE id=?1", [.text(id)])
     }
 
     /// The set of vault-relative paths currently occupied by a LIVE row (file OR folder marker; tombstoned

@@ -12,6 +12,11 @@ export interface NavItem {
   /** Disabled + reason — shown honestly, not hidden. */
   disabled?: boolean;
   hint?: string;
+  /** A count pinned to the right of the label — live work on that page (e.g. transfers in flight). Falsy
+   * or zero renders nothing, so the rail is quiet when there's nothing to say. This is where an ambient
+   * count belongs: it sits ON the page that explains it, one click from the detail, instead of floating in
+   * the sidebar foot as a popover with nowhere to go. */
+  badge?: number;
 }
 
 /** Navigation rail. The mark is a stand-in (Material snowflake on the iceberg tile) for the real
@@ -50,7 +55,12 @@ export const Sidebar = ({
           onClick={() => onNavigate(it.id)}
         >
           <Icon name={it.icon} size={22} />
-          {it.label}
+          <span className="cs-nav-label">{it.label}</span>
+          {it.badge ? (
+            <span className="cs-nav-badge" aria-label={`${it.badge} in progress`}>
+              {it.badge}
+            </span>
+          ) : null}
         </button>
       ))}
     </nav>

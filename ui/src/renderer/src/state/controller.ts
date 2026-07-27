@@ -42,6 +42,9 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
   const refreshExcludes = (): Promise<void> =>
     syncing("excludes", async () => store.dispatch({ type: "excludesLoaded", excludes: await api.request("listExcludes") }));
 
+  const refreshRestores = (): Promise<void> =>
+    syncing("restores", async () => store.dispatch({ type: "restoresLoaded", restores: await api.request("listRestores") }));
+
 
   const offEvent = api.onEvent((name, data) => {
     store.dispatch(eventAction(name, data));
@@ -65,6 +68,11 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
       void refreshStatus();
       void refreshFiles();
       void refreshExcludes();
+      // Transfers too — and this line is the fix for a real bug. `beginSession` publishes `filesChanged`,
+      // so this is the sign-in resync: sign out and back in, and the in-flight transfers must come BACK.
+      // They used to vanish for good (renderer-held, cleared by `authChanged`), leaving a file the user had
+      // paid to retrieve showing a plain green "Stored" ✓.
+      void refreshRestores();
     }
     // A finished run may have archived new files / changed their status — re-read both the counts
     // (getStatus) and the tree (listFiles).
@@ -72,6 +80,9 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
       void refreshStatus();
       void refreshFiles();
     }
+    // A transfer moved (or finished). One event for the whole list — we re-read it rather than patch a
+    // local copy, because the daemon's journal is the only thing that knows where a transfer really stands.
+    else if (name === "restoresChanged" || name === "restoreCompleted") void refreshRestores();
   });
 
   const offLifecycle = api.onLifecycle((state) => {
@@ -80,6 +91,7 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
       void refreshStatus(); // resync the snapshot after a (re)connect
       void refreshFiles();
       void refreshExcludes();
+      void refreshRestores();
     }
   });
 
@@ -111,7 +123,7 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
     // connected refreshes so the right screen paints as soon as the auth answer is in.
     store.dispatch({ type: "initialized" });
     if (state === "connected") {
-      await Promise.all([refreshStatus(), refreshFiles(), refreshExcludes()]);
+      await Promise.all([refreshStatus(), refreshFiles(), refreshExcludes(), refreshRestores()]);
     }
   })();
 

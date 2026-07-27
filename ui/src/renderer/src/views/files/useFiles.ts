@@ -9,12 +9,13 @@
  * genuinely IS a cheap journal `relativePath` edit, no S3/no thaw), so the refetch is a no-op in the happy
  * path and the authoritative correction if anything diverged.
  *
- * Live restore status IS real: request-back calls the daemon's `restore` command, and the `restore*`
- * events fold into the store's `restores` — which we overlay here so a file the user asks back shows
- * `getting back` / `here` in the tree. (Pass the store's `restores` in.)
+ * Transfer status IS real: request-back calls the daemon's `requestRestore`, which writes a durable
+ * journal row; the daemon's run loop drives it and the app READS the list (`listRestores`). We overlay
+ * the newest transfer per file here, so a file the user asked back shows `pending` (deep storage is
+ * waking up) / `transferring` (bytes moving) / `here` (saved) in the tree. Pass the store's `restores` in.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { RestoreActivity } from "../../state/reducer.ts";
+import type { RestoreRow } from "../../../../shared/ipc.ts";
 import {
   type ArchivedFile,
   type FileStatus,
@@ -54,17 +55,35 @@ export interface FilesApi {
   newFolder: (intoDir: string) => string;
 }
 
-/** Overlay live restore activity onto a base file (request-back makes this real, not a fixture). */
-const applyRestore = (file: ArchivedFile, r: RestoreActivity | undefined): ArchivedFile => {
-  if (!r) return file;
-  if (r.state === "completed") return { ...file, status: "here", localPath: r.out ?? file.localPath ?? null };
-  return { ...file, status: "gettingBack" };
+/** The per-file status a transfer implies. Only the states that CHANGE how the file reads are mapped: a
+ * canceled or failed transfer leaves the file exactly as it was (still safely stored — the copy didn't
+ * arrive, the archive is untouched), so those keep the journal's own status and surface on the Transfers
+ * page instead of putting a scary mark on a file that is perfectly fine. */
+const STATUS_FROM_TRANSFER: Partial<Record<RestoreRow["state"], FileStatus>> = {
+  // Awaiting payment reads as pending too: from the file's point of view a copy is on the way, and the
+  // thing that needs doing about it belongs on the Transfers page, not on a tree row.
+  needsAuthorization: "pending",
+  pending: "pending",
+  transferring: "transferring",
+  saved: "here",
+};
+
+/** Overlay a file's newest transfer onto its row. */
+const applyRestore = (file: ArchivedFile, r: RestoreRow | undefined): ArchivedFile => {
+  const status = r && STATUS_FROM_TRANSFER[r.state];
+  if (!r || !status) return file;
+  return {
+    ...file,
+    status,
+    transferId: r.id,
+    localPath: r.state === "saved" ? r.out : (file.localPath ?? null),
+  };
 };
 
 export const useFiles = (
   daemonFiles: ArchivedFile[],
   persistedFolders: string[],
-  restores: Record<string, RestoreActivity>,
+  restores: readonly RestoreRow[],
 ): FilesApi => {
   const [base, setBase] = useState<ArchivedFile[]>(daemonFiles);
   // Empty folders, now journal-backed (status `folder` markers, fed in as `persistedFolders`). Held in
@@ -85,8 +104,20 @@ export const useFiles = (
     setVirtualFolders(persistedFolders);
   }, [persistedFolders]);
 
-  // Overlay live restore status by file id — keeps the tree truthful as a real thaw progresses.
-  const files = useMemo(() => base.map((file) => applyRestore(file, restores[file.id])), [base, restores]);
+  // Index the transfer list by file, keeping only the NEWEST per file: the list is history as well as
+  // active work, so a file fetched back twice has several rows and only the latest describes it now.
+  // (`listRestores` is newest-first, so the first one wins.)
+  const newestByFile = useMemo(() => {
+    const m = new Map<string, RestoreRow>();
+    for (const r of restores) if (!m.has(r.fileId)) m.set(r.fileId, r);
+    return m;
+  }, [restores]);
+
+  // Overlay transfer status by file id — keeps the tree truthful as a real thaw progresses.
+  const files = useMemo(
+    () => base.map((file) => applyRestore(file, newestByFile.get(file.id))),
+    [base, newestByFile],
+  );
 
   const deposit = useCallback((items: { name: string; srcPath?: string; size?: number }[], intoDir: string): string[] => {
     const stamp = ++depositSeq;

@@ -2,6 +2,9 @@
 
 ## 2026-07-27
 
+- feat: **restores are journal-backed transfers** — a durable `restores` row (daemon `requestRestore`/`listRestores`/`cancelRestore`/`resumeRestore`/`forgetRestore` + a `restoresChanged` event) survives sign-out and quit, so a paid retrieval resumes inside the 5-day window without a second charge.
+- feat(ui): new `TransfersView` replaces `GettingBackPanel` — transfers are a first-class surface driven by the journal, with Stop/Resume, "reveal in Finder" on completion, and copy that says stopping doesn't refund.
+- refactor: `cancelRestore` → `abandonQuote` for dropping an unpaid quote; `cancelRestore` now means stopping an in-flight transfer.
 - feat(infra): **the AWS account migration is COMPLETE** — everything runs in Ben's own account, the Adpharm stacks were destroyed the same day, and `MIGRATION.md` is now the record of why rather than a runbook.
 - chore: `tf:legacy:destroy`, `login:legacy` and the `LEGACY_*` vars are gone from `Taskfile.yml` — the escape hatch outlived the old account.
 - fix(taskfile): `app:mac:_require-api-identity` is invoked as a `task:` reference with a dynamic `sh:` var instead of `task <name>` in a shell (internal tasks exit 202 from the CLI); an empty URL is handled as a legitimate no-config state.

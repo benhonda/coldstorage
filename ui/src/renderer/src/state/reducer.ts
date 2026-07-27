@@ -2,8 +2,9 @@
  * The event-stream → app-state fold (layer 2). A PURE reducer: `(state, action) → state`, no I/O — so
  * it's unit-testable headless (see reducer.test.ts) and React just binds to the store that wraps it.
  *
- * `status` is the authoritative snapshot (from `getStatus`/`listSources`); `run`, `failures`,
- * `restores`, `lastError` are folded live from pushed events. Daemon event values arrive as STRINGS
+ * `status` is the authoritative snapshot (from `getStatus`/`listSources`); `run`, `failures` and
+ * `lastError` are folded live from pushed events. `restores` is NOT folded — it is read wholesale from the
+ * daemon's journal, which owns it (see {@link AppState.restores}). Daemon event values arrive as STRINGS
  * (the `[String:String]` wire) — numbers are parsed here, the one place that knows the wire shape.
  */
 import type {
@@ -14,6 +15,7 @@ import type {
   DaemonEvents,
   EntitlementStatus,
   ListedFile,
+  RestoreRow,
   Source,
   Status,
   UpdateStatus,
@@ -66,13 +68,17 @@ export interface BlobFailure {
   files: string[];
 }
 
-/** One file's restore progress, folded from the restore* events (idempotent, re-issued by the UI). */
-export interface RestoreActivity {
-  file: string;
-  state: "requested" | "inProgress" | "completed";
-  tier: string | null;
-  out: string | null;
-}
+// A `RestoreActivity` interface used to live here, folded per-file from `restoreRequested` /
+// `restoreInProgress` / `restoreCompleted` events. It was DELETED (2026-07-27) and must not come back as
+// a fold.
+//
+// It was renderer-memory state, which meant a transfer the user had PAID for was lost by `authChanged`
+// below (it clears every vault-derived slice) and by any relaunch — the file simply reverted to a green
+// "Stored" ✓ with no sign a transfer was ever requested. It also had no state for "bytes are moving", so
+// the whole ~48-hour thaw rendered as "Downloading".
+//
+// Transfers are now durable journal rows the daemon drives and the app READS ({@link AppState.restores},
+// filled by `listRestores`). If you want to know where a transfer stands, read the list.
 
 export interface AppState {
   /** True until the first status batch (connection + auth + vault) has arrived from main. Gates the whole
@@ -102,8 +108,10 @@ export interface AppState {
   excludes: string[];
   run: RunProgress | null;
   failures: BlobFailure[];
-  /** Keyed by file id. */
-  restores: Record<string, RestoreActivity>;
+  /** Every transfer this Mac has requested, newest first — active and history — read from the daemon's
+   * journal (`listRestores`), never accumulated here. Authoritative: the daemon owns and drives these,
+   * so they survive a sign-out, a relaunch, and a closed app. */
+  restores: RestoreRow[];
   lastError: string | null;
   /** The `code` of the most recent daemon `error` (or null) — drives a recovery action on the toast, e.g.
    * `photosAccessDenied` → an "Open Photos settings" button. Cleared (→ null) by any error without a code. */
@@ -123,7 +131,7 @@ export const initialState: AppState = {
   excludes: [],
   run: null,
   failures: [],
-  restores: {},
+  restores: [],
   lastError: null,
   lastErrorCode: null,
 };
@@ -146,6 +154,7 @@ export type Action =
   | { type: "sourcesLoaded"; sources: Source[] }
   | { type: "filesLoaded"; files: ListedFile[] }
   | { type: "excludesLoaded"; excludes: string[] }
+  | { type: "restoresLoaded"; restores: RestoreRow[] }
   | { type: "failuresDismissed" }
   | EventAction;
 
@@ -239,7 +248,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
         excludes: [],
         run: null,
         failures: [],
-        restores: {},
+        restores: [],
         lastError: null,
         lastErrorCode: null,
       };
@@ -269,6 +278,9 @@ export const reducer = (state: AppState, action: Action): AppState => {
 
     case "excludesLoaded":
       return { ...state, excludes: action.excludes };
+
+    case "restoresLoaded":
+      return { ...state, restores: action.restores };
 
     case "failuresDismissed":
       // The user acknowledged the "couldn't upload" pill and asked it gone. An acknowledgement, not a
@@ -374,17 +386,12 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
       return { ...state, failures: [{ blob, kind, message, files }, ...state.failures].slice(0, FAILURE_CAP) };
     }
 
-    case "restoreRequested":
-      return upsertRestore(state, action.data.file, {
-        state: "requested",
-        tier: action.data.tier,
-      });
-
-    case "restoreInProgress":
-      return upsertRestore(state, action.data.file, { state: "inProgress" });
-
+    case "restoresChanged":
     case "restoreCompleted":
-      return upsertRestore(state, action.data.file, { state: "completed", out: action.data.out });
+      // Authoritative refresh is the controller's job (it re-reads `listRestores`); no fold here. Same
+      // pattern as sourcesChanged/filesChanged — and for a stronger reason: a renderer-side fold of these
+      // is what used to lose an in-flight transfer on sign-out.
+      return state;
 
     case "error":
       return { ...state, lastError: action.data.message, lastErrorCode: action.data.code ?? null };
@@ -401,19 +408,4 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
       // A reorganize/delete edited the journal tree; the controller re-reads listFiles. No fold here.
       return state;
   }
-};
-
-/** Merge a partial update into one file's restore activity (creating it if new). */
-const upsertRestore = (
-  state: AppState,
-  file: string,
-  patch: Partial<Omit<RestoreActivity, "file">>,
-): AppState => {
-  const prev: RestoreActivity = state.restores[file] ?? {
-    file,
-    state: "requested",
-    tier: null,
-    out: null,
-  };
-  return { ...state, restores: { ...state.restores, [file]: { ...prev, ...patch } } };
 };

@@ -23,6 +23,11 @@ scan/encrypt/upload/restore/journal. The UI reads state and sends commands.
 > copy** / **Start transfer** / **Transferring** (not "download"/"retrieve" — those imply immediacy;
 > the slow-thaw nuance lives in the dialog, not the label), **frozen** (factual: deep storage is slow
 > to open). Status is *information*, not comfort — neither alarm nor reassurance, just facts.
+>
+> **"Transferring" means bytes are moving (2026-07-27).** It is not the word for the ~48h Deep Archive
+> thaw, which is **pending** / *waiting on deep storage* — nothing transfers during it. The app called the
+> whole thaw "Transferring" until this landed, so a transfer appeared to sit at zero progress for two days.
+> One word, one meaning: if nothing is moving, don't say transferring.
 
 ## The mental model — a reorganizable filesystem (canonical since 2026-06-24)
 Two jobs are the whole product: **get files up** and **get them back**. The app does them as a
@@ -55,11 +60,11 @@ Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-cl
 │ ❄ coldstor.│  My Files › Photos › 2019              ⊞ ⊟    ⊕ Add      │
 │            │  Name                          Size      Date            │
 │  My Files  │  📁 January                    1.2 GB    12 items        │
-│  Settings  │  📄 beach.jpg                  4.1 MB    Jul 12 2019  ✓ ⋯ │
-│            │  📄 sunset.jpg                 3.8 MB    Jul 12 2019  ↓ ⋯ │
+│ Transfers 1│  📄 beach.jpg                  4.1 MB    Jul 12 2019  ✓ ⋯ │
+│  Settings  │  📄 sunset.jpg                 3.8 MB    Jul 12 2019  ⧗ ⋯ │
 │            │  📄 hike.mov                   2.3 GB    Aug 3 2019      │
 │ 12 GB      │                                                          │
-│Transferring 1│ ────── drop anywhere to upload · right-click for more ─│
+│            │ ────── drop anywhere to upload · right-click for more ─│
 └────────────┴────────────────────────────────────────────────────────┘
    ⋯ → Get info · Rename · Move to… · New folder · Request a copy… · Delete
 ```
@@ -74,7 +79,8 @@ Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-cl
   muted-red ⚠ **couldn't upload** (permanent/stuck — also persistent in the sidebar → failures panel
   + Try again / Dismiss, because a one-shot toast gets missed; the pill clears itself when a retry
   lands, Dismiss is acknowledge-only — rows keep their ⚠, and a re-hit fault re-surfaces it) ·
-  amber ↓ **Transferring** · green `download_done`
+  amber ⧗ **waiting on deep storage** (the thaw — nothing is moving yet) · blue ↓ **Transferring**
+  (bytes actually moving) · green `download_done`
   **saved on this Mac**. No icon = nothing in flight.
 - **Selection is just selection** (cmd/shift multi → batch ops); details live behind `⋯`/right-click;
   double-click a file = Get info, a folder = drill in. No docked side-inspector.
@@ -142,7 +148,9 @@ Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-cl
    your Downloads folder [Show] [Open]."* *(Notification still open, below.)*
 5. The local copy expires after the requested `days`, then re-freezes → honest *"available until
    Jun 28,"* download-again is one click.
-6. A persistent **"Transferring N"** indicator in the sidebar foot (→ queue popover) survives app close.
+6. A count on the **Transfers** nav item (above Settings) — the page is the detail, so the badge has
+   somewhere to go. Transfers are journal rows the daemon drives, so they survive sign-out, relaunch and
+   a closed app. (Superseded the sidebar-foot "Transferring N" pill + its popover, 2026-07-27.)
 7. Batch/folder request → one **combined** quote (`240 files · ~a day · ~$3.10`).
 
 ## Settings
@@ -243,7 +251,8 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   (`{id, method, params?}`); replies carry `id`; pushed events carry `event`. `ui/src/daemon/protocol.ts`
   is the hand-kept TS mirror.
 - **Commands (SSOT = `DaemonService.handle`):** `ping · getStatus · listSources · listFiles ·
-  listExcludes · addSource · removeSource · addExclude · removeExclude · restorePlan · restore ·
+  listExcludes · addSource · removeSource · addExclude · removeExclude · restorePlan · requestRestore ·
+  listRestores · cancelRestore · resumeRestore · forgetRestore ·
   deposit · depositPhotos · previewDeposit · movePath · createFolder · deletePath · pathIsWatched · authenticate ·
   deauthenticate · mintVault · unlockVault · unlockVaultWithRecoveryCode · lockVault · triggerNow ·
   pauseSource · resumeSource`. (`authenticate`/`deauthenticate` = the **session** opened/closed —
@@ -258,9 +267,13 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   keep rendering the previous account's tree: `authChanged` resets every vault-derived slice
   (files/status/excludes/run/failures/restores) on sign-out **and** on an account switch, keyed on the
   account — the daemon's isolation is only half the fix if the UI still holds the last user's state.
+  **Clearing is only half of THAT fix:** every cleared slice must be refillable from the daemon on the way
+  back in. `restores` was cleared but had no daemon read behind it, so signing out and back in destroyed
+  an in-flight transfer permanently (Ben, 2026-07-27) — the file just showed a green ✓ again. `beginSession`
+  publishes `filesChanged`, and the controller re-reads status/files/excludes/**restores** on it.
 - **Events (SSOT = the `DaemonEvent(...)` call sites):** `runStarted · fileArchived · uploadProgress ·
   runProgress · runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged ·
-  restoreRequested · restoreInProgress · restoreCompleted · restoreNeedsAuthorization · error`.
+  restoresChanged · restoreCompleted · error`.
   `runProgress` carries `{filesTotal, bytesTotal, filesArchived, bytesUploaded, currentPath}` — the
   whole-run aggregate the deposit banner draws from (all ENCRYPTED bytes; `bytesTotal` 0 ⇒ unknown, e.g.
   Photos; ETA/throughput are derived UI-side, never sent — coarsely, in buckets, since a snapshot only
@@ -335,14 +348,11 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   (headless-tested). Fonts self-hosted (Fontsource + material-symbols) for the locked-down CSP.
 
 ## Remaining UI-lane work (still open)
-1. **Per-file live status:** icons need `frozen | uploading | failed | gettingBack | here` per file —
-   fold journal `FileStatus` with live restore state (restore state is per-request via `restore*`
-   events today, not queryable per file).
 2. **Skipped-count reporting** (daemon): the deposit "skipped 1,203" line needs the run to report how
    many files the excludes filtered. Also a per-run **filesFailed** count (blobs ≠ files).
 3. **Retry depth:** row Retry re-issues `deposit` from the remembered `srcPath`; a failure *after* the
    daemon accepted it (journal row, no `srcPath`) needs daemon support to retry.
-4. **Polish:** macOS notification on restore-ready; `Show in Finder` (`shell.showItemInFolder`);
+4. **Polish:** macOS notification on restore-ready (`restoreCompleted` is the hook, still unwired);
    subset the 5.3 MB Material Symbols woff2 to the ~12 glyphs used.
 5. `newFolder` is local-only until something lands in it (a virtual path — nothing to persist).
 
@@ -352,9 +362,13 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   `ListObjectsV2` — blobs are opaque `blobs/<hash>` objects). Don't block browse work on R2.
 - **Socket perms:** `0600`, same user — fine. Dev socket `coldstorage/coldstored.sock`; installed
   `~/Library/Application Support/ColdStorage/coldstored.sock` (`COLDSTORE_SOCKET`).
-- **Restore is idempotent/one-step:** `restore` returns `state ∈ restored | thawRequested |
-  thawInProgress` (+ `typicalWait`). Call, show the quoted wait, re-issue / reflect `restore*` events.
-  Don't expect one call to block for hours.
+- **A transfer is a durable journal row, not a request/response.** `requestRestore` records it and
+  returns the whole list; the DAEMON's run loop then steps it (`restorePass`) until it lands, so it keeps
+  going with the app closed. Read `listRestores` for state; never accumulate a copy from events. The old
+  one-shot `restore` command is gone: nothing re-issued it, so every transfer stalled at `thawRequested`
+  forever while the UI showed it as downloading.
+- **States are named, never a percentage:** `needsAuthorization | pending | transferring | saved |
+  canceled | failed`. Deep Archive reports only warming vs ready, so a progress bar would be invented.
 - **JS tooling is Bun** (repo convention), but Electron's main runs its bundled Node — dev/test on Bun,
   ship on Node, only `node:net`. Add deps with `bun add <pkg>@latest`.
 - `node_modules` is platform-native — each OS needs its own `bun install` (the container uses a named

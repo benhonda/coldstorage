@@ -4,6 +4,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { etaSeconds, initialState, reducer, throughput, type AppState } from "./reducer.ts";
+import type { RestoreRow } from "../../../shared/ipc.ts";
 
 /** Apply a sequence of actions from the initial state. */
 const run = (...actions: Parameters<typeof reducer>[1][]): AppState =>
@@ -19,6 +20,24 @@ const status: AppState["status"] = {
   sources: [{ id: "s1", kind: "folder", path: "/a", mountPath: "a", paused: false }],
   bytesStored: 4096,
 };
+
+/** A wire-shaped transfer row (what `listRestores` hands back). */
+const transfer = (id: string, state: RestoreRow["state"] = "pending"): RestoreRow => ({
+  id,
+  fileId: `f-${id}`,
+  relativePath: `Photos/${id}.jpg`,
+  out: `/Users/ben/Downloads/${id}.jpg`,
+  state,
+  tier: "bulk",
+  jobId: "job-1",
+  bytes: 1234,
+  requestedAt: 1_700_000_000,
+  readyAt: null,
+  completedAt: null,
+  error: null,
+  typicalWait: "~48 hours",
+  resumable: false,
+});
 
 const signedIn = (email: string): Parameters<typeof reducer>[1] => ({
   type: "authChanged",
@@ -192,13 +211,47 @@ describe("failures, pause, restore, error", () => {
     expect(again.failures).toHaveLength(1);
   });
 
-  test("restore* events fold into one keyed activity, latest state winning", () => {
-    const s = run(
-      { type: "event", name: "restoreRequested", data: { file: "f1", tier: "Bulk" } },
-      { type: "event", name: "restoreInProgress", data: { file: "f1" } },
-      { type: "event", name: "restoreCompleted", data: { file: "f1", out: "/out/f1" } },
+  test("restoresLoaded replaces the transfer list wholesale", () => {
+    const s = run({ type: "restoresLoaded", restores: [transfer("t1"), transfer("t2")] });
+    expect(s.restores.map((r) => r.id)).toEqual(["t1", "t2"]);
+
+    // A later read is the whole truth, not a merge — the daemon's journal owns this list.
+    const later = reducer(s, { type: "restoresLoaded", restores: [transfer("t2")] });
+    expect(later.restores.map((r) => r.id)).toEqual(["t2"]);
+  });
+
+  test("restore events do NOT fold into the list — the controller re-reads it", () => {
+    // Deliberate: folding these renderer-side is what used to lose an in-flight transfer. The events say
+    // only "something moved"; `listRestores` says what.
+    const loaded = run({ type: "restoresLoaded", restores: [transfer("t1", "pending")] });
+    const after = reducer(loaded, { type: "event", name: "restoresChanged", data: {} });
+    expect(after.restores).toEqual(loaded.restores);
+
+    const done = reducer(loaded, {
+      type: "event",
+      name: "restoreCompleted",
+      data: { file: "f-t1", out: "/out/f" },
+    });
+    expect(done.restores).toEqual(loaded.restores);
+  });
+
+  test("signing back in refills transfers that sign-out cleared", () => {
+    // THE regression (2026-07-27, Ben): sign out and back in, and an in-flight transfer vanished — the
+    // file just showed a green "Stored" ✓ again, with no sign a copy was on its way. Clearing on sign-out
+    // is correct (it's another user's data until proven otherwise); what was missing is that the list is
+    // refillable from the daemon, because the daemon is the one that actually owns it.
+    const live = run(signedIn("a@b.com"), { type: "restoresLoaded", restores: [transfer("t1", "pending")] });
+    expect(live.restores).toHaveLength(1);
+
+    const out = reducer(live, signedOut);
+    expect(out.restores).toEqual([]);
+
+    const back = [signedIn("a@b.com"), { type: "restoresLoaded" as const, restores: [transfer("t1", "pending")] }].reduce(
+      reducer,
+      out,
     );
-    expect(s.restores.f1).toEqual({ file: "f1", state: "completed", tier: "Bulk", out: "/out/f1" });
+    expect(back.restores.map((r) => r.id)).toEqual(["t1"]);
+    expect(back.restores[0]!.state).toBe("pending");
   });
 
   test("error sets lastError", () => {

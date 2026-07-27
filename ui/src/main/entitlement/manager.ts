@@ -253,8 +253,9 @@ export class EntitlementManager {
     return body;
   }
 
-  /** Drop a quote the user walked away from, so it burns none of their free allowance. */
-  async cancelRestore(jobId: string): Promise<void> {
+  /** Drop a QUOTE the user walked away from, so it burns none of their free allowance. Distinct from the
+   * daemon's `cancelRestore`, which stops an in-flight transfer — see `ColdstoreApi.abandonQuote`. */
+  async abandonQuote(jobId: string): Promise<void> {
     await this.authedJson(`/retrieval/jobs/${jobId}/cancel`, { method: "POST" }).catch(() => undefined);
   }
 

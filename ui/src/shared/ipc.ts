@@ -22,10 +22,12 @@ export type {
   ListedFile,
   Method,
   ParamsArg,
-  RestoreStep,
+  RestoreRow,
+  RestoreState,
   Source,
   Status,
 } from "../daemon/protocol.ts";
+export { ACTIVE_RESTORE_STATES, isActiveRestore } from "../daemon/protocol.ts";
 
 import type { Commands, DaemonEventName, DaemonEvents, Method, ParamsArg } from "../daemon/protocol.ts";
 
@@ -45,6 +47,8 @@ export const IPC = {
   chooseUploads: "dialog:chooseUploads",
   /** invoke: the OS Downloads directory (default save destination). */
   downloadsDir: "dialog:downloadsDir",
+  /** invoke: reveal a path in Finder, `(absolutePath → void)`. */
+  revealInFinder: "shell:reveal",
   /** invoke: present the native Photos picker; resolves to the picked asset ids (or [] if cancelled). */
   pickPhotos: "photos:pick",
   /** invoke: open System Settings ▸ Privacy & Security ▸ Photos (recovery for a denied/limited grant). */
@@ -335,6 +339,10 @@ export interface ColdstoreApi {
   /** Open the native folder picker (a window sheet on macOS). Resolves to the chosen absolute path, or
    * null if cancelled. `defaultPath` seeds where it opens. */
   chooseFolder(defaultPath?: string): Promise<string | null>;
+  /** Reveal an absolute path in Finder (selecting it in its enclosing folder). The natural end of a
+   * finished transfer: the copy landed, so hand the user the actual file rather than a path to read out.
+   * Silent no-op if the file has since been moved or deleted — a stale row must not raise an error. */
+  revealInFinder(path: string): Promise<void>;
   /** Open the native upload picker (a window sheet on macOS): select any mix of files AND folders,
    * multi-select. The deposit pipeline walks each chosen directory and re-bases its tree under the current
    * folder, so folder structure is preserved. Resolves to the chosen absolute paths, or [] if cancelled.
@@ -426,8 +434,11 @@ export interface ColdstoreApi {
   payForRestore(jobId: string): Promise<RetrievalQuote>;
   /** Poll one restore job. */
   getRestoreJob(jobId: string): Promise<RetrievalQuote>;
-  /** Abandon an unpaid quote, so it burns none of the free allowance. */
-  cancelRestore(jobId: string): Promise<void>;
+  /** Abandon an unpaid QUOTE, so it burns none of the free allowance. Deliberately not called
+   *  "cancelRestore": that is the daemon command that stops an in-flight TRANSFER, and the two are
+   *  different acts on different layers. This one walks away before any money moves and nothing has
+   *  thawed; that one stops a copy the user may already have paid for. */
+  abandonQuote(jobId: string): Promise<void>;
 
   /** Subscribe to entitlement changes. */
   onEntitlement(listener: (status: EntitlementStatus) => void): () => void;

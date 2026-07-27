@@ -18,7 +18,11 @@ const STATUS: Record<FileStatus, { icon: string; tone: Tone; label: string } | n
   uploading: { icon: "arrow_circle_up", tone: "accent", label: "Uploading" },
   // permanent/stuck only — a transient blip stays `uploading` (it self-heals), never shows this.
   failed: { icon: "error", tone: "danger", label: "Couldn't upload" },
-  gettingBack: { icon: "arrow_circle_down", tone: "warning", label: "Transferring" },
+  // Two states, because they are two different things. `pending` is the ~48h Deep Archive thaw, during
+  // which no byte moves — an hourglass, not a down-arrow, because nothing is arriving yet. `transferring`
+  // is the down-arrow it was always drawn as, now reserved for when that's actually true.
+  pending: { icon: "hourglass_top", tone: "warning", label: "Waiting on deep storage" },
+  transferring: { icon: "arrow_circle_down", tone: "accent", label: "Transferring" },
   here: { icon: "download_done", tone: "success", label: "Saved on this Mac" },
 };
 
@@ -31,7 +35,8 @@ const KIND_ICON: Record<FileKind, string> = {
   other: "draft",
 };
 
-/** A small colored status icon — ✓ stored, ↑ uploading, ⚠ couldn't upload, ↓ transferring, or saved-here. */
+/** A small colored status icon — ✓ stored, ↑ uploading, ⚠ couldn't upload, ⧗ waiting on deep storage,
+ * ↓ transferring, or saved-here. */
 export const StatusIcon = ({ status, size = 20 }: { status: FileStatus; size?: number }): React.JSX.Element | null => {
   const s = STATUS[status];
   if (!s) return null;

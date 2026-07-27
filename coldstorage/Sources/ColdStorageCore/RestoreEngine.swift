@@ -35,9 +35,17 @@ public struct RestoreEngine: Sendable {
 
     /// Do the next step toward getting `fileId` back. Safe to re-run: starts the thaw if needed,
     /// reports progress while it's retrieving, and downloads + verifies once the copy is ready.
+    ///
+    /// `willDownload` fires at the ONE moment bytes are about to move — after the thaw is confirmed ready
+    /// and before the ranged GET. It exists because the caller cannot infer that moment from the return
+    /// value: `restore` returns `.restored` only once the download has already finished, so without this
+    /// hook there is no way to tell "waiting ~48h for deep storage" apart from "actively transferring", and
+    /// the app is forced to call the whole wait a download. That mislabel is precisely what
+    /// {@link RestoreState} exists to fix, so the signal has to come from here, where the truth is known.
     @discardableResult
     public func restore(fileId: String, to outURL: URL,
-                        tier: RestoreTier = .standard, days: Int = 7) async throws -> RestoreOutcome {
+                        tier: RestoreTier = .standard, days: Int = 7,
+                        willDownload: (@Sendable () -> Void)? = nil) async throws -> RestoreOutcome {
         guard let f = try journal.fileMapping(fileId) else { throw ColdStorageError.invalidRequest("no archived file '\(fileId)'") }
         // Read the STORED key (SSOT) rather than recomputing `"blobs/<blobId>"` — a multi-user object lives
         // under its owner's prefix (`blobs/<cognito-identity-id>/<blobId>`), so recomputing would miss it.
@@ -60,7 +68,9 @@ public struct RestoreEngine: Sendable {
             return .thawInProgress
         case .download:
             // Thawed, so a ranged GET works — the daemon keeps `s3:GetObject`, which is exactly why the
-            // paid-retrieval gate had to be the THAW and not the read.
+            // paid-retrieval gate had to be the THAW and not the read. Announce it FIRST: from here on
+            // bytes really are moving, and this is the only instant at which that becomes true.
+            willDownload?()
             try await download(f, key: key, to: outURL, fileId: fileId)
             return .restored
         }

@@ -117,25 +117,70 @@ export interface Status {
 }
 
 /**
- * `RestoreDTO` — one idempotent restore step's outcome. Re-issue `restore` until `state==="restored"`.
- * `out` is set only when bytes landed; `tier`/`typicalWait` only while thawing (for the quoted wait).
+ * Where one requested transfer stands. The daemon's `RestoreState` (`Models.swift`) is the SSOT; this is
+ * its wire mirror.
  *
- * `authorizationRequired` is the paid-retrieval hard gate (root `RETRIEVAL.md`): on a signed-in
- * (multi-user) daemon the blob is frozen and the daemon has no right to thaw it — only the account
- * backend does, and only for a restore that's paid for or inside the free monthly allowance. It is NOT an
- * error: it's the normal first step. `blobKey`/`egressBytes` are set only in this state, and are exactly
- * what `POST /retrieval/quote` needs to price the restore.
+ * The distinction the app exists to show honestly: for the ~48 hours a Deep Archive thaw takes, **nothing
+ * is transferring**. Deep storage is waking up. So that wait is `pending`, and `transferring` means one
+ * thing only — bytes are moving right now. (Until 2026-07-27 the app called the entire thaw "Transferring",
+ * so a user watched a transfer report no progress for two days.)
+ *
+ * `needsAuthorization` is the paid-retrieval hard gate (root `RETRIEVAL.md`): on a signed-in (multi-user)
+ * daemon the blobs are frozen and the daemon has no right to thaw them — only the account backend does,
+ * and only for a restore that's paid for or inside the free monthly allowance. It is NOT an error; it means
+ * the app owes a quote, not a wait.
  */
-export interface RestoreStep {
-  file: string;
-  state: "restored" | "thawRequested" | "thawInProgress" | "authorizationRequired";
-  out: string | null;
-  tier: string | null;
-  typicalWait: string | null;
-  /** Only on `authorizationRequired` — the blob the backend must thaw. */
-  blobKey: string | null;
-  /** Only on `authorizationRequired` — bytes that will come back (what the quote is priced on). */
-  egressBytes: number | null;
+export type RestoreState =
+  | "needsAuthorization"
+  | "pending"
+  | "transferring"
+  | "saved"
+  | "canceled"
+  | "failed";
+
+/** The states that still count as in-flight — what the Transfers page files under "Active" and what the
+ * sidebar badge counts. Mirrors `RestoreState.isActive` in `Models.swift`. */
+export const ACTIVE_RESTORE_STATES = ["needsAuthorization", "pending", "transferring"] as const;
+
+export const isActiveRestore = (s: RestoreState): boolean =>
+  (ACTIVE_RESTORE_STATES as readonly string[]).includes(s);
+
+/**
+ * One requested transfer, straight from the daemon's `restores` journal table.
+ *
+ * Journal-backed rather than folded from events in the renderer, because the renderer was the wrong owner
+ * in three ways that were each a real bug: the transfer vanished on sign-out, vanished on restart, and
+ * couldn't progress while the app was closed — though the request dialog promises exactly that. Read this
+ * list; never accumulate a parallel copy from event fragments.
+ */
+export interface RestoreRow {
+  /** Stable transfer id — the handle for cancel/resume/forget. */
+  id: string;
+  /** The journal file this brings back. */
+  fileId: string;
+  /** The file's CURRENT vault path (resolved daemon-side; a file can be renamed mid-transfer). Falls back
+   * to the destination's basename if the vault copy was since deleted, so history never goes nameless. */
+  relativePath: string;
+  /** Absolute destination on this Mac, chosen per-request. */
+  out: string;
+  state: RestoreState;
+  tier: string;
+  /** The backend retrieval job that authorized this thaw — what was quoted and paid. Null in dogfood mode. */
+  jobId: string | null;
+  /** Plaintext bytes coming back. */
+  bytes: number;
+  /** Unix seconds. */
+  requestedAt: number;
+  /** Unix seconds the thaw was first seen READY — when the 5-day download window opened. Null until then. */
+  readyAt: number | null;
+  completedAt: number | null;
+  error: string | null;
+  /** How long the thaw takes, in plain words, from the tier we actually quote at. The app must never
+   * invent its own wait — only the party that picks the tier can state it honestly. */
+  typicalWait: string;
+  /** True ⇒ "Resume" costs nothing: the blobs this job already paid to thaw are still warm. Decided by the
+   * daemon (`RestoreRow.isResumable`), never by the renderer — getting it wrong charges someone twice. */
+  resumable: boolean;
 }
 
 /** `AuthDTO` — `authenticate`'s result: the Cognito identity id this daemon's uploads are now scoped
@@ -246,10 +291,30 @@ export interface Commands {
     params: { files: string };
     result: { blobKeys: string[]; egressBytes: number };
   };
-  restore: {
-    params: { file: string; out: string; tier?: string; days?: string };
-    result: RestoreStep;
+  /** Every transfer this Mac has requested, newest first — active and history in one list. The Transfers
+   * page reads this; it is the SSOT. Empty when signed out (transfers are vault data). */
+  listRestores: { params: Record<string, never>; result: RestoreRow[] };
+  /** Start a transfer: record it durably, then take the first step. Call this only once the restore is
+   * AUTHORIZED (paid, or free under the allowance) — `jobId` links the row to what was paid. The daemon's
+   * run loop drives it from here, so it keeps going with the app closed.
+   *
+   * Every one of these commands answers with the WHOLE list, so the caller never has to reconcile a
+   * mutation against its own copy — it just adopts the reply. */
+  requestRestore: {
+    params: { file: string; out: string; jobId?: string; tier?: string };
+    result: RestoreRow[];
   };
+  /** Stop a transfer. This stops the COPY, not the thaw: a Glacier retrieval can't be called back and the
+   * money is already spent. Honest only because `resumeRestore` is free while the 5-day window lasts — the
+   * app's copy must say so and must not imply a refund. */
+  cancelRestore: { params: { id: string }; result: RestoreRow[] };
+  /** Pick a stopped/failed transfer back up. Free while `resumable` is true. If the window has lapsed the
+   * next pass finds the blobs cold and the row lands on `needsAuthorization` — the truthful answer, which
+   * routes the user to a fresh quote rather than a wait that would never end. */
+  resumeRestore: { params: { id: string }; result: RestoreRow[] };
+  /** Clear a FINISHED transfer from history. Forgets the record, not the copy on disk. Rejects an active
+   * transfer — stop it first, or the run loop would keep driving something the user thinks is dismissed. */
+  forgetRestore: { params: { id: string }; result: RestoreRow[] };
   triggerNow: { params: Record<string, never>; result: Ack };
   /** Per-source pause/resume — stop/resume auto-syncing one watched folder (it stays registered).
    * Persisted in the journal; both emit `sourcesChanged` so the UI refetches. (There is no global pause.) */
@@ -367,8 +432,13 @@ export interface DaemonEvents {
    * Carries the affected path (`moved`+`to`, XOR `deleted`, XOR `created`) for logging; the controller's
    * response is to re-read `listFiles`. */
   filesChanged: { moved?: string; to?: string; deleted?: string; created?: string };
-  restoreRequested: { file: string; tier: string };
-  restoreInProgress: { file: string };
+  /** The transfer list moved — re-read `listRestores`. ONE event for the whole list, deliberately: a
+   * per-state event carrying a fragment is what invited the renderer to fold its own parallel copy, and
+   * that copy is what silently lost an in-flight transfer on sign-out. The journal is the SSOT; this event
+   * says only "it changed". */
+  restoresChanged: Record<string, never>;
+  /** A transfer finished and the bytes are on disk. Distinct from `restoresChanged` because a completion
+   * is a moment, not a state — it's what a "your copy is ready" notification hangs off. */
   restoreCompleted: { file: string; out: string };
   /** A daemon-side error surfaced to the user as a toast. `code`, when present, marks a KNOWN, actionable
    * failure the UI can offer recovery for — `photosAccessDenied` (the daemon lacks full Photos access →

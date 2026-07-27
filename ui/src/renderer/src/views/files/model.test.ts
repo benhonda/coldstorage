@@ -64,6 +64,18 @@ describe("childrenOf", () => {
     expect(folder.type === "folder" && folder.status).toBe("uploading");
   });
 
+  test("a folder that has bytes moving reads as transferring, not merely pending", () => {
+    // `transferring` is the more specific truth: something under here really is arriving. A folder that
+    // reported "waiting on deep storage" while a file inside it was downloading would understate it.
+    const rows = childrenOf([file("a/x", 1, "pending"), file("a/y", 1, "transferring")], "");
+    expect(rows[0]!.type === "folder" && rows[0]!.status).toBe("transferring");
+  });
+
+  test("a folder waiting on a thaw reads as pending", () => {
+    const rows = childrenOf([file("a/x", 1, "frozen"), file("a/y", 1, "pending")], "");
+    expect(rows[0]!.type === "folder" && rows[0]!.status).toBe("pending");
+  });
+
   test("a virtual (empty) folder surfaces only at its own level", () => {
     const rows = childrenOf(sample, "", ["Projects"]);
     const proj = rows.find((r) => r.type === "folder" && r.name === "Projects");

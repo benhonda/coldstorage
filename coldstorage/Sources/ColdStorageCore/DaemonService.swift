@@ -34,6 +34,12 @@ public actor DaemonService {
     // dragged in would be a bug). `running` + a waiter queue gives both — see `withRunLock`.
     private var running = false
     private var runWaiters: [CheckedContinuation<Void, Never>] = []
+    /// Guards `restorePass` against running twice at once. The actor suspends at every network await, so a
+    /// pass kicked off by `requestRestore`/`resumeRestore` can interleave with the scheduled one — both
+    /// would see the same row active and both would download it. That is a duplicated ranged GET: egress
+    /// we pay for twice, and two writers racing on one destination path. Same shape as `running` above, and
+    /// separate from it on purpose — a busy upload must never block a paid-for restore.
+    private var restoring = false
     // Blobs that failed *permanently* (config/logic — won't self-heal) this session. Skipped on the next
     // pass so we don't re-stage+re-attempt a doomed blob every interval. In-memory by design: a restart
     // retries once (maybe the operator fixed the config). Persisting it would need a journal schema change.
@@ -327,6 +333,10 @@ public actor DaemonService {
             // always runs — a pass over zero unpaused folders is just a cheap no-op.
             do { try await runOnce() }
             catch { bus.publish(DaemonEvent("error", ["message": "\(error)"])) }   // surface, never crash the loop
+            // Push in-flight transfers along on the same beat. Deliberately OUTSIDE the upload pass and
+            // after it: a stuck or busy upload run must never be the reason a paid-for restore stops
+            // progressing. Non-throwing by construction — it records faults on the row, never here.
+            if let session { await restorePass(session) }
             await wakeableSleep(seconds: intervalSeconds)
         }
     }
@@ -526,13 +536,87 @@ public actor DaemonService {
     /// total that will actually come back.
     private struct RestorePlanDTO: Encodable { let blobKeys: [String]; let egressBytes: Int }
 
-    /// `blobKey`/`egressBytes` are set only for `state == "authorizationRequired"` — they're what the app
-    /// hands to the account backend's `POST /retrieval/quote` to price (and, once paid, trigger) the thaw.
-    private struct RestoreDTO: Encodable {
-        let file, state: String
-        let out, tier, typicalWait: String?
-        let blobKey: String?
-        let egressBytes: Int?
+    // A `RestoreDTO` + `restoreResult(file:out:outcome:)` pair used to live here, behind a one-shot
+    // `restore` command that returned a single engine step to the caller. Both were DELETED (2026-07-27)
+    // along with that command, and should not come back.
+    //
+    // The shape was the bug: a restore is a DAYS-LONG process, and modelling it as a request/response the
+    // app fires once made the app the only thing holding it. Nothing re-issued the step, so every transfer
+    // stalled at `thawRequested` forever; the record lived in renderer memory, so it vanished on sign-out
+    // and on restart; and there was no state for "bytes are actually moving", so the whole ~48h thaw was
+    // labelled "Downloading". One shape, three user-visible failures.
+    //
+    // A transfer is now a durable JOURNAL ROW (`RestoreRow`) that the run loop drives (`restorePass`), and
+    // the app reads the list rather than accumulating its own copy. If you want to start one, that's
+    // `requestRestore`; if you want to know where one stands, that's `listRestores`.
+
+    /// One requested transfer, as the app's Transfers page renders it. The journal row plus the two things
+    /// only the daemon can say: the file's current vault path (rows are keyed by id, and a file can be
+    /// renamed mid-transfer) and whether a stopped transfer can be resumed for free.
+    private struct RestoreRowDTO: Encodable {
+        let id, fileId, relativePath, out, state, tier: String
+        let jobId: String?
+        let bytes, requestedAt: Int
+        let readyAt, completedAt: Int?
+        let error: String?
+        /// How long the thaw takes, in plain words — so the app never invents its own wait.
+        let typicalWait: String
+        /// True ⇒ "Resume" costs nothing: the blobs this job already paid to thaw are still warm.
+        let resumable: Bool
+
+        /// Written by hand for ONE reason: the synthesized encoder uses `encodeIfPresent` for optionals, so
+        /// a nil `readyAt`/`completedAt`/`error` would be OMITTED from the JSON entirely. `protocol.ts`
+        /// declares those as `T | null`, which is a promise that the key is always there — a reader doing
+        /// `row.readyAt === null` would get `undefined` and quietly take the wrong branch. Encoding the
+        /// nulls explicitly makes the wire match the contract the app is typed against.
+        // Declared, not synthesized: writing `encode(to:)` by hand suppresses the compiler's own.
+        enum CodingKeys: String, CodingKey {
+            case id, fileId, relativePath, out, state, tier, jobId, bytes, requestedAt
+            case readyAt, completedAt, error, typicalWait, resumable
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(id, forKey: .id)
+            try c.encode(fileId, forKey: .fileId)
+            try c.encode(relativePath, forKey: .relativePath)
+            try c.encode(out, forKey: .out)
+            try c.encode(state, forKey: .state)
+            try c.encode(tier, forKey: .tier)
+            try c.encode(jobId, forKey: .jobId)              // `encode`, not `encodeIfPresent` — emits null
+            try c.encode(bytes, forKey: .bytes)
+            try c.encode(requestedAt, forKey: .requestedAt)
+            try c.encode(readyAt, forKey: .readyAt)
+            try c.encode(completedAt, forKey: .completedAt)
+            try c.encode(error, forKey: .error)
+            try c.encode(typicalWait, forKey: .typicalWait)
+            try c.encode(resumable, forKey: .resumable)
+        }
+    }
+
+    private func restoreRowDTOs(_ session: UserSession) throws -> [RestoreRowDTO] {
+        // One read of the tree, then an in-memory lookup — a vault is personal-scale, and this beats a
+        // per-row query. A row whose file was since deleted keeps its recorded destination as its name, so
+        // a completed transfer never disappears from history just because the vault copy was tidied away.
+        let paths = Dictionary(try session.journal.listFiles().map { ($0.id, $0.relativePath) },
+                               uniquingKeysWith: { a, _ in a })
+        let now = Int(Date().timeIntervalSince1970)
+        return try session.journal.listRestores().map { r in
+            RestoreRowDTO(id: r.id, fileId: r.fileId,
+                          relativePath: paths[r.fileId] ?? (r.out as NSString).lastPathComponent,
+                          out: r.out, state: r.state.rawValue, tier: r.tier.rawValue, jobId: r.jobId,
+                          bytes: r.bytes, requestedAt: r.requestedAt, readyAt: r.readyAt,
+                          completedAt: r.completedAt, error: r.error,
+                          typicalWait: r.tier.typicalWait, resumable: r.isResumable(now: now))
+        }
+    }
+
+    /// Tell every live watcher the transfer list moved. One event for the whole list (the app re-reads
+    /// `listRestores`) rather than a per-state event carrying a fragment: the journal is the SSOT, and a
+    /// renderer folding its own parallel copy from event fragments is exactly the arrangement that lost a
+    /// user's in-flight transfer on sign-out.
+    private func publishRestoresChanged() {
+        bus.publish(DaemonEvent("restoresChanged", [:]))
     }
 
     private func sourceDTOs(_ session: UserSession) throws -> [SourceDTO] {
@@ -540,29 +624,91 @@ public actor DaemonService {
     }
 
 
-    /// Map an idempotent restore step's outcome to its wire DTO, and push a matching progress event so a
-    /// live `watch`er (the future UI) sees it without polling. Re-issue `restore` until `state == "restored"`.
-    private func restoreResult(file: String, out: String, outcome: RestoreOutcome) -> RestoreDTO {
-        switch outcome {
-        case .restored:
-            bus.publish(DaemonEvent("restoreCompleted", ["file": file, "out": out]))
-            return RestoreDTO(file: file, state: "restored", out: out, tier: nil, typicalWait: nil, blobKey: nil, egressBytes: nil)
-        case .thawRequested(let tier):
-            bus.publish(DaemonEvent("restoreRequested", ["file": file, "tier": tier.rawValue]))
-            return RestoreDTO(file: file, state: "thawRequested", out: nil, tier: tier.rawValue, typicalWait: tier.typicalWait,
-                              blobKey: nil, egressBytes: nil)
-        case .thawInProgress:
-            bus.publish(DaemonEvent("restoreInProgress", ["file": file]))
-            return RestoreDTO(file: file, state: "thawInProgress", out: nil, tier: nil, typicalWait: nil, blobKey: nil, egressBytes: nil)
-        case .authorizationRequired(let blobKey, let egressBytes):
-            // NOT an error — the normal first step of a paid restore on a multi-user daemon. The app takes
-            // (blobKey, egressBytes) to the backend for a quote; once that's paid (or covered by the free
-            // allowance) the backend thaws, and re-running `restore` picks up at `.thawInProgress`.
-            bus.publish(DaemonEvent("restoreNeedsAuthorization",
-                                    ["file": file, "blobKey": blobKey, "egressBytes": "\(egressBytes)"]))
-            return RestoreDTO(file: file, state: "authorizationRequired", out: nil, tier: nil, typicalWait: nil,
-                              blobKey: blobKey, egressBytes: egressBytes)
+    /// Push every in-flight transfer one step, once per run-loop pass.
+    ///
+    /// This is what makes a transfer real. `RestoreEngine.restore` is idempotent and self-progressing by
+    /// design — request the thaw, report it's warming, download once ready — but something has to *re-run*
+    /// it, and until this existed nothing did: the app fired one `restore`, got `thawRequested` back, and
+    /// that was the end of it. Every transfer sat frozen at step one forever, while the UI showed it as
+    /// "Downloading". So the fix for the wrong label and the fix for the stalled transfer are the same fix.
+    ///
+    /// Runs on the daemon's own loop, so a transfer progresses with the app closed — which the request
+    /// dialog has always promised ("You can close the app; we'll let you know when it's ready").
+    ///
+    /// Each row is stepped independently and a failure is recorded on THAT row, never thrown: one bad
+    /// transfer must not abort the pass for the others, and it must not crash the run loop.
+    private func restorePass(_ session: UserSession) async {
+        // Skip if a pass is already in flight; it will pick up anything this one would have. No `await`
+        // between the check and the set, so the acquire is atomic on the actor — no reentrancy gap.
+        if restoring { return }
+        restoring = true
+        defer { restoring = false }
+
+        let active: [RestoreRow]
+        do { active = try session.journal.activeRestores() } catch { return }
+        guard !active.isEmpty else { return }
+
+        // Captured for the `willDownload` callback below, which deliberately runs OFF the actor.
+        let bus = self.bus
+        let journal = session.journal
+
+        var changed = false
+        for row in active {
+            // `needsAuthorization` is the app's move, not ours — the backend has to be paid before anything
+            // can thaw. Stepping it here would just re-earn the same answer every pass.
+            guard row.state != .needsAuthorization else { continue }
+            let now = Int(Date().timeIntervalSince1970)
+            do {
+                let outcome = try await session.restoreEngine.restore(
+                    fileId: row.fileId, to: URL(fileURLWithPath: row.out), tier: row.tier,
+                    days: RestoreRow.thawWindowSeconds / 86_400,
+                    // Fires the instant the thaw is confirmed ready and bytes start moving. Recording it
+                    // here (rather than after the download returns) is the whole point: this is the window
+                    // during which "Transferring" is a true statement.
+                    //
+                    // Written INLINE rather than hopped onto the actor with a `Task`. Hopping would queue
+                    // the flip behind the download that is about to start, so a transfer could finish and
+                    // write `saved` before the `transferring` flip landed — leaving a delivered file stuck
+                    // reading "Transferring" forever. Journal and bus each carry their own lock, so doing
+                    // it here is both safe and correctly ordered.
+                    //
+                    // `readyAt` is stamped only the first time (COALESCE in the journal), so a resumed
+                    // transfer keeps the window start it already had instead of pretending it just thawed.
+                    willDownload: {
+                        try? journal.setRestoreState(row.id, .transferring, readyAt: row.readyAt ?? now)
+                        bus.publish(DaemonEvent("restoresChanged", [:]))
+                    })
+
+                switch outcome {
+                case .restored:
+                    try session.journal.setRestoreState(row.id, .saved, completedAt: now)
+                    bus.publish(DaemonEvent("restoreCompleted", ["file": row.fileId, "out": row.out]))
+                    changed = true
+                case .thawInProgress, .thawRequested:
+                    // Still warming. Only a state CHANGE is worth an event — a row that was already
+                    // `pending` last pass is still pending, and re-announcing it every interval would
+                    // repaint the app for no news.
+                    if row.state != .pending {
+                        try session.journal.setRestoreState(row.id, .pending)
+                        changed = true
+                    }
+                case .authorizationRequired:
+                    // The backend hasn't thawed these blobs (payment never landed, or the 5-day window
+                    // lapsed and they refroze). Honest state: this needs authorizing again, and the app
+                    // must re-quote rather than wait on a thaw that is never coming.
+                    if row.state != .needsAuthorization {
+                        try session.journal.setRestoreState(row.id, .needsAuthorization)
+                        changed = true
+                    }
+                }
+            } catch {
+                // Record the fault ON the transfer so the user can see which one broke and why, instead of
+                // a bare toast detached from any row. Retryable from the Transfers page.
+                try? session.journal.setRestoreState(row.id, .failed, error: "\(error)")
+                changed = true
+            }
         }
+        if changed { publishRestoresChanged() }
     }
 
     private func handle(_ method: String, _ p: [String: String]) async throws -> AnyEncodable {
@@ -661,20 +807,72 @@ public actor DaemonService {
                 if seen.insert(key).inserted { keys.append(key) }
             }
             return AnyEncodable(RestorePlanDTO(blobKeys: keys, egressBytes: egress))
-        case "restore":
-            let session = try requireSession("restore")
-            guard let file = p["file"] else { throw ColdStorageError.invalidRequest("restore requires params.file (the fileId)") }
-            guard let out = p["out"] else { throw ColdStorageError.invalidRequest("restore requires params.out (output path)") }
-            let tier = try RestoreTier.parse(p["tier"])
-            // Reject a bad `days` rather than silently defaulting (same reason as tier — surface the typo).
-            let days = try p["days"].map { raw -> Int in
-                guard let d = Int(raw), d > 0 else { throw ColdStorageError.invalidRequest("bad days '\(raw)' (expected a positive integer)") }
-                return d
-            } ?? 7
-            // One step toward getting the file back. Network I/O is awaited off the actor (reentrancy keeps
-            // other commands responsive); a `.ready` download blocks only this call until bytes are verified.
-            let outcome = try await session.restoreEngine.restore(fileId: file, to: URL(fileURLWithPath: out), tier: tier, days: days)
-            return AnyEncodable(restoreResult(file: file, out: out, outcome: outcome))
+        case "listRestores":
+            // Signed out ⇒ empty, like every other read here: transfers are vault data.
+            guard let session else { return AnyEncodable([RestoreRowDTO]()) }
+            return AnyEncodable(try restoreRowDTOs(session))
+        case "requestRestore":
+            let session = try requireSession("requestRestore")
+            guard let file = p["file"] else { throw ColdStorageError.invalidRequest("requestRestore requires params.file (the fileId)") }
+            guard let out = p["out"] else { throw ColdStorageError.invalidRequest("requestRestore requires params.out (output path)") }
+            guard let f = try session.journal.fileMapping(file) else {
+                throw ColdStorageError.invalidRequest("no archived file '\(file)'")
+            }
+            // Bulk is the only tier we quote at, so it's the only tier we may request: asking S3 for a
+            // faster one would spend money the backend never charged for (root RETRIEVAL.md).
+            let tier = try RestoreTier.parse(p["tier"] ?? RestoreTier.bulk.rawValue)
+            // RECORD FIRST, step second. The row is what makes this transfer survive a restart, a sign-out,
+            // and a closed app — and the user may already have PAID for it by the time we get here, so it
+            // must be durable before any network call gets a chance to fail.
+            let row = RestoreRow(id: UUID().uuidString, fileId: file, out: out, jobId: p["jobId"],
+                                 state: .pending, tier: tier, bytes: f.length,
+                                 requestedAt: Int(Date().timeIntervalSince1970))
+            try session.journal.addRestore(row)
+            publishRestoresChanged()
+            // Take the first step right away so a thaw that's already warm downloads now rather than at the
+            // next interval; from here the run loop owns it.
+            Task { await self.restorePass(session) }
+            return AnyEncodable(try restoreRowDTOs(session))
+        case "cancelRestore":
+            let session = try requireSession("cancelRestore")
+            guard let id = p["id"] else { throw ColdStorageError.invalidRequest("cancelRestore requires params.id") }
+            guard let row = try session.journal.restore(id: id) else {
+                throw ColdStorageError.invalidRequest("no transfer '\(id)'")
+            }
+            guard row.state.isActive else { throw ColdStorageError.invalidRequest("that transfer already finished") }
+            // Stops the COPY, not the thaw. A Glacier retrieval cannot be called back and the money is
+            // already spent, so this is honest only because `resumeRestore` is free while the window lasts —
+            // the app's copy must say so plainly rather than imply a refund (root RETRIEVAL.md).
+            try session.journal.setRestoreState(id, .canceled)
+            publishRestoresChanged()
+            return AnyEncodable(try restoreRowDTOs(session))
+        case "resumeRestore":
+            let session = try requireSession("resumeRestore")
+            guard let id = p["id"] else { throw ColdStorageError.invalidRequest("resumeRestore requires params.id") }
+            guard let row = try session.journal.restore(id: id) else {
+                throw ColdStorageError.invalidRequest("no transfer '\(id)'")
+            }
+            // Re-open even when the thaw window has lapsed: the next pass will discover the blobs are cold
+            // again and land the row on `needsAuthorization`, which is the truthful answer and routes the
+            // user to a fresh quote. Deciding "too late" here would mean guessing at S3's state instead of
+            // asking it.
+            try session.journal.reopenRestore(id, .pending)
+            publishRestoresChanged()
+            Task { await self.restorePass(session) }
+            _ = row
+            return AnyEncodable(try restoreRowDTOs(session))
+        case "forgetRestore":
+            let session = try requireSession("forgetRestore")
+            guard let id = p["id"] else { throw ColdStorageError.invalidRequest("forgetRestore requires params.id") }
+            guard let row = try session.journal.restore(id: id) else {
+                throw ColdStorageError.invalidRequest("no transfer '\(id)'")
+            }
+            // History-only: clearing a finished transfer's record. An in-flight one must be stopped first,
+            // or the run loop would keep driving a transfer the user believes they dismissed.
+            guard !row.state.isActive else { throw ColdStorageError.invalidRequest("stop that transfer before clearing it") }
+            try session.journal.deleteRestore(id)
+            publishRestoresChanged()
+            return AnyEncodable(try restoreRowDTOs(session))
         case "deposit":
             _ = try requireSession("deposit")
             // Ad-hoc drop-to-upload: archive these paths once, under the browser folder `dest` ("" = root).

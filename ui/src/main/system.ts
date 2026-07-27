@@ -1,7 +1,8 @@
 /**
  * Main-process OS integrations the renderer needs but can't reach (no Node in the renderer): the native
  * open panels (single-folder for a watched source / restore destination; files-AND-folders multi-select
- * for a deposit), the default Downloads directory (request-a-copy dialog), and the native Photos picker
+ * for a deposit), the default Downloads directory (request-a-copy dialog), revealing a restored copy in
+ * Finder, and the native Photos picker
  * (the explicit photo-deposit path, UI option B). Kept separate from {@link registerBridge} (which is
  * strictly the daemon-client seam).
  */
@@ -51,6 +52,9 @@ export const registerSystemHandlers = (): (() => void) => {
   ipcMain.handle(IPC.downloadsDir, () => app.getPath("downloads"));
   ipcMain.handle(IPC.pickPhotos, () => pickPhotos());
   ipcMain.handle(IPC.openPhotosSettings, () => shell.openExternal(PHOTOS_PRIVACY_PANE));
+  // Show a restored copy in Finder. `showItemInFolder` is already a no-op on a missing path, so a stale
+  // history row just does nothing rather than erroring at someone about a file they moved themselves.
+  ipcMain.handle(IPC.revealInFinder, (_e, path: string) => shell.showItemInFolder(path));
 
   // Shared native open-panel. Parented to the focused window so it's a sheet on macOS (modal, attached),
   // not a free window. Returns the chosen absolute paths ([] on cancel).
@@ -83,5 +87,6 @@ export const registerSystemHandlers = (): (() => void) => {
     ipcMain.removeHandler(IPC.chooseUploads);
     ipcMain.removeHandler(IPC.pickPhotos);
     ipcMain.removeHandler(IPC.openPhotosSettings);
+    ipcMain.removeHandler(IPC.revealInFinder);
   };
 };

@@ -19,7 +19,7 @@ export const registerEntitlementIpc = (entitlement: EntitlementManager): (() => 
   );
   ipcMain.handle(IPC.retrievalPay, (_e, jobId: string) => entitlement.payForRestore(jobId));
   ipcMain.handle(IPC.retrievalJob, (_e, jobId: string) => entitlement.getRestoreJob(jobId));
-  ipcMain.handle(IPC.retrievalCancel, (_e, jobId: string) => entitlement.cancelRestore(jobId));
+  ipcMain.handle(IPC.retrievalCancel, (_e, jobId: string) => entitlement.abandonQuote(jobId));
 
   const offStatus = entitlement.onStatus((s) => {
     for (const win of BrowserWindow.getAllWindows()) win.webContents.send(IPC.entitlementStatusChanged, s);

@@ -32,6 +32,7 @@ const api: ColdstoreApi = {
   chooseFolder: (defaultPath?: string) => ipcRenderer.invoke(IPC.chooseFolder, defaultPath),
   chooseUploads: (defaultPath?: string) => ipcRenderer.invoke(IPC.chooseUploads, defaultPath),
   getDownloadsDir: () => ipcRenderer.invoke(IPC.downloadsDir),
+  revealInFinder: (path: string) => ipcRenderer.invoke(IPC.revealInFinder, path),
   pickPhotos: () => ipcRenderer.invoke(IPC.pickPhotos),
   openPhotosSettings: () => ipcRenderer.invoke(IPC.openPhotosSettings),
 
@@ -81,7 +82,7 @@ const api: ColdstoreApi = {
   quoteRestore: (blobKeys: string[], egressBytes: number) => ipcRenderer.invoke(IPC.retrievalQuote, blobKeys, egressBytes),
   payForRestore: (jobId: string) => ipcRenderer.invoke(IPC.retrievalPay, jobId),
   getRestoreJob: (jobId: string) => ipcRenderer.invoke(IPC.retrievalJob, jobId),
-  cancelRestore: (jobId: string) => ipcRenderer.invoke(IPC.retrievalCancel, jobId),
+  abandonQuote: (jobId: string) => ipcRenderer.invoke(IPC.retrievalCancel, jobId),
   onEntitlement: (listener) => {
     const handler = (_e: IpcRendererEvent, status: unknown): void =>
       (listener as (s: unknown) => void)(status);

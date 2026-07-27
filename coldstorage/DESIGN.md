@@ -103,7 +103,7 @@ objects carrying them.
   (`COLDSTORE_DATA_DIR`), keyed by the Cognito **user-pool `sub`** — the canonical identity (the
   identity-pool `identityId` is a derived S3-addressing detail, and names the vault prefix only):
   ```
-  <dataRoot>/users/<sub>/coldstore.sqlite   # journal: file index, watched-folder registry, excludes
+  <dataRoot>/users/<sub>/coldstore.sqlite   # journal: file index, watched-folder registry, excludes, transfers
   <dataRoot>/users/<sub>/scratch/           # PUSH-source landing zone (a Photos asset mid-stream) — plaintext
   <dataRoot>/users/<sub>/status.json        # run summary this user's app reads
   <dataRoot>/coldstored.sock                # the ONE machine-level file (COLDSTORE_SOCKET)
@@ -170,7 +170,8 @@ objects carrying them.
 - **The journal is the metadata-index SPOF** — losing it makes the opaque-ciphertext archive
   unrecoverable. First-class durability (hot, versioned, replicated) + a cross-device story is the
   R2/portability work, load-bearing for multi-user (see `../PROD.md`).
-- Schema SSOT is `Journal.swift` (`sources` / `files` / `blobs` / `parts` / `excludes`); file and part
+- Schema SSOT is `Journal.swift` (`sources` / `files` / `blobs` / `parts` / `blob_members` / `excludes` /
+  `restores`); file and part
   state machines are independent.
 
 ## 5. Resume protocol — survive anything
@@ -287,13 +288,14 @@ Local Unix-domain socket (`0600`), newline-delimited JSON commands + a server-pu
 Secrets live in Keychain, never in the UI.
 
 - **Commands — SSOT is `DaemonService.handle`:** `ping · getStatus · listSources · listFiles ·
-  listExcludes · addSource · removeSource · addExclude · removeExclude · restorePlan · restore ·
+  listExcludes · addSource · removeSource · addExclude · removeExclude · restorePlan · requestRestore ·
+  listRestores · cancelRestore · resumeRestore · forgetRestore ·
   deposit · depositPhotos · previewDeposit · movePath · createFolder · deletePath · authenticate ·
   deauthenticate · setQuota · mintVault · unlockVault · unlockVaultWithRecoveryCode · lockVault ·
   triggerNow · pauseSource · resumeSource`.
 - **Events — SSOT is the `DaemonEvent(...)` call sites:** `runStarted · fileArchived · uploadProgress ·
-  runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged · restoreRequested ·
-  restoreInProgress · restoreCompleted · restoreNeedsAuthorization · error`.
+  runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged · restoresChanged ·
+  restoreCompleted · error`.
 - **Every command is session-scoped** (§2): signed out, the four reads answer empty and everything else
   throws *"not signed in"*. `getStatus` says so explicitly — `signedIn: bool` — and its `bytesStored`
   (the S3-derived storage-quota usage figure) is non-null whenever signed in, `null` only when not.

@@ -7,6 +7,9 @@
  *   2. `listFiles` round-trips (the browser's journal-backed tree read).
  *   3. `triggerNow` produces `runStarted` … `runFinished` on the event stream.
  *   5. `listExcludes`/`addExclude`/`removeExclude` round-trip (defaults seeded; add then remove).
+ *   6. `listRestores` round-trips and every row carries the fields `protocol.ts` promises — the
+ *      Transfers page binds straight to these, and `protocol.ts` is a hand-maintained mirror of the
+ *      daemon's DTO, so a silent rename is exactly what this catches.
  * `fileArchived` only fires when there's something new to archive (the pipeline is idempotent), so
  * it's reported when seen but not required — runStarted/runFinished are the reliable invariants.
  *
@@ -100,6 +103,18 @@ if (!(await client.request("listExcludes")).includes(probe)) fail(`addExclude di
 await client.request("removeExclude", { pattern: probe });
 if ((await client.request("listExcludes")).includes(probe)) fail(`removeExclude did not drop ${probe}`);
 log(`excludes → ${defaults.length} default(s) seeded; add/remove round-trips clean`);
+
+// 6 — transfers: the list reads (usually empty on a fresh daemon, which is a valid answer), and any row
+// present has the whole shape. Checked against the LIVE daemon because `protocol.ts` mirrors the Swift DTO
+// by hand — nothing else would notice the two drifting apart.
+const transfers = await client.request("listRestores");
+for (const t of transfers) {
+  for (const k of ["id", "fileId", "relativePath", "out", "state", "tier", "bytes", "requestedAt",
+                   "readyAt", "completedAt", "error", "typicalWait", "resumable"]) {
+    if (!(k in t)) fail(`listRestores row is missing '${k}' — protocol.ts and the daemon DTO have drifted`);
+  }
+}
+log(`transfers → ${transfers.length} recorded; row shape matches protocol.ts`);
 
 client.close();
 log("PASS — bridge round-trips commands and streams events");

@@ -87,9 +87,19 @@ app picks files to restore
       → subscriber: Paddle one-time charge against the saved card (no checkout)
       → free user:  hosted Paddle checkout URL, opened in the system browser
   → `transaction.completed` webhook → THAW the job's blobs → job `paid`      ← THE GATE
-  → daemon polls S3 HeadObject (its own creds still allow this) until thawed (~48 h, bulk)
-  → daemon ranged-GETs the ciphertext + decrypts locally → done
+  → app calls `requestRestore` → the daemon records a durable TRANSFER row (`restores`)
+  → the daemon's run loop polls S3 HeadObject each pass (its own creds still allow this), ~48 h bulk
+  → thaw lands → ranged-GET the ciphertext + decrypt locally → row goes `saved`
 ```
+
+**The transfer is journal-backed, and that is load-bearing for billing** (2026-07-27). Until then the app
+fired one `restore` and held the result in renderer memory: nothing re-issued the step, so a paid-for
+restore stalled at `thawRequested` forever, and signing out or quitting destroyed the only record that the
+user had bought it. The row now carries the `jobId` that paid for it, so a transfer can be resumed inside
+the 5-day window **without a second charge** — see `RestoreRow.isResumable`.
+
+**Stopping ≠ refunding.** A Glacier retrieval cannot be called back, so the app's Stop is honest only
+because Resume is free while the window lasts. The confirm dialog says both, up front.
 
 ## What's built (2026-07-13) — all green: backend 27, daemon 89, UI 110 tests
 
@@ -102,8 +112,10 @@ app picks files to restore
 - **daemon** — `RestoreStep.next` (pure, tested: a daemon that cannot thaw NEVER decides to thaw),
   the `.authorizationRequired` outcome, and a `restorePlan` command that maps fileIds → deduped blob
   keys + egress bytes for the quote. Dogfood still self-thaws (its IAM user kept `RestoreObject`).
-- **UI** — `quoteRestore`/`payForRestore`/`getRestoreJob`/`cancelRestore` through manager → IPC →
+- **UI** — `quoteRestore`/`payForRestore`/`getRestoreJob`/`abandonQuote` through manager → IPC →
   preload; `RequestBackModal` now shows the BACKEND's price (quote → pay → restore).
+  (`cancelRestore` was renamed `abandonQuote` on 2026-07-27: it drops an unpaid QUOTE, and the daemon now
+  has its own `cancelRestore` that stops an in-flight TRANSFER. Two different acts, two names.)
 
 ## The pricing-SSOT cleanup (2026-07-13) — one price, from the party that charges it
 
@@ -155,6 +167,10 @@ of rebuilding a local estimate.
   above the floor is margin, which the 0% rule forbids).
 - **[open]** Refunds: a job paid whose thaw permanently fails → refund via Paddle (the MoR owns the
   mechanics). Decide what the app shows. Not V1-blocking, but it is a real path.
+- **[settled 2026-07-27, Ben's ask]** Cancelling. An unpaid quote cancels for free (backend
+  `/jobs/:id/cancel`, unchanged). A paid/thawing transfer can be STOPPED, which stops the copy only — no
+  refund, because the retrieval is already bought and AWS won't take it back — and resuming inside the
+  5-day window costs nothing. Anything else would either lie about a refund or charge twice.
 - **[accepted]** Allowance double-spend race: two devices quoting at the same instant each see the
   full allowance. Worst case is one extra window (~2¢ of egress); locking the account row on every
   quote would add hot-path contention to defend two cents.

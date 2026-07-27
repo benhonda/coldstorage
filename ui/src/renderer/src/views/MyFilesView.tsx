@@ -4,7 +4,8 @@
  * reorganize, and request-back.
  *
  * Holds no upload logic. The tree comes from {@link useFiles} (the daemon's journal-backed `listFiles`);
- * request-back issues the real `restore` command via `exec`.
+ * request-back issues the real `requestRestore` command via `exec`, which records a durable transfer the
+ * daemon then drives — this view starts a transfer, the Transfers page tracks it.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ColdstoreApi, ConflictPolicy, DepositPreviewItem, RetrievalQuote } from "../../../shared/ipc.ts";
@@ -60,6 +61,11 @@ interface Props {
    * {@link onDepositBlocked} (→ the paywall) instead of uploading. Fails open on unknown usage/quota. */
   hasRoomFor: (incomingBytes: number) => boolean;
   onDepositBlocked: () => void;
+  /** A file the Transfers page asked us to re-open the request dialog for (a transfer that needs buying
+   * again). Null most of the time. */
+  requestFileId?: string | null;
+  /** Tell the owner we've consumed {@link requestFileId}, so the same file can be asked for again later. */
+  onRequestOpened?: () => void;
 }
 
 type ViewMode = "list" | "grid";
@@ -78,6 +84,8 @@ export const MyFilesView = ({
   run,
   hasRoomFor,
   onDepositBlocked,
+  requestFileId,
+  onRequestOpened,
 }: Props): React.JSX.Element => {
   const [dir, setDir] = useState("");
   const [view, setView] = useState<ViewMode>("list");
@@ -164,8 +172,12 @@ export const MyFilesView = ({
   // `s3:RestoreObject`, so the blobs cannot thaw until the backend says this restore is paid for (or free
   // under the monthly allowance) and thaws them itself. Hence the order here — quote, pay, THEN restore.
   // Issuing `restore` first would just get `authorizationRequired` back and strand the user.
-  const openRequest = (candidates: ArchivedFile[]): void => {
-    const restorable = candidates.filter((f) => f.status === "frozen");
+  //
+  // `force` is for the Transfers page's "Ask again": that file's row reads `pending` (it HAS a transfer —
+  // one that needs buying again), so the normal `frozen`-only filter would silently drop it and the button
+  // would do nothing. The caller there already knows the transfer is stalled, so it says so.
+  const openRequest = (candidates: ArchivedFile[], force = false): void => {
+    const restorable = force ? candidates : candidates.filter((f) => f.status === "frozen");
     if (restorable.length === 0) return;
     setRequestFiles(restorable);
     setQuote(null);
@@ -202,12 +214,27 @@ export const MyFilesView = ({
           return; // payment didn't land — don't pretend a restore started
         }
       }
+      // Record each transfer against the job that authorized it. The daemon writes a durable row and its
+      // run loop takes it from here — so the transfer survives a sign-out, a quit, and the ~48h thaw,
+      // which is exactly what the dialog above promises when it says you can close the app.
       for (const f of files) {
         const out = `${folder}/${baseName(f.relativePath)}`;
-        exec(() => api.request("restore", { file: f.id, out }));
+        exec(() => api.request("requestRestore", { file: f.id, out, jobId: job.jobId }));
       }
     })();
   };
+
+  // The Transfers page asked to re-open the request dialog for a file whose transfer needs re-buying.
+  // Consumed once (`onRequestOpened`) so asking for the same file again later still works.
+  useEffect(() => {
+    if (!requestFileId) return;
+    const f = files.find((x) => x.id === requestFileId);
+    if (f) openRequest([f], true);
+    onRequestOpened?.();
+    // `files` is deliberately not a dep: this must fire on the REQUEST, not on every tree refresh, or a
+    // background `listFiles` would re-open a dialog the user just dismissed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestFileId]);
 
   // ── reorganize ──
   const startRename = (key: string): void => {
@@ -677,7 +704,7 @@ export const MyFilesView = ({
           onConfirm={confirmRequest}
           onClose={() => {
             // Let go of an unpaid quote so it burns none of the user's free monthly allowance.
-            if (quote && quote.quoteCents > 0) void api.cancelRestore(quote.jobId);
+            if (quote && quote.quoteCents > 0) void api.abandonQuote(quote.jobId);
             setRequestFiles(null);
           }}
         />

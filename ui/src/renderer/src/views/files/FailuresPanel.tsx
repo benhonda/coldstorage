@@ -1,7 +1,8 @@
 /**
  * The "couldn't upload" popover — off the sidebar indicator, listing uploads that failed PERMANENTLY
  * (the daemon classified them non-retryable and stopped trying). Transient blips never appear here —
- * they stay shown as `uploading` and self-heal (Ben, 2026-06-24). Mirrors {@link GettingBackPanel}.
+ * they stay shown as `uploading` and self-heal (Ben, 2026-06-24). (This used to mirror a `GettingBackPanel`
+ * popover for transfers; that one is gone — transfers have their own page, see `views/TransfersView.tsx`.)
  * Closes on outside click / Escape. "Try again" re-triggers a run (the daemon re-attempts non-skipped
  * work; a permanent fault that's since been fixed will then clear). "Dismiss" acknowledges the failures
  * and clears the pill — the file rows keep their journal-backed ⚠, and a fault the daemon re-hits

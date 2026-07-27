@@ -240,3 +240,95 @@ public enum RestoreOutcome: Sendable, Equatable {
     /// restore, the same way a locked door isn't a fault (root `RETRIEVAL.md`).
     case authorizationRequired(blobKey: String, egressBytes: Int)
 }
+
+/// Where one requested transfer stands — the SSOT for what every surface calls it.
+///
+/// The distinction that matters, and the reason this enum exists at all: for the ~48 hours a Deep Archive
+/// thaw takes, **nothing is transferring**. Deep storage is waking up; no byte has moved and none will for
+/// hours. Calling that "transferring" (as the UI did until this type landed) describes work that isn't
+/// happening — the user watches a "download" that reports no progress for two days and reasonably concludes
+/// it's broken. So the wait is `pending`, and `transferring` means exactly one thing: bytes are moving right
+/// now. Named states, never a percentage — Deep Archive reports "warming" vs "ready" and nothing in between,
+/// so a progress bar here would be invented (root `RETRIEVAL.md`, `ui/DESIGN.md`).
+public enum RestoreState: String, Codable, Sendable, CaseIterable {
+    /// Quoted but not paid: this daemon may not thaw (multi-user), so the blobs are still frozen and will
+    /// stay that way until the account backend authorizes the job. The app owes a payment, not a wait.
+    case needsAuthorization
+    /// Authorized (paid, or free under the allowance) and thawing. THE ~48-HOUR STATE. Nothing transfers.
+    case pending
+    /// Thawed, and the ciphertext is actually moving over the wire right now.
+    case transferring
+    /// Bytes on disk at `out`, hash-verified. Terminal.
+    case saved
+    /// The user stopped it. Terminal, but see `resumable`: a paid thaw the user walked away from can be
+    /// picked back up for free while the 5-day window lasts.
+    case canceled
+    /// A step failed hard. Terminal until retried; `error` carries why.
+    case failed
+
+    /// Is this transfer still working (or waiting on us) — i.e. does it belong under "Active"?
+    public var isActive: Bool {
+        switch self {
+        case .needsAuthorization, .pending, .transferring: return true
+        case .saved, .canceled, .failed: return false
+        }
+    }
+}
+
+/// One requested transfer, as the journal stores it. Per-DEVICE by design: a transfer targets a folder on
+/// *this* Mac, so it belongs to this daemon's journal, not to the account. (The backend's `retrieval_jobs`
+/// row is the billing record for the same event — `jobId` links them.)
+///
+/// This is journal-backed rather than held in the app because the app is the wrong place for it in three
+/// separate ways, each of which was a real bug: it vanished on sign-out, it vanished on restart, and it
+/// could not progress while the app was closed — though the request modal promises exactly that ("You can
+/// close the app; we'll let you know when it's ready").
+public struct RestoreRow: Sendable, Equatable {
+    public let id: String
+    /// The journal file this transfer brings back (`files.id`).
+    public let fileId: String
+    /// Absolute destination path on this Mac, chosen per-request in the app.
+    public let out: String
+    /// The account backend's retrieval job (`retrieval_jobs.id`) that authorized this thaw — the link to
+    /// what was quoted and paid. `nil` in dogfood mode, where the daemon thaws on its own IAM credentials
+    /// and no money changes hands.
+    public let jobId: String?
+    public let state: RestoreState
+    public let tier: RestoreTier
+    /// Plaintext bytes this transfer brings back — for display, and so the app never re-derives a size.
+    public let bytes: Int
+    public let requestedAt: Int
+    /// When the thaw was first observed READY (i.e. when the 5-day download window started). `nil` until
+    /// then. This is what makes a free resume decidable: within 5 days of this, the blob is still warm.
+    public let readyAt: Int?
+    public let completedAt: Int?
+    public let error: String?
+
+    public init(id: String, fileId: String, out: String, jobId: String?, state: RestoreState,
+                tier: RestoreTier, bytes: Int, requestedAt: Int, readyAt: Int? = nil,
+                completedAt: Int? = nil, error: String? = nil) {
+        self.id = id; self.fileId = fileId; self.out = out; self.jobId = jobId; self.state = state
+        self.tier = tier; self.bytes = bytes; self.requestedAt = requestedAt; self.readyAt = readyAt
+        self.completedAt = completedAt; self.error = error
+    }
+}
+
+extension RestoreRow {
+    /// How long a thawed copy stays downloadable — the `days` we pass to `RestoreObject`. A resume inside
+    /// this window costs nothing (the blob is already warm); past it, getting the file back is a genuinely
+    /// new retrieval and correctly a new charge (root `RETRIEVAL.md`, "Thaw window: 5 days").
+    public static let thawWindowSeconds = 5 * 24 * 60 * 60
+
+    /// Can a stopped transfer be picked back up **without paying again**? True only while the blob this job
+    /// already paid to thaw is still warm. Pure so the rule lives in one place and is unit-testable — the
+    /// app must never decide this for itself, because deciding it wrong charges someone twice.
+    public func isResumable(now: Int) -> Bool {
+        switch state {
+        case .canceled, .failed:
+            guard let readyAt else { return false }   // never thawed ⇒ nothing warm to resume onto
+            return now - readyAt < Self.thawWindowSeconds
+        case .needsAuthorization, .pending, .transferring, .saved:
+            return false
+        }
+    }
+}
