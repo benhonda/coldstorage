@@ -8,6 +8,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ColdstoreApi, ConflictPolicy, DepositPreviewItem, RetrievalQuote } from "../../../shared/ipc.ts";
+import { RECLAIM } from "../../../shared/reclaim-constants.ts";
 import type { Exec } from "./types.ts";
 import type { FilesApi } from "./files/useFiles.ts";
 import type { RunProgress } from "../state/reducer.ts";
@@ -700,8 +701,8 @@ export const MyFilesView = ({
         >
           <p className="cs-quote-lead">
             This removes {confirmDelete.length === 1 ? "it" : `${confirmDelete.length} items`} from your
-            files. Space comes back once the bytes pass 180 days in deep storage — right away for anything
-            you've had a while.
+            files. Space comes back once the bytes pass {RECLAIM.minimumStorageDays} days in deep storage —
+            right away for anything you've had a while.
           </p>
           {deleteIsWatched && (
             <label className="cs-delete-watched">

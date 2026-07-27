@@ -93,16 +93,19 @@ resource "aws_s3_bucket_lifecycle_configuration" "vault" {
   # `Journal.reclaimedCreditBytes`, which credits at eligibility (AWS stops charging then, even if the sweep
   # runs later). Keep the two straight: this rule controls OUR cost, the credit controls THEIR quota.
   #
-  # The tag spelling is duplicated in `S3Store.reapTagKey`. A mismatch is silent — the object gets tagged,
-  # this rule never matches, and the bytes bill forever while the journal believes they're gone.
+  # The tag spelling and the expiry below are NOT written here — they come from the root
+  # `reclaim.constants.json` (via `root.hcl` → variables with no defaults), which is the same file the
+  # daemon, the gate test and the UI's delete copy read. This rule used to spell them itself, and a
+  # mismatch was silent: the object gets tagged, this rule never matches, and the bytes bill forever
+  # while the journal believes they're gone.
   rule {
     id     = "expire-reclaimable-blobs"
     status = "Enabled"
 
     filter {
       tag {
-        key   = "coldstorage-reap"
-        value = "true"
+        key   = var.reap_tag_key
+        value = var.reap_tag_value
       }
     }
 

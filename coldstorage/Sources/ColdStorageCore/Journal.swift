@@ -459,6 +459,11 @@ public final class Journal: @unchecked Sendable {
 
     /// Deep Archive's minimum billable storage duration. The clock the user's space comes back on, because
     /// it is the clock our bill comes off.
+    ///
+    /// A copy of `minimumStorageDays` in the root `reclaim.constants.json` — the same number the bucket's
+    /// lifecycle rule expires on, so the two MUST agree or the credit hands back space we are still paying
+    /// for. Swift can't read the file at compile time; `ReclaimConstantsTests` pins this literal to it
+    /// instead. Edit the JSON, not this line.
     public static let minimumStorageDays = 180
 
     /// Bytes to give back to the user that S3 is still listing.

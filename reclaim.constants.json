@@ -1,0 +1,27 @@
+{
+  "_doc": [
+    "SSOT for the constants that space reclamation depends on. A value belongs in this file if, and only",
+    "if, MORE THAN ONE component has to agree on it — that is the whole membership rule. Single-consumer",
+    "numbers (Journal.creditGraceDays, the lifecycle rule's noncurrent_days) stay where they are used.",
+    "",
+    "Why the file exists: these values were spelled out by hand in five places, and a mismatch was SILENT.",
+    "The daemon tags an object, the bucket's lifecycle rule never matches the tag, the journal credits the",
+    "user their space back, and the bytes bill for ever with nothing anywhere saying so.",
+    "",
+    "Who reads it, and how each is kept honest:",
+    "  - Terraform  — infra/coldstorage/root.hcl decodes this file into inputs; the module's variables have",
+    "                 NO defaults, so a missing value fails the plan instead of silently substituting one.",
+    "  - Taskfile   — daemon:gate-test reads it with jq at run time.",
+    "  - UI copy    — ui/src/shared/reclaim-constants.ts imports it; the delete-confirm sentence is built",
+    "                 from the number rather than stating it.",
+    "  - Swift      — constants must be compile-time, so S3Store/Journal keep literals and",
+    "                 ReclaimConstantsTests asserts they equal this file. `task daemon:test` is the gate.",
+    "",
+    "Changing minimumStorageDays is an AWS-facing decision, not a preference: it is Deep Archive's minimum",
+    "billable duration. Setting it below 180 makes us pay for storage the user has already been credited."
+  ],
+
+  "reapTagKey": "coldstorage-reap",
+  "reapTagValue": "true",
+  "minimumStorageDays": 180
+}

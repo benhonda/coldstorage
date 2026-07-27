@@ -88,9 +88,14 @@ public struct S3Store: Vault {
     /// "Archived" means verified-present, not "PUT 200".
     public func verify(key: String) async throws { _ = try await client.headObject(input: .init(bucket: bucket, key: key)) }
 
-    /// The tag the bucket's lifecycle rule filters on (`infra/coldstorage/modules/stack/s3.tf`). One SSOT for
-    /// the spelling — a typo here is silent: the object is tagged, the rule never matches, and the bytes bill
-    /// forever while the journal believes they're gone.
+    /// The tag the bucket's lifecycle rule filters on.
+    ///
+    /// **These are copies, and they are allowed to be copies only because a test says so.** The spelling is
+    /// owned by the root `reclaim.constants.json`, which Terraform and the gate test read directly; Swift
+    /// cannot read a file at compile time, so `ReclaimConstantsTests` asserts these two literals equal that
+    /// file and `task daemon:test` fails if they ever diverge. Do not edit them here — edit the JSON, then
+    /// let the test tell you what to change. A typo that reached production would be silent: the object is
+    /// tagged, the rule never matches, and the bytes bill forever while the journal believes they're gone.
     public static let reapTagKey = "coldstorage-reap"
     public static let reapTagValue = "true"
 

@@ -26,11 +26,25 @@ variable "abort_incomplete_multipart_days" {
   description = "Server-side cleanup of orphaned multipart parts (the daemon reuses uploadIds across crashes, but never-completed uploads are garbage). Days after initiation."
 }
 
+# ── Space reclamation. All three come from the root `reclaim.constants.json` via `root.hcl`, and NONE of
+#    them has a default on purpose: a default here would be a second spelling of the value that silently
+#    wins whenever the wiring breaks, which is the exact class of bug this file's SSOT exists to end.
+#    Missing input ⇒ the plan fails and says which variable.
+
+variable "reap_tag_key" {
+  type        = string
+  description = "Object tag key the daemon writes (`S3Store.reapTagKey`) and the lifecycle rule filters on. A mismatch is silent: the object gets tagged, the rule never matches, the bytes bill for ever."
+}
+
+variable "reap_tag_value" {
+  type        = string
+  description = "Object tag value paired with `reap_tag_key`. The lifecycle filter matches on the PAIR, so this drifting breaks reclamation just as completely as the key drifting."
+}
+
 variable "reclaimable_blob_expiry_days" {
   type        = number
-  default     = 180
   description = <<-EOT
-    Days after object CREATION before a blob tagged coldstorage-reap=true is expired. Set to Deep Archive's
+    Days after object CREATION before a blob tagged for reaping is expired. Set to Deep Archive's
     180-day minimum ON PURPOSE, and the alignment does all the work:
 
     - A blob older than 180 days is already past the threshold, so tagging expires it on the next daily
