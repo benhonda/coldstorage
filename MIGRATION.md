@@ -173,24 +173,46 @@ apply coldstorage *before* importing account-backend. `site` has no such depende
    (`DATABASE_URL`, the Paddle keys, `CD2_API_KEY`, `TURNSTILE_SECRET_KEY`). Terraform rewrote
    `AWS_ROLE_ARN` / `COGNITO_*` / `VAULT_BUCKET_NAME` to point at the new account; it deliberately
    never touches these.
-4. **Redeploy both Vercel projects** so the new env vars take effect.
+4. **Redeploy both Vercel projects — BOTH LANES.** This is not optional bookkeeping: Vercel env vars only
+   take effect on a **new deployment**, so until you redeploy, the running instance still verifies tokens
+   against the OLD Cognito pool and every authenticated call gets a bare 401. Production and **staging**
+   are separate deployments; `ui:mac:live` talks to staging by default, so forgetting that lane looks
+   exactly like a broken migration. Verify with `task backend:api:health ENV=staging|production` — it now
+   reports the identity each deployment is actually wired to.
 
 ### Phase 3 — cut the Mac over
 
+The new pool means a new account: new user-pool `sub`, new identity id, new S3 prefix. Nothing on the
+Mac can be reused, so the cutover is "clear the old account's local state, repoint, sign in fresh".
+**The old vault is untouched throughout** — the new config names a different bucket.
+
+Everything below runs **on the Mac**, in this order. Quit `ColdStorage.app` first if it's open.
+
 ```sh
-# devcontainer:
-task tf:coldstorage:creds-export     # new bucket + Cognito ids → the gitignored handoff file
-# Mac:
-task daemon:mac:reset                # wipe the local journal — nothing is "already uploaded" any more
-task daemon:mac:bootstrap            # rebuild + reinstall the LaunchAgent (no credential step any more)
-task daemon:mac:doctor
+task daemon:mac:uninstall        # stop the LaunchAgent — the wipes below refuse while coldstored runs
+task daemon:mac:sim-new-device   # drop vault.json, this device's OLD MasterKey escrow
+task daemon:mac:reset:local      # drop every per-user journal (the old sub's index is orphaned now)
+task ui:mac:config               # rewrite config.json from the re-exported handoff (new bucket + pool)
+task daemon:mac:bootstrap        # build + install the LaunchAgent with the new bucket + pool
+task daemon:mac:doctor           # launchd state + getStatus
+task ui:mac:live                 # run the UI against it, and sign in with Google
 ```
 
-Signing in now hits a **new user pool**, so the app sees a first run: a new account, a new MasterKey,
-and **a new recovery code — write it down.** The old recovery code unlocks nothing in the new account,
-and once the old vault is destroyed it unlocks nothing at all.
+Notes on the two that look odd:
 
-Re-add the watched folders and let the re-upload run.
+- **`sim-new-device`** is named for its usual job (proving the new-device unlock path), but deleting
+  `vault.json` is exactly right here: that file caches the MasterKey for the account you're leaving.
+  Removing it guarantees the new account mints a fresh MK rather than reusing anything.
+- **`reset:local`**, not `reset`. Journals are per-user under `<data dir>/users/` since the 2026-07-13
+  session refactor; `reset` targets the older machine-wide layout.
+
+You do **not** need to sign out first. The stored refresh token belongs to the old pool, so the silent
+restore fails, logs `stored sign-in couldn't be restored (starting signed out)`, and deletes the session
+file by itself (`auth/manager.ts`).
+
+Then, in the app: **write down the new recovery code.** It is shown once. The old one unlocks nothing in
+this account, and once the old vault is destroyed it unlocks nothing anywhere. Re-add the watched folders
+and let the upload run — every file is new to this account, so it all re-uploads from source.
 
 ### Phase 4 — verify, then decommission
 

@@ -740,12 +740,6 @@ tasks:
     cmds:
       - bun run typecheck
 
-  ui:test:
-    desc: "Run the headless renderer tests (state fold + file-tree model; no Electron/daemon needed)."
-    dir: ui
-    cmds:
-      - bun run test
-
   ui:mac:live:
     desc: "Run the UI against the INSTALLED launchd daemon (real prod AWS) — dogfood the real thing. Needs task daemon:mac:bootstrap done."
     dir: ui
@@ -755,11 +749,29 @@ tasks:
       COLDSTORE_SOCKET: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
       COLDSTORE_PHOTO_PICKER: "{{.ROOT_DIR}}/coldstorage/.build/release/coldstore-photo-picker"
     cmds:
+      # This talks to whatever accountApiBaseUrl config.json names, and used to do so with NO
+      # verification — the app:mac:run:* gates never covered this path. That is exactly the hole the
+      # 2026-07-27 migration fell through (staging never redeployed ⇒ bare 401s), so it gets CHECK 3 too.
+      - |
+        CFG="{{.HOME}}/Library/Application Support/ColdStorage/config.json"
+        api="$(sed -n 's/.*"accountApiBaseUrl"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CFG" 2>/dev/null)"
+        if [ -n "$api" ]; then
+          task app:mac:_require-api-identity API="$api"
+        else
+          echo "⚠ no accountApiBaseUrl in $CFG — skipping the identity check (run 'task ui:mac:config')."
+        fi
       - |
         # Sign-in config sourced from the local handoff file (bucket/region/Cognito ids; no secrets).
         CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
         if [ -f "$CREDS" ]; then set -a; . "$CREDS"; set +a; fi   # config only — the handoff carries no secrets
         bun run dev
+
+
+  ui:test:
+    desc: "Run the headless renderer tests (state fold + file-tree model; no Electron/daemon needed)."
+    dir: ui
+    cmds:
+      - bun run test
 
   # ====================================================================================================================
   #  app:mac:* — the whole app, end to end, in one command (compositions of daemon:mac:* + ui:mac:*)
@@ -773,6 +785,61 @@ tasks:
   #  production = LIVE Paddle, where a restore charges a real card. The two are one word apart, so the
   #  production tasks confirm before they run.
   # ====================================================================================================================
+
+  app:mac:_require-api-identity:
+    internal: true
+    # ── CHECK 3: is the deployed API wired to the SAME Cognito pool this Mac is? ────────────────────
+    # The code-parity gate below compares your working tree to what Vercel deployed. It cannot see
+    # CONFIGURATION drift, and that is a distinct failure with an identical-looking cause: Vercel env
+    # vars only take effect on a NEW DEPLOYMENT, so changing them (in Terraform or the dashboard) leaves
+    # the running instance on the old values indefinitely. The code is byte-identical, so CHECK 1 passes.
+    #
+    # The symptom is maximally unhelpful: a valid ID token from the new pool gets a bare 401 from a
+    # deployment still verifying against the old one, surfacing in the app as "Couldn't set up
+    # encryption". Happened for real on 2026-07-27 — the AWS account migration applied a new Cognito pool
+    # and redeployed production, but not staging, and `ui:mac:live` defaults to staging.
+    #
+    # Nothing local can answer this, so we ask the running service (the same principle GET /health was
+    # built on) and compare against the infra handoff, which is the SSOT for what this Mac is pointed at.
+    requires:
+      vars: [API]
+    cmds:
+      - |
+        if [ "${SKIP_DEPLOY_CHECK:-0}" = "1" ]; then exit 0; fi
+        CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
+        if [ ! -f "$CREDS" ]; then
+          echo "⚠ no infra handoff at $CREDS — can't verify which Cognito pool {{.API}} uses."
+          echo "  (run 'task tf:coldstorage:creds-export' in the devcontainer)"
+          exit 0
+        fi
+        # The handoff stores the provider name; the pool id is its last path segment.
+        want="$(sed -n 's#^COLDSTORE_COGNITO_USER_POOL_PROVIDER=.*/##p' "$CREDS")"
+        got="$(curl -sS --max-time 15 "{{.API}}/health" 2>/dev/null \
+                | sed -n 's/.*"userPoolId":"\([^"]*\)".*/\1/p')"
+        if [ -z "$want" ]; then
+          echo "⚠ the handoff has no Cognito pool — skipping the identity check."; exit 0
+        fi
+        if [ -z "$got" ]; then
+          echo "⚠ {{.API}}/health reported no identity (deploy predates the identity block?) — can't compare."
+          exit 0
+        fi
+        if [ "$want" = "$got" ]; then
+          echo "✓ {{.API}} verifies tokens against $got — the same pool this Mac signs in to."
+          exit 0
+        fi
+        echo "─────────────────────────────────────────────────────────────────────────────"
+        echo "✗ THE DEPLOYED API IS ON A DIFFERENT COGNITO POOL — every call will 401."
+        echo "─────────────────────────────────────────────────────────────────────────────"
+        echo "  {{.API}} verifies against : $got"
+        echo "  this Mac signs in to      : $want"
+        echo ""
+        echo "  Its env vars were changed but it was never REDEPLOYED — env vars only take"
+        echo "  effect on a new deployment, so the code can be identical and still be wrong."
+        echo "  Redeploy that lane (push the branch, or Redeploy in the Vercel dashboard),"
+        echo "  then re-run. Verify with: task backend:api:health ENV=staging|production"
+        echo "  (Override, if you know what you're doing:  SKIP_DEPLOY_CHECK=1 task <task>)"
+        echo "─────────────────────────────────────────────────────────────────────────────"
+        exit 1
 
   app:mac:_require-api-deployed:
     internal: true
@@ -828,6 +895,9 @@ tasks:
             echo "⚠ {{.API}}/health gave an unexpected reply (older deploy without /health?):"
             echo "$body" | head -c 200 | sed 's/^/    /'; echo "" ;;
         esac
+
+      - task: app:mac:_require-api-identity
+        vars: { API: "{{.API}}" }
 
       # ── CHECK 1: is the deployed API running YOUR code? ──────────────────────────────────────────
       - |
