@@ -52,12 +52,13 @@ before they reach us.
 The **signed-in user's journal is the SSOT for sources** — add/remove via the socket survives restarts
 (`COLDSTORE_SOURCES` is only a one-time seed, dev-identity only). The socket is `0600` (owner-only).
 On macOS the full setup is two task runs:
-`task tf:coldstorage:creds-export` (in the devcontainer — TF creds → a gitignored handoff file over the bind
-mount) then `task daemon:mac:bootstrap` (seeds the AWS secret into the login Keychain + wires a `coldstorage`
-profile whose `credential_process` reads it, then renders the LaunchAgent plist (RunAtLoad + KeepAlive) and
-bootstraps it). `task daemon:mac:doctor` health-checks it; `daemon:mac:uninstall` removes it. AWS creds resolve via
-the Keychain — never a plaintext file — and the `credential_process` helper lives at a space-free
-`~/.coldstorage/` (AWS splits that command on whitespace).
+`task tf:coldstorage:creds-export` (in the devcontainer — TF config outputs → a gitignored handoff file over
+the bind mount) then `task daemon:mac:bootstrap` (renders the LaunchAgent plist (RunAtLoad + KeepAlive) and
+bootstraps it). `task daemon:mac:doctor` health-checks it; `daemon:mac:uninstall` removes it.
+**There is no credential step.** The daemon holds no long-lived AWS key: it exchanges the signed-in user's
+Cognito token for short-lived STS credentials scoped to that user's own `blobs/<identity-id>/` prefix, so the
+handoff file carries public client config only. (Until 2026-07-27 this seeded an IAM secret into the login
+Keychain behind a `credential_process` helper — that user and its key are deleted; see `/MIGRATION.md`.)
 
 The server runs each command's async handler **off** the connection's read thread (no semaphore bridge —
 that was a forward-progress hazard); writes per connection are serialized. Client API: `ControlClient(path:

@@ -9,8 +9,9 @@
 > → CD2). typecheck + copy-check + build + `task ssr:check:site` all green.
 > Pending: **hero + drag-in media are placeholders**, the privacy/key-escrow claim needs a
 > product call, OIDC-trust re-apply (`coldstorage-web` slug), live Paddle token for prod
-> checkout, **two copy lines await Ben's confirmation**, **`infra/site` TF plan unverified
-> (pharmer SSO expired)** — see **Open decisions** and **Phases** below.
+> checkout, **two copy lines await Ben's confirmation**, **`infra/site` TF unapplied in the new AWS
+> account** (the 2026-07-27 account migration — see [`MIGRATION.md`](../MIGRATION.md) phase 2; the
+> `coldstorage-web` OIDC-slug fix lands with it) — see **Open decisions** and **Phases** below.
 > This spec is a living document, not scripture. If the code and this file disagree, the code wins
 > — fix the file.
 

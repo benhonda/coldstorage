@@ -1,6 +1,10 @@
-# Vercel API token: shared SSM Parameter Store SecureString (team constant — terraform.md).
+# Vercel API token: SSM Parameter Store SecureString. The path moved off `/adpharm/…` in the
+# 2026-07-27 account migration — that parameter was an ADPHARM-account fixture shared with unrelated
+# Adpharm projects, so it neither exists nor belongs in our own account. It now sits under `/coldstorage/`
+# the account's own Vercel token parameter, whose NAME comes from the Taskfile (the value is set once
+# with `task tf:vercel-token`, and lives only in SSM — never in this repo).
 data "aws_ssm_parameter" "vercel_token" {
-  name = "/adpharm/vercel-api-token-benhonda"
+  name = var.vercel_token_ssm_param
 }
 
 provider "vercel" {

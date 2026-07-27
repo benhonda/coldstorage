@@ -5,8 +5,9 @@
 # pushed as a Vercel env var (the app doesn't read it, and terraform.md's env-var-ownership
 # says a deployed env var must exist in the app's zod schema).
 #
-# The AWS account already has an IAM OIDC provider for oidc.vercel.com/adpharm and the
-# /adpharm/vercel-api-token-benhonda SSM param (set up by account-backend — see its oidc.tf).
+# The OIDC provider is an account-level singleton this repo READS and never owns — see
+# infra/account-backend/modules/shared/main.tf for why (destroying ColdStorage must not break the
+# sibling Vercel project that created it).
 data "aws_iam_openid_connect_provider" "vercel" {
   url = "https://oidc.vercel.com/${var.vercel_team_slug}"
 }
@@ -20,6 +21,12 @@ resource "aws_iam_role" "vercel" {
       Principal = { Federated = data.aws_iam_openid_connect_provider.vercel.arn }
       Action    = "sts:AssumeRoleWithWebIdentity"
       Condition = {
+        # Defence in depth alongside the `sub` pin below — the provider's client_id_list constrains the
+        # audience too, but it lives in ANOTHER PROJECT'S Terraform, which could widen it without anyone
+        # reading this file.
+        StringEquals = {
+          "oidc.vercel.com/${var.vercel_team_slug}:aud" = "https://vercel.com/${var.vercel_team_slug}"
+        }
         StringLike = {
           # var.vercel_project_name (NOT var.project_name) — Vercel's OIDC token `sub` claim
           # embeds the real Vercel project slug here; project_name is just this Terraform

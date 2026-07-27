@@ -52,7 +52,7 @@ export const appIdentity = (): { productName: string; scheme: string } => {
  *   - baked  = `Contents/Resources/app-config.json` (the public prod config, packaged builds only) — the
  *     SSOT that makes a config-less customer download work; NO secret (creds come via Cognito STS).
  *   - user   = `<dataDir>/config.json` (written by `task ui:mac:config`) — dev/dogfood overrides on top, e.g.
- *     `awsProfile` for the credential_process path, or a MinIO/staging bucket for testing.
+ *     a staging bucket for testing.
  * A missing file on either side is normal (a customer has no user file; dev has no baked file), so this
  * silently degrades: uploads just fail clean until something supplies bucket + Cognito, the daemon still
  * serves its control socket. `cognitoIdentityPoolId`/`cognitoUserPoolProvider` are the daemon's multi-user
@@ -66,7 +66,8 @@ export const readAppConfig = (dir: string): AppConfig => {
 /** The env `coldstored` reads (see coldstored/main.swift), plus the AWS bucket/region/profile from
  * {@link readAppConfig} so a Finder-launched app (which inherits no shell env) can actually upload. Only
  * keys present in config.json are set, so `coldstored`'s own defaults still apply when it's absent.
- * Creds = Cognito STS, per signed-in user (`AWS_PROFILE` is the local-dev credential_process path only).
+ * Creds = Cognito STS, per signed-in user. There is no other path: the daemon holds no long-lived key
+ * and no AWS profile (the IAM user those pointed at was retired 2026-07-27).
  *
  * We hand the daemon a DATA ROOT, not a journal/staging/status path each. Per-user state lives at
  * `<root>/users/<sub>/…` and is opened by the daemon at sign-in, because at spawn time nobody is signed in
@@ -82,7 +83,6 @@ const daemonEnv = (dir: string): NodeJS.ProcessEnv => {
     COLDSTORE_SOCKET: join(dir, "coldstored.sock"),
     ...(cfg.bucket ? { COLDSTORE_BUCKET: cfg.bucket } : {}),
     ...(cfg.region ? { AWS_REGION: cfg.region } : {}),
-    ...(cfg.awsProfile ? { AWS_PROFILE: cfg.awsProfile } : {}),
     ...(cfg.cognitoIdentityPoolId ? { COLDSTORE_COGNITO_IDENTITY_POOL_ID: cfg.cognitoIdentityPoolId } : {}),
     ...(cfg.cognitoUserPoolProvider ? { COLDSTORE_COGNITO_USER_POOL_PROVIDER: cfg.cognitoUserPoolProvider } : {}),
   };

@@ -4,10 +4,10 @@
 # holding `s3:RestoreObject`, the permission the USER's Cognito role deliberately lacks.
 # The foresight paid off — the role already existed, so this needed no new trust plumbing.
 #
-# CONFIRMED (2026-07-01, via a real `terragrunt plan`): the AWS account already has an IAM
-# OIDC provider for oidc.vercel.com/adpharm and the /adpharm/vercel-api-token-benhonda SSM
-# param — some earlier Adpharm project set both up. infra/coldstorage has neither (it opted
-# out of the Vercel convention entirely); this is the first component in THIS repo to use them.
+# The OIDC provider is an account-level singleton (AWS allows one per issuer URL) that this repo READS
+# and never owns — in Adpharm's account an old Adpharm project created it; in Ben's own account
+# `vercel-log-drain` did, on 2026-07-19. Adopting it here would mean a `terragrunt destroy` of
+# ColdStorage deletes the provider a sibling project authenticates with. See modules/shared/main.tf.
 data "aws_iam_openid_connect_provider" "vercel" {
   url = "https://oidc.vercel.com/${var.vercel_team_slug}"
 }
@@ -21,6 +21,13 @@ resource "aws_iam_role" "vercel" {
       Principal = { Federated = data.aws_iam_openid_connect_provider.vercel.arn }
       Action    = "sts:AssumeRoleWithWebIdentity"
       Condition = {
+        # Pin the audience as well as the subject. The provider's own client_id_list already constrains
+        # `aud`, so this is defence in depth — and it matters MORE here than usual, because that list
+        # lives in a different project's Terraform entirely: someone could widen it without ever seeing
+        # this file. Verified against the live provider 2026-07-27 (audience `https://vercel.com/benhonda`).
+        StringEquals = {
+          "oidc.vercel.com/${var.vercel_team_slug}:aud" = "https://vercel.com/${var.vercel_team_slug}"
+        }
         StringLike = {
           # var.vercel_project_name (NOT var.project_name) — this must be the Vercel
           # project's actual slug, since Vercel's OIDC token's `sub` claim embeds its real

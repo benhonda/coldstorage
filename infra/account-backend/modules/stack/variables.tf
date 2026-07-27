@@ -2,10 +2,6 @@ variable "project_name" {
   type = string
 }
 
-variable "aws_profile" {
-  type = string
-}
-
 variable "aws_region" {
   type = string
 }
@@ -33,6 +29,11 @@ variable "vercel_project_name" {
 
 variable "vercel_team_slug" {
   type = string
+}
+
+variable "vercel_token_ssm_param" {
+  type        = string
+  description = "Name of the SSM SecureString holding the Vercel API token. Account-scoped, not project-scoped — one token per Vercel team per AWS account, shared with whatever else in the account talks to Vercel. Was `/adpharm/vercel-api-token-benhonda` before the 2026-07-27 account move; comes from the Taskfile so an account change is one line."
 }
 
 variable "cognito_user_pool_id" {

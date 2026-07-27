@@ -19,14 +19,17 @@ values the `/checkout` page needs.
 - **DNS** — **deferred** (`modules/shared/main.tf`), see below.
 
 ## Status (2026-07-05)
+> **⚠️ AWS account migration in flight (2026-07-27).** Everything below is applied in **Adpharm's**
+> account; this repo now targets **Ben's own** account, where nothing has been created yet. Read
+> [`MIGRATION.md`](../../MIGRATION.md) before running any `tf:*` task here — statuses on this page
+> describe the account we are leaving.
 
 - **Live** — the site is deployed + serving at `coldstorage.sh`, and both stacks are **applied** to
   real AWS/Vercel.
 - **Vercel project:** `prj_QkTYTMBTzLCHXCsRncrrAThMSlv7`, slug **`coldstorage-web`**. Note this differs
   from `project_name` (`coldstorage-site`), which is only this component's TF/state label + IAM role name.
 - **Pending re-apply:** `vercel_project_name` was corrected `coldstorage-site` → `coldstorage-web` (it's
-  baked into the OIDC trust — `oidc.tf`); it's uncommitted in `live/*/terragrunt.hcl`. Run `task
-  tf:site:apply ENV=production` + `ENV=staging` to land it. Dormant (the site makes no AWS calls) → low-urgency.
+  baked into the OIDC trust — `oidc.tf`); it lands with the account migration's first apply in the new account (MIGRATION.md phase 2), so there is nothing separate to run.
 - **Paddle:** staging carries the real sandbox client token; **production** carries the
   `TODO_PASTE_LIVE_PADDLE_CLIENT_TOKEN_HERE` placeholder until the live account exists. The default
   payment link has been **repointed to `coldstorage.sh/checkout`**.

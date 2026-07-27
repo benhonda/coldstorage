@@ -34,8 +34,47 @@ output: prefixed
 #        socket/journal). `task daemon:mac:uninstall` before testing this; `task daemon:mac:bootstrap` again
 #        afterward to bring your real daemon (#1) back. (Temporary: once packaging's background-run/
 #        Tray UX lands, the packaged app replaces #1 outright and this toggle goes away.)
+# ── DEPLOY-TARGET CONSTANTS — the SSOT for "which account / region / bucket / Vercel team" ──────────
+# These four are the ONLY place any of this is written down. `infra/*/root.hcl` does NOT restate them:
+# it reads them back out of the environment with `get_env(...)` (see the `env:` block below), so the
+# Taskfile stays what CLAUDE.md says it is — the single root command surface — and a migration between
+# AWS accounts is a change to `vars:` here, nothing else (PILLAR3).
+#
+# Deliberately NOT recorded anywhere: the AWS **account id**. This is a public repo, and account ids were
+# scrubbed from the docs on purpose (CHANGELOG 2026-07-05). `check-aws-identity` still pins the account —
+# it reads the expected id out of your ~/.aws/config (untracked, machine-local) rather than from here.
 vars:
-  AWS_PROFILE: "pharmer"
+  # Ben's OWN AWS account (SSO org d-9d6747549c). Was `pharmer` (Adpharm's account) until the
+  # 2026-07-27 migration — see MIGRATION.md. `task login` follows this var, so there is nothing else
+  # to change when it moves again.
+  AWS_PROFILE: "benbot"
+  AWS_REGION: "ca-central-1"
+  # Terraform state — ColdStorage's own bucket, created by Terragrunt on first plan.
+  #
+  # Two buckets it deliberately is NOT. Not Adpharm's `terraform-state-sensitive` (wrong account, shared
+  # with unrelated projects). And not the account's existing `tf-state-benbot-<acct>-…` bucket, for one
+  # concrete reason: that name embeds the AWS account id, and this is a public repo that deliberately
+  # keeps account ids out of tracked files. Isolating ColdStorage's state also means a future move of
+  # this product doesn't have to disentangle it from Ben's other projects' state.
+  COLDSTORE_TF_STATE_BUCKET: "coldstorage-sh-tfstate"
+  # The Vercel team that owns the site + account-backend projects. Confirmed by Ben 2026-07-27 — the
+  # projects had already moved off the `adpharm` team, so the old value was stale before this migration
+  # even started. Load-bearing beyond labelling: it is baked into the OIDC issuer URL
+  # (`https://oidc.vercel.com/<slug>`), the provider's audience, AND the trust condition's `sub` claim,
+  # so a wrong value here silently produces a role nothing can assume.
+  COLDSTORE_VERCEL_TEAM_SLUG: "benhonda"
+  # SSM SecureString holding the Vercel API token the `vercel` provider authenticates with. Account-scoped
+  # rather than project-scoped — one token per Vercel team per AWS account — so ColdStorage READS the
+  # account's existing parameter instead of minting a second one for the same team. In Adpharm's account
+  # that was `/adpharm/vercel-api-token-benhonda`; here it's the one Ben's `vercel-log-drain` already set.
+  COLDSTORE_VERCEL_TOKEN_SSM_PARAM: "vercel-token-for-benhonda"
+
+  # ── Decommission-only (delete once the old account is empty — MIGRATION.md phase 4) ──────────────
+  # The Adpharm account the infra is migrating OFF. Used solely by `login:legacy` + `tf:legacy:destroy`
+  # so the old stacks can still be torn down from this repo after the constants above moved on.
+  LEGACY_AWS_PROFILE: "pharmer"
+  LEGACY_TF_STATE_BUCKET: "terraform-state-sensitive"
+
   # Pinned for reproducibility — bump deliberately. Used by `task scan` (leak guard).
   GITLEAKS_IMAGE: "ghcr.io/gitleaks/gitleaks:v8.30.1"
   # The GitHub repo the release tasks read + publish to. Deliberately NOT re-derived from
@@ -43,6 +82,18 @@ vars:
   # value that changes only if the repo is renamed. The two must agree; electron-builder.yml carries a
   # comment pointing here so a rename touches both.
   GH_REPO: "benhonda/coldstorage"
+
+# Exported to every task, and therefore to every child process — `aws`, `terragrunt`, and the AWS
+# provider all read AWS_PROFILE/AWS_REGION natively, so neither the CLI flags nor `root.hcl` need to
+# restate them. The two COLDSTORE_* names are ours; they're read by `get_env(...)` in `infra/*/root.hcl`.
+# (Prefixed rather than called TF_STATE_BUCKET so they can never collide with Terraform's own TF_* /
+# Terragrunt's TG_* environment namespace.)
+env:
+  AWS_PROFILE: "{{.AWS_PROFILE}}"
+  AWS_REGION: "{{.AWS_REGION}}"
+  COLDSTORE_TF_STATE_BUCKET: "{{.COLDSTORE_TF_STATE_BUCKET}}"
+  COLDSTORE_VERCEL_TEAM_SLUG: "{{.COLDSTORE_VERCEL_TEAM_SLUG}}"
+  COLDSTORE_VERCEL_TOKEN_SSM_PARAM: "{{.COLDSTORE_VERCEL_TOKEN_SSM_PARAM}}"
 
 dotenv:
   - .env
@@ -55,23 +106,47 @@ tasks:
 
   # ------------------------------------------------------------------ AWS identity (core)
   login:
-    desc: Log in to AWS SSO
+    desc: Log in to AWS SSO (your own account)
     requires:
       vars: [AWS_PROFILE]
     cmds:
       - aws sso login --profile {{.AWS_PROFILE}}
 
+  login:legacy:
+    desc: "[decommission] Log in to the OLD Adpharm AWS SSO — only for tearing down the migrated-off stacks"
+    requires:
+      vars: [LEGACY_AWS_PROFILE]
+    cmds:
+      - aws sso login --profile {{.LEGACY_AWS_PROFILE}}
+
   check-aws-identity:
-    desc: Fail early if the AWS profile isn't logged in
+    # Two failures, not one. "Not logged in" was always caught; "logged in, but pointing at the WRONG
+    # ACCOUNT" was not — and that is the failure that actually matters now that this repo has migrated
+    # between accounts and both profiles are live on this machine. An apply into the wrong account
+    # creates a parallel vault + Cognito pool that looks like it worked.
+    #
+    # The expected id is read from ~/.aws/config (machine-local, untracked) rather than pinned here,
+    # so the account id stays out of the public repo. The AWS provider's region/profile come from the
+    # exported env, so no --profile flag is needed anywhere below.
+    desc: Fail early if the AWS profile isn't logged in, or resolves to a different account than it should
     requires:
       vars: [AWS_PROFILE]
     silent: true
     cmds:
       - |
-        if ! aws sts get-caller-identity --profile {{.AWS_PROFILE}}; then
-          echo "\nYour '{{.AWS_PROFILE}}' AWS profile is not logged in. Run 'task login'."
+        if ! actual=$(aws sts get-caller-identity --query Account --output text 2>/dev/null); then
+          printf "\nYour '%s' AWS profile is not logged in. Run 'task login'.\n" "{{.AWS_PROFILE}}"
           exit 1
         fi
+        # Empty for a non-SSO profile — then there's nothing to pin against.
+        expected=$(aws configure get sso_account_id --profile {{.AWS_PROFILE}} 2>/dev/null || true)
+        if [ -n "$expected" ] && [ "$actual" != "$expected" ]; then
+          printf "\n✗ WRONG AWS ACCOUNT — profile '%s' resolved to %s, but its SSO config says %s.\n" \
+            "{{.AWS_PROFILE}}" "$actual" "$expected"
+          printf "  Refusing to continue. Run 'task login' to re-auth as the right account.\n"
+          exit 1
+        fi
+        printf "✓ AWS: profile %s → account %s (%s)\n" "{{.AWS_PROFILE}}" "$actual" "{{.AWS_REGION}}"
 
   # ------------------------------------------------------------------ daemon (domain: coldstorage/)
   # Native — no Docker. Swift toolchain (swiftly) + libsodium.
@@ -255,14 +330,18 @@ tasks:
         # Tested HERE rather than from the Mac because this runs as the real Cognito identity. The Mac-side
         # aws CLI authenticates as the legacy `-daemon` IAM user, which the daemon has not used since
         # 2026-07-14 — a check against that principal proves nothing about production either way.
+        # The tag comes from the SSOT, not from a literal here: a gate test that asserts its OWN spelling
+        # of the tag would pass while production tags something the lifecycle rule ignores.
+        TAG_KEY=$(jq -er '.reapTagKey' "{{.ROOT_DIR}}/reclaim.constants.json")
+        TAG_VALUE=$(jq -er '.reapTagValue' "{{.ROOT_DIR}}/reclaim.constants.json")
         if aws s3api put-object-tagging --bucket "$BUCKET" --key "blobs/$IDENTITY/gate-probe.bin" \
-             --tagging 'TagSet=[{Key=coldstorage-reap,Value=true}]' --region "$REGION" > /dev/null 2>"$TMP/e4"; then
+             --tagging "TagSet=[{Key=$TAG_KEY,Value=$TAG_VALUE}]" --region "$REGION" > /dev/null 2>"$TMP/e4"; then
           # Read it back with the ADMIN profile, not the test identity: proving the tag LANDED shouldn't
           # require granting the daemon s3:GetObjectTagging it has no runtime use for (least privilege).
           GOT=$(aws s3api get-object-tagging --bucket "$BUCKET" --key "blobs/$IDENTITY/gate-probe.bin" \
-                  --query "TagSet[?Key=='coldstorage-reap'].Value | [0]" --output text \
+                  --query "TagSet[?Key=='$TAG_KEY'].Value | [0]" --output text \
                   --profile {{.AWS_PROFILE}} --region "$REGION" 2>/dev/null)
-          [ "$GOT" = "true" ] && echo "✓ tagged + verified on a DEEP_ARCHIVE object (no thaw)" \
+          [ "$GOT" = "$TAG_VALUE" ] && echo "✓ tagged + verified on a DEEP_ARCHIVE object (no thaw)" \
             || { echo "✗ FAIL — PutObjectTagging returned OK but the tag is not on the object (got: $GOT)"; PASS_ALL=0; }
         else
           echo "✗ FAIL — could not tag own cold object: $(cat "$TMP/e4")"; PASS_ALL=0
@@ -413,7 +492,7 @@ tasks:
       - ./.build/release/coldstorectl "{{.SOCK}}" {{.CLI_ARGS | default "getStatus"}}
 
   daemon:mac:verify-aws:
-    desc: 'HEAD a single LIVE vault blob directly in S3 (bypasses the daemon) to confirm StorageClass=DEEP_ARCHIVE + see the Restore (thaw) status. Picks a blob from the running daemon automatically (BLOB=<id> to override). Uses head-object, so it stays within the daemon''s least-priv GetObject grant (no ListBucket). Also the way to poll a thaw: re-run until Restore shows ongoing-request="false".'
+    desc: 'HEAD a single LIVE vault blob directly in S3 (bypasses the daemon) to confirm StorageClass=DEEP_ARCHIVE + see the Restore (thaw) status. Picks a blob from the running daemon automatically (BLOB=<id> to override). Runs as YOUR SSO profile (`task login` on the Mac first) — the daemon has no standing credentials to borrow since the IAM user was retired 2026-07-27. Also the way to poll a thaw: re-run until Restore shows ongoing-request="false".'
     dir: coldstorage
     vars:
       CREDS: "{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
@@ -426,7 +505,7 @@ tasks:
         echo "── HEAD s3://${bucket}/${key} ──"
         aws s3api head-object --bucket "$bucket" --key "$key" \
           --query '{StorageClass:StorageClass,Size:ContentLength,Restore:Restore}' \
-          --output table --profile coldstorage --region "$region"
+          --output table --profile {{.AWS_PROFILE}} --region "$region"
 
   daemon:mac:restore-wait:
     desc: "Hands-off Deep Archive restore: re-fires `restore` against the INSTALLED daemon every INTERVAL until state=restored, then shows the recovered file. Start it and walk away (Glacier Standard thaw is ~12h). FILE=<id> OUT=<path> [TIER=standard] [INTERVAL=900]. Idempotent — re-issues no duplicate thaw while in progress."
@@ -498,7 +577,6 @@ tasks:
         [ -f "$CREDS" ] && { set -a; . "$CREDS"; set +a; }
         bucket="${COLDSTORE_BUCKET:-coldstorage}"
         region="${AWS_REGION:-us-east-1}"
-        profile="${COLDSTORE_AWS_PROFILE:-coldstorage}"   # creds resolve via this profile's credential_process (task daemon:mac:creds)
         # Cognito (multi-user prod) is REQUIRED for the installed daemon: without it coldstored refuses to
         # start (there is no silent fall-back to the shared all-access IAM user any more). Fail HERE, at
         # install time, with the fix in hand — rather than letting launchd bootstrap a daemon that exits 2
@@ -517,11 +595,10 @@ tasks:
             -e "s#__SOCKET__#{{.DATA_DIR}}/coldstored.sock#g" \
             -e "s#__BUCKET__#${bucket}#g" \
             -e "s#__REGION__#${region}#g" \
-            -e "s#__PROFILE__#${profile}#g" \
             -e "s#__COGNITO_IDENTITY_POOL_ID__#${cognito_pool_id}#g" \
             -e "s#__COGNITO_USER_POOL_PROVIDER__#${cognito_provider}#g" \
             launchd/com.theadpharm.coldstored.plist.template > "{{.PLIST}}"
-        echo "wired: bucket=${bucket} region=${region} profile=${profile} cognito=${cognito_pool_id:+configured}${cognito_pool_id:-not configured}"
+        echo "wired: bucket=${bucket} region=${region} cognito=${cognito_pool_id:+configured}${cognito_pool_id:-not configured}"
       # `bootout` is ASYNCHRONOUS — it returns before launchd has finished tearing the job down, and with
       # KeepAlive set the old instance may still be respawning. Bootstrapping into that window fails with
       # launchd's famously unhelpful `Bootstrap failed: 5: Input/output error`. So: ask it to go, then WAIT
@@ -575,50 +652,13 @@ tasks:
         echo "─────────────────────────────────────────────────────────────────────────────"
         exit 1
 
-  daemon:mac:creds:
-    desc: "Seed the daemon's IAM-user creds into the login Keychain + wire the `coldstorage` AWS profile. Needs the handoff file — run `task tf:coldstorage:creds-export` in the devcontainer first."
-    dir: coldstorage
-    vars:
-      # SCRIPT_DIR is a SPACE-FREE path on purpose: AWS splits `credential_process` on
-      # whitespace, so the helper can't live under "…/Application Support/…".
-      SCRIPT_DIR: "{{.HOME}}/.coldstorage"
-      CREDS: "{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
-    cmds:
-      - mkdir -p "{{.SCRIPT_DIR}}" && chmod 700 "{{.SCRIPT_DIR}}"
-      - |
-        if [ ! -f "{{.CREDS}}" ]; then echo "missing {{.CREDS}} — run 'task tf:coldstorage:creds-export' in the devcontainer first"; exit 1; fi
-        set -a; . "{{.CREDS}}"; set +a
-        # Re-runnable: if the handoff file's secret was already stripped, fall back to the Keychain copy.
-        akid="${DAEMON_AKID:-$(security find-generic-password -s coldstorage-aws-access-key-id     -w 2>/dev/null || true)}"
-        secret="${DAEMON_SECRET:-$(security find-generic-password -s coldstorage-aws-secret-access-key -w 2>/dev/null || true)}"
-        if [ -z "$akid" ] || [ -z "$secret" ]; then echo "no creds in {{.CREDS}} or Keychain — run 'task tf:coldstorage:creds-export' in the devcontainer first"; exit 1; fi
-        # 1. secret + key id → login Keychain (encrypted; -U overwrites, so this doubles as rotate). security is macOS-only.
-        security add-generic-password -a "$USER" -s coldstorage-aws-access-key-id     -w "$akid"   -U
-        security add-generic-password -a "$USER" -s coldstorage-aws-secret-access-key -w "$secret" -U
-        # 2. install the credential_process helper to the space-free path
-        install -m 0755 launchd/coldstore-aws-credential-process.sh "{{.SCRIPT_DIR}}/coldstore-aws-credential-process.sh"
-        # 3. wire the `coldstorage` profile. Prefer the aws CLI (also fixes a stale path on re-run); guarded append if absent.
-        SCRIPT="{{.SCRIPT_DIR}}/coldstore-aws-credential-process.sh"
-        if command -v aws >/dev/null 2>&1; then
-          aws configure set profile.coldstorage.credential_process "$SCRIPT"
-          aws configure set profile.coldstorage.region "$AWS_REGION"
-        else
-          cfg="$HOME/.aws/config"; mkdir -p "$HOME/.aws"; touch "$cfg"
-          grep -q '^\[profile coldstorage\]' "$cfg" || printf '\n[profile coldstorage]\ncredential_process = %s\nregion = %s\n' "$SCRIPT" "$AWS_REGION" >> "$cfg"
-        fi
-        # 4. secret is in the Keychain now — strip it from the on-disk handoff (leave bucket/region/akid for daemon:mac:install)
-        grep -v '^DAEMON_SECRET=' "{{.CREDS}}" > "{{.CREDS}}.tmp" && mv "{{.CREDS}}.tmp" "{{.CREDS}}" && chmod 600 "{{.CREDS}}"
-        echo "✓ Keychain seeded; profile 'coldstorage' wired (region=$AWS_REGION, helper=$SCRIPT); secret stripped from disk."
-        echo "  health check: task daemon:mac:doctor"
-
   daemon:mac:bootstrap:
-    desc: "[Mode 1: your real daemon] One-shot daemon setup: seed creds (Keychain + profile) → build + install the LaunchAgent. Run once, after `task tf:coldstorage:creds-export` in the devcontainer. After this, launchd keeps the daemon running (RunAtLoad/KeepAlive) — you don't re-run it to start it."
+    desc: "[Mode 1: your real daemon] One-shot daemon setup: build + install the LaunchAgent. Run once, after `task tf:coldstorage:creds-export` in the devcontainer. After this, launchd keeps the daemon running (RunAtLoad/KeepAlive) — you don't re-run it to start it. (No credential step: the daemon gets short-lived Cognito STS creds as the signed-in user, so there is nothing to seed.)"
     cmds:
-      - task: daemon:mac:creds
       - task: daemon:mac:install
 
   daemon:mac:doctor:
-    desc: "Health-check the installed daemon: launchd state, AWS auth via the coldstorage profile (Keychain), and getStatus over the control socket."
+    desc: "Health-check the installed daemon: launchd state + getStatus over the control socket. (AWS auth isn't checked separately — the daemon holds no standing credentials; it gets Cognito STS creds per signed-in user, so `getStatus` answering IS the auth check.)"
     dir: coldstorage
     vars:
       SOCK: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
@@ -626,8 +666,6 @@ tasks:
     cmds:
       - 'echo "── launchd ──"'
       - launchctl print "gui/$(id -u)/com.theadpharm.coldstored" 2>/dev/null | grep -iE "state =|pid =|last exit" || echo "not loaded — run task daemon:mac:bootstrap"
-      - 'echo "── AWS auth (coldstorage profile → credential_process → Keychain) ──"'
-      - aws sts get-caller-identity --profile coldstorage || echo "auth FAILED — re-run task daemon:mac:bootstrap (fixes the profile), then re-check"
       - 'echo "── daemon status (control socket) ──"'
       # An `if`, not an && || && chain: the old one parsed as ((A && B) || C) && D, so the error-log tail
       # ran even when getStatus had answered perfectly — a wall of log lines under a healthy result reads
@@ -718,9 +756,9 @@ tasks:
       COLDSTORE_PHOTO_PICKER: "{{.ROOT_DIR}}/coldstorage/.build/release/coldstore-photo-picker"
     cmds:
       - |
-        # Sign-in config sourced from the local creds file; secrets stripped.
+        # Sign-in config sourced from the local handoff file (bucket/region/Cognito ids; no secrets).
         CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
-        if [ -f "$CREDS" ]; then set -a; . "$CREDS"; set +a; unset DAEMON_AKID DAEMON_SECRET; fi
+        if [ -f "$CREDS" ]; then set -a; . "$CREDS"; set +a; fi   # config only — the handoff carries no secrets
         bun run dev
 
   # ====================================================================================================================
@@ -1142,7 +1180,7 @@ tasks:
         open "$app"
 
   ui:mac:config:
-    desc: "Write the packaged app's config (~/Library/Application Support/ColdStorage/config.json: bucket/region/profile + the Cognito identity pool id/provider + the sign-in domain/client id, when the handoff has them) from the infra-outputs handoff, so a Finder-launched ColdStorage.app — which inherits no shell env — can upload and sign users in. NO secret is written here; creds resolve via the profile's credential_process → Keychain (run `task daemon:mac:creds` once). Mirrors the env daemon:mac:install bakes into the launchd plist."
+    desc: "Write the packaged app's config (~/Library/Application Support/ColdStorage/config.json: bucket/region + the Cognito identity pool id/provider + the sign-in domain/client id, when the handoff has them) from the infra-outputs handoff, so a Finder-launched ColdStorage.app — which inherits no shell env — can upload and sign users in. NO secret is written here, and no AWS profile: the daemon gets short-lived Cognito STS creds as the signed-in user. Mirrors the env daemon:mac:install bakes into the launchd plist."
     dir: coldstorage
     vars:
       DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
@@ -1177,13 +1215,13 @@ tasks:
         account_api='{{.ACCOUNT_API}}'
         account_api="${account_api:-${COLDSTORE_ACCOUNT_API:-https://api-staging.coldstorage.sh}}"
         echo "→ account backend: $account_api"
-        printf '{\n  "bucket": "%s",\n  "region": "%s",\n  "awsProfile": "%s",\n  "cognitoIdentityPoolId": "%s",\n  "cognitoUserPoolProvider": "%s",\n  "cognitoDomain": "%s",\n  "cognitoClientId": "%s",\n  "accountApiBaseUrl": "%s"\n}\n' \
-          "$bucket" "$region" "$profile" "$cognito_pool_id" "$cognito_provider" "$cognito_domain" "$cognito_client_id" "$account_api" > "{{.DATA_DIR}}/config.json"
-        echo "wrote {{.DATA_DIR}}/config.json  (bucket=$bucket region=$region profile=$profile cognito=${cognito_pool_id:+configured}${cognito_pool_id:-not configured} sign-in=${cognito_domain:+configured}${cognito_domain:-not configured})"
-        echo "creds: ensure 'task daemon:mac:creds' wired the '$profile' profile + Keychain (one-time). Verify: task ui:mac:package:doctor"
+        printf '{\n  "bucket": "%s",\n  "region": "%s",\n  "cognitoIdentityPoolId": "%s",\n  "cognitoUserPoolProvider": "%s",\n  "cognitoDomain": "%s",\n  "cognitoClientId": "%s",\n  "accountApiBaseUrl": "%s"\n}\n' \
+          "$bucket" "$region" "$cognito_pool_id" "$cognito_provider" "$cognito_domain" "$cognito_client_id" "$account_api" > "{{.DATA_DIR}}/config.json"
+        echo "wrote {{.DATA_DIR}}/config.json  (bucket=$bucket region=$region cognito=${cognito_pool_id:+configured}${cognito_pool_id:-not configured} sign-in=${cognito_domain:+configured}${cognito_domain:-not configured})"
+        echo "creds: nothing to wire — the daemon gets Cognito STS creds when you sign in. Verify: task ui:mac:package:doctor"
 
   ui:config:bake:
-    desc: "Bake the PUBLIC app config into ui/build/app-config.json (bundled at Contents/Resources/app-config.json) so a config-less download self-configures — sign-in is the only setup (PROD.md Phase 6d). ENV=production|staging picks (a) the account-backend lane (prod → api.coldstorage.sh, staging → api-staging.coldstorage.sh; Cognito + vault bucket are shared) and (b) the app INSTALL IDENTITY from ui/identity.json (productName/appId/scheme) — so a staging build installs alongside prod. Both the bundle (electron-builder.cjs) and the runtime read this baked file, so they can't disagree. REQUIRED + explicit: there is no silent default, so a customer build can never accidentally ship staging-wired. Sourced from the SAME infra-outputs handoff as ui:mac:config but PUBLIC-ONLY: no awsProfile (customers get creds via Cognito STS). Run automatically by ui:mac:release (production) / ui:mac:package (staging)."
+    desc: "Bake the PUBLIC app config into ui/build/app-config.json (bundled at Contents/Resources/app-config.json) so a config-less download self-configures — sign-in is the only setup (PROD.md Phase 6d). ENV=production|staging picks (a) the account-backend lane (prod → api.coldstorage.sh, staging → api-staging.coldstorage.sh; Cognito + vault bucket are shared) and (b) the app INSTALL IDENTITY from ui/identity.json (productName/appId/scheme) — so a staging build installs alongside prod. Both the bundle (electron-builder.cjs) and the runtime read this baked file, so they can't disagree. REQUIRED + explicit: there is no silent default, so a customer build can never accidentally ship staging-wired. Sourced from the SAME infra-outputs handoff as ui:mac:config. Run automatically by ui:mac:release (production) / ui:mac:package (staging)."
     dir: coldstorage
     requires:
       vars: [ENV]
@@ -1214,9 +1252,9 @@ tasks:
         scheme="$(node -p "require('$ID_FILE')['{{.ENV}}'].scheme")"
 
         # Same SSOT as ui:mac:config (the handoff written by `task tf:coldstorage:creds-export`), but PUBLIC
-        # values ONLY — this file ships inside the .dmg, so awsProfile (the dogfood credential_process path)
-        # is deliberately omitted; a customer signs in and gets scoped STS creds. Cognito + bucket are
-        # lane-independent, so they come from the handoff unchanged for both ENVs.
+        # values ONLY — this file ships inside the .dmg. Cognito + bucket are lane-independent, so they
+        # come from the handoff unchanged for both ENVs. (There is no credential field to omit any more:
+        # since 2026-07-27 the dogfood build authenticates exactly like a customer's — Cognito STS.)
         CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
         if [ ! -f "$CREDS" ]; then
           # Identity still ships (it's what makes side-by-side installs work) even on a handoff-less dogfood build.
@@ -1314,9 +1352,8 @@ tasks:
       - bun scripts/gen-icon.ts
 
   ui:mac:bootstrap:
-    desc: "One-shot setup so the packaged ColdStorage.app can upload: seed creds (Keychain + `coldstorage` profile) → write the app's config.json. Run once after `task tf:coldstorage:creds-export` (devcontainer). The .app analogue of daemon:mac:bootstrap."
+    desc: "One-shot setup so the packaged ColdStorage.app can upload: write the app's config.json. Run once after `task tf:coldstorage:creds-export` (devcontainer). The .app analogue of daemon:mac:bootstrap. (No credential step since 2026-07-27 — the daemon authenticates as the signed-in user via Cognito STS.)"
     cmds:
-      - task: daemon:mac:creds
       - task: ui:mac:config
 
   ui:mac:auth:doctor:
@@ -1358,11 +1395,8 @@ tasks:
         echo "── upload config (config.json) ──"
         if [ -f "$dir/config.json" ]; then
           cat "$dir/config.json"
-          profile=$(sed -n 's/.*"awsProfile"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$dir/config.json")
-          profile="${profile:-coldstorage}"
-          echo "── AWS auth (profile '$profile' → credential_process → Keychain) ──"
-          aws sts get-caller-identity --profile "$profile" 2>&1 | grep -Ei 'Arn|error|could not|Unable' \
-            || echo "auth FAILED — run 'task daemon:mac:creds' (wires the profile + Keychain)"
+          # No AWS-auth probe: the app holds no standing credentials. It gets Cognito STS creds on
+          # sign-in, so the sign-in state below (and coldstored.err.log) is where auth failures surface.
         else
           echo "MISSING — a Finder-launched app can't upload without it. Run 'task ui:mac:config' (or 'task ui:mac:bootstrap')."
         fi
@@ -1739,15 +1773,167 @@ tasks:
           *) echo "✗ that doesn't look like a Google client id (want *.apps.googleusercontent.com, got ${#G_CLIENT_ID} chars) — nothing stored"; exit 1 ;;
         esac
         [ "${#G_CLIENT_SECRET}" -ge 10 ] || { echo "✗ secret looks too short (${#G_CLIENT_SECRET} chars) — nothing stored"; exit 1; }
-        aws ssm put-parameter --profile {{.AWS_PROFILE}} --region ca-central-1 \
+        # No --profile/--region flags: both come from the exported AWS_PROFILE/AWS_REGION (see the `env:`
+        # block at the top), so this task follows an account migration for free instead of pinning
+        # ca-central-1 and the old profile the way it used to.
+        aws ssm put-parameter \
           --name /coldstorage/google-oauth-client-id --type String --overwrite --value "$G_CLIENT_ID" > /dev/null
-        aws ssm put-parameter --profile {{.AWS_PROFILE}} --region ca-central-1 \
+        aws ssm put-parameter \
           --name /coldstorage/google-oauth-client-secret --type SecureString --overwrite --value "$G_CLIENT_SECRET" > /dev/null
         echo "✓ stored: id ${G_CLIENT_ID%%-*}-…(${#G_CLIENT_ID} chars), secret …(${#G_CLIENT_SECRET} chars)"
         echo "  If enable_google_idp is already true, re-plan+apply so Cognito picks up the new values: task tf:plan"
 
+  tf:adopt-vercel:
+    # ── Run ONCE PER VERCEL STACK, before that stack's first apply ────────────────────────────────────
+    # The Vercel projects are NOT migrating — only the values pointing at AWS are (AWS_ROLE_ARN,
+    # COGNITO_*, VAULT_BUCKET_NAME). But the state that owned those env vars lived in Adpharm's bucket,
+    # so with fresh state Terraform doesn't know they exist and plans to CREATE ~10 variables per stack
+    # that are already there. Vercel rejects a duplicate key+target, so the apply dies partway.
+    #
+    # Deleting them first is NOT an option, and this is the load-bearing detail: five rows are Vercel
+    # `sensitive` (site prod CD2_API_KEY + TURNSTILE_SECRET_KEY; account-backend prod DATABASE_URL,
+    # PADDLE_API_KEY, PADDLE_WEBHOOK_SECRET). Vercel never returns a sensitive value over the API, so a
+    # deleted one cannot be put back from anything but the originating system — and both
+    # `coldstorage.sh` and `api.coldstorage.sh` are serving production.
+    #
+    # Copying the old state across doesn't work either (tried 2026-07-27): moving the projects between
+    # Vercel teams re-created every env var with a NEW id, so the old state's ids are all dead.
+    #
+    # So: import the LIVE resources into fresh state. Terraform then refreshes them, finds them present,
+    # and proposes only what genuinely differs. Sensitive values are imported as null and `ignore_changes
+    # = [value]` keeps Terraform's hands off them — they stay exactly as they are in Vercel.
+    #
+    # ORDER: account-backend reads infra/coldstorage's outputs, and mock outputs are plan-only, so apply
+    # coldstorage BEFORE importing account-backend. `site` has no such dependency and can go any time.
+    desc: "[migration, once per stack] Import live Vercel env vars + custom env into fresh state (SERVICE=site|account-backend ENV=production|staging)"
+    requires:
+      vars: [SERVICE, ENV]
+    deps: [check-aws-identity]
+    cmds:
+      - |
+        set -e
+        case "{{.SERVICE}}" in site|account-backend) ;; *) echo "SERVICE must be site|account-backend"; exit 1 ;; esac
+        case "{{.ENV}}" in production|staging) ;; *) echo "ENV must be production|staging"; exit 1 ;; esac
+        cd "{{.ROOT_DIR}}/infra/{{.SERVICE}}/live/{{.ENV}}"
+
+        # SSOT: the project id and which keys are dashboard-valued come from the stack's OWN inputs,
+        # never restated here — so this can't drift from live/*/terragrunt.hcl.
+        RENDER=$(terragrunt render --format json 2>/dev/null)
+        PROJECT=$(printf '%s' "$RENDER" | python3 -c "import sys,json;print(json.load(sys.stdin)['inputs']['vercel_project_id'])")
+        MANUAL=$(printf '%s' "$RENDER" | python3 -c "import sys,json;print(' '.join((json.load(sys.stdin)['inputs'].get('manual_secrets') or {}).keys()))")
+
+        TOKEN=$(aws ssm get-parameter --name "{{.COLDSTORE_VERCEL_TOKEN_SSM_PARAM}}" --with-decryption --query Parameter.Value --output text)
+        TEAM=$(curl -sf -H "Authorization: Bearer $TOKEN" "https://api.vercel.com/v2/teams" | python3 -c "
+        import sys,json
+        for t in json.load(sys.stdin).get('teams',[]):
+            if t['slug']=='{{.COLDSTORE_VERCEL_TEAM_SLUG}}': print(t['id']); break")
+        [ -n "$TEAM" ] || { echo "✗ no Vercel team with slug '{{.COLDSTORE_VERCEL_TEAM_SLUG}}' is visible to this token"; exit 1; }
+        echo "→ {{.SERVICE}}/{{.ENV}}: project $PROJECT, team $TEAM"
+
+        ALREADY=$(terragrunt state list 2>/dev/null || true)
+
+        # Which live rows belong to THIS stack: production owns target==["production"]; staging owns the
+        # preview/development rows, which are the ones scoped to its custom environment.
+        ROWS=$(curl -sf -H "Authorization: Bearer $TOKEN" "https://api.vercel.com/v10/projects/$PROJECT/env?teamId=$TEAM" | python3 -c "
+        import sys,json
+        env='{{.ENV}}'
+        for e in json.load(sys.stdin).get('envs',[]):
+            t=e.get('target') or []
+            mine = (t==['production']) if env=='production' else ('preview' in t)
+            if mine: print(e['id'], e['key'])")
+
+        printf '%s\n' "$ROWS" | while read -r ID KEY; do
+          [ -n "$ID" ] || continue
+          case " $MANUAL " in
+            *" $KEY "*) ADDR="vercel_project_environment_variable.manual[\"$KEY\"]" ;;
+            *)          ADDR="vercel_project_environment_variable.managed[\"$KEY\"]" ;;
+          esac
+          if printf '%s' "$ALREADY" | grep -qxF "$ADDR"; then echo "  • $KEY — already in state"; continue; fi
+          if terragrunt import "$ADDR" "$TEAM/$PROJECT/$ID" >/dev/null 2>&1; then echo "  ✓ $KEY"
+          else echo "  ✗ $KEY — import failed (address may not exist in this stack's config)"; fi
+        done
+
+        if [ "{{.ENV}}" = "staging" ]; then
+          ADDR='vercel_custom_environment.env[0]'
+          if printf '%s' "$ALREADY" | grep -qxF "$ADDR"; then echo "  • custom environment 'staging' — already in state"
+          elif terragrunt import "$ADDR" "$TEAM/$PROJECT/staging" >/dev/null 2>&1; then echo "  ✓ custom environment 'staging'"
+          else echo "  ✗ custom environment 'staging' — import failed"; fi
+        fi
+        echo "→ now: task tf:{{.SERVICE}}:plan ENV={{.ENV}}  (expect UPDATES, not creations)"
+
+  tf:bootstrap:
+    # Creates the Terraform state bucket itself — the one resource that can't be managed by the state it
+    # holds. Run ONCE per AWS account, before the first plan.
+    #
+    # Terragrunt 1.x does NOT create it as a side effect of `plan` (older versions did, and much of the
+    # documentation still says so — 1.x made it opt-in). Without this, the first plan fails with
+    # `S3 bucket "…" does not exist`. Making it its own task rather than passing --backend-bootstrap on
+    # every plan keeps bucket creation a thing you did on purpose, once.
+    #
+    # Idempotent: re-running against an existing bucket just reconciles versioning/encryption settings.
+    desc: "[once per AWS account] Create the Terraform state bucket, before the first plan"
+    interactive: true
+    prompt: "Create/reconcile the state bucket '{{.COLDSTORE_TF_STATE_BUCKET}}' in this AWS account?"
+    deps: [check-aws-identity]
+    dir: infra/coldstorage/live/shared
+    cmds:
+      - terragrunt backend bootstrap
+      - 'echo "✓ state backend ready — {{.COLDSTORE_TF_STATE_BUCKET}} (versioned + encrypted). Next → task tf:coldstorage:plan ENV=production"'
+
+  tf:reinit:
+    # Terraform records which backend a working directory was initialized against, inside the
+    # .terragrunt-cache/ scratch dirs. After the account move those caches still point at Adpharm's
+    # `terraform-state-sensitive`, so every plan dies with "Backend configuration block has changed".
+    #
+    # The fix is to throw the caches away, NOT to run `terraform init -migrate-state`. Migrating would
+    # COPY the old account's state into the new bucket, and Terraform would then believe a brand-new,
+    # empty account already contains a vault, a Cognito pool and four IAM roles — so the first plan
+    # would show "no changes" for infrastructure that does not exist. Fresh account, fresh state.
+    #
+    # Safe to run any time: .terragrunt-cache/ is gitignored scratch, re-downloaded on the next plan.
+    desc: "Clear stale Terragrunt caches (fixes 'Backend configuration block has changed' after the account move)"
+    cmds:
+      - |
+        n=$(find "{{.ROOT_DIR}}/infra" -type d -name '.terragrunt-cache' -prune | wc -l | tr -d ' ')
+        find "{{.ROOT_DIR}}/infra" -type d -name '.terragrunt-cache' -prune -exec rm -rf {} +
+        echo "✓ cleared $n .terragrunt-cache dir(s) — the next plan re-initializes against the current backend"
+
+  tf:vercel-token:
+    # ROTATION, not setup. The Vercel provider in infra/{account-backend,site} authenticates with an API
+    # token read from SSM, and that parameter is ACCOUNT-scoped (one token per Vercel team) — in Ben's own
+    # account `vercel-log-drain` already created it, so ColdStorage reads it rather than minting a second
+    # one for the same team. Only run this to replace an expired or leaked token.
+    #
+    # ⚠️ The parameter is SHARED. Overwriting it re-points every project in this account that reads it,
+    # not just ColdStorage — which is correct for a rotation and wrong for anything else.
+    desc: "Rotate the Vercel API token in SSM (shared account-wide — every project reading it follows)"
+    interactive: true
+    deps: [check-aws-identity]
+    cmds:
+      - |
+        PARAM="{{.COLDSTORE_VERCEL_TOKEN_SSM_PARAM}}"
+        if aws ssm get-parameter --name "$PARAM" >/dev/null 2>&1; then
+          echo "⚠️  '$PARAM' already exists and is SHARED with everything in this account that talks to"
+          echo "    Vercel (e.g. vercel-log-drain). Overwriting re-points all of them. That's what you"
+          echo "    want for a rotation — nothing else."
+          printf "Continue? [y/N]: "; read -r ok
+          case "$ok" in y|Y|yes) ;; *) echo "aborted — nothing stored"; exit 0 ;; esac
+        else
+          echo "'$PARAM' doesn't exist yet in this account — creating it."
+        fi
+        echo "Create a token at https://vercel.com/account/settings/tokens, scoped to the"
+        echo "'{{.COLDSTORE_VERCEL_TEAM_SLUG}}' team. An expired token fails the plan, loudly."
+        read -r -s -p "Vercel API token (hidden): " V_TOKEN; echo
+        # Vercel tokens are 20+ opaque alphanumerics; the check is a typo/paste guard, not validation.
+        [ "${#V_TOKEN}" -ge 20 ] || { echo "✗ that looks too short to be a Vercel token (${#V_TOKEN} chars) — nothing stored"; exit 1; }
+        case "$V_TOKEN" in
+          *[!A-Za-z0-9_-]*) echo "✗ contains characters a Vercel token shouldn't have — did a quote or newline sneak in? nothing stored"; exit 1 ;;
+        esac
+        aws ssm put-parameter --name "$PARAM" --type SecureString --overwrite --value "$V_TOKEN" > /dev/null
+        echo "✓ stored $PARAM (${#V_TOKEN} chars) in this account"
+
   tf:coldstorage:creds-export:
-    desc: "[devcontainer] Export the daemon's creds from TF state → gitignored handoff file the daemon:mac:* tasks read (so the Mac needs no terragrunt). Run after apply; the file rides the bind mount to the Mac."
+    desc: "[devcontainer] Export the daemon's CONFIG (bucket/region/Cognito ids — no secrets) from TF state → gitignored handoff file the daemon:mac:* tasks read, so the Mac needs no terragrunt. Run after apply; the file rides the bind mount to the Mac."
     deps: [check-aws-identity]
     dir: infra/coldstorage/live/production
     vars:
@@ -1761,10 +1947,8 @@ tasks:
         {
           echo "COLDSTORE_BUCKET=$(terragrunt output -raw bucket_name)"
           echo "AWS_REGION=$(terragrunt output -raw aws_region)"
-          echo "DAEMON_AKID=$(terragrunt output -raw daemon_access_key_id)"
-          echo "DAEMON_SECRET=$(terragrunt output -raw daemon_secret_access_key)"
           # Cognito (PROD.md Phase 2, multi-user) — NOT secrets (public client config), so they ride the
-          # handoff untouched by daemon:mac:creds' secret-stripping step. Provider name is Cognito's documented
+          # handoff. Provider name is Cognito's documented
           # `Logins` key shape (cognito-idp.<region>.amazonaws.com/<userPoolId>) — same one cognito.tf notes
           # next to `aws_cognito_user_pool.main.endpoint`.
           echo "COLDSTORE_COGNITO_IDENTITY_POOL_ID=$(terragrunt output -raw cognito_identity_pool_id)"
@@ -1775,7 +1959,7 @@ tasks:
           echo "COLDSTORE_COGNITO_CLIENT_ID=$(terragrunt output -raw cognito_user_pool_client_id)"
         } > "{{.OUT}}"
         echo "✓ wrote {{.OUT}} (0600, gitignored)."
-        echo "  now on the Mac:  task daemon:mac:creds && task daemon:mac:install"
+        echo "  now on the Mac:  task daemon:mac:install"
 
   # ------------------------------------------------------------------ infra — tf:account-backend:* (domain: infra/account-backend)
   # The Vercel project's OIDC role + TF-managed env vars (Cognito ids sourced from
@@ -1892,6 +2076,78 @@ tasks:
     cmds:
       - task: tf:site:_validate-env
       - terragrunt init {{.CLI_ARGS}}
+
+  # ------------------------------------------------------------------ infra — legacy teardown (DELETE THIS BLOCK when done)
+  # The 2026-07-27 account migration (MIGRATION.md) left the OLD stacks running in Adpharm's account,
+  # deliberately: cutover is verified against the new account first, and the old vault stays readable
+  # until it isn't needed. But the constants above have already moved on, so `task tf:*:apply` can no
+  # longer reach the old stacks — and infra you can't reach is infra you can't destroy.
+  #
+  # These tasks are that escape hatch, and NOTHING ELSE. They re-point the four exported constants at
+  # Adpharm for the duration of one command. They are separate tasks rather than a flag on the real
+  # ones because "destroy" and "wrong account" are the two mistakes that actually cost something here,
+  # and a `LEGACY=1` flag on `tf:apply` would put them one keystroke apart.
+  #
+  # Delete this whole block, plus the LEGACY_* vars at the top, once the old account is empty.
+  tf:legacy:destroy:
+    desc: "[decommission] Destroy a stack in the OLD Adpharm account. Irreversible — read MIGRATION.md phase 4 first."
+    interactive: true
+    prompt: "DESTROY infrastructure in the OLD Adpharm account ({{.LEGACY_AWS_PROFILE}})? The vault bucket holds real archived data."
+    env:
+      AWS_PROFILE: "{{.LEGACY_AWS_PROFILE}}"
+      COLDSTORE_TF_STATE_BUCKET: "{{.LEGACY_TF_STATE_BUCKET}}"
+    cmds:
+      - |
+        if ! actual=$(aws sts get-caller-identity --query Account --output text 2>/dev/null); then
+          printf "\nThe legacy '%s' profile is not logged in. Run 'task login:legacy'.\n" "{{.LEGACY_AWS_PROFILE}}"
+          exit 1
+        fi
+        printf "\n⚠️  Targeting the LEGACY account %s as profile '%s'.\n\n" "$actual" "{{.LEGACY_AWS_PROFILE}}"
+        echo "Destroy which legacy stack?"
+        echo "  1) site             — staging"
+        echo "  2) site             — production"
+        echo "  3) account-backend  — staging"
+        echo "  4) account-backend  — production"
+        echo "  5) coldstorage      — production   ← the VAULT + Cognito. Last, and only once re-upload is verified."
+        echo "  q) quit"
+        echo
+        echo "(Listed in dependency order — coldstorage's outputs feed the others, so it goes last.)"
+        printf "Choice [q]: "
+        read -r choice
+        case "${choice:-q}" in
+          1) dir=site/live/staging ;;
+          2) dir=site/live/production ;;
+          3) dir=account-backend/live/staging ;;
+          4) dir=account-backend/live/production ;;
+          5) dir=coldstorage/live/production
+             echo
+             echo "This destroys the S3 vault holding real archived backups, and the Cognito pool holding"
+             echo "the accounts that reach it. Type the word DESTROY to continue:"
+             read -r confirm
+             [ "$confirm" = "DESTROY" ] || { echo "aborted"; exit 1; }
+             ;;
+          q|Q|quit) exit 0 ;;
+          *) echo "Invalid choice: $choice"; exit 1 ;;
+        esac
+        cd "{{.ROOT_DIR}}/infra/$dir"
+
+        # ── The Vercel resources must survive this ────────────────────────────────────────────────────
+        # For site + account-backend, the ONLY thing in the old account is an IAM role. The env vars and
+        # custom environments in that old state are LIVE Vercel resources that `task tf:adopt-vercel`
+        # has since imported into the new state — the same objects, described twice. Destroying from
+        # here would try to delete production env vars out from under the account that now owns them.
+        #
+        # So forget them first, then destroy. `state rm` only edits this old, about-to-be-deleted state
+        # file; it touches nothing in Vercel.
+        case "$dir" in
+          site/*|account-backend/*)
+            for addr in $(terragrunt state list 2>/dev/null | grep '^vercel_' || true); do
+              terragrunt state rm "$addr" >/dev/null && echo "  forgot (kept in Vercel): $addr"
+            done
+            echo "  → only AWS resources remain in this state; destroying those"
+            ;;
+        esac
+        terragrunt destroy {{.CLI_ARGS}}
 
   # ------------------------------------------------------------------ infra — pick a target (one cli step, like the app `dev` picker)
   # `task tf:plan` / `tf:apply` / `tf:init` with no args — prompts for which component + env,

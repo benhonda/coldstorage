@@ -22,7 +22,6 @@ inputs = {
   # differs from project_name ("coldstorage-site", this component's TF/state label + IAM role name).
   vercel_project_id   = "prj_QkTYTMBTzLCHXCsRncrrAThMSlv7"
   vercel_project_name = "coldstorage-web"
-  vercel_team_slug    = "adpharm"
 
   # Paddle LIVE client-side token (live_…) for the /checkout page's Paddle.js. Minted via
   # `task backend:paddle:client-token` (ctkn_01kx2hw4dn0b5ypk51kcsnr2b3). Public by design.

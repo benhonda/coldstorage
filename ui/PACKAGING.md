@@ -185,15 +185,15 @@ build — defer it to the signing milestone. Prioritize the two things that bloc
   verify.** A Finder-launched app inherits no shell env, so the daemon started + served the socket but
   **uploads couldn't complete** (the real dogfooding blocker). Fix reuses the launchd machinery wholesale:
   the supervisor (`main/daemon.ts`) reads a per-user **`config.json`** in the app's data dir
-  (`~/Library/Application Support/ColdStorage/config.json` → `{bucket, region, awsProfile,
+  (`~/Library/Application Support/ColdStorage/config.json` → `{bucket, region,
   cognitoIdentityPoolId, cognitoUserPoolProvider}` — the last two added 2026-07-01 for the Cognito
   multi-user seam, PROD.md Phase 2c; empty/absent until `tf:coldstorage:creds-export` has been re-run
-  since) and injects `COLDSTORE_BUCKET`/`AWS_REGION`/`AWS_PROFILE`/`COLDSTORE_COGNITO_IDENTITY_POOL_ID`/
+  since) and injects `COLDSTORE_BUCKET`/`AWS_REGION`/`COLDSTORE_COGNITO_IDENTITY_POOL_ID`/
   `COLDSTORE_COGNITO_USER_POOL_PROVIDER` into the daemon env — exactly what `daemon:mac:install` bakes into the
-  launchd plist. **No secret is in config.json**: creds resolve via the `coldstorage` profile's
-  `credential_process → Keychain`, the same path `task daemon:mac:creds` already sets up. Write it with
-  **`task ui:mac:config`** (from the infra-outputs handoff SSOT) or **`task ui:mac:bootstrap`** (`daemon:mac:creds` +
-  `ui:mac:config`, the .app analogue of `daemon:mac:bootstrap`). Reading is best-effort — a missing/malformed file
+  launchd plist. **No secret is in config.json, and no AWS profile**: creds resolve via Cognito → short-lived
+  STS, for dogfood builds exactly as for customers (the `awsProfile`/`credential_process` path was deleted
+  2026-07-27 with the IAM user behind it). Write it with **`task ui:mac:config`** (from the infra-outputs
+  handoff SSOT) or **`task ui:mac:bootstrap`** (the .app analogue of `daemon:mac:bootstrap`). Reading is best-effort — a missing/malformed file
   logs + the daemon still starts (graceful "connected but can't upload" degrade).
 - **Self-configuring customer build (baked public config)** — **BUILT ✅ (2026-07-05), PENDING Ben's Mac
   verify (PROD.md Phase 6d).** `config.json` above is the *dogfood/dev* seam — a stranger's download has no
@@ -203,8 +203,8 @@ build — defer it to the signing milestone. Prioritize the two things that bloc
   **same infra-outputs handoff** as `ui:mac:config` — so it's SSOT-generated, never hand-maintained, and
   gitignored (`ui/build/app-config.json`). It carries PUBLIC config (bucket, region, Cognito ids,
   sign-in domain/client, account-API URL) **plus the app INSTALL IDENTITY** (productName/appId/scheme, from
-  `ui/identity.json`) — **`awsProfile` is deliberately omitted**: a customer has no local
-  profile, they sign in and get scoped short-lived STS creds via Cognito (`coldstored/main.swift`). The
+  `ui/identity.json`). Credentials appear nowhere in it: everyone, dogfood and customer alike, signs in and
+  gets scoped short-lived STS creds via Cognito (`coldstored/main.swift`). The
   user's `config.json` (when present) still overrides per-key *for the public config* (identity is baked-only),
   so dogfood/dev testing is unchanged. Net effect: **sign-in is the only customer setup.**
   - **Two lanes, explicit (no silent default):** per lane the bake picks the account-backend URL AND the

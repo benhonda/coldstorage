@@ -5,13 +5,14 @@
  * infra-outputs handoff `task ui:mac:config` uses), and the user's own `config.json` (dev/dogfood) merely
  * OVERRIDES it. So the resolution is always: baked base ← user override.
  *
- * NO secret ever lives here. Customer AWS creds resolve via Cognito → short-lived STS (coldstored/main.swift),
- * so the baked config deliberately omits `awsProfile` — that's the dogfood credential_process path only.
+ * NO secret ever lives here, and no AWS profile either. ALL AWS creds — customer and dogfood alike —
+ * resolve via Cognito → short-lived STS (coldstored/main.swift). The `awsProfile` field was removed
+ * 2026-07-27 with the IAM user it pointed at; there is no longer a second credential path to configure.
  */
 import { readFileSync } from "node:fs";
 
 /** The packaged app's per-user config. Every value is public (bucket/region/Cognito ids are client
- * config, not secrets — see cognito.tf); `awsProfile` is the dogfood-only credential_process path. */
+ * config, not secrets — see cognito.tf). */
 export type AppConfig = {
   /** App INSTALL IDENTITY for this build's lane (baked from ui/identity.json by `task ui:config:bake`).
    * `productName` pins {@link app.setName} → the userData dir (data/socket/logs/vault); `scheme` is the
@@ -22,7 +23,6 @@ export type AppConfig = {
   scheme?: string | undefined;
   bucket?: string | undefined;
   region?: string | undefined;
-  awsProfile?: string | undefined;
   cognitoIdentityPoolId?: string | undefined;
   cognitoUserPoolProvider?: string | undefined;
   cognitoDomain?: string | undefined;
@@ -38,7 +38,6 @@ const CONFIG_KEYS = [
   "scheme",
   "bucket",
   "region",
-  "awsProfile",
   "cognitoIdentityPoolId",
   "cognitoUserPoolProvider",
   "cognitoDomain",

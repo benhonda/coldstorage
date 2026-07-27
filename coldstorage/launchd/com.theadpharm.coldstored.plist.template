@@ -7,11 +7,12 @@
   protocol (journal + ListParts) makes restart-after-anything safe.
 
   Placeholders are substituted by `task daemon:mac:install` (which writes the rendered copy to
-  ~/Library/LaunchAgents/): __BINARY__, __DATA_DIR__, __SOCKET__, __BUCKET__, __REGION__, __PROFILE__,
+  ~/Library/LaunchAgents/): __BINARY__, __DATA_DIR__, __SOCKET__, __BUCKET__, __REGION__,
   __COGNITO_IDENTITY_POOL_ID__, __COGNITO_USER_POOL_PROVIDER__.
 
-  AWS creds: NOT in this file. AWS_PROFILE points at the `coldstorage` profile in ~/.aws/config,
-  whose `credential_process` reads the IAM-user secret from the Keychain (see `task daemon:mac:creds`).
+  AWS creds: NOT in this file, and no AWS_PROFILE either. The daemon authenticates as the SIGNED-IN
+  USER via Cognito STS (COLDSTORE_COGNITO_* below) and holds no long-lived key at all. The old
+  `coldstorage` profile / credential_process / Keychain path was deleted 2026-07-27.
 
   COLDSTORE_DATA_DIR is a ROOT, not a journal path. Per-user state lives at `<root>/users/<sub>/` and is
   opened by the daemon at sign-in — at launch nobody is signed in, so there is no journal for launchd to
@@ -40,7 +41,6 @@
         <key>COLDSTORE_SOCKET</key>   <string>__SOCKET__</string>
         <key>COLDSTORE_INTERVAL</key> <string>300</string>
         <key>AWS_REGION</key>        <string>__REGION__</string>
-        <key>AWS_PROFILE</key>       <string>__PROFILE__</string>
         <key>COLDSTORE_COGNITO_IDENTITY_POOL_ID</key>   <string>__COGNITO_IDENTITY_POOL_ID__</string>
         <key>COLDSTORE_COGNITO_USER_POOL_PROVIDER</key> <string>__COGNITO_USER_POOL_PROVIDER__</string>
     </dict>

@@ -22,6 +22,10 @@ dependency "coldstorage" {
     bucket_arn                  = "arn:aws:s3:::mock-bucket"
     bucket_name                 = "mock-bucket"
   }
+  # Mocks let a plan run before the dependency has ever been applied — but they must never reach an
+  # APPLY. These values become IAM trust principals and resource ARNs, where a placeholder applies
+  # perfectly cleanly and yields a role that silently trusts nobody. This turns that into a refusal.
+  mock_outputs_allowed_terraform_commands = ["validate", "plan"]
 }
 
 inputs = {
@@ -31,7 +35,6 @@ inputs = {
   # within it, not a separate project (see modules/stack/vercel-env-vars.tf).
   vercel_project_id   = "prj_IhOlkinKj2zIuHQBBTJhdP7s008w"
   vercel_project_name = "coldstorage-account-backend"
-  vercel_team_slug    = "adpharm"
 
   cognito_user_pool_id        = dependency.coldstorage.outputs.cognito_user_pool_id
   cognito_user_pool_client_id = dependency.coldstorage.outputs.cognito_user_pool_client_id

@@ -48,9 +48,9 @@ describe("mergeAppConfig (baked base ← user override)", () => {
   });
 
   test("user override wins per-key; baked fills the gaps", () => {
-    const cfg = mergeAppConfig(baked, { bucket: "minio-test", awsProfile: "coldstorage" });
-    expect(cfg.bucket).toBe("minio-test"); // overridden
-    expect(cfg.awsProfile).toBe("coldstorage"); // user-only (never baked — dogfood cred path)
+    const cfg = mergeAppConfig(baked, { bucket: "staging-vault", accountApiBaseUrl: "https://api-staging.coldstorage.sh" });
+    expect(cfg.bucket).toBe("staging-vault"); // overridden
+    expect(cfg.accountApiBaseUrl).toBe("https://api-staging.coldstorage.sh"); // overridden
     expect(cfg.region).toBe("ca-central-1"); // from baked
     expect(cfg.cognitoClientId).toBe("client-1"); // from baked → sign-in still works
   });

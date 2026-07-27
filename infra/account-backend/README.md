@@ -29,7 +29,7 @@ call `infra/coldstorage` made for DNS).
 
 ## Use (all via the Taskfile — no raw commands)
 ```sh
-task login                                    # AWS SSO (profile: pharmer)
+task login                                    # AWS SSO (profile: see Taskfile `vars.AWS_PROFILE`)
 task tf:plan  SERVICE=account-backend ENV=production   # or the picker: task tf:plan
 task tf:apply SERVICE=account-backend ENV=production   # user runs this; never the agent
 # then ENV=staging for the sandbox-Paddle stack
@@ -46,7 +46,12 @@ Production's manual secrets are `sensitive=true` and **not** pullable by design 
 `modules/stack/vercel-env-vars.tf` and [`PROD.md`](../../PROD.md) Phase 4.
 
 ## Status
-**Applied — both stacks live** (`terragrunt state list` confirms all 9 production / 10
+> **⚠️ AWS account migration in flight (2026-07-27).** Everything below is applied in **Adpharm's**
+> account; this repo now targets **Ben's own** account, where nothing has been created yet. Read
+> [`MIGRATION.md`](../../MIGRATION.md) before running any `tf:*` task here — statuses on this page
+> describe the account we are leaving.
+
+**Applied — both stacks live (in Adpharm's account)** (`terragrunt state list` confirms all 9 production / 10
 staging resources exist for real: the OIDC role, the `staging` custom environment, and every
 TF-managed + manual env var; re-running `plan` shows "No changes" for both). **All 6 manual
 secrets are set for real** (staging's 3 on 2026-07-02; production's `DATABASE_URL` on

@@ -49,8 +49,8 @@ guard let cognitoPoolId, let cognitoProvider else {
     FileHandle.standardError.write(Data("""
         coldstored: refusing to start — no identity configured.
           set COLDSTORE_COGNITO_IDENTITY_POOL_ID + COLDSTORE_COGNITO_USER_POOL_PROVIDER
-        Starting without them would sign S3 calls as the shared all-access IAM user, against a shared
-        key prefix — see the identity note in main.swift.
+        There is no fallback: the shared all-access IAM user this used to warn about was deleted
+        2026-07-27, so unset identity means no credentials at all — see the identity note below.
 
         """.utf8))
     exit(2)

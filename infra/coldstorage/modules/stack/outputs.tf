@@ -1,5 +1,12 @@
-# Wire these into the daemon's launchd environment (the COLDSTORE_* / AWS_* vars the
-# daemon reads — see coldstorage/Sources/coldstored/main.swift).
+# Wire these into the daemon's launchd environment (the COLDSTORE_* vars the daemon reads — see
+# coldstorage/Sources/coldstored/main.swift).
+#
+# There are deliberately NO credential outputs. `iam.tf` — a long-lived IAM user whose secret was
+# exported through a handoff file into the macOS Keychain — was deleted 2026-07-27 with the AWS account
+# migration. The daemon has authenticated as the signed-in USER via Cognito STS since 2026-07-14, and
+# `coldstored` now refuses to start without an identity pool, so nothing consumed those creds any more:
+# they were a standing all-access key sitting in Terraform state and a Keychain entry, for nothing.
+# Recreating one in the new account would have carried that forward for no reason.
 
 output "bucket_name" {
   value       = aws_s3_bucket.vault.id
@@ -13,17 +20,6 @@ output "bucket_arn" {
 output "aws_region" {
   value       = var.aws_region
   description = "→ daemon AWS_REGION"
-}
-
-output "daemon_access_key_id" {
-  value       = aws_iam_access_key.daemon.id
-  description = "→ daemon AWS_ACCESS_KEY_ID (store in Keychain)"
-}
-
-output "daemon_secret_access_key" {
-  value       = aws_iam_access_key.daemon.secret
-  sensitive   = true
-  description = "→ daemon AWS_SECRET_ACCESS_KEY. Fetch once: `terragrunt output -raw daemon_secret_access_key`, store in Keychain, then never again. Rotate by tainting aws_iam_access_key.daemon."
 }
 
 # ── Multi-user identity (Cognito — see cognito.tf / PROD.md). These are NOT secrets (public client

@@ -208,6 +208,13 @@ granularity, so it reclaims folder-shaped deletes (blobs are bucketed by folder)
 deletes inside a still-live folder; that residue would need a repack, which Deep Archive makes uneconomic.
 Deep Archive's 180-day minimum means this returns the user's capacity, not our cost. See `ReclaimTests`.
 
+The tag spelling and the 180 days are **not decided here, or in the Swift, or in the Terraform**. They live
+in the repo-root [`reclaim.constants.json`](../reclaim.constants.json), because four components that never
+run together have to agree on them and a mismatch was silent in the worst direction — the object gets
+tagged, the lifecycle rule never matches, the journal credits the space back, and the bytes bill for ever.
+Terraform, `daemon:gate-test` and the app's delete copy read that file directly; the Swift literals are
+pinned to it by `ReclaimConstantsTests`. Change the JSON, not the copies (this doc included).
+
 **When the space actually comes back.** The lifecycle rule expires at **180 days from upload** — Deep
 Archive's minimum billable duration — so a blob past its minimum expires on the next sweep, and a younger
 one expires exactly when we stop being billed for it. A user can never free space we are still paying for,

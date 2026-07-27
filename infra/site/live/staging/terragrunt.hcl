@@ -18,7 +18,6 @@ inputs = {
 
   vercel_project_id   = "prj_QkTYTMBTzLCHXCsRncrrAThMSlv7"
   vercel_project_name = "coldstorage-web"
-  vercel_team_slug    = "adpharm"
 
   # Paddle SANDBOX client-side token (dashboard → Developer tools → Authentication → client-side
   # tokens) for the staging /checkout page — the SAME sandbox Paddle account account-backend's

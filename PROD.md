@@ -22,13 +22,20 @@ Fixed and tested; these are what the audit left open, in severity order:
   and credit only listed reaped objects; that also removes the window guess.
 - **No test covers `DaemonService.currentUsageBytes`.** The credit meets the S3 listing there, and that is
   where both imprecisions above actually bite. `ReclaimTests` proves the journal half only.
-- **The reap tag and the 180-day minimum are spelled in four hand-maintained places** — `S3Store.reapTagKey`,
-  `s3.tf`, `Taskfile.yml` (×2), and `Journal.minimumStorageDays` vs `var.reclaimable_blob_expiry_days`. A
-  mismatch is SILENT: objects get tagged, the rule never matches, bytes bill forever. Wants one checked-in
-  constants file read by Swift, TF and the Taskfile, with a test asserting they agree (PILLAR3).
-- **`iam.tf` (the retired pre-Cognito IAM user) lacks `s3:PutObjectTagging`.** Harmless while the daemon
-  authenticates through Cognito — which it has since 2026-07-14 — but anything falling back to that user
-  reclaims nothing and logs "will retry next pass" for ever.
+- ~~**The reap tag and the 180-day minimum are spelled in four hand-maintained places**~~ **CLOSED ✅
+  (2026-07-27).** It was five, not four — the audit missed the app's delete-confirm copy, which stated
+  "180 days" to the customer as a literal. Root **`reclaim.constants.json`** is now the one source.
+  Terraform (`root.hcl` decodes it into inputs; the module's variables carry **no defaults**, so a broken
+  wiring fails the plan instead of substituting a stale number), the gate test (`jq` at run time) and the
+  UI (build-time import) all derive it live and cannot drift. Swift can't — these are compile-time
+  constants in a binary that ships without the repo — so `S3Store`/`Journal` keep literals and the new
+  **`ReclaimConstantsTests`** pins them to the file, making `task daemon:test` the gate (PILLAR3).
+- ~~**`iam.tf` (the retired pre-Cognito IAM user) lacks `s3:PutObjectTagging`.**~~ **CLOSED 2026-07-27 —
+  by deleting the user, not by adding the permission.** It was retired in practice (Cognito since
+  2026-07-14, and `coldstored` refuses to start without an identity pool), so the AWS account migration
+  removed `iam.tf`, its access key, both credential outputs, `daemon:mac:creds`, the `credential_process`
+  helper and the `awsProfile` config field. A fresh account was the moment not to recreate a standing
+  all-access key whose secret sat in Terraform state. See [`MIGRATION.md`](./MIGRATION.md).
 - **An unrepairable orphan re-logs on every pass.** A `blob_members` row whose file row is gone can never
   satisfy the repair precondition, so it warns indefinitely and reads like a transient fault.
 - **`gate-test` assert 4 cascades**: it tags the probe object from assert 1, so a PutObject denial is
@@ -790,9 +797,9 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
   email signs in with Google — use Continue with Google", unwrapped in `cognito-idp.ts`). The known
   Cognito quirk — the linking sign-in itself fails once with "Already found an entry for username" —
   is auto-retried silently, exactly once, in `auth/manager.ts` (`isFirstLinkError`). Google
-  `attribute_mapping` gains `email_verified` (load-bearing for the trigger). **Pending: TF apply
-  (plan blocked 2026-07-17 — pharmer SSO token expired; `task login` then
-  `tf:coldstorage:plan ENV=production`), then the Mac gate:** ① email-first + Google same address →
+  `attribute_mapping` gains `email_verified` (load-bearing for the trigger). **Pending: TF apply — now folded into the AWS account
+  migration ([`MIGRATION.md`](./MIGRATION.md) phase 2), since the pool this trigger attaches to is
+  being rebuilt in the new account rather than applied in the old one. Then the Mac gate:** ① email-first + Google same address →
   same files; ② Google-first + email-code → same vault; ③ legacy Google account's email-code attempt
   → the clean "use Google" copy. Optional ride-along: retro-link Ben's legacy account by hand so
   both doors work for him too.
