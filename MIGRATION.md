@@ -1,17 +1,23 @@
 # AWS account migration — Adpharm → Ben's own account
 
-> **Status (2026-07-27): `coldstorage` is APPLIED in the new account.** The vault, Cognito and the
-> pre-sign-up Lambda are live there. `site` and `account-backend` are imported and planned, awaiting
-> apply. The old Adpharm account still runs everything that serves traffic, and Ben's Mac daemon is
-> still pointed at the OLD vault until Phase 3. Next: Google redirect URI, then the two Vercel applies.
+> # ✅ COMPLETE — 2026-07-27
 >
-> Verified post-apply, against real AWS:
+> ColdStorage runs entirely in Ben's own AWS account. The Adpharm stacks were destroyed the same day:
+> vault, Cognito pools, pre-sign-up Lambda, every IAM role and the retired daemon user — all confirmed
+> gone. **Kept as the record of why**, not as a runbook; the decommission tasks it describes
+> (`login:legacy`, `tf:legacy:destroy`) have been removed from the Taskfile.
+>
+> Verified against real AWS before teardown:
 > - the per-user boundary is a **literal** IAM policy variable — AWS stored
->   `blobs/${cognito-identity.amazonaws.com:sub}/*`, so the `$${` escape survived and the cross-user
->   boundary is real rather than a Terraform-interpolated constant;
-> - `s3:RestoreObject` is **absent** from the user role — the paid-retrieval hard gate holds;
-> - `coldstorage-production-daemon` does **not exist** (NoSuchEntity) — the retired IAM user was not
->   recreated, and the exported handoff carries no secret.
+>   `blobs/${cognito-identity.amazonaws.com:sub}/*`, so the `$${` escape survived;
+> - `s3:RestoreObject` is absent from the user role and present only on the backend's OIDC roles;
+> - a test blob landed at `blobs/<identity-id>/…` as `DEEP_ARCHIVE` — per-user isolation in practice;
+> - a **paid retrieval round trip** reached S3 (thaw issued), proving Vercel OIDC → AssumeRole →
+>   RestoreObject works in the new account;
+> - all five stacks plan **"No changes"**.
+>
+> **The old vault was deleted, not reproduced.** Ben chose not to bulk re-upload (the source files live
+> on his Mac); the new vault holds a test object. 49 objects / 6.88 GB were destroyed with the account.
 
 Started 2026-07-27. The goal is narrow and total: **ColdStorage's infrastructure stops living in
 Adpharm's AWS account and lives in Ben's own.** Nothing about the product changes. Vercel, Neon, Paddle,
@@ -216,12 +222,31 @@ and let the upload run — every file is new to this account, so it all re-uploa
 
 ### Phase 4 — verify, then decommission
 
-Do not skip the verification. The old vault is the only copy of anything the re-upload misses.
+#### Deciding about the old vault
+
+The re-upload is not happening, so the old vault's ~6.5 GiB (80 objects) is not being reproduced here.
+Three honest options, and they should be chosen rather than defaulted into:
+
+1. **Let it go.** The source files still live on Ben's Mac, there were never any customers, and this was
+   dogfood data. Destroying it costs an early-deletion charge on the Deep Archive minimum and nothing else.
+2. **Re-upload selectively.** Point the daemon at the folders actually worth keeping and let it deposit;
+   the vault fills with what matters instead of everything.
+3. **Copy it across.** Bulk-thaw, S3 Batch Copy with rewritten `blobs/<new-identity-id>/` prefixes,
+   re-transition, then rewrite each Mac journal's `s3Key`. Only worth it if the sources are gone.
+
+**Recommendation: (2), then (1)** — deposit anything genuinely irreplaceable, confirm it, then destroy the
+old vault. It gets the account cleanly separated without a thaw bill or journal surgery.
+
+Whichever is chosen, do not skip the verification below first.
 
 - [ ] `task daemon:mac:doctor` clean, and `daemon:mac:live -- listFiles` shows the full tree
 - [ ] `task daemon:mac:verify-aws` confirms a blob is really in the new bucket as `DEEP_ARCHIVE`
-- [ ] a paid retrieval round trip against staging (`task app:mac:run:staging-local`) — this is the one
-      that proves the new OIDC role really can thaw, which is the whole Vercel→AWS path
+- [x] **a paid retrieval round trip against staging — MET 2026-07-27.** A restore of the test blob was
+      quoted, paid through sandbox Paddle, and the thaw reached S3 (`ongoing-request="true"` on the
+      object). Conclusive by elimination: `s3:RestoreObject` exists ONLY on the backend's OIDC role —
+      the user's Cognito role provably lacks it — so the thaw existing at all proves webhook →
+      Vercel-OIDC → AssumeRole → RestoreObject all work against the new account. Deep Archive
+      standard-tier thaw completes within ~12h; `task daemon:mac:restore-wait` polls it hands-off.
 - [ ] the cross-user boundary still denies: a real token must get `AccessDenied` on another `sub`'s prefix
 - [ ] sign-in works via **both** Google and email-OTP, and lands on the same account (the pre-sign-up
       Lambda's one-email-one-account guarantee, re-proven on a fresh pool)
@@ -242,7 +267,10 @@ Afterwards, in the old account: delete this repo's state objects under `terrafor
 **they contain the old daemon's secret access key** — and confirm the vault bucket is gone. Deleting Deep Archive objects
 before their 180-day minimum incurs early-deletion charges; that bill is expected, not a fault.
 
-Finally, delete the `tf:legacy:*` tasks and the `LEGACY_*` vars from `Taskfile.yml`, and this file.
+The `tf:legacy:*` tasks and `LEGACY_*` vars have been removed from `Taskfile.yml`. This file stays: the
+reasoning in it (rebuild-not-copy, why the OIDC provider is read rather than owned, why the state bucket
+is ours) is referenced from code comments in `infra/` and is the record of decisions that would otherwise
+look arbitrary later.
 
 ## Open items
 

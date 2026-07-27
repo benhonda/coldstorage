@@ -19,13 +19,12 @@ values the `/checkout` page needs.
 - **DNS** — **deferred** (`modules/shared/main.tf`), see below.
 
 ## Status (2026-07-05)
-> **⚠️ AWS account migration in flight (2026-07-27).** Everything below is applied in **Adpharm's**
-> account; this repo now targets **Ben's own** account, where nothing has been created yet. Read
-> [`MIGRATION.md`](../../MIGRATION.md) before running any `tf:*` task here — statuses on this page
-> describe the account we are leaving.
+> **Migrated to Ben's own AWS account, 2026-07-27** ([`MIGRATION.md`](../../MIGRATION.md)). Applied and
+> verified there; the old Adpharm stacks were destroyed the same day. Statuses below describe the
+> CURRENT account.
 
 - **Live** — the site is deployed + serving at `coldstorage.sh`, and both stacks are **applied** to
-  real AWS/Vercel.
+  real AWS/Vercel (Ben's own account since 2026-07-27).
 - **Vercel project:** `prj_QkTYTMBTzLCHXCsRncrrAThMSlv7`, slug **`coldstorage-web`**. Note this differs
   from `project_name` (`coldstorage-site`), which is only this component's TF/state label + IAM role name.
 - **Pending re-apply:** `vercel_project_name` was corrected `coldstorage-site` → `coldstorage-web` (it's

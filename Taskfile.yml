@@ -69,12 +69,6 @@ vars:
   # that was `/adpharm/vercel-api-token-benhonda`; here it's the one Ben's `vercel-log-drain` already set.
   COLDSTORE_VERCEL_TOKEN_SSM_PARAM: "vercel-token-for-benhonda"
 
-  # ── Decommission-only (delete once the old account is empty — MIGRATION.md phase 4) ──────────────
-  # The Adpharm account the infra is migrating OFF. Used solely by `login:legacy` + `tf:legacy:destroy`
-  # so the old stacks can still be torn down from this repo after the constants above moved on.
-  LEGACY_AWS_PROFILE: "pharmer"
-  LEGACY_TF_STATE_BUCKET: "terraform-state-sensitive"
-
   # Pinned for reproducibility — bump deliberately. Used by `task scan` (leak guard).
   GITLEAKS_IMAGE: "ghcr.io/gitleaks/gitleaks:v8.30.1"
   # The GitHub repo the release tasks read + publish to. Deliberately NOT re-derived from
@@ -111,13 +105,6 @@ tasks:
       vars: [AWS_PROFILE]
     cmds:
       - aws sso login --profile {{.AWS_PROFILE}}
-
-  login:legacy:
-    desc: "[decommission] Log in to the OLD Adpharm AWS SSO — only for tearing down the migrated-off stacks"
-    requires:
-      vars: [LEGACY_AWS_PROFILE]
-    cmds:
-      - aws sso login --profile {{.LEGACY_AWS_PROFILE}}
 
   check-aws-identity:
     # Two failures, not one. "Not logged in" was always caught; "logged in, but pointing at the WRONG
@@ -327,9 +314,9 @@ tasks:
         # them, and a bucket lifecycle rule does the expiry. If this is denied, or the tag silently fails to
         # land, deleted files never free space and nothing anywhere would say so.
         #
-        # Tested HERE rather than from the Mac because this runs as the real Cognito identity. The Mac-side
-        # aws CLI authenticates as the legacy `-daemon` IAM user, which the daemon has not used since
-        # 2026-07-14 — a check against that principal proves nothing about production either way.
+        # Tested HERE rather than from the Mac because this runs as the real Cognito identity — which is
+        # now the ONLY identity there is. (The Mac-side aws CLI used to authenticate as a `-daemon` IAM
+        # user; that user was deleted 2026-07-27, unused since Cognito landed on 2026-07-14.)
         # The tag comes from the SSOT, not from a literal here: a gate test that asserts its OWN spelling
         # of the tag would pass while production tags something the lifecycle rule ignores.
         TAG_KEY=$(jq -er '.reapTagKey' "{{.ROOT_DIR}}/reclaim.constants.json")
@@ -752,14 +739,13 @@ tasks:
       # This talks to whatever accountApiBaseUrl config.json names, and used to do so with NO
       # verification — the app:mac:run:* gates never covered this path. That is exactly the hole the
       # 2026-07-27 migration fell through (staging never redeployed ⇒ bare 401s), so it gets CHECK 3 too.
-      - |
-        CFG="{{.HOME}}/Library/Application Support/ColdStorage/config.json"
-        api="$(sed -n 's/.*"accountApiBaseUrl"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CFG" 2>/dev/null)"
-        if [ -n "$api" ]; then
-          task app:mac:_require-api-identity API="$api"
-        else
-          echo "⚠ no accountApiBaseUrl in $CFG — skipping the identity check (run 'task ui:mac:config')."
-        fi
+      # A `task:` reference, NOT `task <name>` in a shell — internal tasks are unreachable from the CLI
+      # (exit 202). The URL comes from config.json via a dynamic `sh:` var; empty (no config yet) is a
+      # legitimate state the gate handles rather than an error.
+      - task: app:mac:_require-api-identity
+        vars:
+          API:
+            sh: sed -n 's/.*"accountApiBaseUrl"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$HOME/Library/Application Support/ColdStorage/config.json" 2>/dev/null || true
       - |
         # Sign-in config sourced from the local handoff file (bucket/region/Cognito ids; no secrets).
         CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
@@ -801,11 +787,13 @@ tasks:
     #
     # Nothing local can answer this, so we ask the running service (the same principle GET /health was
     # built on) and compare against the infra handoff, which is the SSOT for what this Mac is pointed at.
-    requires:
-      vars: [API]
     cmds:
       - |
         if [ "${SKIP_DEPLOY_CHECK:-0}" = "1" ]; then exit 0; fi
+        if [ -z "{{.API}}" ]; then
+          echo "⚠ no account-backend URL to check (config.json missing an accountApiBaseUrl?) — run 'task ui:mac:config'."
+          exit 0
+        fi
         CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
         if [ ! -f "$CREDS" ]; then
           echo "⚠ no infra handoff at $CREDS — can't verify which Cognito pool {{.API}} uses."
@@ -815,7 +803,7 @@ tasks:
         # The handoff stores the provider name; the pool id is its last path segment.
         want="$(sed -n 's#^COLDSTORE_COGNITO_USER_POOL_PROVIDER=.*/##p' "$CREDS")"
         got="$(curl -sS --max-time 15 "{{.API}}/health" 2>/dev/null \
-                | sed -n 's/.*"userPoolId":"\([^"]*\)".*/\1/p')"
+                | sed -n 's/.*"userPoolId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
         if [ -z "$want" ]; then
           echo "⚠ the handoff has no Cognito pool — skipping the identity check."; exit 0
         fi
@@ -2146,78 +2134,6 @@ tasks:
     cmds:
       - task: tf:site:_validate-env
       - terragrunt init {{.CLI_ARGS}}
-
-  # ------------------------------------------------------------------ infra — legacy teardown (DELETE THIS BLOCK when done)
-  # The 2026-07-27 account migration (MIGRATION.md) left the OLD stacks running in Adpharm's account,
-  # deliberately: cutover is verified against the new account first, and the old vault stays readable
-  # until it isn't needed. But the constants above have already moved on, so `task tf:*:apply` can no
-  # longer reach the old stacks — and infra you can't reach is infra you can't destroy.
-  #
-  # These tasks are that escape hatch, and NOTHING ELSE. They re-point the four exported constants at
-  # Adpharm for the duration of one command. They are separate tasks rather than a flag on the real
-  # ones because "destroy" and "wrong account" are the two mistakes that actually cost something here,
-  # and a `LEGACY=1` flag on `tf:apply` would put them one keystroke apart.
-  #
-  # Delete this whole block, plus the LEGACY_* vars at the top, once the old account is empty.
-  tf:legacy:destroy:
-    desc: "[decommission] Destroy a stack in the OLD Adpharm account. Irreversible — read MIGRATION.md phase 4 first."
-    interactive: true
-    prompt: "DESTROY infrastructure in the OLD Adpharm account ({{.LEGACY_AWS_PROFILE}})? The vault bucket holds real archived data."
-    env:
-      AWS_PROFILE: "{{.LEGACY_AWS_PROFILE}}"
-      COLDSTORE_TF_STATE_BUCKET: "{{.LEGACY_TF_STATE_BUCKET}}"
-    cmds:
-      - |
-        if ! actual=$(aws sts get-caller-identity --query Account --output text 2>/dev/null); then
-          printf "\nThe legacy '%s' profile is not logged in. Run 'task login:legacy'.\n" "{{.LEGACY_AWS_PROFILE}}"
-          exit 1
-        fi
-        printf "\n⚠️  Targeting the LEGACY account %s as profile '%s'.\n\n" "$actual" "{{.LEGACY_AWS_PROFILE}}"
-        echo "Destroy which legacy stack?"
-        echo "  1) site             — staging"
-        echo "  2) site             — production"
-        echo "  3) account-backend  — staging"
-        echo "  4) account-backend  — production"
-        echo "  5) coldstorage      — production   ← the VAULT + Cognito. Last, and only once re-upload is verified."
-        echo "  q) quit"
-        echo
-        echo "(Listed in dependency order — coldstorage's outputs feed the others, so it goes last.)"
-        printf "Choice [q]: "
-        read -r choice
-        case "${choice:-q}" in
-          1) dir=site/live/staging ;;
-          2) dir=site/live/production ;;
-          3) dir=account-backend/live/staging ;;
-          4) dir=account-backend/live/production ;;
-          5) dir=coldstorage/live/production
-             echo
-             echo "This destroys the S3 vault holding real archived backups, and the Cognito pool holding"
-             echo "the accounts that reach it. Type the word DESTROY to continue:"
-             read -r confirm
-             [ "$confirm" = "DESTROY" ] || { echo "aborted"; exit 1; }
-             ;;
-          q|Q|quit) exit 0 ;;
-          *) echo "Invalid choice: $choice"; exit 1 ;;
-        esac
-        cd "{{.ROOT_DIR}}/infra/$dir"
-
-        # ── The Vercel resources must survive this ────────────────────────────────────────────────────
-        # For site + account-backend, the ONLY thing in the old account is an IAM role. The env vars and
-        # custom environments in that old state are LIVE Vercel resources that `task tf:adopt-vercel`
-        # has since imported into the new state — the same objects, described twice. Destroying from
-        # here would try to delete production env vars out from under the account that now owns them.
-        #
-        # So forget them first, then destroy. `state rm` only edits this old, about-to-be-deleted state
-        # file; it touches nothing in Vercel.
-        case "$dir" in
-          site/*|account-backend/*)
-            for addr in $(terragrunt state list 2>/dev/null | grep '^vercel_' || true); do
-              terragrunt state rm "$addr" >/dev/null && echo "  forgot (kept in Vercel): $addr"
-            done
-            echo "  → only AWS resources remain in this state; destroying those"
-            ;;
-        esac
-        terragrunt destroy {{.CLI_ARGS}}
 
   # ------------------------------------------------------------------ infra — pick a target (one cli step, like the app `dev` picker)
   # `task tf:plan` / `tf:apply` / `tf:init` with no args — prompts for which component + env,
