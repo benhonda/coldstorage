@@ -206,6 +206,11 @@ tasks:
     # exercises Argon2id at production tuning — a deliberately memory-HARD KDF. A neighbour allocating
     # hundreds of MiB inside the process you are measuring makes the measurement meaningless (it reported a
     # 260 MiB "leak" that was Argon2id's). The whole suite is ~2s serial; the trustworthy number is worth it.
+    # This is ENFORCED, not just documented: the memory tests carry `.measuresProcessMemory`, which reads the
+    # runner's own argv and refuses to measure at all under a parallel runner (see MeasuresProcessMemory.swift).
+    # So `swift test` bare now says why it can't measure instead of failing ~2 runs in 5 with a bogus number.
+    # KEEP IN STEP: that guard matches the `--no-parallel` literal below. Nothing links them but this comment —
+    # if Swift Testing ever renames the flag, change BOTH (the guard fails loud, so you will know immediately).
     cmds:
       # See the `.build` note above daemon:build:dev — on Linux we build into our own scratch path so the
       # container never touches the Mac's `.build` (whose `release` symlink launchd depends on).

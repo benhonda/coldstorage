@@ -16,7 +16,12 @@ private func currentRSSBytes() -> Int { ProcessMemory.residentBytes() }
 ///
 /// This test pins the invariant to a NUMBER, because the bug is invisible to every functional test: the
 /// bytes are all correct, there are just far too many of them in memory at once.
-@Suite struct StreamBackpressureTests {
+/// `.measuresProcessMemory` gates this suite under a serial runner: three of these four tests read the
+/// process's own RSS, and under a parallel runner they would report a neighbour's allocations as this code's
+/// footprint. The gate is deliberately suite-WIDE rather than per-test — it costs only
+/// `scratchFileStreamCleansUpWhenTheProducerFails` (which measures nothing) under a command you should not be
+/// using anyway, and in exchange a memory test added here later is covered without anyone remembering to.
+@Suite(.measuresProcessMemory) struct StreamBackpressureTests {
     static let fileSize = 256 << 20   // big enough that buffering it is unmistakable against noise
     static let ceiling  = 32 << 20    // a chunk or two in flight is fine; a whole file is not
 

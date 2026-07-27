@@ -121,7 +121,11 @@ objects carrying them.
   which also decouples an iCloud download from a multi-hour S3 upload). **Never bound such a stream with
   `bufferingPolicy:`** — every bounded policy DROPS elements, and dropping file bytes is corruption, not
   throttling. `StreamBackpressureTests` pins this to a number, because every functional test passes while it
-  is broken; it is why `daemon:test` runs `--no-parallel`.
+  is broken; it is why `daemon:test` runs `--no-parallel`. Those tests read the process's own RSS, so a
+  concurrently-running suite (`ZeroKnowledgeKeysTests` runs Argon2id, a memory-HARD KDF) lands inside the
+  measurement window and fails them with a number that describes the neighbour. The `.measuresProcessMemory`
+  trait now enforces the serial runner rather than trusting it: under a parallel runner the memory tests
+  **refuse to measure** and name the fix, instead of failing ~2 runs in 5 with a plausible-looking leak.
 - **The upload engine writes NOTHING to disk — it encrypts straight into the multipart upload.** It used to
   encrypt each blob into a staging file and then upload that file part by part, which cost a full second copy
   of every byte: a 40 GB video demanded 40 GB of free space, and a backup tool that needs as much headroom as

@@ -189,7 +189,7 @@ import Foundation
     /// shipped part by part. So measure it: archiving a file must cost roughly the concurrency window (a few
     /// 64 MiB parts), NOT the file size. The bound is `maxInFlight` parts, not one — uploads now run in
     /// parallel — but it is still a small constant, wildly under the blob.
-    @Test func archivingALargeFileHoldsTheInFlightPartsInMemoryNotTheBlob() async throws {
+    @Test(.measuresProcessMemory) func archivingALargeFileHoldsTheInFlightPartsInMemoryNotTheBlob() async throws {
         let fm = FileManager.default
         let base = fm.temporaryDirectory.appendingPathComponent("cs-mem-\(UUID().uuidString)")
         let root = base.appendingPathComponent("data")
