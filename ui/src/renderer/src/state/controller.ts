@@ -68,8 +68,8 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
       void refreshStatus();
       void refreshFiles();
       void refreshExcludes();
-      // Transfers too — and this line is the fix for a real bug. `beginSession` publishes `filesChanged`,
-      // so this is the sign-in resync: sign out and back in, and the in-flight transfers must come BACK.
+      // Downloads too — and this line is the fix for a real bug. `beginSession` publishes `filesChanged`,
+      // so this is the sign-in resync: sign out and back in, and the in-flight downloads must come BACK.
       // They used to vanish for good (renderer-held, cleared by `authChanged`), leaving a file the user had
       // paid to retrieve showing a plain green "Stored" ✓.
       void refreshRestores();
@@ -80,8 +80,8 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
       void refreshStatus();
       void refreshFiles();
     }
-    // A transfer moved (or finished). One event for the whole list — we re-read it rather than patch a
-    // local copy, because the daemon's journal is the only thing that knows where a transfer really stands.
+    // A download moved (or finished). One event for the whole list — we re-read it rather than patch a
+    // local copy, because the daemon's journal is the only thing that knows where a download really stands.
     else if (name === "restoresChanged" || name === "restoreCompleted") void refreshRestores();
   });
 

@@ -77,5 +77,5 @@ export function DepositProgress({ run }: { run: RunProgress | null }): React.JSX
   );
 }
 
-// `etaLabel` used to live here. It's now `ui/duration.ts`'s `timeLeft`, shared with the Transfers page's
+// `etaLabel` used to live here. It's now `ui/duration.ts`'s `timeLeft`, shared with the Downloads page's
 // thaw countdown — same question, same input, and keeping two of them meant two voices for one fact.

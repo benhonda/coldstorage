@@ -301,9 +301,25 @@ export const filesUnder = (files: readonly ArchivedFile[], dir: string): Archive
  *   - two files in `Photos`           → base `Photos`     → both save flat, as before
  *   - a mix under different folders   → base `""`         → each keeps its own path, so they can't collide
  */
-export const restoreBase = (targets: readonly RowTarget[]): string => {
-  if (targets.length === 0) return "";
-  const [first, ...rest] = targets.map((t) => segments(parentOf(t.path)));
+export const restoreBase = (targets: readonly RowTarget[]): string =>
+  commonParent(targets.map((t) => t.path));
+
+/**
+ * The deepest folder that is an ancestor of EVERY given path — each path contributes its parent, so a
+ * lone "Photos/a.jpg" yields "Photos" and a lone "Photos" (as a target path) yields "". This is the walk
+ * behind {@link restoreBase}, exported on its own because the Downloads page's request grouping asks the
+ * same question of a request's vault paths (its display name) and destination paths (its reveal folder).
+ *
+ * Unlike {@link parentOf}/{@link segments} (vault-relative only), this preserves a leading "/" — an
+ * absolute path's root arrives as an empty first segment and survives the join — so it serves both path
+ * kinds. Empty input → "".
+ */
+export const commonParent = (paths: readonly string[]): string => {
+  const [first, ...rest] = paths.map((p) => {
+    const cut = p.lastIndexOf("/");
+    const parent = cut > 0 ? p.slice(0, cut) : "";
+    return parent === "" ? [] : parent.split("/");
+  });
   let common = first ?? [];
   for (const segs of rest) {
     let i = 0;

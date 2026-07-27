@@ -55,13 +55,13 @@ export interface FilesApi {
   newFolder: (intoDir: string) => string;
 }
 
-/** The per-file status a transfer implies. Only the states that CHANGE how the file reads are mapped: a
- * canceled or failed transfer leaves the file exactly as it was (still safely stored — the copy didn't
+/** The per-file status a download implies. Only the states that CHANGE how the file reads are mapped: a
+ * canceled or failed download leaves the file exactly as it was (still safely stored — the copy didn't
  * arrive, the archive is untouched), so those keep the journal's own status and surface on the Transfers
  * page instead of putting a scary mark on a file that is perfectly fine. */
 const STATUS_FROM_TRANSFER: Partial<Record<RestoreRow["state"], FileStatus>> = {
   // Awaiting payment reads as pending too: from the file's point of view a copy is on the way, and the
-  // thing that needs doing about it belongs on the Transfers page, not on a tree row.
+  // thing that needs doing about it belongs on the Downloads page, not on a tree row.
   needsAuthorization: "pending",
   pending: "pending",
   transferring: "transferring",

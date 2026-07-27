@@ -9,9 +9,9 @@
  * rejections as a toast), and pins the foot of the sidebar: a quiet status line only when the background
  * uploader isn't running, and the stuck-uploads pill.
  *
- * In-flight transfers used to live down there too, as a count + popover. They now have their own page —
+ * In-flight downloads used to live down there too, as a count + popover. They now have their own page —
  * a count in the sidebar foot with a popover hanging off it had nowhere to send anyone, and it was built
- * from renderer memory, so it lost the user's transfers on sign-out.
+ * from renderer memory, so it lost the user's downloads on sign-out.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon, Modal, Button } from "./ui/primitives.tsx";
@@ -30,7 +30,8 @@ import { eventAction, type BlobFailure } from "./state/reducer.ts";
 import { bytesAvailable } from "./state/entitlement.ts";
 import { MyFilesView } from "./views/MyFilesView.tsx";
 import { SettingsView, type SettingsApi, type SettingsTab } from "./views/SettingsView.tsx";
-import { TransfersView } from "./views/TransfersView.tsx";
+import { DownloadsView } from "./views/DownloadsView.tsx";
+import { groupDownloads } from "./views/downloads/model.ts";
 import { SignInView } from "./views/SignInView.tsx";
 import { RecoveryCodeShow, RecoveryCodeEnter, VaultGate } from "./views/RecoveryCodeView.tsx";
 import { OnboardingWizard, onboardingPending } from "./views/OnboardingWizard.tsx";
@@ -45,9 +46,9 @@ const NOT_RUNNING: Partial<Record<ConnectionState, string>> = {
   disconnected: "Not running",
 };
 
-type Route = "files" | "transfers" | "settings";
+type Route = "files" | "downloads" | "settings";
 
-const ROUTES: readonly Route[] = ["files", "transfers", "settings"];
+const ROUTES: readonly Route[] = ["files", "downloads", "settings"];
 
 const isRoute = (id: string): id is Route => (ROUTES as readonly string[]).includes(id);
 
@@ -64,10 +65,11 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const toast = useToast();
   const [failuresOpen, setFailuresOpen] = useState(false);
-  // Set by the Transfers page to send the user back to My Files with the request dialog open for this
-  // file — the way out of a transfer that needs re-buying (unpaid, or its thaw window lapsed). Cleared by
-  // MyFilesView once it has opened the dialog, so the same file can be asked for again later.
-  const [requestFileId, setRequestFileId] = useState<string | null>(null);
+  // Set by the Downloads page to send the user back to My Files with the request dialog open for these
+  // files — the way out of a download that needs re-buying (unpaid, or its thaw window lapsed). A LIST
+  // because a grouped row re-asks every file that needs re-buying in one go. Cleared by MyFilesView once
+  // it has opened the dialog, so the same files can be asked for again later.
+  const [requestFileIds, setRequestFileIds] = useState<string[] | null>(null);
   // Null = closed. The reason is load-bearing: the same plan picker is a "you're out of room" block when a
   // free vault fills up, and a plain "pick a plan" when someone upgrades from Settings by choice.
   const [paywallReason, setPaywallReason] = useState<PaywallReason | null>(null);
@@ -172,13 +174,18 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
     removeExclude: (pattern) => exec(() => api.request("removeExclude", { pattern })),
   };
 
-  const activeTransfers = state.restores.filter((r) => isActiveRestore(r.state)).length;
+  // Counts REQUESTS, not files — the badge must agree with the rows the page shows, and a folder ask is
+  // one row there ("Photos"), not 300. Same fold the page itself uses.
+  const activeDownloads = useMemo(
+    () => groupDownloads(state.restores).filter((g) => isActiveRestore(g.state)).length,
+    [state.restores],
+  );
   const notRunning = NOT_RUNNING[state.connection];
 
   const NAV: NavItem[] = [
     { id: "files", label: "My Files", icon: "folder" },
     // Above Settings, and carrying the in-flight count: the badge belongs on the page that can explain it.
-    { id: "transfers", label: "Transfers", icon: "download", badge: activeTransfers },
+    { id: "downloads", label: "Downloads", icon: "download", badge: activeDownloads },
     { id: "settings", label: "Settings", icon: "settings" },
   ];
 
@@ -427,19 +434,19 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           run={state.run}
           hasRoomFor={hasRoomFor}
           onDepositBlocked={() => (subscribed ? setOverCapacityOpen(true) : setPaywallReason("quotaReached"))}
-          requestFileId={requestFileId}
-          onRequestOpened={() => setRequestFileId(null)}
-          onShowTransfers={() => setRoute("transfers")}
+          requestFileIds={requestFileIds}
+          onRequestOpened={() => setRequestFileIds(null)}
+          onShowDownloads={() => setRoute("downloads")}
         />
       )}
-      {route === "transfers" && (
-        <TransfersView
+      {route === "downloads" && (
+        <DownloadsView
           api={api}
           exec={exec}
           restores={state.restores}
           restoreProgress={state.restoreProgress}
-          onRequestAgain={(fileId) => {
-            setRequestFileId(fileId);
+          onRequestAgain={(fileIds) => {
+            setRequestFileIds(fileIds);
             setRoute("files");
           }}
         />

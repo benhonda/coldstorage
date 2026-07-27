@@ -1,7 +1,7 @@
 /**
  * Main-process OS integrations the renderer needs but can't reach (no Node in the renderer): the native
  * open panels (single-folder for a watched source / restore destination; files-AND-folders multi-select
- * for a deposit), the default Downloads directory (request-a-copy dialog), revealing a restored copy in
+ * for a deposit), the default Downloads directory (request-a-download dialog), revealing a restored copy in
  * Finder, and the native Photos picker
  * (the explicit photo-deposit path, UI option B). Kept separate from {@link registerBridge} (which is
  * strictly the daemon-client seam).

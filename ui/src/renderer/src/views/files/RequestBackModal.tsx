@@ -42,7 +42,7 @@ export const RequestBackModal = ({
   chooseFolder: (defaultPath?: string) => Promise<string | null>;
   /** The OS Downloads dir — the default destination. */
   getDownloadsDir: () => Promise<string>;
-  /** Start the transfer(s), saving into `folder`. Pays first if the quote isn't free. */
+  /** Start the download, saving into `folder`. Pays first if the quote isn't free. */
   onConfirm: (folder: string) => void;
   onClose: () => void;
 }): React.JSX.Element => {
@@ -64,12 +64,12 @@ export const RequestBackModal = ({
   const bytes = totalBytes(files);
   const many = files.length > 1;
   const lead = many
-    ? `Start a transfer to bring copies of ${files.length} files to your Mac.`
-    : `Start a transfer to bring a copy of ${fileName(files[0])} to your Mac.`;
+    ? `Download copies of ${files.length} files to your Mac.`
+    : `Download a copy of ${fileName(files[0])} to your Mac.`;
 
   const free = quote !== null && quote.quoteCents === 0;
   const pending = quote === null && quoteError === null;
-  // Never let someone commit to a transfer we couldn't price — they'd be agreeing to an unknown charge.
+  // Never let someone commit to a download we couldn't price — they'd be agreeing to an unknown charge.
   const canStart = folder.trim() !== "" && quote !== null;
 
   const priceValue = pending
@@ -82,7 +82,7 @@ export const RequestBackModal = ({
 
   return (
     <Modal
-      title={many ? "Request copies" : "Request a copy"}
+      title="Request a download"
       icon="download"
       onClose={onClose}
       footer={
@@ -91,7 +91,7 @@ export const RequestBackModal = ({
             Not now
           </Button>
           <Button variant="primary" icon="download" disabled={!canStart} onClick={() => onConfirm(folder.trim())}>
-            {free || quote === null ? "Start transfer" : `Pay ${usd(quote.quoteCents)} and start`}
+            {free || quote === null ? "Start download" : `Pay ${usd(quote.quoteCents)} and start`}
           </Button>
         </>
       }

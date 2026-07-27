@@ -48,7 +48,7 @@ export const InfoModal = ({
       )}
       {sel.restorable.length > 0 && (
         <Button variant="secondary" icon="download" onClick={onDownload}>
-          {sel.restorable.length > 1 ? `Request ${sel.restorable.length} copies…` : "Request a copy…"}
+          Request a download…
         </Button>
       )}
     </>
@@ -73,9 +73,9 @@ export const InfoModal = ({
             <KeyValueRow label="Status" value={statusLabel(sel.file.status)} />
             <KeyValueRow label="Uploaded" value={formatDate(sel.file.date)} />
             {/* A "Ready by" row used to sit here, reading `file.readyBy` — a field nothing ever wrote, so
-                it never rendered once. The honest version points at where a transfer actually lives now. */}
+                it never rendered once. The honest version points at where a download actually lives now. */}
             {(sel.file.status === "pending" || sel.file.status === "transferring") && (
-              <KeyValueRow label="Copy" value="In progress — see Transfers" accent />
+              <KeyValueRow label="Copy" value="In progress — see Downloads" accent />
             )}
             {sel.file.status === "here" && sel.file.localPath && (
               <KeyValueRow label="On disk" value={sel.file.localPath} />

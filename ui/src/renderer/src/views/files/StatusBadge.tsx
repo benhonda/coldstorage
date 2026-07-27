@@ -22,7 +22,7 @@ const STATUS: Record<FileStatus, { icon: string; tone: Tone; label: string } | n
   // which no byte moves — an hourglass, not a down-arrow, because nothing is arriving yet. `transferring`
   // is the down-arrow it was always drawn as, now reserved for when that's actually true.
   pending: { icon: "hourglass_top", tone: "warning", label: "Waiting on deep storage" },
-  transferring: { icon: "arrow_circle_down", tone: "accent", label: "Transferring" },
+  transferring: { icon: "arrow_circle_down", tone: "accent", label: "Downloading" },
   here: { icon: "download_done", tone: "success", label: "Saved on this Mac" },
 };
 
@@ -36,7 +36,7 @@ const KIND_ICON: Record<FileKind, string> = {
 };
 
 /** A small colored status icon — ✓ stored, ↑ uploading, ⚠ couldn't upload, ⧗ waiting on deep storage,
- * ↓ transferring, or saved-here. */
+ * ↓ downloading, or saved-here. */
 export const StatusIcon = ({ status, size = 20 }: { status: FileStatus; size?: number }): React.JSX.Element | null => {
   const s = STATUS[status];
   if (!s) return null;

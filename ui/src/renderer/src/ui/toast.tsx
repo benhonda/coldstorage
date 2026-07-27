@@ -3,8 +3,8 @@
  *
  * There was one before this, and it only ever said what went WRONG: a single fixed div in `App`, driven
  * off the latest error string, dismissed by remembering which message the user had already waved away.
- * So every failure announced itself and every success was silent — start a transfer and the app said
- * nothing at all, leaving you to go and check the Transfers page to find out whether the thing you just
+ * So every failure announced itself and every success was silent — start a download and the app said
+ * nothing at all, leaving you to go and check the Downloads page to find out whether the thing you just
  * clicked had worked. Invisible work the user has no way to see is exactly what we owe a message (CORE9),
  * and "it worked" is invisible work too.
  *
@@ -61,7 +61,7 @@ const ToastContext = createContext<ToastApi | null>(null);
 
 /**
  * The toast channel + the stack that renders it. Wraps the whole app (see `main.tsx`), because a toast
- * outlives the view that raised it — a transfer confirmation must survive the user navigating away from
+ * outlives the view that raised it — a download confirmation must survive the user navigating away from
  * My Files the instant they click Start.
  */
 export const ToastProvider = ({ children }: { children: ReactNode }): React.JSX.Element => {
@@ -72,7 +72,7 @@ export const ToastProvider = ({ children }: { children: ReactNode }): React.JSX.
   // The live list, mirrored in a ref. Two things need it to be readable SYNCHRONOUSLY, and neither can be
   // served by `toasts` (a render-time snapshot) or by a `setToasts` updater (which runs later, so `show`
   // would have returned already):
-  //   - dedup, when several shows land in one tick (a batch of transfers all completing at once) — every
+  //   - dedup, when several shows land in one tick (a batch of downloads all completing at once) — every
   //     one of them would otherwise read the same stale list and add a duplicate, and
   //   - the id `show` hands back, which has to be the real one at the moment it returns.
   const listRef = useRef<Toast[]>([]);

@@ -1,12 +1,13 @@
 /**
- * The Transfers countdown + the transferring row's live bar — which row gets a clock, what the readout
+ * The Downloads countdown + the downloading row's live bar — which row gets a clock, what the readout
  * says as the signal firms up, and what the estimate's overrun reads like. The PHRASING of durations is
- * `ui/duration.ts`'s and tested there; this covers only the decisions this page makes.
+ * `ui/duration.ts`'s and tested there; this covers only the decisions this page makes. (The request
+ * GROUPING — one row per ask — is `downloads/model.ts`'s and tested there.)
  */
 import { describe, expect, test } from "bun:test";
 import type { RestoreRow } from "../../../shared/ipc.ts";
 import type { RestoreProgress } from "../state/reducer.ts";
-import { progressFraction, progressLine, remaining } from "./TransfersView.tsx";
+import { progressFraction, progressLine, remaining } from "./DownloadsView.tsx";
 
 const HOUR = 3600;
 const REQUESTED = 1_700_000_000;

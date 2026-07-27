@@ -7,7 +7,7 @@
 
 ## What the UI is
 A control panel for `coldstored`: browse your files, drop files in to upload, reorganize, watch live
-progress, and request a copy back. It holds **no upload/restore logic** — the Swift daemon owns
+progress, and request files back. It holds **no upload/restore logic** — the Swift daemon owns
 scan/encrypt/upload/restore/journal. The UI reads state and sends commands.
 
 > **UI work is design-led — "it compiles and renders" is not done.** The product's job is emotional
@@ -19,15 +19,23 @@ scan/encrypt/upload/restore/journal. The UI reads state and sends commands.
 
 > **VOICE — plain file-uploader, no reassurance theater (Ben, 2026-06-24).** Don't tell the user their
 > files are "safe," don't claim/advertise safety, don't editorialize ("steady", "reassuring"). Plain,
-> factual verbs: **upload** (not "archive" as the active verb), **stored** (not "safe"), **request a
-> copy** / **Start transfer** / **Transferring** (not "download"/"retrieve" — those imply immediacy;
-> the slow-thaw nuance lives in the dialog, not the label), **frozen** (factual: deep storage is slow
-> to open). Status is *information*, not comfort — neither alarm nor reassurance, just facts.
+> factual verbs: **upload** (not "archive" as the active verb), **stored** (not "safe"), **frozen**
+> (factual: deep storage is slow to open). Status is *information*, not comfort — neither alarm nor
+> reassurance, just facts.
 >
-> **"Transferring" means bytes are moving (2026-07-27).** It is not the word for the ~48h Deep Archive
-> thaw, which is **pending** / *waiting on deep storage* — nothing transfers during it. The app called the
-> whole thaw "Transferring" until this landed, so a transfer appeared to sit at zero progress for two days.
-> One word, one meaning: if nothing is moving, don't say transferring.
+> **Getting files back is a "download" (Ben, 2026-07-27).** The page is **Downloads**, one row per
+> REQUEST (ask for a folder of 300, get one row — see the grouping note in the flow below), and a row's
+> states are **pending → downloading → done**. This supersedes both prior rulings — 2026-06-24's
+> "not 'download'" and the "Transfers" era that followed — because *transfer*, *copy* and *request* had
+> each been the entity's name somewhere, which confused even us. The vocabulary now: **download** is the
+> entity (the thing that is one row); **request** is the act that starts one ("Request a download…" —
+> *request* still carries the not-instant signal the 2026-06-24 rule wanted); **thaw** lives in the
+> explanatory copy where it's honest ("deep storage is waking this up"); **transfer** is retired from
+> user-facing text. "Downloading" is EARNED, never assumed: for the ~48h thaw the row is **pending**
+> (nothing moves — a countdown, no bar); it says **downloading** only while bytes actually land (a
+> measured bar); then **done**. The wire keeps its own engineering names for the same lifecycle —
+> `restore`, states `pending`/`transferring`/`saved` (`Models.swift` is that SSOT) — and the page's
+> STATE map is the single wire→copy translation point.
 
 ## The mental model — a reorganizable filesystem (canonical since 2026-06-24)
 Two jobs are the whole product: **get files up** and **get them back**. The app does them as a
@@ -48,7 +56,7 @@ Two jobs are the whole product: **get files up** and **get them back**. The app 
 
 ## Surfaces — two, not four
 *(The original 4-tab Vault/Sources/Restore/Browse layout is superseded and deleted.)*
-- **My Files** — the entire drive: browse, drop-to-upload, reorganize, request a copy.
+- **My Files** — the entire drive: browse, drop-to-upload, reorganize, request a download.
 - **Settings** — one door, two subpages (tabs): **General** (this-Mac behavior) and **Account**
   (identity/plan — configured installs only; the sidebar identity chip's popover deep-links here).
 
@@ -72,7 +80,7 @@ Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-cl
 One `ToastProvider` wrapping the app (outside `App`, so a toast survives its early-return gates), a
 `useToast()` channel, and a bottom-center stack. It replaced a single fixed div in `App` that could only
 ever say what went **wrong** — so every failure announced itself and every success was silent. Starting a
-transfer answered a click with nothing at all; you went and checked the Transfers page to find out whether
+download answered a click with nothing at all; you went and checked the Downloads page to find out whether
 it had worked.
 - **Successes expire (~6s), errors wait to be dismissed.** A confirmation is done in a few seconds; a
   failure may need reading twice.
@@ -82,7 +90,7 @@ it had worked.
   close button.
 - Currently fires on: any `exec` rejection · the daemon's live `error` channel · a failed retrieval
   payment (which used to write into a dialog that had already closed, so it went nowhere) · a started
-  transfer, with a **See transfers** action · a completed transfer, with **Show in Finder**.
+  download, with a **See downloads** action · a completed download, with **Show in Finder**.
 - **Not** for uploads. Deposits have their own ambient surfaces (the progress banner, per-row badges, the
   stuck-uploads pill) and the daemon auto-runs on a timer — toasting those would be noise. The pill is
   still the right call for stuck uploads specifically: a one-shot toast gets missed.
@@ -92,13 +100,13 @@ it had worked.
 │ ❄ coldstor.│  My Files › Photos › 2019              ⊞ ⊟    ⊕ Add      │
 │            │  Name                          Size      Date            │
 │  My Files  │  📁 January                    1.2 GB    12 items        │
-│ Transfers 1│  📄 beach.jpg                  4.1 MB    Jul 12 2019  ✓ ⋯ │
+│ Downloads 1│  📄 beach.jpg                  4.1 MB    Jul 12 2019  ✓ ⋯ │
 │  Settings  │  📄 sunset.jpg                 3.8 MB    Jul 12 2019  ⧗ ⋯ │
 │            │  📄 hike.mov                   2.3 GB    Aug 3 2019      │
 │ 12 GB      │                                                          │
 │            │ ────── drop anywhere to upload · right-click for more ─│
 └────────────┴────────────────────────────────────────────────────────┘
-   ⋯ → Get info · Rename · Move to… · New folder · Request a copy… · Delete
+   ⋯ → Get info · Rename · Move to… · New folder · Request a download… · Delete
 ```
 
 ## My Files — the browser
@@ -111,14 +119,14 @@ it had worked.
   muted-red ⚠ **couldn't upload** (permanent/stuck — also persistent in the sidebar → failures panel
   + Try again / Dismiss, because a one-shot toast gets missed; the pill clears itself when a retry
   lands, Dismiss is acknowledge-only — rows keep their ⚠, and a re-hit fault re-surfaces it) ·
-  amber ⧗ **waiting on deep storage** (the thaw — nothing is moving yet) · blue ↓ **Transferring**
+  amber ⧗ **waiting on deep storage** (the thaw — nothing is moving yet) · blue ↓ **Downloading**
   (bytes actually moving) · green `download_done`
   **saved on this Mac**. No icon = nothing in flight.
 - **Selection is just selection** (cmd/shift multi → batch ops); details live behind `⋯`/right-click;
   double-click a file = Get info, a folder = drill in. No docked side-inspector.
-- **Getting a copy back is a SECONDARY action, never a promoted CTA** — in the row menu + Get-info
-  modal, labeled **"Request a copy…"** (*request* signals not-instant); the dialog's confirm is
-  **"Start transfer"** and owns the "ready in ~a day" detail.
+- **Getting files back is a SECONDARY action, never a promoted CTA** — in the row menu + Get-info
+  modal, labeled **"Request a download…"** (*request* signals not-instant); the dialog's confirm is
+  **"Start download"** and owns the "ready in ~a day" detail.
 - **Empty/first-run:** a bounded, clickable drop-zone card (*"Drop files or folders to upload"* + one
   factual line "encrypted on your Mac before upload" + a "Choose files or folders" CTA). Delete-empty-folder
   skips the confirm (no bytes at stake).
@@ -167,9 +175,9 @@ it had worked.
    `conflicts` map the daemon's `CollisionResolvingSource` applies authoritatively. Copies re-upload
    bytes (content-addressed dedup is a deferred, UX-invisible optimization).
 
-## Request-a-copy flow (available, not advertised)
+## Request-a-download flow (available, not advertised)
 1. Trigger from the row `⋯` / Get-info modal; works on one file, a multi-select, or a folder.
-2. **Confirm = explicit modal** (paid + multi-hour → never accidental), button **"Start transfer"**:
+2. **Confirm = explicit modal** (paid + multi-hour → never accidental), button **"Start download"**:
    file · size · **ready in ~a day (up to 48h)** · **cost ~$X** · a "Save to" row with the native
    folder picker (defaults to Downloads, chosen per request — no global setting) · "you can close the
    app — we'll fetch it and let you know."
@@ -193,16 +201,25 @@ it had worked.
    because there nothing is measured.
    The phrase itself is `ui/duration.ts`'s `timeLeft`, **shared with the deposit banner** — "how much
    longer" is one question, and it briefly had two formatters with two voices ("about 5 min left" on an
-   upload, "About 1 day 17 hours left" on a transfer). One function, one set of buckets: coarser the
+   upload, "About 1 day 17 hours left" on a download). One function, one set of buckets: coarser the
    further out, which suits both a jittery upload rate and an estimate that was never a measurement.
 4. **Ready → macOS system notification** (walk-away is the whole design): *"wedding.mov is ready — in
    your Downloads folder [Show] [Open]."* *(Notification still open, below.)*
 5. The local copy expires after the requested `days`, then re-freezes → honest *"available until
    Jun 28,"* download-again is one click.
-6. A count on the **Transfers** nav item (above Settings) — the page is the detail, so the badge has
-   somewhere to go. Transfers are journal rows the daemon drives, so they survive sign-out, relaunch and
-   a closed app. (Superseded the sidebar-foot "Transferring N" pill + its popover, 2026-07-27.)
-7. Batch/folder request → one **combined** quote (`240 files · ~a day · ~$3.10`).
+6. A count on the **Downloads** nav item (above Settings) — the page is the detail, so the badge has
+   somewhere to go. Downloads are journal rows the daemon drives, so they survive sign-out, relaunch and
+   a closed app. (Superseded the sidebar-foot pill + its popover, 2026-07-27.) The badge counts
+   REQUESTS, not files — the same fold the page shows.
+7. Batch/folder request → one **combined** quote (`240 files · ~a day · ~$3.10`) — **and one row
+   (2026-07-27)**. The Downloads page folds the daemon's per-file rows into one row per request
+   (`views/downloads/model.ts`): `jobId` is the group key (it IS the quote — everything bought together
+   shows together; null jobIds never merge), the label is the files' shared vault folder ("Photos"),
+   the headline state has a stated precedence (unpaid > downloading > pending > failed > stopped >
+   done), the countdown speaks for the slowest pending file, and the bar is bytes-landed over the
+   request's total. Expanding shows the per-file rows; every action fans out to the per-file daemon
+   commands. The journal and wire STAY per-file — that's what keeps stop/resume/partial failure honest
+   underneath.
 8. **A folder comes back as a folder (2026-07-27).** Every file used to save as
    `<chosen folder>/<basename>`, so requesting `Photos` back dumped 300 loose files into Downloads and
    any two sharing a name in different subfolders overwrote each other. The destination now strips
@@ -328,14 +345,14 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   account — the daemon's isolation is only half the fix if the UI still holds the last user's state.
   **Clearing is only half of THAT fix:** every cleared slice must be refillable from the daemon on the way
   back in. `restores` was cleared but had no daemon read behind it, so signing out and back in destroyed
-  an in-flight transfer permanently (Ben, 2026-07-27) — the file just showed a green ✓ again. `beginSession`
+  an in-flight download permanently (Ben, 2026-07-27) — the file just showed a green ✓ again. `beginSession`
   publishes `filesChanged`, and the controller re-reads status/files/excludes/**restores** on it.
 - **Events (SSOT = the `DaemonEvent(...)` call sites):** `runStarted · fileArchived · uploadProgress ·
   runProgress · runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged ·
   restoresChanged · restoreProgress · restoreCompleted · error`.
   `restoreProgress` carries `{id, file, bytes, totalBytes}` — plaintext bytes landed for ONE transferring
-  row, per ~4 MiB frame; folded into the store's ephemeral per-row slice for the Transfers bar, never a
-  source of row state.
+  row, per ~4 MiB frame; folded into the store's ephemeral per-row slice for the Downloads page's bar,
+  never a source of row state.
   `runProgress` carries `{filesTotal, bytesTotal, filesArchived, bytesUploaded, currentPath}` — the
   whole-run aggregate the deposit banner draws from (all ENCRYPTED bytes; `bytesTotal` 0 ⇒ unknown, e.g.
   Photos; ETA/throughput are derived UI-side, never sent — coarsely, in buckets, since a snapshot only
@@ -430,11 +447,11 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   `ListObjectsV2` — blobs are opaque `blobs/<hash>` objects). Don't block browse work on R2.
 - **Socket perms:** `0600`, same user — fine. Dev socket `coldstorage/coldstored.sock`; installed
   `~/Library/Application Support/ColdStorage/coldstored.sock` (`COLDSTORE_SOCKET`).
-- **A transfer is a durable journal row, not a request/response.** `requestRestore` records it and
-  returns the whole list; the DAEMON's run loop then steps it (`restorePass`) until it lands, so it keeps
-  going with the app closed. Read `listRestores` for state; never accumulate a copy from events. The old
-  one-shot `restore` command is gone: nothing re-issued it, so every transfer stalled at `thawRequested`
-  forever while the UI showed it as downloading.
+- **A download is a durable journal row, not a request/response** (a `restore`, on the wire).
+  `requestRestore` records it and returns the whole list; the DAEMON's run loop then steps it
+  (`restorePass`) until it lands, so it keeps going with the app closed. Read `listRestores` for state;
+  never accumulate a copy from events. The old one-shot `restore` command is gone: nothing re-issued it,
+  so every download stalled at `thawRequested` forever while the UI showed it as downloading.
 - **States are named** — `needsAuthorization | pending | transferring | saved | canceled | failed` — **and
   only measured movement gets a percentage.** Deep Archive reports only warming vs ready, so the thaw wait
   never draws a bar; `transferring` does (2026-07-27), fed by the daemon's per-frame `restoreProgress`

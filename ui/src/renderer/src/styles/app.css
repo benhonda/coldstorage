@@ -1101,7 +1101,7 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-seg-opt:hover { color: var(--text-primary); }
 .cs-seg-opt--active { background: var(--accent); color: var(--accent-on); font-weight: var(--weight-medium); }
 
-/* native folder picker row (request-a-copy dialog) — no typing, opens the OS picker */
+/* native folder picker row (request-a-download dialog) — no typing, opens the OS picker */
 .cs-folderpick {
   display: flex;
   align-items: center;
@@ -1509,7 +1509,7 @@ button.cs-kv:hover { background: var(--surface-hover); }
   flex: none;
 }
 /* The progress bar itself — SHARED between the deposit banner and a transferring restore row
-   (TransfersView), which is why it isn't named cs-deposit-*: one visual for "bytes are moving",
+   (DownloadsView), which is why it isn't named cs-deposit-*: one visual for "bytes are moving",
    whichever direction they move (PILLAR3). */
 .cs-bar-track {
   position: relative;
@@ -1548,15 +1548,15 @@ button.cs-kv:hover { background: var(--surface-hover); }
 /* ── Transfers ───────────────────────────────────────────────────
    One row per requested copy. Named states, no progress bar: Deep Archive reports "warming" or "ready"
    and nothing between, and for the ~48h of a thaw there is no progress to draw. */
-.cs-transfers-group { margin-bottom: var(--space-6); }
-.cs-transfers-heading {
+.cs-downloads-group { margin-bottom: var(--space-6); }
+.cs-downloads-heading {
   font: var(--type-label);
   color: var(--text-tertiary);
   text-transform: uppercase;
   letter-spacing: var(--tracking-wide, 0.06em);
   margin: 0 0 var(--space-2);
 }
-.cs-transfer {
+.cs-download {
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
@@ -1565,26 +1565,26 @@ button.cs-kv:hover { background: var(--surface-hover); }
   border-radius: var(--radius-md);
   background: var(--surface-card);
 }
-.cs-transfer + .cs-transfer { margin-top: var(--space-2); }
-.cs-transfer-icon { flex: 0 0 auto; display: flex; padding-top: 2px; }
-.cs-transfer-icon--accent  { color: var(--accent-text); }
-.cs-transfer-icon--warning { color: var(--amber-500); }
-.cs-transfer-icon--success { color: var(--positive); }
-.cs-transfer-icon--danger  { color: var(--negative); }
-.cs-transfer-icon--neutral { color: var(--text-tertiary); }
-.cs-transfer-main { flex: 1; min-width: 0; }
-.cs-transfer-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
-.cs-transfer-name {
+.cs-download + .cs-download { margin-top: var(--space-2); }
+.cs-download-icon { flex: 0 0 auto; display: flex; padding-top: 2px; }
+.cs-download-icon--accent  { color: var(--accent-text); }
+.cs-download-icon--warning { color: var(--amber-500); }
+.cs-download-icon--success { color: var(--positive); }
+.cs-download-icon--danger  { color: var(--negative); }
+.cs-download-icon--neutral { color: var(--text-tertiary); }
+.cs-download-main { flex: 1; min-width: 0; }
+.cs-download-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.cs-download-name {
   font: var(--type-body-strong);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.cs-transfer-meta { font: var(--type-label); color: var(--text-secondary); margin-top: 2px; }
+.cs-download-meta { font: var(--type-label); color: var(--text-secondary); margin-top: 2px; }
 /* Time left on a thaw — the one number someone opens this page for, so it outranks the note below it:
    primary text weight against the note's tertiary, amber to match the "waiting on deep storage" badge
    and icon it belongs to. Tabular figures so a ticking countdown doesn't jitter the line. */
-.cs-transfer-eta {
+.cs-download-eta {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -1594,13 +1594,38 @@ button.cs-kv:hover { background: var(--surface-hover); }
   color: var(--amber-500);
   font-variant-numeric: tabular-nums;
 }
-.cs-transfer-eta .csf-icon { flex: none; }
-.cs-transfer-note { font: var(--type-label); color: var(--text-tertiary); margin-top: var(--space-1); }
+.cs-download-eta .csf-icon { flex: none; }
+.cs-download-note { font: var(--type-label); color: var(--text-tertiary); margin-top: var(--space-1); }
 /* The download bar + readout on a `transferring` row (fed by live `restoreProgress` events). */
-.cs-transfer-progress {
+.cs-download-progress {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
   margin-top: var(--space-2);
 }
-.cs-transfer-actions { flex: 0 0 auto; display: flex; align-items: center; gap: var(--space-2); }
+.cs-download-actions { flex: 0 0 auto; display: flex; align-items: center; gap: var(--space-2); }
+/* A grouped request row ("Photos · 300 files"): chevron to expand, children indented beneath the parent
+   card — quieter (no card border) so the request stays the visual unit and the files read as its detail. */
+.cs-download-expand {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 2px 0 0;
+  margin-left: calc(var(--space-1) * -1);
+  border: none;
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.cs-download-expand:hover { color: var(--text-primary); }
+.cs-download-children {
+  margin: var(--space-1) 0 var(--space-2) var(--space-6);
+  border-left: 2px solid var(--border-subtle);
+  padding-left: var(--space-3);
+}
+.cs-download--child {
+  border: none;
+  background: none;
+  padding: var(--space-2) 0;
+}
+.cs-download--child + .cs-download--child { margin-top: 0; border-top: 1px solid var(--border-subtle); }

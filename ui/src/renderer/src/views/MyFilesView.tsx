@@ -4,8 +4,8 @@
  * reorganize, and request-back.
  *
  * Holds no upload logic. The tree comes from {@link useFiles} (the daemon's journal-backed `listFiles`);
- * request-back issues the real `requestRestore` command via `exec`, which records a durable transfer the
- * daemon then drives — this view starts a transfer, the Transfers page tracks it.
+ * request-back issues the real `requestRestore` command via `exec`, which records a durable download the
+ * daemon then drives — this view starts a download, the Downloads page tracks it.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ColdstoreApi, ConflictPolicy, DepositPreviewItem, RetrievalQuote } from "../../../shared/ipc.ts";
@@ -64,14 +64,14 @@ interface Props {
    * {@link onDepositBlocked} (→ the paywall) instead of uploading. Fails open on unknown usage/quota. */
   hasRoomFor: (incomingBytes: number) => boolean;
   onDepositBlocked: () => void;
-  /** A file the Transfers page asked us to re-open the request dialog for (a transfer that needs buying
-   * again). Null most of the time. */
-  requestFileId?: string | null;
-  /** Tell the owner we've consumed {@link requestFileId}, so the same file can be asked for again later. */
+  /** Files the Downloads page asked us to re-open the request dialog for (a download that needs buying
+   * again — the whole list at once for a grouped row). Null most of the time. */
+  requestFileIds?: string[] | null;
+  /** Tell the owner we've consumed {@link requestFileIds}, so the same files can be asked for again later. */
   onRequestOpened?: () => void;
-  /** Send the user to the Transfers page — the action on the "transfer started" confirmation, since that
+  /** Send the user to the Downloads page — the action on the "download started" confirmation, since that
    * page is where the answer to "how's it going" lives. Routing is App's, so this is a callback. */
-  onShowTransfers: () => void;
+  onShowDownloads: () => void;
 }
 
 type ViewMode = "list" | "grid";
@@ -90,9 +90,9 @@ export const MyFilesView = ({
   run,
   hasRoomFor,
   onDepositBlocked,
-  requestFileId,
+  requestFileIds,
   onRequestOpened,
-  onShowTransfers,
+  onShowDownloads,
 }: Props): React.JSX.Element => {
   const toast = useToast();
   const [dir, setDir] = useState("");
@@ -184,9 +184,9 @@ export const MyFilesView = ({
   // under the monthly allowance) and thaws them itself. Hence the order here — quote, pay, THEN restore.
   // Issuing `restore` first would just get `authorizationRequired` back and strand the user.
   //
-  // `force` is for the Transfers page's "Ask again": that file's row reads `pending` (it HAS a transfer —
+  // `force` is for the Downloads page's "Ask again": that file's row reads `pending` (it HAS a download —
   // one that needs buying again), so the normal `frozen`-only filter would silently drop it and the button
-  // would do nothing. The caller there already knows the transfer is stalled, so it says so.
+  // would do nothing. The caller there already knows the download is stalled, so it says so.
   //
   // Takes TARGETS rather than the expanded files, because the two answer different questions and only the
   // targets answer the one that matters at save time: a request for the folder `Photos` and a request for
@@ -220,7 +220,7 @@ export const MyFilesView = ({
     // the request that was just confirmed, not to whatever gets asked for next.
     const base = requestBase;
     setRequestFiles(null);
-    if (!job) return; // never start a transfer we couldn't price — the button is disabled, but be certain
+    if (!job) return; // never start a download we couldn't price — the button is disabled, but be certain
 
     void (async () => {
       // Pay first when there's something to pay. `payForRestore` resolves only once the webhook confirms
@@ -234,12 +234,12 @@ export const MyFilesView = ({
           // A toast, not `setQuoteError`: the dialog closed on confirm, so its inline error slot is no
           // longer on screen and the message went nowhere. A failed payment is the last thing that should
           // fail silently — the user just agreed to be charged and needs to know they weren't.
-          toast.error(`Couldn't take the payment (${e instanceof Error ? e.message : String(e)}). Nothing was charged, and the transfer didn't start.`);
+          toast.error(`Couldn't take the payment (${e instanceof Error ? e.message : String(e)}). Nothing was charged, and the download didn't start.`);
           return; // payment didn't land — don't pretend a restore started
         }
       }
-      // Record each transfer against the job that authorized it. The daemon writes a durable row and its
-      // run loop takes it from here — so the transfer survives a sign-out, a quit, and the ~48h thaw,
+      // Record each file against the job that authorized it. The daemon writes a durable row and its
+      // run loop takes it from here — so the download survives a sign-out, a quit, and the ~48h thaw,
       // which is exactly what the dialog above promises when it says you can close the app.
       for (const f of files) {
         // Keeps the folder structure the vault already has (see `restoreBase`). The daemon creates the
@@ -247,29 +247,32 @@ export const MyFilesView = ({
         const out = restoreOutPath(f.relativePath, base, folder);
         exec(() => api.request("requestRestore", { file: f.id, out, jobId: job.jobId }));
       }
-      // Say it worked. Until now the app answered a click on "Start transfer" with nothing at all — the
-      // dialog closed and you had to go find the Transfers page yourself to learn whether anything had
+      // Say it worked. Until now the app answered a click on "Start download" with nothing at all — the
+      // dialog closed and you had to go find the Downloads page yourself to learn whether anything had
       // happened. The countdown lives on that page, so the toast points at it rather than restating it.
       toast.success(
         files.length === 1
           ? `Started. ${baseName(files[0]?.relativePath ?? "")} is on its way.`
           : `Started. ${files.length} files are on their way.`,
-        { label: "See transfers", onClick: onShowTransfers },
+        { label: "See downloads", onClick: onShowDownloads },
       );
     })();
   };
 
-  // The Transfers page asked to re-open the request dialog for a file whose transfer needs re-buying.
-  // Consumed once (`onRequestOpened`) so asking for the same file again later still works.
+  // The Downloads page asked to re-open the request dialog for files whose download needs re-buying.
+  // Consumed once (`onRequestOpened`) so asking for the same files again later still works.
   useEffect(() => {
-    if (!requestFileId) return;
-    const f = files.find((x) => x.id === requestFileId);
-    if (f) openRequest([{ kind: "file", id: f.id, path: f.relativePath }], true);
+    if (!requestFileIds || requestFileIds.length === 0) return;
+    const wanted = new Set(requestFileIds);
+    const targets: RowTarget[] = files
+      .filter((x) => wanted.has(x.id))
+      .map((f) => ({ kind: "file", id: f.id, path: f.relativePath }));
+    if (targets.length > 0) openRequest(targets, true);
     onRequestOpened?.();
     // `files` is deliberately not a dep: this must fire on the REQUEST, not on every tree refresh, or a
     // background `listFiles` would re-open a dialog the user just dismissed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestFileId]);
+  }, [requestFileIds]);
 
   // ── reorganize ──
   const startRename = (key: string): void => {
@@ -404,7 +407,7 @@ export const MyFilesView = ({
           { label: "Move to…", icon: "drive_file_move", onClick: () => setMoveTargets(targets) },
           { label: "New folder", icon: "create_new_folder", onClick: doNewFolder },
           "separator",
-          { label: "Request a copy…", icon: "download", onClick: () => openRequest(targets), disabled: restorable.length === 0 },
+          { label: "Request a download…", icon: "download", onClick: () => openRequest(targets), disabled: restorable.length === 0 },
           { label: "Delete", icon: "delete", danger: true, onClick: () => requestDelete(targets) },
         ]
       : [
