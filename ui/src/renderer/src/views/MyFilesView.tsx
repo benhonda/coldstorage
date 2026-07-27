@@ -29,12 +29,15 @@ import {
   parentOf,
   planDeposit,
   reparent,
+  restoreBase,
+  restoreOutPath,
   rowKey,
   rowStatus,
   targetOf,
   totalBytes,
   withName,
 } from "./files/model.ts";
+import { useToast } from "../ui/toast.tsx";
 import { Breadcrumb } from "./files/Breadcrumb.tsx";
 import { type MoveDrag, isMoveDrag, useMoveDrag } from "./files/useMoveDrag.ts";
 import { CollisionModal } from "./files/CollisionModal.tsx";
@@ -66,6 +69,9 @@ interface Props {
   requestFileId?: string | null;
   /** Tell the owner we've consumed {@link requestFileId}, so the same file can be asked for again later. */
   onRequestOpened?: () => void;
+  /** Send the user to the Transfers page — the action on the "transfer started" confirmation, since that
+   * page is where the answer to "how's it going" lives. Routing is App's, so this is a callback. */
+  onShowTransfers: () => void;
 }
 
 type ViewMode = "list" | "grid";
@@ -86,13 +92,18 @@ export const MyFilesView = ({
   onDepositBlocked,
   requestFileId,
   onRequestOpened,
+  onShowTransfers,
 }: Props): React.JSX.Element => {
+  const toast = useToast();
   const [dir, setDir] = useState("");
   const [view, setView] = useState<ViewMode>("list");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [requestFiles, setRequestFiles] = useState<ArchivedFile[] | null>(null);
+  /** The vault prefix to strip when this request saves to disk (`restoreBase` of what was asked for) —
+   * held for the length of the dialog, because the destination folder isn't chosen until it closes. */
+  const [requestBase, setRequestBase] = useState("");
   /** The backend's price for the pending request (null while it's still being fetched). The renderer never
    *  computes a restore price — see RequestBackModal's note on why the old local estimate was ~40× wrong. */
   const [quote, setQuote] = useState<RetrievalQuote | null>(null);
@@ -176,10 +187,17 @@ export const MyFilesView = ({
   // `force` is for the Transfers page's "Ask again": that file's row reads `pending` (it HAS a transfer —
   // one that needs buying again), so the normal `frozen`-only filter would silently drop it and the button
   // would do nothing. The caller there already knows the transfer is stalled, so it says so.
-  const openRequest = (candidates: ArchivedFile[], force = false): void => {
+  //
+  // Takes TARGETS rather than the expanded files, because the two answer different questions and only the
+  // targets answer the one that matters at save time: a request for the folder `Photos` and a request for
+  // every file inside it expand to the same list, but the first should land as a `Photos` folder on the Mac
+  // and the second as loose files. `restoreBase` reads that off the targets; the expanded list can't.
+  const openRequest = (targets: RowTarget[], force = false): void => {
+    const candidates = filesForTargets(targets);
     const restorable = force ? candidates : candidates.filter((f) => f.status === "frozen");
     if (restorable.length === 0) return;
     setRequestFiles(restorable);
+    setRequestBase(restoreBase(targets));
     setQuote(null);
     setQuoteError(null);
 
@@ -198,6 +216,9 @@ export const MyFilesView = ({
   const confirmRequest = (folder: string): void => {
     const files = requestFiles ?? [];
     const job = quote;
+    // Read before the dialog closes — the async body below outlives this render, and the base belongs to
+    // the request that was just confirmed, not to whatever gets asked for next.
+    const base = requestBase;
     setRequestFiles(null);
     if (!job) return; // never start a transfer we couldn't price — the button is disabled, but be certain
 
@@ -210,7 +231,10 @@ export const MyFilesView = ({
         try {
           await api.payForRestore(job.jobId);
         } catch (e) {
-          setQuoteError(e instanceof Error ? e.message : String(e));
+          // A toast, not `setQuoteError`: the dialog closed on confirm, so its inline error slot is no
+          // longer on screen and the message went nowhere. A failed payment is the last thing that should
+          // fail silently — the user just agreed to be charged and needs to know they weren't.
+          toast.error(`Couldn't take the payment (${e instanceof Error ? e.message : String(e)}). Nothing was charged, and the transfer didn't start.`);
           return; // payment didn't land — don't pretend a restore started
         }
       }
@@ -218,9 +242,20 @@ export const MyFilesView = ({
       // run loop takes it from here — so the transfer survives a sign-out, a quit, and the ~48h thaw,
       // which is exactly what the dialog above promises when it says you can close the app.
       for (const f of files) {
-        const out = `${folder}/${baseName(f.relativePath)}`;
+        // Keeps the folder structure the vault already has (see `restoreBase`). The daemon creates the
+        // intermediate directories on its way to writing the file.
+        const out = restoreOutPath(f.relativePath, base, folder);
         exec(() => api.request("requestRestore", { file: f.id, out, jobId: job.jobId }));
       }
+      // Say it worked. Until now the app answered a click on "Start transfer" with nothing at all — the
+      // dialog closed and you had to go find the Transfers page yourself to learn whether anything had
+      // happened. The countdown lives on that page, so the toast points at it rather than restating it.
+      toast.success(
+        files.length === 1
+          ? `Started. ${baseName(files[0]?.relativePath ?? "")} is on its way.`
+          : `Started. ${files.length} files are on their way.`,
+        { label: "See transfers", onClick: onShowTransfers },
+      );
     })();
   };
 
@@ -229,7 +264,7 @@ export const MyFilesView = ({
   useEffect(() => {
     if (!requestFileId) return;
     const f = files.find((x) => x.id === requestFileId);
-    if (f) openRequest([f], true);
+    if (f) openRequest([{ kind: "file", id: f.id, path: f.relativePath }], true);
     onRequestOpened?.();
     // `files` is deliberately not a dep: this must fire on the REQUEST, not on every tree refresh, or a
     // background `listFiles` would re-open a dialog the user just dismissed.
@@ -369,7 +404,7 @@ export const MyFilesView = ({
           { label: "Move to…", icon: "drive_file_move", onClick: () => setMoveTargets(targets) },
           { label: "New folder", icon: "create_new_folder", onClick: doNewFolder },
           "separator",
-          { label: "Request a copy…", icon: "download", onClick: () => openRequest(filesForTargets(targets)), disabled: restorable.length === 0 },
+          { label: "Request a copy…", icon: "download", onClick: () => openRequest(targets), disabled: restorable.length === 0 },
           { label: "Delete", icon: "delete", danger: true, onClick: () => requestDelete(targets) },
         ]
       : [
@@ -685,7 +720,9 @@ export const MyFilesView = ({
           sel={sel}
           onDownload={() => {
             setInfoOpen(false);
-            openRequest(sel.restorable);
+            // The SELECTION, not `sel.restorable` — Get info on a folder must still request the folder, so
+            // the copy lands as a folder. `openRequest` filters to what's actually restorable itself.
+            openRequest(selectedRows.map(targetOf));
           }}
           onShowInFinder={onOpen}
           onClose={() => setInfoOpen(false)}

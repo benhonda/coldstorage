@@ -186,6 +186,16 @@ export interface RestoreRow {
   /** How long the thaw takes, in plain words, from the tier we actually quote at. The app must never
    * invent its own wait — only the party that picks the tier can state it honestly. */
   typicalWait: string;
+  /** The same wait in seconds — the machine-readable half of {@link typicalWait}, from the same tier, so
+   * the two can never disagree. `requestedAt + typicalWaitSeconds` is the estimated ready-by instant, which
+   * is what lets a waiting row count down instead of restating "~48 hours" for two days.
+   *
+   * An ESTIMATE, not a deadline: a thaw can land early or run over, so a row can still be `pending` after
+   * this elapses. Say "taking longer than usual" then — never a negative countdown. */
+  typicalWaitSeconds: number;
+  /** Unix seconds this thawed copy stops being free to download (`readyAt` + the 5-day thaw window).
+   * Null until the thaw is ready, because the window hasn't opened and any date would be invented. */
+  freeUntil: number | null;
   /** True ⇒ "Resume" costs nothing: the blobs this job already paid to thaw are still warm. Decided by the
    * daemon (`RestoreRow.isResumable`), never by the renderer — getting it wrong charges someone twice. */
   resumable: boolean;

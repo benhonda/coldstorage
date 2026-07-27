@@ -55,6 +55,38 @@ Two jobs are the whole product: **get files up** and **get them back**. The app 
 Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-click) opens actions,
 **Get info** opens a modal.
 
+### Sidebar foot + account chip (2026-07-27)
+- **The plan badge hangs off the avatar, not the name line.** The chip was avatar · name · badge ·
+  caret on one row with the meter beneath, inside a rail that's 232px by default and draggable down to
+  200 — at that width the name truncated to almost nothing. The badge now sits on the avatar's bottom
+  edge (the notification-dot placement), short form only (`Free` · `1 TB` · `Active` · `Ends`), and the
+  popover says the long form (`Ends Aug 3`) where there's room. Same suppression rule as before: no badge
+  when the meter already names the quota.
+- **Upgrade has two doors, both free-accounts-only.** A primary button pinned in the sidebar foot, and
+  the first item in the account popover. Before this, buying more room meant finding it inside Settings.
+  Both open the same `SubscribeModal` with `reason: "upgrade"`. **Neither renders once
+  `entitlement.active`** — there's nothing to sell to someone who already bought, and changing an
+  existing plan is a priced, prorated decision that belongs on Settings › Account beside its preview.
+
+### Toasts (`ui/toast.tsx`, 2026-07-27)
+One `ToastProvider` wrapping the app (outside `App`, so a toast survives its early-return gates), a
+`useToast()` channel, and a bottom-center stack. It replaced a single fixed div in `App` that could only
+ever say what went **wrong** — so every failure announced itself and every success was silent. Starting a
+transfer answered a click with nothing at all; you went and checked the Transfers page to find out whether
+it had worked.
+- **Successes expire (~6s), errors wait to be dismissed.** A confirmation is done in a few seconds; a
+  failure may need reading twice.
+- **They stack, and identical messages collapse** — the daemon re-reports the same live error, and the
+  same completion can arrive twice across a reconnect.
+- **Errors keep their old shape**: red surface, optional inline recovery action (the Photos-grant one),
+  close button.
+- Currently fires on: any `exec` rejection · the daemon's live `error` channel · a failed retrieval
+  payment (which used to write into a dialog that had already closed, so it went nowhere) · a started
+  transfer, with a **See transfers** action · a completed transfer, with **Show in Finder**.
+- **Not** for uploads. Deposits have their own ambient surfaces (the progress banner, per-row badges, the
+  stuck-uploads pill) and the daemon auto-runs on a timer — toasting those would be noise. The pill is
+  still the right call for stuck uploads specifically: a one-shot toast gets missed.
+
 ```
 ┌────────────┬────────────────────────────────────────────────────────┐
 │ ❄ coldstor.│  My Files › Photos › 2019              ⊞ ⊟    ⊕ Add      │
@@ -144,6 +176,14 @@ Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-cl
 3. **In-flight = named stages, NEVER a fake progress bar** (Deep Archive reports only warming vs
    ready): **Preparing** (~12–48h, the honest unknown) → **Downloading** → **Ready**, with a quoted
    ready-by time.
+   **The wait counts down (2026-07-27).** A named stage says what's happening but not where you are in
+   it, and "how much longer" is the question the page is opened to answer. The daemon sends
+   `typicalWaitSeconds` beside the prose `typicalWait` — both off the tier it quoted at, so the two can't
+   disagree and the renderer never parses copy for a number — and a `pending` row shows
+   `requestedAt + typicalWaitSeconds - now` as *"About 1 day 17 hours left."* It's AWS's typical case, not
+   a deadline: past it the row reads *"Taking longer than the usual ~48 hours. Still waiting."* rather
+   than a clock at zero. Still no bar during `transferring` — per-byte download progress doesn't exist
+   yet (the engine does one ranged GET), and inventing one is the thing this page won't do.
 4. **Ready → macOS system notification** (walk-away is the whole design): *"wedding.mov is ready — in
    your Downloads folder [Show] [Open]."* *(Notification still open, below.)*
 5. The local copy expires after the requested `days`, then re-freezes → honest *"available until
@@ -152,6 +192,14 @@ Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-cl
    somewhere to go. Transfers are journal rows the daemon drives, so they survive sign-out, relaunch and
    a closed app. (Superseded the sidebar-foot "Transferring N" pill + its popover, 2026-07-27.)
 7. Batch/folder request → one **combined** quote (`240 files · ~a day · ~$3.10`).
+8. **A folder comes back as a folder (2026-07-27).** Every file used to save as
+   `<chosen folder>/<basename>`, so requesting `Photos` back dumped 300 loose files into Downloads and
+   any two sharing a name in different subfolders overwrote each other. The destination now strips
+   `restoreBase(targets)` — the deepest folder containing everything asked for — and keeps the rest of the
+   vault path, which is Finder's own rule: ask for a folder and you get the folder, ask for files and you
+   get the files. `restoreBase` reads that off the TARGETS, not the expanded file list, because requesting
+   `Photos` and requesting every file inside it expand identically and must land differently. The daemon
+   creates the intermediate directories on its way to writing each file.
 
 ## Settings
 **One door, two subpages (2026-07-17).** The nav has a single Settings entry; inside, a small
@@ -292,6 +340,9 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   spawn; `daemon.ts`: the packaged-app daemon supervisor — see `PACKAGING.md`); `src/shared/ipc.ts` is
   the typed main↔renderer seam; `src/renderer/src/state/` is reducer (pure fold) → store
   (`useSyncExternalStore`) → controller (layer 2; `task ui:test`).
+- `ui/src/renderer/src/ui/` — the shell's own primitives, no product logic: `primitives.tsx` (Button,
+  Badge, Modal, Icon, Skeleton…), `layout.tsx` (Sidebar + Page), `useResizable.ts`, and `toast.tsx`
+  (the app-wide `ToastProvider`/`useToast` channel — see "Toasts" above).
 - `ui/src/main/auth/` — sign-in (PROD.md Phase 5), two lanes into ONE token lifecycle: Google via
   Cognito managed-login OAuth (`oauth.ts` — PKCE, system browser, `coldstorage://auth/callback` deep
   link packaged / loopback in dev) and email one-time-code via the Cognito API as plain HTTPS JSON-RPC
@@ -336,8 +387,10 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   `views/PlanPicker.tsx`); Settings shows the state. `coldstorage://checkout-complete` is a check-now nudge. **Manage surface (2026-07-10, PADDLE.md "Managing a subscription"):**
   `getSubscription()/previewPlanChange()/changePlan()/openManage()` → the sidebar's pinned
   `views/AccountCard.tsx` (avatar · email · a Drive-style storage meter fed by the gate's own
-  used/quota figures; the plan-size badge only when the meter can't name the quota; click → a
-  popover: identity summary + "Settings…" deep-linking to Settings › Account + Sign out)
+  used/quota figures; the plan badge hangs off the AVATAR's bottom edge rather than sitting beside the
+  name — see "Sidebar account chip" below — and only when the meter can't name the quota; click → a
+  popover: identity summary + **Upgrade** on a free account + "Settings…" deep-linking to
+  Settings › Account + Sign out)
   + Settings › Account
   (plan row + `views/ChangePlanModal.tsx` with a proration preview; cancel/payment-method open
   Paddle-hosted pages in the browser).

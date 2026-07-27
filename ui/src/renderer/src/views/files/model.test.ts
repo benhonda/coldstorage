@@ -16,6 +16,8 @@ import {
   filesUnder,
   formatBytes,
   reparent,
+  restoreBase,
+  restoreOutPath,
   rewritePrefix,
   targetOf,
   totalBytes,
@@ -283,5 +285,48 @@ describe("move legality (drag-to-move + Move to…)", () => {
     expect(moveIsNoop([fileT("Photos/beach.jpg")], "")).toBe(false); // root is a REAL move up
     expect(moveIsNoop([fileT("readme.txt")], "")).toBe(true); // a root item dropped on the root crumb
     expect(moveIsNoop([fileT("Photos/beach.jpg"), fileT("readme.txt")], "Photos")).toBe(false); // mixed parents → a real move
+  });
+});
+
+describe("restore destination paths (the folder-flattening fix)", () => {
+  const folder = (path: string): RowTarget => ({ kind: "folder", path });
+  const fileT = (path: string): RowTarget => ({ kind: "file", id: path, path });
+  const out = (vaultPath: string, targets: RowTarget[]): string =>
+    restoreOutPath(vaultPath, restoreBase(targets), "/Users/ben/Downloads");
+
+  test("requesting a folder brings the folder back, not its files in a heap", () => {
+    // The 2026-07-27 bug: every file landed as Downloads/<basename>, so this whole tree collapsed into
+    // one directory and `2019/beach.jpg` and `2020/beach.jpg` overwrote each other.
+    const t = [folder("Photos")];
+    expect(out("Photos/2019/beach.jpg", t)).toBe("/Users/ben/Downloads/Photos/2019/beach.jpg");
+    expect(out("Photos/2020/beach.jpg", t)).toBe("/Users/ben/Downloads/Photos/2020/beach.jpg");
+  });
+
+  test("requesting a nested folder brings back that folder, not its ancestors", () => {
+    expect(out("Photos/2019/beach.jpg", [folder("Photos/2019")])).toBe("/Users/ben/Downloads/2019/beach.jpg");
+  });
+
+  test("requesting files still saves them flat, exactly as before", () => {
+    const t = [fileT("Photos/beach.jpg"), fileT("Photos/sunset.jpg")];
+    expect(out("Photos/beach.jpg", t)).toBe("/Users/ben/Downloads/beach.jpg");
+    expect(out("Photos/sunset.jpg", t)).toBe("/Users/ben/Downloads/sunset.jpg");
+  });
+
+  test("a root-level file saves flat", () => {
+    expect(out("readme.txt", [fileT("readme.txt")])).toBe("/Users/ben/Downloads/readme.txt");
+  });
+
+  test("targets under different parents each keep their own path, so they cannot collide", () => {
+    const t = [folder("Photos/2019"), folder("Photos/2020")];
+    expect(out("Photos/2019/beach.jpg", t)).toBe("/Users/ben/Downloads/2019/beach.jpg");
+    expect(out("Photos/2020/beach.jpg", t)).toBe("/Users/ben/Downloads/2020/beach.jpg");
+  });
+
+  test("a sibling sharing a name prefix is not treated as an ancestor", () => {
+    expect(restoreBase([folder("Photos"), folder("Photos-old")])).toBe("");
+  });
+
+  test("a file outside the base falls back to its name rather than a negative slice", () => {
+    expect(restoreOutPath("Docs/tax.pdf", "Photos", "/tmp")).toBe("/tmp/tax.pdf");
   });
 });

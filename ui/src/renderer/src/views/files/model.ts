@@ -285,6 +285,47 @@ export const childrenOf = (
 export const filesUnder = (files: readonly ArchivedFile[], dir: string): ArchivedFile[] =>
   files.filter((f) => isUnder(f.relativePath, dir));
 
+/**
+ * The vault path prefix to strip when saving a restore to the Mac: the deepest folder that CONTAINS
+ * everything asked for. Finder's rule — copy a folder and you get the folder, copy files and you get the
+ * files.
+ *
+ * This exists because requesting a folder back used to flatten it (2026-07-27). Every file in the request
+ * was saved as `<chosen folder>/<basename>`, so a folder of 300 photos landed as 300 loose files in
+ * Downloads, and any two that shared a name in different subfolders overwrote each other on the way in.
+ * The structure was in the vault the whole time; the destination path just threw it away.
+ *
+ * Each target contributes its PARENT, so:
+ *   - the folder `Photos`             → parent `""`       → base `""`     → saves `Photos/2019/beach.jpg`
+ *   - the file  `Photos/beach.jpg`    → parent `Photos`   → base `Photos` → saves `beach.jpg`
+ *   - two files in `Photos`           → base `Photos`     → both save flat, as before
+ *   - a mix under different folders   → base `""`         → each keeps its own path, so they can't collide
+ */
+export const restoreBase = (targets: readonly RowTarget[]): string => {
+  if (targets.length === 0) return "";
+  const [first, ...rest] = targets.map((t) => segments(parentOf(t.path)));
+  let common = first ?? [];
+  for (const segs of rest) {
+    let i = 0;
+    while (i < common.length && i < segs.length && common[i] === segs[i]) i++;
+    common = common.slice(0, i);
+  }
+  return common.join("/");
+};
+
+/**
+ * Where a vault file lands on this Mac: its path with `base` stripped, under the chosen save folder.
+ *
+ * Falls back to the basename for a file that isn't under `base` at all. That shouldn't happen (the base is
+ * derived from the same targets the files were expanded from), but the alternative to a guard is a path
+ * built from a negative slice — which silently writes somewhere nobody asked for.
+ */
+export const restoreOutPath = (relativePath: string, base: string, destDir: string): string => {
+  if (base === "") return `${destDir}/${relativePath}`;
+  const rel = isUnder(relativePath, base) ? relativePath.slice(base.length + 1) : baseName(relativePath);
+  return `${destDir}/${rel}`;
+};
+
 /** Every folder path implied by the files (+ any virtual folders), sorted — for a move-to picker. */
 export const allFolderPaths = (
   files: readonly ArchivedFile[],

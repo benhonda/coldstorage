@@ -82,6 +82,14 @@ public struct RestoreEngine: Sendable {
         guard let bc = try journal.blobCrypto(f.blobId) else { throw ColdStorageError.invalidRequest("no key material for blob \(f.blobId)") }
         let dek = try cipher.unwrap(bc.wrappedDEK, kek: try keys.userKEK())
 
+        // The destination's folders have to exist before anything can be written into them. This became
+        // load-bearing when restoring a FOLDER started preserving its structure: `out` is no longer always
+        // "<chosen folder>/<filename>" — it can be "<chosen folder>/2019/January/beach.jpg", and every one
+        // of those intermediate folders is ours to create. Idempotent (`withIntermediateDirectories`), so
+        // the flat case and a re-run both pass straight through.
+        try FileManager.default.createDirectory(at: outURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+
         // A ZERO-BYTE file has no ciphertext — no frames, no bytes, nothing to fetch. Ask S3 for it anyway
         // and you build the range `bytes=<offset>-<offset - 1>`, which is backwards and rejected (416): the
         // file would show as archived in the tree and be permanently unrecoverable. Its content is known

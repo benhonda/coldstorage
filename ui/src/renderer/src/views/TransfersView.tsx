@@ -10,8 +10,13 @@
  * between, so a progress bar would be invented — and, more to the point, for the ~48 hours of a thaw
  * there is no progress to draw, because nothing is moving yet. That's `pending`. `transferring` is
  * reserved for when bytes actually are.
+ *
+ * What a waiting row CAN honestly say is how much of the wait is left, and that's the one thing someone
+ * actually wants from this page. The daemon hands over `typicalWaitSeconds` alongside the prose
+ * `typicalWait`, both from the tier it quoted at, so the countdown here is the backend's own estimate
+ * ticking down rather than a number the renderer made up.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ColdstoreApi, RestoreRow, RestoreState } from "../../../shared/ipc.ts";
 import { isActiveRestore } from "../../../shared/ipc.ts";
 import { Badge, Button, EmptyState, Icon, Modal } from "../ui/primitives.tsx";
@@ -20,6 +25,52 @@ import { baseName, formatBytes } from "./files/model.ts";
 import type { Exec } from "./types.ts";
 
 type Tone = "neutral" | "accent" | "warning" | "success" | "danger";
+
+/** Unix seconds, re-read on an interval, so every countdown on the page moves without the daemon having
+ * to push anything. 15s: fine enough that a "3 minutes left" row doesn't visibly lag, cheap enough to
+ * leave running (one `setState` on a page with a handful of rows). */
+const useNow = (everyMs = 15_000): number => {
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    const t = setInterval(() => setNow(Math.floor(Date.now() / 1000)), everyMs);
+    return () => clearInterval(t);
+  }, [everyMs]);
+  return now;
+};
+
+/** "1 day 17 hours" / "17 hours" / "12 minutes". Coarse on purpose — the underlying figure is AWS's
+ * typical case, so a to-the-second readout would dress an estimate up as a measurement. */
+export const humanDuration = (seconds: number): string => {
+  const mins = Math.round(seconds / 60);
+  if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"}`;
+  const hours = Math.round(seconds / 3600);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"}`;
+  const days = Math.floor(hours / 24);
+  const rest = hours % 24;
+  const d = `${days} day${days === 1 ? "" : "s"}`;
+  return rest === 0 ? d : `${d} ${rest} hour${rest === 1 ? "" : "s"}`;
+};
+
+/** Just the date — for a deadline days out, the hour is noise. */
+const day = (unixSeconds: number): string =>
+  new Date(unixSeconds * 1000).toLocaleDateString("en-US", { month: "long", day: "numeric" });
+
+/**
+ * How much of the thaw is left, for a row that's waiting on one. Null for every other state: a transfer
+ * that's downloading, saved, stopped or unpaid has no thaw to count down, and nothing here should invent
+ * one for it.
+ *
+ * Past the estimate we say so rather than showing a clock at zero or running it negative. A bulk retrieval
+ * that overruns ~48 hours is normal and not a fault, so the copy has to hold "still fine, still waiting"
+ * without either alarming anyone or pretending the estimate still stands.
+ */
+export const remaining = (r: RestoreRow, now: number): string | null => {
+  if (r.state !== "pending") return null;
+  const left = r.requestedAt + r.typicalWaitSeconds - now;
+  if (left <= 0) return `Taking longer than the usual ${r.typicalWait}. Still waiting.`;
+  if (left < 60) return "Less than a minute left";
+  return `About ${humanDuration(left)} left`;
+};
 
 /** How each state reads to the user. `pending` says what's actually happening (deep storage is waking up)
  * rather than "downloading", which described work that had not started and would not for two days. */
@@ -61,7 +112,9 @@ const detail = (r: RestoreRow): string | null => {
 
   switch (r.state) {
     case "pending":
-      return `Deep storage usually takes ${r.typicalWait} to wake a file up. You can close the app — this keeps going.`;
+      // No longer restates the ~48 hours — the countdown above the note says where in it we are, which is
+      // the more useful half of the same fact.
+      return "You can close the app — this keeps going.";
     case "needsAuthorization":
       return "This one isn't paid for, so deep storage won't release it. Ask for the file again to get a new price.";
     case "transferring":
@@ -69,8 +122,12 @@ const detail = (r: RestoreRow): string | null => {
     case "saved":
       return `Saved to ${folderOf(r.out)}`;
     case "canceled":
+      // `freeUntil` is the end of the 5-day window the thaw already bought. Naming the date matters more
+      // here than anywhere else on the page: after it passes, picking this back up costs money again.
       return r.resumable
-        ? "You stopped this. The copy is still warm, so picking it back up costs nothing."
+        ? r.freeUntil
+          ? `You stopped this. The copy stays warm until ${day(r.freeUntil)}, so picking it back up before then costs nothing.`
+          : "You stopped this. The copy is still warm, so picking it back up costs nothing."
         : "You stopped this. Asking again will be a new request.";
     case "failed":
       return r.error ?? "Something went wrong.";
@@ -79,6 +136,7 @@ const detail = (r: RestoreRow): string | null => {
 
 const Row = ({
   r,
+  now,
   onStop,
   onResume,
   onForget,
@@ -86,6 +144,8 @@ const Row = ({
   onRequestAgain,
 }: {
   r: RestoreRow;
+  /** Ticking clock from the page, so every row's countdown moves off one interval rather than N. */
+  now: number;
   onStop: (r: RestoreRow) => void;
   onResume: (r: RestoreRow) => void;
   onForget: (r: RestoreRow) => void;
@@ -94,6 +154,7 @@ const Row = ({
 }): React.JSX.Element => {
   const s = STATE[r.state];
   const note = detail(r);
+  const left = remaining(r, now);
   return (
     <div className="cs-transfer">
       <span className={`cs-transfer-icon cs-transfer-icon--${s.tone}`}>
@@ -110,6 +171,14 @@ const Row = ({
           {formatBytes(r.bytes)} · asked {when(r.requestedAt)}
           {r.state === "saved" && r.completedAt ? ` · saved ${when(r.completedAt)}` : ""}
         </div>
+        {/* The headline fact for a waiting transfer, so it reads above the standing explanation rather
+            than buried inside it. */}
+        {left && (
+          <div className="cs-transfer-eta">
+            <Icon name="schedule" size={16} />
+            {left}
+          </div>
+        )}
         {note && <div className="cs-transfer-note">{note}</div>}
       </div>
       <div className="cs-transfer-actions">
@@ -163,6 +232,7 @@ export const TransfersView = ({
   // The transfer awaiting a stop confirmation. Stopping is worth a confirm because it can't be undone for
   // free once the thaw window closes, and because the money question needs answering before, not after.
   const [stopping, setStopping] = useState<RestoreRow | null>(null);
+  const now = useNow();
 
   const active = restores.filter((r) => isActiveRestore(r.state));
   const past = restores.filter((r) => !isActiveRestore(r.state));
@@ -195,7 +265,7 @@ export const TransfersView = ({
             <section className="cs-transfers-group">
               <h2 className="cs-transfers-heading">In progress</h2>
               {active.map((r) => (
-                <Row key={r.id} r={r} {...rowProps} />
+                <Row key={r.id} r={r} now={now} {...rowProps} />
               ))}
             </section>
           )}
@@ -203,7 +273,7 @@ export const TransfersView = ({
             <section className="cs-transfers-group">
               <h2 className="cs-transfers-heading">Earlier</h2>
               {past.map((r) => (
-                <Row key={r.id} r={r} {...rowProps} />
+                <Row key={r.id} r={r} now={now} {...rowProps} />
               ))}
             </section>
           )}

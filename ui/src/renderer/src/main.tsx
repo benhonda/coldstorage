@@ -16,6 +16,7 @@ import "@fontsource/jetbrains-mono/600.css";
 import "material-symbols/rounded.css";
 import "./styles/index.css";
 import { App } from "./App.tsx";
+import { ToastProvider } from "./ui/toast.tsx";
 import { connectController } from "./state/controller.ts";
 import { createStore } from "./state/store.ts";
 
@@ -27,6 +28,10 @@ const root = document.getElementById("root");
 if (!root) throw new Error("missing #root");
 createRoot(root).render(
   <StrictMode>
-    <App api={api} store={store} />
+    {/* Outside App, not inside it: App returns early for the sign-in, vault and onboarding gates, and a
+        toast raised on the way through one of those still has to be able to render. */}
+    <ToastProvider>
+      <App api={api} store={store} />
+    </ToastProvider>
   </StrictMode>,
 );

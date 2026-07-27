@@ -396,33 +396,73 @@ button.cs-kv:hover { background: var(--surface-hover); }
   color: var(--negative);
 }
 
-/* ── Toast (bottom-center; errors surfaced plainly, dismissable) ── */
-.cs-toast {
+/* ── Toasts (bottom-center stack; successes expire, errors wait to be dismissed) ── */
+/* The stack, not the toast, owns the position now — several can be up at once (a batch of transfers all
+   landing), and the newest belongs at the bottom, nearest where the eye already is. */
+.cs-toasts {
   position: fixed;
   left: 50%;
   bottom: var(--space-8);
   transform: translateX(-50%);
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  z-index: 20;
+  /* The gaps between toasts must not eat clicks on the page underneath. */
+  pointer-events: none;
+}
+.cs-toast {
+  pointer-events: auto;
+  display: flex;
   align-items: center;
   gap: var(--space-3);
   max-width: min(560px, calc(100vw - var(--space-8)));
   padding: var(--space-3) var(--space-3) var(--space-3) var(--space-5);
-  /* light-red error surface (opaque mix), calm not alarm-red */
-  background: color-mix(in srgb, var(--negative) 10%, var(--surface-raised));
-  border: 1px solid color-mix(in srgb, var(--negative) 28%, var(--border-subtle));
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-toast);
   font: var(--type-body);
-  z-index: 20;
+  animation: cs-toast-in var(--duration-fast) var(--ease-out);
 }
-.cs-toast .csf-icon { flex: none; color: var(--negative); }
+@keyframes cs-toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cs-toast { animation: none; }
+}
+/* Tone = the surface + the icon + the action's outline. Each is a light opaque mix over the raised
+   surface, so a toast reads as its own card rather than a wash over whatever it covers. */
+.cs-toast--error {
+  /* light-red error surface (opaque mix), calm not alarm-red */
+  background: color-mix(in srgb, var(--negative) 10%, var(--surface-raised));
+  border: 1px solid color-mix(in srgb, var(--negative) 28%, var(--border-subtle));
+}
+.cs-toast--error .csf-icon { color: var(--negative); }
+.cs-toast--error .cs-toast-action { border-color: color-mix(in srgb, var(--negative) 32%, var(--border-subtle)); }
+.cs-toast--error .cs-toast-action:hover { background: color-mix(in srgb, var(--negative) 12%, transparent); }
+.cs-toast--success {
+  background: color-mix(in srgb, var(--positive) 10%, var(--surface-raised));
+  border: 1px solid color-mix(in srgb, var(--positive) 28%, var(--border-subtle));
+}
+.cs-toast--success .csf-icon { color: var(--positive); }
+.cs-toast--success .cs-toast-action { border-color: color-mix(in srgb, var(--positive) 32%, var(--border-subtle)); }
+.cs-toast--success .cs-toast-action:hover { background: color-mix(in srgb, var(--positive) 12%, transparent); }
+.cs-toast--info {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+}
+.cs-toast--info .csf-icon { color: var(--accent-text); }
+.cs-toast--info .cs-toast-action { border-color: var(--border-subtle); }
+.cs-toast--info .cs-toast-action:hover { background: var(--surface-hover); }
+.cs-toast .csf-icon { flex: none; }
 /* Wrap the full message (up to a few lines) — never truncate it; the user must be able to read what failed. */
 .cs-toast-msg { flex: 1; min-width: 0; line-height: 1.4; overflow-wrap: anywhere; }
-/* Inline recovery action (e.g. "Open Photos settings") — a quiet pill, never an alarm-red button. */
+/* Inline action (e.g. "Show in Finder", "Open Photos settings") — a quiet pill, never a filled button. */
 .cs-toast-action {
   flex: none;
   padding: var(--space-1) var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--negative) 32%, var(--border-subtle));
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-pill);
   background: transparent;
   color: var(--text-primary);
@@ -430,7 +470,6 @@ button.cs-kv:hover { background: var(--surface-hover); }
   cursor: pointer;
   white-space: nowrap;
 }
-.cs-toast-action:hover { background: color-mix(in srgb, var(--negative) 12%, transparent); }
 
 /* Auto-update ready (Phase 6): a calm top banner. The update also installs on next quit, so this is an
    offer to apply it now — accent-tinted, never urgent (mirrors the toast, top-anchored + positive tone). */
@@ -485,8 +524,10 @@ button.cs-kv:hover { background: var(--surface-hover); }
   --cs-col-actions: 64px; /* status icon + ⋯, fixed so rows align with or without an icon */
 }
 
-/* ── sidebar foot: storage + (only-when-broken) status + getting-back ─ */
-.cs-foot { display: flex; flex-direction: column; gap: var(--space-1); }
+/* ── sidebar foot: upgrade CTA + (only-when-broken) status + stuck uploads ─ */
+/* The CTA is a real button and the rest of the foot is quiet text, so the gap has to clear the button
+   rather than hug a text line. Padded to line the button up with the nav items above it. */
+.cs-foot { display: flex; flex-direction: column; gap: var(--space-2); padding: 0 var(--space-2); }
 .cs-store {
   display: flex;
   align-items: center;
@@ -938,6 +979,10 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-menu-item:hover { background: var(--surface-hover); }
 .cs-menu-item:disabled { opacity: 0.45; cursor: default; }
 .cs-menu-item:disabled:hover { background: transparent; }
+/* The one promoted item in a menu (Upgrade). Accent TEXT, not an accent fill — a solid button inside a
+   popover list would outshout the menu it lives in. */
+.cs-menu-item--accent { color: var(--accent-text); font-weight: var(--weight-medium); }
+.cs-menu-item--accent .csf-icon { color: var(--accent-text); }
 .cs-menu-item--danger { color: var(--negative); }
 .cs-menu-item--danger:hover { background: rgba(222, 77, 59, 0.10); }
 .cs-menu-item .csf-icon { color: var(--text-secondary); }
@@ -1250,10 +1295,20 @@ button.cs-kv:hover { background: var(--surface-hover); }
   min-width: 0;
 }
 .cs-account:hover { background: var(--surface-hover); }
-.cs-account-avatar {
+/* Avatar + its hung badge. The wrapper reserves the badge's overhang at the bottom so the pill can sit
+   ON the circle's edge without the chip growing or the name line shifting when the plan changes. */
+.cs-account-mark {
   flex: none;
-  width: 28px;
-  height: 28px;
+  position: relative;
+  display: block;
+  width: 32px;
+  height: 32px;
+  padding-bottom: 6px;
+  box-sizing: content-box;
+}
+.cs-account-avatar {
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   border-radius: 50%;
@@ -1262,9 +1317,33 @@ button.cs-kv:hover { background: var(--surface-hover); }
   font: var(--type-label);
   font-weight: var(--weight-medium);
 }
+/* The plan, hung off the avatar's bottom edge (the notification-dot placement). Tiny and centered: it's
+   an identity marker at a glance, and the popover says the same thing in full for anyone who wants it.
+   The ring is the sidebar's own background, so the pill reads as sitting in front of the circle. */
+.cs-account-mark-badge {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  padding: 0 6px;
+  height: 15px;
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-pill);
+  box-shadow: 0 0 0 2px var(--bg-app);
+  font: var(--type-label);
+  font-size: 10px;
+  line-height: 1;
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-tight);
+  white-space: nowrap;
+}
+.cs-account-mark-badge--neutral { background: var(--btn-secondary-bg); color: var(--text-secondary); }
+.cs-account-mark-badge--accent  { background: var(--accent); color: var(--accent-on); }
+.cs-account-mark-badge--success { background: var(--positive); color: var(--accent-on); }
+.cs-account-mark-badge--warning { background: var(--amber-500); color: var(--accent-on); }
 .cs-account-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; align-items: stretch; }
 .cs-account-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
-.cs-account-head .cs-badge { flex: none; }
 .cs-account-email {
   min-width: 0;
   overflow: hidden;
@@ -1494,5 +1573,19 @@ button.cs-kv:hover { background: var(--surface-hover); }
   white-space: nowrap;
 }
 .cs-transfer-meta { font: var(--type-label); color: var(--text-secondary); margin-top: 2px; }
+/* Time left on a thaw — the one number someone opens this page for, so it outranks the note below it:
+   primary text weight against the note's tertiary, amber to match the "waiting on deep storage" badge
+   and icon it belongs to. Tabular figures so a ticking countdown doesn't jitter the line. */
+.cs-transfer-eta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  font: var(--type-label);
+  font-weight: var(--weight-medium);
+  color: var(--amber-500);
+  font-variant-numeric: tabular-nums;
+}
+.cs-transfer-eta .csf-icon { flex: none; }
 .cs-transfer-note { font: var(--type-label); color: var(--text-tertiary); margin-top: var(--space-1); }
 .cs-transfer-actions { flex: 0 0 auto; display: flex; align-items: center; gap: var(--space-2); }

@@ -162,6 +162,26 @@ public enum RestoreTier: String, Sendable, CaseIterable { case expedited, standa
         }
     }
 
+    /// The same wait, in seconds — the machine-readable half of `typicalWait`.
+    ///
+    /// It exists so the app can show a ready-by time and a counting-down "about 9 hours left" instead of
+    /// repeating a static "~48 hours" for two days, which tells someone nothing about where they are in it.
+    /// Deriving that clock by PARSING `typicalWait` in the renderer was the obvious shortcut and the wrong
+    /// one: the prose is UX copy and free to change wording, and the party that picks the tier is the only
+    /// one entitled to state the wait (root `RETRIEVAL.md`). So the tier states it in both forms, here, and
+    /// the two can never disagree.
+    ///
+    /// It is an ESTIMATE of AWS's typical case, not a promise — a thaw may land early or run over, so the
+    /// app must present it as an estimate and cope with the clock running out while the row is still
+    /// `pending`.
+    public var typicalWaitSeconds: Int {
+        switch self {
+        case .expedited: return 5 * 60
+        case .standard:  return 12 * 60 * 60
+        case .bulk:      return 48 * 60 * 60
+        }
+    }
+
     // A `retrievalUsdPerGB` rate card used to live here (and a `Pricing` enum beside it), quoting AWS's
     // Deep Archive list prices to the UI. Both were DELETED on 2026-07-13 and must not come back.
     //

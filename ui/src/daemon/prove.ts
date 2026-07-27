@@ -110,7 +110,8 @@ log(`excludes → ${defaults.length} default(s) seeded; add/remove round-trips c
 const transfers = await client.request("listRestores");
 for (const t of transfers) {
   for (const k of ["id", "fileId", "relativePath", "out", "state", "tier", "bytes", "requestedAt",
-                   "readyAt", "completedAt", "error", "typicalWait", "resumable"]) {
+                   "readyAt", "completedAt", "error", "typicalWait", "typicalWaitSeconds", "freeUntil",
+                   "resumable"]) {
     if (!(k in t)) fail(`listRestores row is missing '${k}' — protocol.ts and the daemon DTO have drifted`);
   }
 }

@@ -2,10 +2,18 @@
  * The sidebar's pinned identity chip (bottom-left, the standard SaaS pattern): avatar initial +
  * who's signed in + the storage meter, Google-Drive style — the bar and "X of Y used" live right
  * in the tile, so how full the vault is never needs a trip to Settings. Clicking it opens a small
- * popover (Discord/Slack convention) — identity summary + **Settings…** (deep-links to
- * Settings › Account, the full manage surface: change plan / cancel / payment method) + **Sign
- * out** — the chip never navigates directly. Rendered only for a configured (multi-user)
- * signed-in install — dogfood mode has no account to show, and so no Account subpage either.
+ * popover (Discord/Slack convention) — identity summary + **Upgrade** (free accounts) +
+ * **Settings…** (deep-links to Settings › Account, the full manage surface: change plan / cancel /
+ * payment method) + **Sign out** — the chip never navigates directly. Rendered only for a
+ * configured (multi-user) signed-in install — dogfood mode has no account to show, and so no
+ * Account subpage either.
+ *
+ * **The plan badge sits on the avatar, not beside the name** (2026-07-27). It used to be the third
+ * thing on one line — avatar, name, badge, caret, with the meter under all of it — inside a rail
+ * that's 232px by default and can be dragged down to 200. At that width the name had almost nothing
+ * left and truncated to a couple of characters. Hanging the badge off the avatar's bottom edge is
+ * the usual fix for exactly this (the notification-dot pattern), and it hands the whole line back to
+ * the name.
  */
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -25,6 +33,7 @@ export const AccountCard = ({
   usagePending,
   quotaBytes,
   onOpenSettings,
+  onUpgrade,
   onSignOut,
 }: {
   email: string;
@@ -43,6 +52,9 @@ export const AccountCard = ({
   quotaBytes: number | null;
   /** The popover's "Settings…" — routes to Settings › Account. */
   onOpenSettings: () => void;
+  /** Open the plan picker. Only offered while {@link active} is false — a subscriber changes plan from
+   * Settings › Account, where the proration preview lives. */
+  onUpgrade: () => void;
   onSignOut: () => void;
 }): React.JSX.Element => {
   // Popover anchor, measured from the chip at open time. Fixed-position + portaled (the chip is a
@@ -89,19 +101,21 @@ export const AccountCard = ({
       ? Math.min(1, usedBytes / quotaBytes)
       : null;
 
-  // The one plan badge, shared by chip head and popover. Not "No plan" — since the free tier landed,
-  // no subscription IS a plan: 25 GB, forever, and it backs up like any other. Naming it "Free" is
-  // the honest label AND the one that makes the usage line read as a plan filling up, not a locked
-  // account.
-  const badge = subscription?.cancelsAt ? (
-    <Badge tone="warning">Ends {shortDate(subscription.cancelsAt)}</Badge>
-  ) : subscription?.plan ? (
-    <Badge tone="accent">{subscription.plan.size}</Badge>
-  ) : active ? (
-    <Badge tone="success">Active</Badge>
-  ) : (
-    <Badge tone="neutral">Free</Badge>
-  );
+  // The plan, in two lengths from one decision. Not "No plan" — since the free tier landed, no
+  // subscription IS a plan: 25 GB, forever, and it backs up like any other. Naming it "Free" is the honest
+  // label AND the one that makes the usage line read as a plan filling up, not a locked account.
+  //
+  // `short` is what fits on the avatar; `long` is what the popover has room to say. Only the cancelling
+  // case actually differs, and it's the case where the difference matters most — "Ends" alone is a warning
+  // with no information in it, so the date gets said the moment there's space for it.
+  const plan: { tone: "neutral" | "accent" | "success" | "warning"; short: string; long: string } =
+    subscription?.cancelsAt
+      ? { tone: "warning", short: "Ends", long: `Ends ${shortDate(subscription.cancelsAt)}` }
+      : subscription?.plan
+        ? { tone: "accent", short: subscription.plan.size, long: subscription.plan.size }
+        : active
+          ? { tone: "success", short: "Active", long: "Active" }
+          : { tone: "neutral", short: "Free", long: "Free" };
 
   return (
     <>
@@ -114,15 +128,21 @@ export const AccountCard = ({
         aria-haspopup="menu"
         aria-expanded={pop != null}
       >
-        <span className="cs-account-avatar" aria-hidden="true">
-          {(displayName ?? email).charAt(0).toUpperCase()}
+        {/* Avatar + the plan badge hung off its bottom edge. `aria-hidden` covers the initial only —
+            the badge is real information and stays in the accessibility tree. */}
+        <span className="cs-account-mark">
+          <span className="cs-account-avatar" aria-hidden="true">
+            {(displayName ?? email).charAt(0).toUpperCase()}
+          </span>
+          {/* The size badge only when the meter can't show it — "6 GB of 25 GB used" already names
+              the plan size, and a "25 GB" badge under the avatar would say the same thing twice. */}
+          {subscription?.plan && !subscription.cancelsAt && fraction != null ? null : (
+            <span className={`cs-account-mark-badge cs-account-mark-badge--${plan.tone}`}>{plan.short}</span>
+          )}
         </span>
         <span className="cs-account-info">
           <span className="cs-account-head">
             <span className="cs-account-email">{displayName ?? email}</span>
-            {/* The size badge only when the meter can't show it — "6 GB of 25 GB used" already names
-                the plan size, and a "25 GB" badge next to it would say the same thing twice. */}
-            {subscription?.plan && !subscription.cancelsAt && fraction != null ? null : badge}
           </span>
           {/* Three states, not two. The meter used to collapse entirely whenever `usedBytes` was null,
               which conflated "the daemon hasn't reported yet" with "there's nothing to report" — and did
@@ -180,7 +200,7 @@ export const AccountCard = ({
               <div className="cs-account-pop-name">{displayName ?? email}</div>
               {displayName != null && <div className="cs-account-pop-email">{email}</div>}
               <div className="cs-account-pop-plan">
-                {badge}
+                <Badge tone={plan.tone}>{plan.long}</Badge>
                 {usedBytes != null && quotaBytes != null && (
                   <span>
                     {formatBytes(usedBytes)} of {formatBytes(quotaBytes)} used
@@ -189,6 +209,24 @@ export const AccountCard = ({
               </div>
             </div>
             <div className="cs-menu-sep" />
+            {/* First item, and the only accented one — someone who opens this menu looking for a way to buy
+                more room shouldn't have to find it inside Settings. Subscribers don't see it: changing an
+                existing plan is a priced, prorated decision, and it belongs on the surface that previews
+                the charge (Settings › Account), not behind a one-word menu item. */}
+            {!active && (
+              <button
+                type="button"
+                className="cs-menu-item cs-menu-item--accent"
+                role="menuitem"
+                onClick={() => {
+                  setPop(null);
+                  onUpgrade();
+                }}
+              >
+                <Icon name="rocket_launch" size={20} />
+                Upgrade
+              </button>
+            )}
             <button
               type="button"
               className="cs-menu-item"

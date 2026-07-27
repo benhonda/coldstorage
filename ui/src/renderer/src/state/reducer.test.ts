@@ -36,6 +36,8 @@ const transfer = (id: string, state: RestoreRow["state"] = "pending"): RestoreRo
   completedAt: null,
   error: null,
   typicalWait: "~48 hours",
+  typicalWaitSeconds: 48 * 60 * 60,
+  freeUntil: null,
   resumable: false,
 });
 

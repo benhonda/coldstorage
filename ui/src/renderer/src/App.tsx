@@ -14,8 +14,9 @@
  * from renderer memory, so it lost the user's transfers on sign-out.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Icon, IconButton, Modal, Button } from "./ui/primitives.tsx";
+import { Icon, Modal, Button } from "./ui/primitives.tsx";
 import { Sidebar, type NavItem } from "./ui/layout.tsx";
+import { useToast } from "./ui/toast.tsx";
 import type { Store } from "./state/store.ts";
 import type { ColdstoreApi, ConnectionState, SubscriptionInfo } from "../../shared/ipc.ts";
 import { isActiveRestore } from "../../shared/ipc.ts";
@@ -25,7 +26,7 @@ import { useResizable } from "./ui/useResizable.ts";
 import { useFiles } from "./views/files/useFiles.ts";
 import { fileFromJournal, isFolderMarker } from "./views/files/model.ts";
 import { FailuresPanel } from "./views/files/FailuresPanel.tsx";
-import type { BlobFailure } from "./state/reducer.ts";
+import { eventAction, type BlobFailure } from "./state/reducer.ts";
 import { bytesAvailable } from "./state/entitlement.ts";
 import { MyFilesView } from "./views/MyFilesView.tsx";
 import { SettingsView, type SettingsApi, type SettingsTab } from "./views/SettingsView.tsx";
@@ -61,10 +62,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   // Settings' active subpage, owned here (not in SettingsView) for two reasons: the sidebar chip's
   // popover deep-links to Settings › Account, and the last-visited tab survives a trip to My Files.
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
-  const [cmdError, setCmdError] = useState<string | null>(null);
-  // The error message the user has dismissed. Daemon `error` events are live state (no id/timestamp), so
-  // we gate on the message string: a new, distinct error re-shows the toast; re-firing the same one stays hidden.
-  const [dismissedError, setDismissedError] = useState<string | null>(null);
+  const toast = useToast();
   const [failuresOpen, setFailuresOpen] = useState(false);
   // Set by the Transfers page to send the user back to My Files with the request dialog open for this
   // file — the way out of a transfer that needs re-buying (unpaid, or its thaw window lapsed). Cleared by
@@ -157,8 +155,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   }, [api, signedIn, state.entitlement.active]);
 
   const exec: Exec = (fn) => {
-    setCmdError(null);
-    void fn().catch((e: unknown) => setCmdError(e instanceof Error ? e.message : String(e)));
+    void fn().catch((e: unknown) => toast.error(e instanceof Error ? e.message : String(e)));
   };
 
   // Excludes are daemon-backed now (the SSOT): list comes from the store, add/remove issue commands and
@@ -212,6 +209,16 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
 
   const footer = (
     <>
+      {/* The one place in the app that asks for money without being asked first. It's here rather than in
+          the nav rail because it isn't a destination, and it's a real button because Ben's point stands:
+          a free account had no way to buy more room short of hunting through Settings. Free accounts only,
+          and it disappears the moment there's a subscription — there's nothing to sell to someone who
+          already bought, and a permanent upsell in the chrome would be the opposite of what this app is. */}
+      {signedIn && state.entitlement.known && !subscribed && (
+        <Button variant="primary" size="sm" icon="rocket_launch" full onClick={() => setPaywallReason("upgrade")}>
+          Upgrade
+        </Button>
+      )}
       {notRunning && (
         <div className="cs-status">
           <span className={`cs-dot cs-dot--${state.connection}`} />
@@ -236,13 +243,40 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
     </>
   );
 
-  // Most recent of the two error channels (command rejection over live daemon error), hidden once dismissed.
-  const liveError = cmdError ?? state.lastError;
-  const toast = liveError && liveError !== dismissedError ? liveError : null;
-  const dismissToast = (): void => {
-    setCmdError(null);
-    setDismissedError(liveError);
-  };
+  // The daemon's live error channel. It's STATE, not a stream — no id, no timestamp — so the effect keys
+  // on the message and the toast layer collapses repeats. Command rejections take their own route
+  // (`exec` above, which has the rejection in hand); this is for faults nobody asked for.
+  const lastError = state.lastError;
+  const lastErrorCode = state.lastErrorCode;
+  useEffect(() => {
+    if (!lastError) return;
+    // A denied Photos grant can't be re-prompted for by the daemon, so the toast carries the only way out.
+    toast.error(
+      lastError,
+      lastErrorCode === "photosAccessDenied"
+        ? { label: "Open Photos settings", onClick: () => void api.openPhotosSettings() }
+        : undefined,
+    );
+  }, [lastError, lastErrorCode, api, toast]);
+
+  // Every finished transfer says so, wherever the user happens to be. This is the completion the whole
+  // request flow promises ("we'll let you know when it's ready") and the app had no way to make good on:
+  // a transfer that landed while you were looking at Settings announced itself nowhere.
+  useEffect(
+    () =>
+      api.onEvent((name, data) => {
+        // Through `eventAction` rather than reading `data` off the generic pair: the generic doesn't narrow
+        // on a `name` check, and that helper is where this layer's one correlated-pair cast already lives.
+        const e = eventAction(name, data);
+        if (e.type !== "event" || e.name !== "restoreCompleted") return;
+        const out = e.data.out;
+        toast.success(`${out.split("/").at(-1)} is saved on your Mac.`, {
+          label: "Show in Finder",
+          onClick: () => void api.revealInFinder(out),
+        });
+      }),
+    [api, toast],
+  );
 
   // Startup: show a neutral "checking…" card until we actually know the sign-in state, rather than
   // flashing the shell or the login screen and then correcting it. Two windows: `initializing` (before
@@ -345,6 +379,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
                 setSettingsTab("account");
                 setRoute("settings");
               }}
+              onUpgrade={() => setPaywallReason("upgrade")}
               onSignOut={() => void api.signOut()}
             />
           ) : undefined
@@ -380,6 +415,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           onDepositBlocked={() => (subscribed ? setOverCapacityOpen(true) : setPaywallReason("quotaReached"))}
           requestFileId={requestFileId}
           onRequestOpened={() => setRequestFileId(null)}
+          onShowTransfers={() => setRoute("transfers")}
         />
       )}
       {route === "transfers" && (
@@ -466,21 +502,6 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
       )}
 
       <UpdateBanner update={state.update} onRestart={() => void api.restartToUpdate()} />
-
-      {toast && (
-        <div className="cs-toast" role="alert">
-          <Icon name="error" size={20} />
-          <span className="cs-toast-msg">{toast}</span>
-          {/* Recovery for a denied/limited Photos grant — jumps straight to the right Settings pane (the daemon
-              can't re-prompt once denied). Only on the live daemon-error channel, not a command rejection. */}
-          {!cmdError && state.lastErrorCode === "photosAccessDenied" && (
-            <button type="button" className="cs-toast-action" onClick={() => void api.openPhotosSettings()}>
-              Open Photos settings
-            </button>
-          )}
-          <IconButton icon="close" label="Dismiss" onClick={dismissToast} />
-        </div>
-      )}
     </div>
   );
 };

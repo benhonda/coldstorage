@@ -101,11 +101,18 @@ import Crypto
         #expect(row["id"] as? String != nil)
         #expect(row["state"] as? String != nil)
         #expect(row["typicalWait"] as? String == "~48 hours")
+        // The machine-readable twin of the line above — the app's ready-by clock is `requestedAt + this`,
+        // so a drift between the prose and the number would put a wrong time on the Transfers page.
+        #expect(row["typicalWaitSeconds"] as? Int == 48 * 60 * 60)
         #expect(row["resumable"] as? Bool == false)
         #expect(row["requestedAt"] as? Int != nil)
         #expect(row.keys.contains("readyAt"))
         #expect(row.keys.contains("completedAt"))
         #expect(row.keys.contains("error"))
+        // Present-and-null on a fresh row (the thaw window hasn't opened), NOT absent — the app is typed
+        // against `number | null` and reads `=== null`, which an omitted key would silently fail.
+        #expect(row.keys.contains("freeUntil"))
+        #expect(row["freeUntil"] is NSNull)
     }
 
     /// **The regression Ben hit (2026-07-27).** Sign out and back in, and the transfer must still be there.

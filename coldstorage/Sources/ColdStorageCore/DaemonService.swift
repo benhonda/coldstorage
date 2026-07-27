@@ -561,6 +561,12 @@ public actor DaemonService {
         let error: String?
         /// How long the thaw takes, in plain words — so the app never invents its own wait.
         let typicalWait: String
+        /// The same wait in seconds, so the app can count down to a ready-by time rather than restate a
+        /// static "~48 hours" for two days. Estimate, not a promise — see `RestoreTier.typicalWaitSeconds`.
+        let typicalWaitSeconds: Int
+        /// Unix seconds the thawed copy stops being free to download (`readyAt` + the 5-day window). Null
+        /// until the thaw is ready, because the window has not opened yet and any date here would be fiction.
+        let freeUntil: Int?
         /// True ⇒ "Resume" costs nothing: the blobs this job already paid to thaw are still warm.
         let resumable: Bool
 
@@ -572,7 +578,7 @@ public actor DaemonService {
         // Declared, not synthesized: writing `encode(to:)` by hand suppresses the compiler's own.
         enum CodingKeys: String, CodingKey {
             case id, fileId, relativePath, out, state, tier, jobId, bytes, requestedAt
-            case readyAt, completedAt, error, typicalWait, resumable
+            case readyAt, completedAt, error, typicalWait, typicalWaitSeconds, freeUntil, resumable
         }
 
         func encode(to encoder: Encoder) throws {
@@ -590,6 +596,8 @@ public actor DaemonService {
             try c.encode(completedAt, forKey: .completedAt)
             try c.encode(error, forKey: .error)
             try c.encode(typicalWait, forKey: .typicalWait)
+            try c.encode(typicalWaitSeconds, forKey: .typicalWaitSeconds)
+            try c.encode(freeUntil, forKey: .freeUntil)      // `encode`, not `encodeIfPresent` — emits null
             try c.encode(resumable, forKey: .resumable)
         }
     }
@@ -607,7 +615,9 @@ public actor DaemonService {
                           out: r.out, state: r.state.rawValue, tier: r.tier.rawValue, jobId: r.jobId,
                           bytes: r.bytes, requestedAt: r.requestedAt, readyAt: r.readyAt,
                           completedAt: r.completedAt, error: r.error,
-                          typicalWait: r.tier.typicalWait, resumable: r.isResumable(now: now))
+                          typicalWait: r.tier.typicalWait, typicalWaitSeconds: r.tier.typicalWaitSeconds,
+                          freeUntil: r.readyAt.map { $0 + RestoreRow.thawWindowSeconds },
+                          resumable: r.isResumable(now: now))
         }
     }
 

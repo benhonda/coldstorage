@@ -85,6 +85,44 @@ import Foundation
         ])
     }
 
+    /// **Restoring into folders that don't exist yet.** Asking for a FOLDER back saves each file at its own
+    /// path under the chosen destination (`Downloads/Photos/2019/beach.jpg`), so the daemon has to build
+    /// those intermediate folders on the way. Before it did, the request was flattened to
+    /// `Downloads/beach.jpg` instead — which lost the structure AND let two files with the same name in
+    /// different subfolders overwrite each other.
+    ///
+    /// Uses the same `roundTrip` helper as everything else here, because `LocalDirSource` archives a nested
+    /// tree under its relative path and the restore destination is built from that path — the nesting is the
+    /// whole point of the case.
+    @Test func aNestedFileRestoresIntoFoldersThatDoNotExistYet() async throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent("cs-rt-\(UUID().uuidString)")
+        let root = base.appendingPathComponent("data")
+        let out = base.appendingPathComponent("out")
+        try fm.createDirectory(at: root.appendingPathComponent("Photos/2019"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: root.appendingPathComponent("Photos/2020"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: out, withIntermediateDirectories: true)   // the destination, but NOT its subtree
+        defer { try? fm.removeItem(at: base) }
+
+        // Same basename in two different folders — the pair the flat destination used to collapse into one.
+        let a = Data("the 2019 one".utf8), b = Data("the 2020 one".utf8)
+        try a.write(to: root.appendingPathComponent("Photos/2019/beach.jpg"))
+        try b.write(to: root.appendingPathComponent("Photos/2020/beach.jpg"))
+
+        let journal = try Journal(path: base.appendingPathComponent("j.sqlite").path)
+        let keys = LocalFileKEK(path: base.appendingPathComponent("kek.bin").path)
+        let vault = FakeVault()
+        #expect(try await UploadEngine(journal: journal, store: vault, keys: keys)
+            .run(source: LocalDirSource(root: root), prefix: .dev).isEmpty)
+
+        let restore = RestoreEngine(journal: journal, store: vault, keys: keys, canSelfThaw: true)
+        for name in ["Photos/2019/beach.jpg", "Photos/2020/beach.jpg"] {
+            _ = try await restore.restore(fileId: name, to: out.appendingPathComponent(name))
+        }
+        #expect(try Data(contentsOf: out.appendingPathComponent("Photos/2019/beach.jpg")) == a)
+        #expect(try Data(contentsOf: out.appendingPathComponent("Photos/2020/beach.jpg")) == b)
+    }
+
     /// **A blob in which EVERY file is empty** — a directory of nothing but `.gitkeep`s. There are no bytes,
     /// so there are no parts; S3 has no zero-byte multipart upload, and `complete` with an empty part list is
     /// rejected with a code we classify as PERMANENT. The blob failed forever and marked those files `failed`.
