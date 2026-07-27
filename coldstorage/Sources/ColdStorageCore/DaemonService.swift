@@ -689,6 +689,17 @@ public actor DaemonService {
                     willDownload: {
                         try? journal.setRestoreState(row.id, .transferring, readyAt: row.readyAt ?? now)
                         bus.publish(DaemonEvent("restoresChanged", [:]))
+                    },
+                    // Once per decrypted frame (~4 MiB): plaintext bytes on disk so far. Ephemeral by
+                    // design — the bar's truth is this stream, not the journal (a SQLite write every 4 MiB
+                    // for hours would buy nothing: on reconnect the next tick lands within a second).
+                    // `totalBytes` is the row's own plaintext size, the same figure the page already shows,
+                    // so numerator and denominator can never disagree about units. Runs OFF the actor,
+                    // inline, exactly like `willDownload` above — the bus carries its own lock.
+                    onProgress: { plainBytes in
+                        bus.publish(DaemonEvent("restoreProgress", ["id": row.id, "file": row.fileId,
+                                                                    "bytes": "\(plainBytes)",
+                                                                    "totalBytes": "\(row.bytes)"]))
                     })
 
                 switch outcome {

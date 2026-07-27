@@ -460,6 +460,12 @@ export interface DaemonEvents {
    * that copy is what silently lost an in-flight transfer on sign-out. The journal is the SSOT; this event
    * says only "it changed". */
   restoresChanged: Record<string, never>;
+  /** Determinate download progress for ONE `transferring` row: plaintext bytes decrypted and on disk so
+   * far, emitted once per ~4 MiB frame while the ranged GET streams. `id` is the RestoreRow id (the key
+   * the Transfers page folds by); `totalBytes` is the row's own plaintext size — numerator and denominator
+   * count the same thing, so the bar reaches exactly 100%. Ephemeral by design: fold it live for the bar,
+   * never persist it or grow rows from it — the row's STATE still comes only from `listRestores`. */
+  restoreProgress: { id: string; file: string; bytes: string; totalBytes: string };
   /** A transfer finished and the bytes are on disk. Distinct from `restoresChanged` because a completion
    * is a moment, not a state — it's what a "your copy is ready" notification hangs off. */
   restoreCompleted: { file: string; out: string };

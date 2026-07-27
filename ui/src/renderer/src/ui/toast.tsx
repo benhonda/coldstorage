@@ -141,26 +141,34 @@ export const ToastProvider = ({ children }: { children: ReactNode }): React.JSX.
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div className="cs-toasts" aria-live="polite">
-        {toasts.map((t) => (
-          <div key={t.id} className={`cs-toast cs-toast--${t.tone}`} role={t.tone === "error" ? "alert" : "status"}>
-            <Icon name={ICON[t.tone]} size={20} />
-            <span className="cs-toast-msg">{t.message}</span>
-            {t.action && (
-              <button
-                type="button"
-                className="cs-toast-action"
-                onClick={() => {
-                  t.action?.onClick();
-                  dismiss(t.id);
-                }}
-              >
-                {t.action.label}
-              </button>
-            )}
-            <IconButton icon="close" label="Dismiss" onClick={() => dismiss(t.id)} />
-          </div>
-        ))}
+      {/* Each toast is its own live region — `role="alert"` (assertive) for a failure, `role="status"`
+          (polite) otherwise. Deliberately NOT an `aria-live` on this container as well: nesting live
+          regions makes screen readers announce the same toast twice. */}
+      <div className="cs-toasts">
+        {toasts.map((t) => {
+          // Bound out here so the handler closes over a definite `ToastAction` — narrowing `t.action`
+          // inside the JSX doesn't reach into a deferred callback.
+          const action = t.action;
+          return (
+            <div key={t.id} className={`cs-toast cs-toast--${t.tone}`} role={t.tone === "error" ? "alert" : "status"}>
+              <Icon name={ICON[t.tone]} size={20} />
+              <span className="cs-toast-msg">{t.message}</span>
+              {action && (
+                <button
+                  type="button"
+                  className="cs-toast-action"
+                  onClick={() => {
+                    dismiss(t.id);
+                    action.onClick();
+                  }}
+                >
+                  {action.label}
+                </button>
+              )}
+              <IconButton icon="close" label="Dismiss" onClick={() => dismiss(t.id)} />
+            </div>
+          );
+        })}
       </div>
     </ToastContext.Provider>
   );

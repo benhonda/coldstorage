@@ -60,6 +60,9 @@ const makeApi = (initial: ConnectionState) => {
       if (method === "listSources") return Promise.resolve(sources);
       if (method === "listFiles") return Promise.resolve(files);
       if (method === "listExcludes") return Promise.resolve(excludes);
+      // The real daemon answers list reads with an ARRAY (empty when signed out) — an `{ok:true}` here
+      // would be a wire shape that cannot occur, and the reducer rightly chokes on it.
+      if (method === "listRestores") return Promise.resolve([]);
       return Promise.resolve({ ok: true });
     }) as ColdstoreApi["request"],
     getConnectionState: () => Promise.resolve(connectionState),

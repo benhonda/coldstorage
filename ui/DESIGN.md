@@ -173,17 +173,28 @@ it had worked.
    file · size · **ready in ~a day (up to 48h)** · **cost ~$X** · a "Save to" row with the native
    folder picker (defaults to Downloads, chosen per request — no global setting) · "you can close the
    app — we'll fetch it and let you know."
-3. **In-flight = named stages, NEVER a fake progress bar** (Deep Archive reports only warming vs
-   ready): **Preparing** (~12–48h, the honest unknown) → **Downloading** → **Ready**, with a quoted
+3. **In-flight = named stages, and a bar only where one is MEASURED** (Deep Archive reports only warming
+   vs ready): **Preparing** (~12–48h, the honest unknown) → **Downloading** → **Ready**, with a quoted
    ready-by time.
    **The wait counts down (2026-07-27).** A named stage says what's happening but not where you are in
    it, and "how much longer" is the question the page is opened to answer. The daemon sends
-   `typicalWaitSeconds` beside the prose `typicalWait` — both off the tier it quoted at, so the two can't
-   disagree and the renderer never parses copy for a number — and a `pending` row shows
+   `typicalWaitSeconds` beside the prose `typicalWait` — the tier holds the NUMBER once and derives the
+   prose from it, so they can't disagree, and the renderer never parses copy for a number — and a
+   `pending` row shows
    `requestedAt + typicalWaitSeconds - now` as *"About 1 day 17 hours left."* It's AWS's typical case, not
    a deadline: past it the row reads *"Taking longer than the usual ~48 hours. Still waiting."* rather
-   than a clock at zero. Still no bar during `transferring` — per-byte download progress doesn't exist
-   yet (the engine does one ranged GET), and inventing one is the thing this page won't do.
+   than a clock at zero.
+   **The download itself now has a real bar (2026-07-27).** The engine streams the ranged GET
+   frame-by-frame and narrates plaintext bytes as they land (`restoreProgress` events, folded into the
+   store's ephemeral `restoreProgress` slice), so a `transferring` row draws a measured determinate bar +
+   *"1.2 GB of 50 GB · 42 MB/s · about 20 minutes left"* — the same `throughput`/`etaSeconds` math and the
+   same `cs-bar-*` visual as the deposit banner, one mechanism in both directions. Until the first tick
+   lands the bar shimmers indeterminate rather than claiming a number; the thaw wait still gets no bar,
+   because there nothing is measured.
+   The phrase itself is `ui/duration.ts`'s `timeLeft`, **shared with the deposit banner** — "how much
+   longer" is one question, and it briefly had two formatters with two voices ("about 5 min left" on an
+   upload, "About 1 day 17 hours left" on a transfer). One function, one set of buckets: coarser the
+   further out, which suits both a jittery upload rate and an estimate that was never a measurement.
 4. **Ready → macOS system notification** (walk-away is the whole design): *"wedding.mov is ready — in
    your Downloads folder [Show] [Open]."* *(Notification still open, below.)*
 5. The local copy expires after the requested `days`, then re-freezes → honest *"available until
@@ -321,7 +332,10 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   publishes `filesChanged`, and the controller re-reads status/files/excludes/**restores** on it.
 - **Events (SSOT = the `DaemonEvent(...)` call sites):** `runStarted · fileArchived · uploadProgress ·
   runProgress · runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged ·
-  restoresChanged · restoreCompleted · error`.
+  restoresChanged · restoreProgress · restoreCompleted · error`.
+  `restoreProgress` carries `{id, file, bytes, totalBytes}` — plaintext bytes landed for ONE transferring
+  row, per ~4 MiB frame; folded into the store's ephemeral per-row slice for the Transfers bar, never a
+  source of row state.
   `runProgress` carries `{filesTotal, bytesTotal, filesArchived, bytesUploaded, currentPath}` — the
   whole-run aggregate the deposit banner draws from (all ENCRYPTED bytes; `bytesTotal` 0 ⇒ unknown, e.g.
   Photos; ETA/throughput are derived UI-side, never sent — coarsely, in buckets, since a snapshot only
@@ -341,8 +355,9 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   the typed main↔renderer seam; `src/renderer/src/state/` is reducer (pure fold) → store
   (`useSyncExternalStore`) → controller (layer 2; `task ui:test`).
 - `ui/src/renderer/src/ui/` — the shell's own primitives, no product logic: `primitives.tsx` (Button,
-  Badge, Modal, Icon, Skeleton…), `layout.tsx` (Sidebar + Page), `useResizable.ts`, and `toast.tsx`
-  (the app-wide `ToastProvider`/`useToast` channel — see "Toasts" above).
+  Badge, Modal, Icon, Skeleton…), `layout.tsx` (Sidebar + Page), `useResizable.ts`, `toast.tsx`
+  (the app-wide `ToastProvider`/`useToast` channel — see "Toasts" above), and `duration.ts`
+  (`timeLeft` — the one "how much longer" phrase, shared by the deposit banner and the thaw countdown).
 - `ui/src/main/auth/` — sign-in (PROD.md Phase 5), two lanes into ONE token lifecycle: Google via
   Cognito managed-login OAuth (`oauth.ts` — PKCE, system browser, `coldstorage://auth/callback` deep
   link packaged / loopback in dev) and email one-time-code via the Cognito API as plain HTTPS JSON-RPC
@@ -420,8 +435,11 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   going with the app closed. Read `listRestores` for state; never accumulate a copy from events. The old
   one-shot `restore` command is gone: nothing re-issued it, so every transfer stalled at `thawRequested`
   forever while the UI showed it as downloading.
-- **States are named, never a percentage:** `needsAuthorization | pending | transferring | saved |
-  canceled | failed`. Deep Archive reports only warming vs ready, so a progress bar would be invented.
+- **States are named** — `needsAuthorization | pending | transferring | saved | canceled | failed` — **and
+  only measured movement gets a percentage.** Deep Archive reports only warming vs ready, so the thaw wait
+  never draws a bar; `transferring` does (2026-07-27), fed by the daemon's per-frame `restoreProgress`
+  ticks — a byte counter for the bar only, ephemeral by design. Row STATE still comes exclusively from
+  `listRestores`; never grow rows from events.
 - **JS tooling is Bun** (repo convention), but Electron's main runs its bundled Node — dev/test on Bun,
   ship on Node, only `node:net`. Add deps with `bun add <pkg>@latest`.
 - `node_modules` is platform-native — each OS needs its own `bun install` (the container uses a named

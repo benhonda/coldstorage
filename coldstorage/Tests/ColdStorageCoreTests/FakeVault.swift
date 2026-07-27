@@ -107,18 +107,46 @@ final class FakeVault: Vault, @unchecked Sendable {
     // MARK: VaultStore — the restore half
     func thawState(key: String) async throws -> ThawState { .ready }   // STANDARD: readable, no thaw
     func requestThaw(key: String, days: Int, tier: RestoreTier) async throws {}
-    func getRange(key: String, offset: Int, length: Int) async throws -> Data {
+    func getRange(key: String, offset: Int, length: Int) async throws -> AsyncThrowingStream<Data, Error> {
         // **S3 has no zero-length range.** `S3Store` builds the header `bytes=<offset>-<offset + length - 1>`,
         // so length 0 asks for `bytes=100-99` — backwards, and rejected with a 416. A fake that happily returns
         // empty data here is *more forgiving than the real thing*, which makes any test of the zero-byte path a
         // facade: it passes whether or not the bug is fixed. Reject it exactly as S3 would.
         guard length > 0 else { throw ColdStorageError.s3("invalid range bytes=\(offset)-\(offset + length - 1)") }
-        return try lock.withLock {
+        try lock.withLock {
             guard let object = _objects[key] else { throw ColdStorageError.s3("no such object \(key)") }
             guard offset >= 0, offset + length <= object.count else {
                 throw ColdStorageError.s3("range \(offset)..<\(offset + length) outside object of \(object.count)")
             }
-            return object.subdata(in: offset..<(offset + length))
+        }
+        // Served in NETWORK-SIZED chunks (deliberately misaligned with the 4 MiB frame size), not one
+        // Data — so the consumer's reassembly across chunk boundaries is genuinely exercised, and so the
+        // memory tests see per-chunk copies rather than a fake that hands the whole span over at once.
+        let reader = RangeReader(vault: self, key: key, offset: offset, length: length)
+        return AsyncThrowingStream(unfolding: { reader.next() })
+    }
+
+    /// One chunk per demand out of `_objects` — the fake's `ChunkReader`. Same serial-invocation contract
+    /// as the real one (`AsyncThrowingStream(unfolding:)` awaits each call), so `@unchecked Sendable` holds.
+    private final class RangeReader: @unchecked Sendable {
+        static let chunkSize = 256 << 10   // 256 KiB: several demands per frame, misaligned with 4 MiB
+        private let vault: FakeVault
+        private let key: String
+        private let end: Int
+        private var pos: Int
+
+        init(vault: FakeVault, key: String, offset: Int, length: Int) {
+            self.vault = vault; self.key = key; self.pos = offset; self.end = offset + length
+        }
+
+        func next() -> Data? {
+            guard pos < end else { return nil }
+            let n = min(Self.chunkSize, end - pos)
+            // Re-read under the lock each demand, like S3 re-serves each range request — a vanished object
+            // mid-stream would be an impossible fixture, not a case to model.
+            let chunk = self.vault.lock.withLock { self.vault._objects[key]!.subdata(in: pos..<(pos + n)) }
+            pos += n
+            return chunk
         }
     }
     func usageBytes(prefix: VaultPrefix) async throws -> Int { lock.withLock { _objects.values.reduce(0) { $0 + $1.count } } }

@@ -35,7 +35,13 @@ public protocol BlobStore: Sendable {
 public protocol VaultStore: Sendable {
     func thawState(key: String) async throws -> ThawState
     func requestThaw(key: String, days: Int, tier: RestoreTier) async throws
-    func getRange(key: String, offset: Int, length: Int) async throws -> Data
+    /// Ranged GET of an object's byte span, delivered as a CHUNK STREAM, never a whole `Data`.
+    ///
+    /// The signature is the memory bound: a restore must hold chunks, not the file (the same contract
+    /// `IngestItem.open()` gives the upload path — see `ByteStreams.swift`, including the trap to avoid
+    /// when building one of these). Returning `Data` here is what made a video-sized restore cost
+    /// 2× the file in RAM.
+    func getRange(key: String, offset: Int, length: Int) async throws -> AsyncThrowingStream<Data, Error>
     func usageBytes(prefix: VaultPrefix) async throws -> Int
 }
 
@@ -131,14 +137,32 @@ public struct S3Store: Vault {
         return total
     }
 
-    /// Ranged GET of an object's byte span (a logical file's ciphertext within its blob).
+    /// Bytes per demand off the response stream — same size as the upload path's `ChunkReader`, and for
+    /// the same reason: memory tracks the chunk, never the object.
+    static let downloadChunkSize = 1 << 20
+
+    /// Ranged GET of an object's byte span (a logical file's ciphertext within its blob), streamed.
     /// Assumes the object is downloadable now — Deep Archive callers must `thawState`/`requestThaw` first
     /// (RestoreEngine orchestrates this); STANDARD/GLACIER_IR serve directly.
-    public func getRange(key: String, offset: Int, length: Int) async throws -> Data {
+    ///
+    /// `readData()` on the response body would drain the whole range into one `Data` — the very buffering
+    /// this signature exists to forbid — so the SDK's underlying `Smithy.Stream` is read incrementally
+    /// instead (`readAsync(upToCount:)`, nil at end). Built with `unfolding:` — the pull-based initializer;
+    /// see `ByteStreams.swift` for why the closure-based one is a memory bomb.
+    public func getRange(key: String, offset: Int, length: Int) async throws -> AsyncThrowingStream<Data, Error> {
         let out = try await client.getObject(input: .init(
             bucket: bucket, key: key, range: "bytes=\(offset)-\(offset + length - 1)"))
-        guard let data = try await out.body?.readData() else { throw ColdStorageError.s3("empty body for \(key)") }
-        return data
+        switch out.body {
+        case .stream(let stream):
+            return AsyncThrowingStream(unfolding: { try await stream.readAsync(upToCount: Self.downloadChunkSize) })
+        case .data(let data):
+            // The SDK may hand a small response fully materialized. One yield of an already-in-memory Data
+            // adds no buffering, so the closure initializer is sound here (and only here).
+            guard let data else { throw ColdStorageError.s3("empty body for \(key)") }
+            return AsyncThrowingStream { $0.yield(data); $0.finish() }
+        case .noStream, .none:
+            throw ColdStorageError.s3("empty body for \(key)")
+        }
     }
 
     // MARK: - Glacier thaw (Deep Archive restore-before-GET)

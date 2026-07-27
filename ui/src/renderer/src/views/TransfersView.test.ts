@@ -1,11 +1,12 @@
 /**
- * The Transfers countdown. Pure functions over a journal row, so they're testable without a DOM — and
- * worth testing, because every failure mode here is one the user reads as a lie: a clock that runs
- * negative, a "1 days left", or a wait that keeps promising ~48 hours after 60 have passed.
+ * The Transfers countdown + the transferring row's live bar — which row gets a clock, what the readout
+ * says as the signal firms up, and what the estimate's overrun reads like. The PHRASING of durations is
+ * `ui/duration.ts`'s and tested there; this covers only the decisions this page makes.
  */
 import { describe, expect, test } from "bun:test";
 import type { RestoreRow } from "../../../shared/ipc.ts";
-import { humanDuration, remaining } from "./TransfersView.tsx";
+import type { RestoreProgress } from "../state/reducer.ts";
+import { progressFraction, progressLine, remaining } from "./TransfersView.tsx";
 
 const HOUR = 3600;
 const REQUESTED = 1_700_000_000;
@@ -30,24 +31,6 @@ const row = (over: Partial<RestoreRow> = {}): RestoreRow => ({
   ...over,
 });
 
-describe("humanDuration", () => {
-  test("singulars don't read like a bug", () => {
-    expect(humanDuration(60)).toBe("1 minute");
-    expect(humanDuration(HOUR)).toBe("1 hour");
-    expect(humanDuration(25 * HOUR)).toBe("1 day 1 hour");
-  });
-
-  test("drops the hours when a day lands flat", () => {
-    expect(humanDuration(48 * HOUR)).toBe("2 days");
-  });
-
-  test("crosses each unit at the right place", () => {
-    expect(humanDuration(45 * 60)).toBe("45 minutes");
-    expect(humanDuration(2 * HOUR)).toBe("2 hours");
-    expect(humanDuration(41 * HOUR)).toBe("1 day 17 hours");
-  });
-});
-
 describe("remaining", () => {
   test("counts down from the tier's own estimate", () => {
     expect(remaining(row(), REQUESTED + 7 * HOUR)).toBe("About 1 day 17 hours left");
@@ -61,7 +44,7 @@ describe("remaining", () => {
   });
 
   test("the last minute doesn't round to '0 minutes left'", () => {
-    expect(remaining(row(), REQUESTED + 48 * HOUR - 20)).toBe("Less than a minute left");
+    expect(remaining(row(), REQUESTED + 48 * HOUR - 20)).toBe("Under a minute left");
   });
 
   test("only a thaw gets a countdown", () => {
@@ -70,5 +53,45 @@ describe("remaining", () => {
     for (const state of ["transferring", "saved", "canceled", "failed", "needsAuthorization"] as const) {
       expect(remaining(row({ state }), REQUESTED + HOUR)).toBeNull();
     }
+  });
+});
+
+describe("the transferring row's bar", () => {
+  const GB = 1_000_000_000;
+  const p = (over: Partial<RestoreProgress> = {}): RestoreProgress => ({
+    bytes: 0,
+    totalBytes: 50 * GB,
+    samples: [],
+    ...over,
+  });
+
+  test("no entry / no tick yet → indeterminate, and no readout invented", () => {
+    // Just flipped to transferring, or the app opened mid-transfer: nothing true to show yet.
+    expect(progressFraction(undefined)).toBeNull();
+    expect(progressFraction(p())).toBeNull(); // bytes 0: same story
+    expect(progressLine(p())).toBeNull();
+  });
+
+  test("the fraction is measured bytes over the row's own total, capped at 1", () => {
+    expect(progressFraction(p({ bytes: 25 * GB }))).toBe(0.5);
+    expect(progressFraction(p({ bytes: 51 * GB }))).toBe(1);
+    // No denominator → no honest fraction (the bar shimmers instead of lying).
+    expect(progressFraction(p({ bytes: 25 * GB, totalBytes: null }))).toBeNull();
+  });
+
+  test("the readout states only what's measured: bytes first, rate and ETA once there's signal", () => {
+    // One tick: bytes alone — a rate from a single sample would be invented.
+    expect(progressLine(p({ bytes: 1 * GB, samples: [{ t: 0, bytes: 1 * GB }] }))).toBe("1 GB of 50 GB");
+
+    // Two ticks a second apart: 1 GB/s → rate and a real time-left appear.
+    const line = progressLine(
+      p({ bytes: 2 * GB, samples: [{ t: 0, bytes: 1 * GB }, { t: 1000, bytes: 2 * GB }] }),
+    );
+    expect(line).toStartWith("2 GB of 50 GB · 1 GB/s · ");
+    expect(line).toContain("minute"); // 48 GB left at 1 GB/s — settled by duration.ts, not restated here
+  });
+
+  test("an unknown total still reports the bytes that have landed", () => {
+    expect(progressLine(p({ bytes: 3 * GB, totalBytes: null, samples: [{ t: 0, bytes: 3 * GB }] }))).toBe("3 GB");
   });
 });

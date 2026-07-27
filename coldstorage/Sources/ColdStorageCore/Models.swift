@@ -138,12 +138,19 @@ public enum ColdStorageError: Error, CustomStringConvertible {
     /// the OLD content hash, so *that* blob can never be archived again — the next scan re-hashes the file
     /// and plans it afresh under a new id.
     case contentDrift(String)
+    /// A ranged read ended cleanly but EARLY — the store delivered fewer bytes than the span asked for (a
+    /// cut connection, a truncated response). Its own case, not `.s3`, because the distinction is what
+    /// `FailureKind.classify` keys on: every other `ColdStorageError` is a config/data fault that can't
+    /// self-heal (permanent), while this one describes the NETWORK, not the data — the next restore pass
+    /// re-runs the download from scratch and succeeds. Folding it into `.s3` permanently stranded a
+    /// transfer over one dropped connection.
+    case shortRead(String)
     /// The bare message — so `"\(error)"` (CLI stderr, daemon wire `error` field) reads cleanly instead
     /// of leaking the case name (`invalidRequest("…")`).
     public var description: String {
         switch self {
         case .s3(let m), .integrity(let m), .invalidRequest(let m), .photosAccess(let m),
-             .photosNoneResolved(let m), .contentDrift(let m): return m
+             .photosNoneResolved(let m), .contentDrift(let m), .shortRead(let m): return m
         }
     }
 }
@@ -153,32 +160,38 @@ public enum ColdStorageError: Error, CustomStringConvertible {
 /// Glacier retrieval speed/cost tier. Deep Archive supports only `.standard` (~12h) and `.bulk` (~48h);
 /// `.expedited` is Glacier-Flexible-only (S3 rejects it for Deep Archive) — kept for completeness.
 public enum RestoreTier: String, Sendable, CaseIterable { case expedited, standard, bulk
-    /// Human-readable retrieval wait for CLI/UX copy (calm, factual — no drama).
-    public var typicalWait: String {
-        switch self {
-        case .expedited: return "minutes (Glacier Flexible only — not Deep Archive)"
-        case .standard:  return "~12 hours"
-        case .bulk:      return "~48 hours"
-        }
-    }
-
-    /// The same wait, in seconds — the machine-readable half of `typicalWait`.
+    /// The retrieval wait, in seconds — the ONE place the number is written down.
     ///
-    /// It exists so the app can show a ready-by time and a counting-down "about 9 hours left" instead of
-    /// repeating a static "~48 hours" for two days, which tells someone nothing about where they are in it.
-    /// Deriving that clock by PARSING `typicalWait` in the renderer was the obvious shortcut and the wrong
-    /// one: the prose is UX copy and free to change wording, and the party that picks the tier is the only
-    /// one entitled to state the wait (root `RETRIEVAL.md`). So the tier states it in both forms, here, and
-    /// the two can never disagree.
+    /// It exists so the app can count down ("about 9 hours left") instead of repeating a static
+    /// "~48 hours" for two days, which tells someone nothing about where in it they are. Deriving that
+    /// clock by PARSING `typicalWait` in the renderer was the obvious shortcut and the wrong one: the prose
+    /// is UX copy and free to be reworded, and the party that picks the tier is the only one entitled to
+    /// state the wait (root `RETRIEVAL.md`).
     ///
-    /// It is an ESTIMATE of AWS's typical case, not a promise — a thaw may land early or run over, so the
-    /// app must present it as an estimate and cope with the clock running out while the row is still
-    /// `pending`.
+    /// An ESTIMATE of AWS's typical case, not a promise — a thaw may land early or run over, so the app has
+    /// to present it as an estimate and cope with the clock running out while a transfer is still pending.
     public var typicalWaitSeconds: Int {
         switch self {
         case .expedited: return 5 * 60
         case .standard:  return 12 * 60 * 60
         case .bulk:      return 48 * 60 * 60
+        }
+    }
+
+    /// Human-readable retrieval wait for CLI/UX copy (calm, factual — no drama).
+    ///
+    /// **Derived from `typicalWaitSeconds`, not restated beside it.** These two started life as parallel
+    /// switches over the same enum whose cases had to agree by hand — "~12 hours" next to `12 * 60 * 60`,
+    /// forever, with nothing to catch an edit to one and not the other. That's precisely the drift PILLAR3
+    /// exists to prevent, and it would surface as a countdown that disagrees with the sentence beneath it.
+    /// The number now has one home and the prose reads it.
+    public var typicalWait: String {
+        switch self {
+        // Not derived: expedited isn't offered for Deep Archive at all, and the caveat IS the string —
+        // there's no hour count that would say the useful part. Spelled out as its own case (rather than a
+        // `default`) so adding a tier is still a compile error here.
+        case .expedited: return "minutes (Glacier Flexible only — not Deep Archive)"
+        case .standard, .bulk: return "~\(typicalWaitSeconds / 3600) hours"
         }
     }
 

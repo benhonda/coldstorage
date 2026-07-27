@@ -24,6 +24,16 @@ import Testing
         #expect(FailureKind.classify(ColdStorageError.s3("createMultipartUpload returned no uploadId")).isPermanent)
     }
 
+    @Test func aShortReadIsTransientNotTerminal() {
+        // The one ColdStorageError that names the NETWORK, not our config or the data: a ranged restore
+        // read that ended early (cut connection, truncated response). Classifying it permanent — which
+        // the blanket ColdStorageError rule above would — permanently strands a PAID transfer over one
+        // dropped connection; the next restore pass redownloads and succeeds.
+        let kind = FailureKind.classify(ColdStorageError.shortRead("range read ended early: 5 of 9 bytes"))
+        #expect(!kind.isPermanent)
+        #expect(kind.message.contains("ended early"))
+    }
+
     @Test func unknownErrorsDefaultTransient() {
         struct SomeOtherError: Error {}   // optimistic default — don't permanently give up on the unrecognized.
         #expect(!FailureKind.classify(SomeOtherError()).isPermanent)

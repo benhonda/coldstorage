@@ -22,7 +22,7 @@ import Crypto
         private let inner = FakeVault()
         func thawState(key: String) async throws -> ThawState { .needed }
         func requestThaw(key: String, days: Int, tier: RestoreTier) async throws {}
-        func getRange(key: String, offset: Int, length: Int) async throws -> Data {
+        func getRange(key: String, offset: Int, length: Int) async throws -> AsyncThrowingStream<Data, Error> {
             throw ColdStorageError.s3("InvalidObjectState: still frozen")
         }
         func usageBytes(prefix: VaultPrefix) async throws -> Int { try await inner.usageBytes(prefix: prefix) }

@@ -29,4 +29,18 @@ import Testing
         #expect(RestoreTier(rawValue: "turbo") == nil)
         #expect(RestoreTier.bulk.typicalWait.contains("48"))
     }
+
+    /// The prose and the number are one fact in two forms — the app puts a countdown directly above a
+    /// sentence quoting the wait, so a tier whose two halves disagree is visible on screen. `typicalWait`
+    /// derives from `typicalWaitSeconds` for exactly this reason; this pins that they stay in step for
+    /// every tier that quotes an hour count.
+    @Test func theWaitReadsTheSameInBothForms() {
+        for tier in [RestoreTier.standard, .bulk] {
+            #expect(tier.typicalWait == "~\(tier.typicalWaitSeconds / 3600) hours")
+        }
+        // Expedited is the deliberate exception: it isn't a Deep Archive option, so its string carries the
+        // caveat rather than an hour count. It still owes a sane number for anything doing arithmetic.
+        #expect(RestoreTier.expedited.typicalWait.contains("not Deep Archive"))
+        #expect(RestoreTier.expedited.typicalWaitSeconds > 0)
+    }
 }

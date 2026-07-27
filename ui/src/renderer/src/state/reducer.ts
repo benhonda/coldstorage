@@ -57,6 +57,22 @@ export interface RunProgress {
   uploadProgress: Record<string, { path: string; uploaded: number; total: number }>;
 }
 
+/** Live download progress for one `transferring` restore row, folded from `restoreProgress` events.
+ * Ephemeral on purpose — the daemon deliberately doesn't journal a byte counter (a SQLite write every
+ * 4 MiB for hours buys nothing; on reconnect the next frame's tick lands within a second), so this slice
+ * is the bar's only source. The row's STATE still comes exclusively from `restores`; these entries carry
+ * no lifecycle of their own and are pruned the moment their row stops transferring. */
+export interface RestoreProgress {
+  /** Plaintext bytes decrypted and on disk so far. */
+  bytes: number;
+  /** The transfer's plaintext size — same figure as its row's `bytes`, so the bar lands on exactly 100%.
+   * `null` if the wire ever said 0 (nothing should divide by it). */
+  totalBytes: number | null;
+  /** Recent `(timestamp, bytes)` ticks, bounded — same signal `throughput`/`etaSeconds` smooth for the
+   * deposit banner; one mechanism, both directions (PILLAR3). */
+  samples: { t: number; bytes: number }[];
+}
+
 export interface BlobFailure {
   blob: string;
   /** `overQuota` = refused because it would cross the storage quota (the daemon's `UploadEngine` ceiling).
@@ -112,6 +128,8 @@ export interface AppState {
    * journal (`listRestores`), never accumulated here. Authoritative: the daemon owns and drives these,
    * so they survive a sign-out, a relaunch, and a closed app. */
   restores: RestoreRow[];
+  /** Live download progress keyed by restore row id — see {@link RestoreProgress}. */
+  restoreProgress: Record<string, RestoreProgress>;
   lastError: string | null;
   /** The `code` of the most recent daemon `error` (or null) — drives a recovery action on the toast, e.g.
    * `photosAccessDenied` → an "Open Photos settings" button. Cleared (→ null) by any error without a code. */
@@ -132,6 +150,7 @@ export const initialState: AppState = {
   run: null,
   failures: [],
   restores: [],
+  restoreProgress: {},
   lastError: null,
   lastErrorCode: null,
 };
@@ -249,6 +268,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
         run: null,
         failures: [],
         restores: [],
+        restoreProgress: {},
         lastError: null,
         lastErrorCode: null,
       };
@@ -279,8 +299,19 @@ export const reducer = (state: AppState, action: Action): AppState => {
     case "excludesLoaded":
       return { ...state, excludes: action.excludes };
 
-    case "restoresLoaded":
-      return { ...state, restores: action.restores };
+    case "restoresLoaded": {
+      // The authoritative list is also the progress slice's janitor: an entry whose row is no longer
+      // `transferring` (saved, stopped, failed, forgotten, superseded) is done narrating — pruning here,
+      // on the one action that knows every row's true state, is what keeps the slice from leaking a stale
+      // bar per completed transfer for the life of the session.
+      const transferring = new Set(
+        action.restores.filter((r) => r.state === "transferring").map((r) => r.id),
+      );
+      const restoreProgress = Object.fromEntries(
+        Object.entries(state.restoreProgress).filter(([id]) => transferring.has(id)),
+      );
+      return { ...state, restores: action.restores, restoreProgress };
+    }
 
     case "failuresDismissed":
       // The user acknowledged the "couldn't upload" pill and asked it gone. An acknowledgement, not a
@@ -392,6 +423,27 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
       // pattern as sourcesChanged/filesChanged — and for a stronger reason: a renderer-side fold of these
       // is what used to lose an in-flight transfer on sign-out.
       return state;
+
+    case "restoreProgress": {
+      // The one restore event that IS folded — deliberately, and the "no fold" rule above survives it:
+      // this carries no lifecycle (no states, no rows), only a byte counter for a bar. Losing it on
+      // sign-out is correct (the transfer keeps going; the counter re-fills on the next frame's tick).
+      const { id, bytes, totalBytes } = action.data;
+      const prev = state.restoreProgress[id];
+      const done = num(bytes);
+      const total = num(totalBytes);
+      return {
+        ...state,
+        restoreProgress: {
+          ...state.restoreProgress,
+          [id]: {
+            bytes: done,
+            totalBytes: total > 0 ? total : null,
+            samples: [...(prev?.samples ?? []), { t: Date.now(), bytes: done }].slice(-SAMPLE_CAP),
+          },
+        },
+      };
+    }
 
     case "error":
       return { ...state, lastError: action.data.message, lastErrorCode: action.data.code ?? null };

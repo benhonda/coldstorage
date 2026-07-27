@@ -2,8 +2,9 @@ import Foundation
 import Crypto
 
 /// The other half of correctness: get a file back, byte-identical. Locates the logical file's
-/// ciphertext span via the journal, ranged-GETs it, decrypts the frames (re-deriving nonces from
-/// the stored prefix + frame counter), reassembles, and verifies against the stored plaintext hash.
+/// ciphertext span via the journal, streams the ranged GET, decrypts the frames as they arrive
+/// (re-deriving nonces from the stored prefix + frame counter) straight to disk, and verifies the
+/// incremental hash against the stored plaintext hash before the bytes may claim the destination.
 ///
 /// Deep Archive can't be downloaded directly — it must be thawed (RestoreObject) first, which takes
 /// hours. So `restore` is **idempotent and self-progressing**: call it, and it does the next right
@@ -42,10 +43,16 @@ public struct RestoreEngine: Sendable {
     /// hook there is no way to tell "waiting ~48h for deep storage" apart from "actively transferring", and
     /// the app is forced to call the whole wait a download. That mislabel is precisely what
     /// {@link RestoreState} exists to fix, so the signal has to come from here, where the truth is known.
+    ///
+    /// `onProgress` then narrates the window `willDownload` opened: PLAINTEXT bytes decrypted and on disk so
+    /// far, once per frame (~4 MiB). Plaintext, not ciphertext, because the denominator the caller shows
+    /// beside it (`RestoreRow.bytes`) is the file's own size — the two must count the same thing or the bar
+    /// finishes at 99.6%. Total is deliberately NOT passed back: the caller already owns it.
     @discardableResult
     public func restore(fileId: String, to outURL: URL,
                         tier: RestoreTier = .standard, days: Int = 7,
-                        willDownload: (@Sendable () -> Void)? = nil) async throws -> RestoreOutcome {
+                        willDownload: (@Sendable () -> Void)? = nil,
+                        onProgress: (@Sendable (_ plaintextBytes: Int) -> Void)? = nil) async throws -> RestoreOutcome {
         guard let f = try journal.fileMapping(fileId) else { throw ColdStorageError.invalidRequest("no archived file '\(fileId)'") }
         // Read the STORED key (SSOT) rather than recomputing `"blobs/<blobId>"` — a multi-user object lives
         // under its owner's prefix (`blobs/<cognito-identity-id>/<blobId>`), so recomputing would miss it.
@@ -71,14 +78,28 @@ public struct RestoreEngine: Sendable {
             // paid-retrieval gate had to be the THAW and not the read. Announce it FIRST: from here on
             // bytes really are moving, and this is the only instant at which that becomes true.
             willDownload?()
-            try await download(f, key: key, to: outURL, fileId: fileId)
+            try await download(f, key: key, to: outURL, fileId: fileId, onProgress: onProgress)
             return .restored
         }
     }
 
-    /// Ranged-GET the file's ciphertext span, decrypt frame-by-frame, reassemble, hash-verify, write.
+    /// Ranged-GET the file's ciphertext span as a CHUNK STREAM, decrypt frame-by-frame as it arrives,
+    /// hash incrementally, and write each frame's plaintext straight to disk — then let the verified
+    /// bytes claim the destination in one rename.
+    ///
+    /// **Memory holds one frame, never the file.** The first version of this read the whole span into one
+    /// `Data` and accumulated the whole plaintext into another before writing — ~2× the file resident, which
+    /// is invisible at photo sizes and kills the daemon at video sizes. The bound is now `pending` (at most
+    /// one sealed frame + one network chunk, ~5 MiB) + the frame being decrypted; the memory test in
+    /// `RestoreStreamingTests` pins that claim to a number, since no functional test can see the difference.
+    ///
+    /// **Streaming moves the write BEFORE the verify**, so bytes now touch disk before the hash is checked.
+    /// That's why the sink is `<out>.coldstorage-partial`, not `outURL`: the destination path only ever holds
+    /// bytes that passed verification, a failed download deletes the partial and leaves nothing, and a
+    /// re-run starts clean by truncating it.
     private func download(_ f: (blobId: String, offset: Int, length: Int, firstFrame: Int, plaintextSha256: String),
-                          key: String, to outURL: URL, fileId: String) async throws {
+                          key: String, to outURL: URL, fileId: String,
+                          onProgress: (@Sendable (Int) -> Void)?) async throws {
         guard let bc = try journal.blobCrypto(f.blobId) else { throw ColdStorageError.invalidRequest("no key material for blob \(f.blobId)") }
         let dek = try cipher.unwrap(bc.wrappedDEK, kek: try keys.userKEK())
 
@@ -104,18 +125,79 @@ public struct RestoreEngine: Sendable {
             return
         }
 
-        let ct = try await store.getRange(key: key, offset: f.offset, length: f.length)
-        let sealedFrame = EnvelopeCipher.sealedFrameSize
-
-        var plain = Data(); var frame = UInt64(f.firstFrame); var pos = 0
-        while pos < ct.count {
-            let n = min(sealedFrame, ct.count - pos)
-            plain.append(try cipher.open(ct.subdata(in: pos ..< pos + n), dek: dek, prefix: bc.noncePrefix, frame: frame))
-            pos += n; frame += 1
+        let fm = FileManager.default
+        let partial = outURL.appendingPathExtension("coldstorage-partial")
+        // createFile truncates: a partial stranded by a killed daemon is never appended to, always replaced.
+        guard fm.createFile(atPath: partial.path, contents: nil) else {
+            throw ColdStorageError.invalidRequest("can't write to \(partial.path)")
         }
+        let sink = try FileHandle(forWritingTo: partial)
 
-        let sha = SHA256.hash(data: plain).hex
-        guard sha == f.plaintextSha256 else { throw ColdStorageError.integrity("restored '\(fileId)' failed hash check") }
-        try plain.write(to: outURL)
+        do {
+            let sealedFrame = EnvelopeCipher.sealedFrameSize
+            var hasher = SHA256()
+            var frame = UInt64(f.firstFrame)
+            var received = 0          // ciphertext bytes off the wire — checked against the span at EOF
+            var written = 0           // plaintext bytes on disk — what onProgress reports
+            var pending = Data()      // bounded: at most one sealed frame + one network chunk
+
+            // Decrypt one sealed frame, hash it, land it, tick progress. Nested so the full-frame loop and
+            // the final short frame share one spelling of the sequence — a drift between two copies of it
+            // would be a silent corruption bug.
+            //
+            // `autoreleasepool` for the same reason as every `FileHandle` loop in this codebase (see
+            // `Autorelease.swift` + `ChunkReader`): on macOS, Foundation file I/O returns autoreleased
+            // buffers that a long-running async task never drains, and this loop runs for HOURS on a big
+            // restore. A no-op on Linux — which is exactly why the Core's memory test cannot vouch for
+            // its absence and it must be here by discipline, not by measurement.
+            func openAndWrite(_ sealed: Data) throws {
+                try autoreleasepool {
+                    let plain = try cipher.open(sealed, dek: dek, prefix: bc.noncePrefix, frame: frame)
+                    hasher.update(data: plain)
+                    try sink.write(contentsOf: plain)
+                    frame += 1
+                    written += plain.count
+                    onProgress?(written)
+                }
+            }
+
+            for try await chunk in try await store.getRange(key: key, offset: f.offset, length: f.length) {
+                received += chunk.count
+                // More bytes than the span asked for means the range header was ignored or malformed —
+                // decrypting on regardless would walk frames that aren't this file's.
+                guard received <= f.length else {
+                    throw ColdStorageError.s3("range read for '\(fileId)' returned \(received) of \(f.length) bytes asked")
+                }
+                pending.append(chunk)
+                while pending.count >= sealedFrame {
+                    try openAndWrite(Data(pending.prefix(sealedFrame)))
+                    pending.removeFirst(sealedFrame)
+                }
+            }
+            // A short read (connection cut, truncated object) previously surfaced as a baffling hash
+            // mismatch — or, truncated exactly on a frame boundary, as an `.integrity` fault that would
+            // condemn the transfer as corrupt. Name the actual fault with its own case: `.shortRead`
+            // classifies TRANSIENT (the only ColdStorageError that does), so the next pass just retries.
+            guard received == f.length else {
+                throw ColdStorageError.shortRead("range read for '\(fileId)' ended early: \(received) of \(f.length) bytes")
+            }
+            if !pending.isEmpty { try openAndWrite(pending) }   // the final short frame
+
+            try sink.close()
+            guard hasher.finalize().hex == f.plaintextSha256 else {
+                throw ColdStorageError.integrity("restored '\(fileId)' failed hash check")
+            }
+            // Only verified bytes may claim the destination — and in one move, so no reader ever sees a
+            // half-written file at `outURL`. Remove-then-move rather than a platform atomic-replace API:
+            // this is the portable Core, and the pre-streaming behavior (overwrite an existing file) holds.
+            if fm.fileExists(atPath: outURL.path) { try fm.removeItem(at: outURL) }
+            try fm.moveItem(at: partial, to: outURL)
+        } catch {
+            // Whatever failed — a dropped stream, a bad frame, the hash check — leave NOTHING behind:
+            // no partial to confuse a Finder window, no unverified bytes at the destination.
+            try? sink.close()
+            try? fm.removeItem(at: partial)
+            throw error
+        }
     }
 }

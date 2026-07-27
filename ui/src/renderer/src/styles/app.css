@@ -525,9 +525,12 @@ button.cs-kv:hover { background: var(--surface-hover); }
 }
 
 /* ── sidebar foot: upgrade CTA + (only-when-broken) status + stuck uploads ─ */
-/* The CTA is a real button and the rest of the foot is quiet text, so the gap has to clear the button
-   rather than hug a text line. Padded to line the button up with the nav items above it. */
-.cs-foot { display: flex; flex-direction: column; gap: var(--space-2); padding: 0 var(--space-2); }
+.cs-foot { display: flex; flex-direction: column; gap: var(--space-1); }
+/* The upgrade CTA. Full-width, so it already lines up with the nav items (same column, no inset of its
+   own) — it only needs to stop hugging the quiet status text that can appear under it. The container
+   keeps its original gap, because the status/stuck-upload lines carry their own padding and moving the
+   foot's inset would have shifted both of them out of line with the nav. */
+.cs-upgrade { margin-bottom: var(--space-2); }
 .cs-store {
   display: flex;
   align-items: center;
@@ -1505,35 +1508,40 @@ button.cs-kv:hover { background: var(--surface-hover); }
   font-variant-numeric: tabular-nums;
   flex: none;
 }
-.cs-deposit-track {
+/* The progress bar itself — SHARED between the deposit banner and a transferring restore row
+   (TransfersView), which is why it isn't named cs-deposit-*: one visual for "bytes are moving",
+   whichever direction they move (PILLAR3). */
+.cs-bar-track {
   position: relative;
   height: 6px;
   border-radius: var(--radius-pill);
   background: rgba(0, 0, 0, 0.12);
   overflow: hidden;
 }
-.cs-deposit-fill {
+.cs-bar-fill {
   height: 100%;
   border-radius: inherit;
   background: var(--accent);
   transition: width var(--duration-fast) var(--ease-out);
 }
-/* Photos deposit — size unknown, so no honest percentage: a moving sheen instead of a filled bar. */
-.cs-deposit-track--indeterminate .cs-deposit-fill {
+/* Denominator unknown (a Photos deposit; a transfer's first tick not yet landed) — no honest
+   percentage: a moving sheen instead of a filled bar. */
+.cs-bar-track--indeterminate .cs-bar-fill {
   width: 35%;
-  animation: cs-deposit-slide 1.2s var(--ease-out) infinite;
+  animation: cs-bar-slide 1.2s var(--ease-out) infinite;
 }
-@keyframes cs-deposit-slide {
+@keyframes cs-bar-slide {
   from { transform: translateX(-120%); }
   to { transform: translateX(340%); }
 }
-.cs-deposit-meta {
+/* The byte/rate/ETA readout under a bar — shared with the transfer row for the same reason as the bar. */
+.cs-bar-meta {
   font: var(--type-label);
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
 }
 @media (prefers-reduced-motion: reduce) {
-  .cs-deposit-track--indeterminate .cs-deposit-fill { animation: none; width: 100%; opacity: 0.5; }
+  .cs-bar-track--indeterminate .cs-bar-fill { animation: none; width: 100%; opacity: 0.5; }
 }
 
 
@@ -1588,4 +1596,11 @@ button.cs-kv:hover { background: var(--surface-hover); }
 }
 .cs-transfer-eta .csf-icon { flex: none; }
 .cs-transfer-note { font: var(--type-label); color: var(--text-tertiary); margin-top: var(--space-1); }
+/* The download bar + readout on a `transferring` row (fed by live `restoreProgress` events). */
+.cs-transfer-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
 .cs-transfer-actions { flex: 0 0 auto; display: flex; align-items: center; gap: var(--space-2); }

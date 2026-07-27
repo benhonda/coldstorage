@@ -117,6 +117,12 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   );
   // Which upsell a full vault shows: a free account picks a plan (paywall), a subscriber resizes theirs.
   const subscribed = state.entitlement.active;
+  // Is there anything to sell this account? ONE rule, used by both upgrade doors (the sidebar button and
+  // the account popover's item) — they were two expressions of it, which disagreed in the seconds before
+  // entitlement lands: `!active` alone is true for a subscriber whose status hasn't arrived yet, so the
+  // popover briefly offered "Upgrade" to someone who already pays. Waiting for `known` fails CLOSED, which
+  // is the right way round for an upsell: showing it late is nothing, showing it wrongly is a bad moment.
+  const canUpgrade = signedIn && state.entitlement.known && !subscribed;
   useEffect(() => {
     if (state.entitlement.active) setPaywallReason(null);
   }, [state.entitlement.active]);
@@ -214,8 +220,15 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           a free account had no way to buy more room short of hunting through Settings. Free accounts only,
           and it disappears the moment there's a subscription — there's nothing to sell to someone who
           already bought, and a permanent upsell in the chrome would be the opposite of what this app is. */}
-      {signedIn && state.entitlement.known && !subscribed && (
-        <Button variant="primary" size="sm" icon="rocket_launch" full onClick={() => setPaywallReason("upgrade")}>
+      {canUpgrade && (
+        <Button
+          variant="primary"
+          size="sm"
+          icon="rocket_launch"
+          full
+          className="cs-upgrade"
+          onClick={() => setPaywallReason("upgrade")}
+        >
           Upgrade
         </Button>
       )}
@@ -379,6 +392,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
                 setSettingsTab("account");
                 setRoute("settings");
               }}
+              canUpgrade={canUpgrade}
               onUpgrade={() => setPaywallReason("upgrade")}
               onSignOut={() => void api.signOut()}
             />
@@ -423,6 +437,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           api={api}
           exec={exec}
           restores={state.restores}
+          restoreProgress={state.restoreProgress}
           onRequestAgain={(fileId) => {
             setRequestFileId(fileId);
             setRoute("files");

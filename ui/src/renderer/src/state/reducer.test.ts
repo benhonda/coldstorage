@@ -334,3 +334,49 @@ describe("run progress (the deposit bar / throughput / ETA)", () => {
     expect(etaSeconds(samples, 0, null)).toBeNull(); // unknown total (photos)
   });
 });
+
+describe("download progress fold (the transferring row's bar)", () => {
+  const tick = (id: string, bytes: string, totalBytes = "1234"): Parameters<typeof reducer>[1] => ({
+    type: "event",
+    name: "restoreProgress",
+    data: { id, file: `f-${id}`, bytes, totalBytes },
+  });
+
+  test("ticks fold into an entry keyed by row id, with samples for rate/ETA", () => {
+    const s = run(tick("t1", "100"), tick("t1", "400"));
+    expect(s.restoreProgress["t1"]?.bytes).toBe(400);
+    expect(s.restoreProgress["t1"]?.totalBytes).toBe(1234);
+    expect(s.restoreProgress["t1"]?.samples.map((x) => x.bytes)).toEqual([100, 400]);
+  });
+
+  test("two transfers keep separate entries", () => {
+    const s = run(tick("t1", "100"), tick("t2", "700"));
+    expect(s.restoreProgress["t1"]?.bytes).toBe(100);
+    expect(s.restoreProgress["t2"]?.bytes).toBe(700);
+  });
+
+  test("a 0 totalBytes is UNKNOWN, not a zero denominator", () => {
+    // Nothing should ever divide by it — the bar goes indeterminate instead.
+    expect(run(tick("t1", "100", "0")).restoreProgress["t1"]?.totalBytes).toBeNull();
+  });
+
+  test("restoresLoaded prunes entries whose row stopped transferring — no stale bars for the session", () => {
+    const mid = run(tick("t1", "100"), tick("t2", "300"), {
+      type: "restoresLoaded",
+      restores: [transfer("t1", "transferring"), transfer("t2", "transferring")],
+    });
+    expect(Object.keys(mid.restoreProgress).sort()).toEqual(["t1", "t2"]);
+
+    // t1 saves; t2 keeps going. t1's counter is done narrating and must go with it.
+    const after = reducer(mid, {
+      type: "restoresLoaded",
+      restores: [transfer("t1", "saved"), transfer("t2", "transferring")],
+    });
+    expect(Object.keys(after.restoreProgress)).toEqual(["t2"]);
+  });
+
+  test("sign-out clears the slice with the rest of the vault-derived state", () => {
+    const s = run(signedIn("a@b.com"), tick("t1", "100"));
+    expect(reducer(s, signedOut).restoreProgress).toEqual({});
+  });
+});

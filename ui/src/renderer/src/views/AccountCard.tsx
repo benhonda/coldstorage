@@ -33,6 +33,7 @@ export const AccountCard = ({
   usagePending,
   quotaBytes,
   onOpenSettings,
+  canUpgrade,
   onUpgrade,
   onSignOut,
 }: {
@@ -52,8 +53,12 @@ export const AccountCard = ({
   quotaBytes: number | null;
   /** The popover's "Settings…" — routes to Settings › Account. */
   onOpenSettings: () => void;
-  /** Open the plan picker. Only offered while {@link active} is false — a subscriber changes plan from
-   * Settings › Account, where the proration preview lives. */
+  /** Whether to offer the upgrade item at all. Decided by App, not re-derived from {@link active} here:
+   * the sidebar's upgrade button asks the same question, and two copies of the rule drifted (`!active`
+   * alone is true for a subscriber whose entitlement hasn't loaded yet). */
+  canUpgrade: boolean;
+  /** Open the plan picker. A subscriber changes plan from Settings › Account instead, where the
+   * proration preview lives. */
   onUpgrade: () => void;
   onSignOut: () => void;
 }): React.JSX.Element => {
@@ -213,7 +218,7 @@ export const AccountCard = ({
                 more room shouldn't have to find it inside Settings. Subscribers don't see it: changing an
                 existing plan is a priced, prorated decision, and it belongs on the surface that previews
                 the charge (Settings › Account), not behind a one-word menu item. */}
-            {!active && (
+            {canUpgrade && (
               <button
                 type="button"
                 className="cs-menu-item cs-menu-item--accent"

@@ -1,5 +1,6 @@
 import { etaSeconds, throughput, type RunProgress } from "../state/reducer.ts";
 import { baseName, formatBytes } from "./files/model.ts";
+import { timeLeft } from "../ui/duration.ts";
 
 /**
  * The live deposit banner — the answer to "what's happening and how long will it take".
@@ -43,7 +44,7 @@ export function DepositProgress({ run }: { run: RunProgress | null }): React.JSX
     else if (filesArchived > 0) parts.push(`${filesArchived} files`);
     if (knowBytes) parts.push(`${formatBytes(bytesUploaded)} of ${formatBytes(bytesTotal)}`);
     if (rate != null) parts.push(`${formatBytes(rate)}/s`);
-    const eta_ = eta != null ? etaLabel(eta) : "";
+    const eta_ = eta != null ? timeLeft(eta) : "";
     if (eta_) parts.push(eta_);
   }
 
@@ -59,45 +60,22 @@ export function DepositProgress({ run }: { run: RunProgress | null }): React.JSX
       </div>
 
       <div
-        className={`cs-deposit-track${indeterminate ? " cs-deposit-track--indeterminate" : ""}`}
+        className={`cs-bar-track${indeterminate ? " cs-bar-track--indeterminate" : ""}`}
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={indeterminate ? undefined : 100}
         aria-valuenow={indeterminate || fraction == null ? undefined : Math.round(fraction * 100)}
       >
         <div
-          className="cs-deposit-fill"
+          className="cs-bar-fill"
           style={indeterminate || fraction == null ? undefined : { width: `${fraction * 100}%` }}
         />
       </div>
 
-      {parts.length > 0 && <div className="cs-deposit-meta">{parts.join(" · ")}</div>}
+      {parts.length > 0 && <div className="cs-bar-meta">{parts.join(" · ")}</div>}
     </div>
   );
 }
 
-/**
- * A coarse, human ETA phrase — e.g. "under a minute left", "about 5 min left", "about 1½ hr left".
- *
- * Coarse ON PURPOSE. The daemon reports bytes per 64 MiB part, so a fresh estimate only lands every
- * part (tens of seconds apart) and the raw rate wobbles between them. Showing exact seconds made the
- * readout lurch to odd values ("43s" → "12s") every time a part landed. Friendly buckets — no seconds,
- * coarser the further out you are — absorb that jitter so the estimate reads as the rough guide it is,
- * not a stopwatch. Returns "" when there's nothing worth saying.
- */
-export function etaLabel(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return "";
-  if (seconds < 60) return "under a minute left";
-  const mins = seconds / 60;
-  if (mins < 60) {
-    // Nearest minute up close, nearest 5 once it's a longer wait — precision matters less the further out.
-    const step = mins < 10 ? 1 : 5;
-    const rounded = Math.max(1, Math.round(mins / step) * step);
-    return `about ${rounded} min left`;
-  }
-  // Over an hour: round to the nearest half-hour and stop there. Sub-hour precision would only wobble.
-  const halfHours = Math.round(mins / 30);
-  const hrs = Math.floor(halfHours / 2);
-  const half = halfHours % 2 === 1;
-  return `about ${hrs}${half ? "½" : ""} hr left`;
-}
+// `etaLabel` used to live here. It's now `ui/duration.ts`'s `timeLeft`, shared with the Transfers page's
+// thaw countdown — same question, same input, and keeping two of them meant two voices for one fact.

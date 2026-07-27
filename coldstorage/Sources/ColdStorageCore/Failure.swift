@@ -47,6 +47,11 @@ public enum FailureKind: Sendable, Equatable {
     /// SDK service errors map by code; anything else is treated as transient (optimistic — retry next pass).
     public static func classify(_ error: Error) -> FailureKind {
         switch error {
+        // A truncated ranged read is the one ColdStorageError that names a NETWORK fault, not a
+        // config/data one — a rerun redownloads and succeeds, so condemning it would strand a paid
+        // transfer over a dropped connection (see the case's own doc).
+        case ColdStorageError.shortRead(let m):
+            return .transient(m)
         case let e as ColdStorageError:
             // integrity = corruption/hash mismatch; s3/staging = our precondition or config — none self-heal.
             return .permanent("\(e)")

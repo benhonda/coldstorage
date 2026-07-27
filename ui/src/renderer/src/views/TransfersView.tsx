@@ -6,21 +6,28 @@
  * built from renderer memory. Sign out, or quit the app, and an in-flight transfer someone had paid for
  * simply disappeared. Now the daemon's journal owns them and this page reads the list.
  *
- * The states are named, never a percentage. Deep Archive tells us "warming" or "ready" and nothing in
- * between, so a progress bar would be invented — and, more to the point, for the ~48 hours of a thaw
- * there is no progress to draw, because nothing is moving yet. That's `pending`. `transferring` is
- * reserved for when bytes actually are.
+ * The states are named, and only real movement gets a bar. For the ~48 hours of a thaw, Deep Archive
+ * reports "warming" or "ready" and nothing in between — a bar there would be invented, so the wait is
+ * `pending` and gets a countdown instead. `transferring` is reserved for when bytes actually move, and
+ * NOW that state earns a real determinate bar: the daemon streams the download frame-by-frame and
+ * narrates plaintext bytes as they land (`restoreProgress` events → the store's `restoreProgress`
+ * slice), so the fraction here is measured, never invented.
  *
  * What a waiting row CAN honestly say is how much of the wait is left, and that's the one thing someone
  * actually wants from this page. The daemon hands over `typicalWaitSeconds` alongside the prose
  * `typicalWait`, both from the tier it quoted at, so the countdown here is the backend's own estimate
- * ticking down rather than a number the renderer made up.
+ * ticking down rather than a number the renderer made up. The phrase itself comes from `ui/duration.ts`,
+ * shared with the deposit banner — "how much longer" is one question and gets one voice. Rate + ETA on a
+ * transferring row are the same shared math (`throughput`/`etaSeconds`) the deposit banner smooths its
+ * own bar with — one mechanism, both directions.
  */
 import { useEffect, useState } from "react";
 import type { ColdstoreApi, RestoreRow, RestoreState } from "../../../shared/ipc.ts";
 import { isActiveRestore } from "../../../shared/ipc.ts";
+import { etaSeconds, throughput, type RestoreProgress } from "../state/reducer.ts";
 import { Badge, Button, EmptyState, Icon, Modal } from "../ui/primitives.tsx";
 import { Page } from "../ui/layout.tsx";
+import { timeLeft, timeLeftSentence } from "../ui/duration.ts";
 import { baseName, formatBytes } from "./files/model.ts";
 import type { Exec } from "./types.ts";
 
@@ -36,19 +43,6 @@ const useNow = (everyMs = 15_000): number => {
     return () => clearInterval(t);
   }, [everyMs]);
   return now;
-};
-
-/** "1 day 17 hours" / "17 hours" / "12 minutes". Coarse on purpose — the underlying figure is AWS's
- * typical case, so a to-the-second readout would dress an estimate up as a measurement. */
-export const humanDuration = (seconds: number): string => {
-  const mins = Math.round(seconds / 60);
-  if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"}`;
-  const hours = Math.round(seconds / 3600);
-  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"}`;
-  const days = Math.floor(hours / 24);
-  const rest = hours % 24;
-  const d = `${days} day${days === 1 ? "" : "s"}`;
-  return rest === 0 ? d : `${d} ${rest} hour${rest === 1 ? "" : "s"}`;
 };
 
 /** Just the date — for a deadline days out, the hour is noise. */
@@ -68,8 +62,7 @@ export const remaining = (r: RestoreRow, now: number): string | null => {
   if (r.state !== "pending") return null;
   const left = r.requestedAt + r.typicalWaitSeconds - now;
   if (left <= 0) return `Taking longer than the usual ${r.typicalWait}. Still waiting.`;
-  if (left < 60) return "Less than a minute left";
-  return `About ${humanDuration(left)} left`;
+  return timeLeftSentence(left) || null;
 };
 
 /** How each state reads to the user. `pending` says what's actually happening (deep storage is waking up)
@@ -92,6 +85,52 @@ const when = (unixSeconds: number | null): string => {
     hour: "numeric",
     minute: "2-digit",
   });
+};
+
+/**
+ * The transferring row's readout — "1.2 GB of 50 GB · 42 MB/s · About 20 minutes left" — from its live
+ * progress entry. Null until the first tick lands (nothing true to say yet) and piece by piece as the
+ * signal firms up: bytes always, rate once two samples exist, ETA once there's a rate and a total. Pure
+ * and exported for the tests; only states what's measured, never invents precision (the same contract as
+ * the deposit banner's line).
+ */
+export const progressLine = (p: RestoreProgress): string | null => {
+  if (p.bytes <= 0) return null;
+  const parts: string[] = [
+    p.totalBytes != null ? `${formatBytes(p.bytes)} of ${formatBytes(p.totalBytes)}` : formatBytes(p.bytes),
+  ];
+  const rate = throughput(p.samples);
+  if (rate != null) parts.push(`${formatBytes(rate)}/s`);
+  const eta = etaSeconds(p.samples, p.bytes, p.totalBytes);
+  const left = eta != null ? timeLeft(eta) : "";
+  if (left) parts.push(left);
+  return parts.join(" · ");
+};
+
+/** The measured fraction for the bar, or null when it can't be honest yet (no tick, or no denominator) —
+ * null renders the indeterminate sheen, exactly like the deposit banner before its first part lands. */
+export const progressFraction = (p: RestoreProgress | undefined): number | null =>
+  p && p.totalBytes != null && p.bytes > 0 ? Math.min(1, p.bytes / p.totalBytes) : null;
+
+/** The bar + readout under a `transferring` row. Indeterminate until the first frame's tick arrives
+ * (just flipped, or the app just opened mid-transfer — the next tick lands within a second). */
+const TransferBar = ({ p }: { p: RestoreProgress | undefined }): React.JSX.Element => {
+  const fraction = progressFraction(p);
+  const line = p ? progressLine(p) : null;
+  return (
+    <div className="cs-transfer-progress">
+      <div
+        className={`cs-bar-track${fraction == null ? " cs-bar-track--indeterminate" : ""}`}
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={fraction == null ? undefined : 100}
+        aria-valuenow={fraction == null ? undefined : Math.round(fraction * 100)}
+      >
+        <div className="cs-bar-fill" style={fraction == null ? undefined : { width: `${fraction * 100}%` }} />
+      </div>
+      {line && <div className="cs-bar-meta">{line}</div>}
+    </div>
+  );
 };
 
 /** The folder a transfer saves into (the destination minus the filename). Guards the no-slash case: with
@@ -137,6 +176,7 @@ const detail = (r: RestoreRow): string | null => {
 const Row = ({
   r,
   now,
+  progress,
   onStop,
   onResume,
   onForget,
@@ -146,6 +186,9 @@ const Row = ({
   r: RestoreRow;
   /** Ticking clock from the page, so every row's countdown moves off one interval rather than N. */
   now: number;
+  /** This row's live download progress — present only while it's `transferring` (the reducer prunes it
+   * the moment the row's state moves on). */
+  progress: RestoreProgress | undefined;
   onStop: (r: RestoreRow) => void;
   onResume: (r: RestoreRow) => void;
   onForget: (r: RestoreRow) => void;
@@ -179,6 +222,7 @@ const Row = ({
             {left}
           </div>
         )}
+        {r.state === "transferring" && <TransferBar p={progress} />}
         {note && <div className="cs-transfer-note">{note}</div>}
       </div>
       <div className="cs-transfer-actions">
@@ -220,11 +264,15 @@ export const TransfersView = ({
   api,
   exec,
   restores,
+  restoreProgress,
   onRequestAgain,
 }: {
   api: ColdstoreApi;
   exec: Exec;
   restores: readonly RestoreRow[];
+  /** Live download progress by row id (the store's `restoreProgress` slice) — feeds each transferring
+   * row's bar. */
+  restoreProgress: Record<string, RestoreProgress>;
   /** Send the user back to My Files with the request-a-copy dialog open for this file — the way out of
    * `needsAuthorization` (and of a transfer whose thaw window closed), both of which need a fresh price. */
   onRequestAgain: (fileId: string) => void;
@@ -265,7 +313,7 @@ export const TransfersView = ({
             <section className="cs-transfers-group">
               <h2 className="cs-transfers-heading">In progress</h2>
               {active.map((r) => (
-                <Row key={r.id} r={r} now={now} {...rowProps} />
+                <Row key={r.id} r={r} now={now} progress={restoreProgress[r.id]} {...rowProps} />
               ))}
             </section>
           )}
@@ -273,7 +321,7 @@ export const TransfersView = ({
             <section className="cs-transfers-group">
               <h2 className="cs-transfers-heading">Earlier</h2>
               {past.map((r) => (
-                <Row key={r.id} r={r} now={now} {...rowProps} />
+                <Row key={r.id} r={r} now={now} progress={undefined} {...rowProps} />
               ))}
             </section>
           )}

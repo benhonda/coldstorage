@@ -246,8 +246,10 @@ Exactness across devices needs a server-side index.
 6. Background sampling audit (restore a small random sample, check against `plaintext_sha256`) — the
    deferred systemic-bug catcher.
 
-**"Archived" means *verified present*, never "PUT returned 200."** Restore hash-verifies before
-writing, so a restored file is byte-identical by construction.
+**"Archived" means *verified present*, never "PUT returned 200."** Restore streams to a
+`.coldstorage-partial` beside the destination and hash-verifies before the rename — the destination path
+only ever holds bytes that passed the check, so a restored file is byte-identical by construction and a
+failed download leaves nothing behind.
 
 ## 7. Encryption — envelope, ZK-ready
 
@@ -264,6 +266,12 @@ writing, so a restored file is byte-identical by construction.
 
 - Bounded worker pool for concurrent part uploads; streaming read→hash→encrypt→upload with capped
   in-flight buffers — never load an archive into memory.
+- **The restore path streams too, symmetrically** (2026-07-27): `VaultStore.getRange` hands back a chunk
+  stream (the signature *is* the memory bound), and `RestoreEngine` decrypts frame-by-frame as chunks
+  arrive — incremental hash, incremental write, per-frame progress ticks. Peak memory is one sealed frame
+  + one network chunk (~5 MiB), where it used to be ciphertext + plaintext whole (~2× the file — fatal at
+  video sizes). `RestoreStreamingTests` pins the bound to a number, download-side twin of the upload
+  memory test.
 - **Newest/most-precious-first** planning so recent files land in minutes.
 - Transient retry is the **AWS SDK's** job (built-in backoff); our layer classifies failures
   (`Failure.swift`, permanent vs transient) and isolates per blob — a poison blob is surfaced and the
@@ -298,8 +306,8 @@ Secrets live in Keychain, never in the UI.
   deauthenticate · setQuota · mintVault · unlockVault · unlockVaultWithRecoveryCode · lockVault ·
   triggerNow · pauseSource · resumeSource`.
 - **Events — SSOT is the `DaemonEvent(...)` call sites:** `runStarted · fileArchived · uploadProgress ·
-  runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged · restoresChanged ·
-  restoreCompleted · error`.
+  runProgress · runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged ·
+  restoresChanged · restoreProgress · restoreCompleted · error`.
 - **Every command is session-scoped** (§2): signed out, the four reads answer empty and everything else
   throws *"not signed in"*. `getStatus` says so explicitly — `signedIn: bool` — and its `bytesStored`
   (the S3-derived storage-quota usage figure) is non-null whenever signed in, `null` only when not.
