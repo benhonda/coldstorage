@@ -3,6 +3,9 @@
 ## 2026-07-27
 
 - feat: **restores are journal-backed transfers** — a durable `restores` row (daemon `requestRestore`/`listRestores`/`cancelRestore`/`resumeRestore`/`forgetRestore` + a `restoresChanged` event) survives sign-out and quit, so a paid retrieval resumes inside the 5-day window without a second charge.
+- fix: a transient restore fault (`FailureKind.classify`) leaves the row in flight and only records the reason via `recordRestoreFault` — only permanent faults land `.failed`, so a network blip can't strand a paid transfer.
+- fix: `setRestoreState`/`recordRestoreFault` only write `WHERE state IN (active)`, so a mid-flight `restorePass` can't un-cancel a transfer the user stopped; `reopenRestore` stays the one way back.
+- fix: a new `requestRestore` for a file supersedes the transfer of it still in flight, instead of leaving a dead row padding the "In progress" count.
 - feat(ui): new `TransfersView` replaces `GettingBackPanel` — transfers are a first-class surface driven by the journal, with Stop/Resume, "reveal in Finder" on completion, and copy that says stopping doesn't refund.
 - refactor: `cancelRestore` → `abandonQuote` for dropping an unpaid quote; `cancelRestore` now means stopping an in-flight transfer.
 - feat(infra): **the AWS account migration is COMPLETE** — everything runs in Ben's own account, the Adpharm stacks were destroyed the same day, and `MIGRATION.md` is now the record of why rather than a runbook.

@@ -39,9 +39,6 @@ export interface ArchivedFile {
   kind: FileKind;
   /** Archived/modified instant (ISO), or null if the journal doesn't expose one. */
   date: string | null;
-  /** When `pending`/`transferring`: the id of the transfer bringing it back — the handle the row's
-   * "Transfers" affordance deep-links with. */
-  transferId?: string | null;
   /** When `here`: the local path the thawed bytes landed at. */
   localPath?: string | null;
   /** For an optimistic (not-yet-uploaded) drop: the local absolute source path, so a failed upload can be

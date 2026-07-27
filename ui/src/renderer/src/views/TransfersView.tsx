@@ -43,12 +43,22 @@ const when = (unixSeconds: number | null): string => {
   });
 };
 
-/** The folder a transfer saves into (the destination minus the filename). */
-const folderOf = (out: string): string => out.slice(0, out.lastIndexOf("/")) || "/";
+/** The folder a transfer saves into (the destination minus the filename). Guards the no-slash case: with
+ * no separator `lastIndexOf` is -1, and `slice(0, -1)` would quietly lop off the last character instead. */
+const folderOf = (out: string): string => {
+  const cut = out.lastIndexOf("/");
+  return cut > 0 ? out.slice(0, cut) : "/";
+};
 
 /** The one-line explanation under each row. Only says something when there IS something to say — a
- * transferring row needs no commentary. */
+ * transferring row that's behaving needs no commentary. */
 const detail = (r: RestoreRow): string | null => {
+  // An error on a row that's still ACTIVE means a transient fault the daemon is retrying (a network blip
+  // during the thaw, say). Say so: the transfer is fine and still going, but a silent hiccup that leaves
+  // the page reading "waiting on deep storage" for an extra hour with no explanation is the sort of
+  // invisible work the user deserves to see (CORE9).
+  if (r.error && isActiveRestore(r.state)) return `Hit a snag (${r.error}) — still trying.`;
+
   switch (r.state) {
     case "pending":
       return `Deep storage usually takes ${r.typicalWait} to wake a file up. You can close the app — this keeps going.`;

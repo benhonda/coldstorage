@@ -104,10 +104,35 @@ import Foundation
     @Test func failureRecordsItsReason() throws {
         let j = try tempJournal()
         try j.addRestore(row("a"))
-        try j.setRestoreState("a", .failed, error: "hash check failed")
+        try j.recordRestoreFault("a", .failed, error: "hash check failed")
         let got = try #require(try j.restore(id: "a"))
         #expect(got.state == .failed)
         #expect(got.error == "hash check failed")
+    }
+
+    /// A TRANSIENT fault leaves the transfer where it was so the run loop keeps retrying — only the reason
+    /// is recorded. Marking every fault terminal is how a network blip strands a paid-for transfer.
+    @Test func aTransientFaultRecordsTheReasonWithoutKillingTheTransfer() throws {
+        let j = try tempJournal()
+        try j.addRestore(row("a", state: .pending))
+        try j.recordRestoreFault("a", .pending, error: "S3 RequestTimeout")
+        let got = try #require(try j.restore(id: "a"))
+        #expect(got.state == .pending)
+        #expect(got.state.isActive, "a transient fault must leave the transfer in the run loop's work list")
+        #expect(got.error == "S3 RequestTimeout")
+    }
+
+    /// ...and the moment a step succeeds, that reason is history. Leaving it behind would pin a stale
+    /// "we hit a snag" note on a transfer that has since recovered.
+    @Test func aSuccessfulStepClearsAStaleFault() throws {
+        let j = try tempJournal()
+        try j.addRestore(row("a", state: .pending))
+        try j.recordRestoreFault("a", .pending, error: "S3 RequestTimeout")
+
+        try j.setRestoreState("a", .transferring, readyAt: 5_000)
+        let got = try #require(try j.restore(id: "a"))
+        #expect(got.error == nil, "a recovered transfer must not still be showing the old fault")
+        #expect(got.readyAt == 5_000)      // ...while still not clobbering what a success DOES set
     }
 
     /// Reopening clears the stale failure but KEEPS `readyAt` — the blob is still warm, and that fact is
@@ -116,7 +141,7 @@ import Foundation
         let j = try tempJournal()
         try j.addRestore(row("a", state: .pending))
         try j.setRestoreState("a", .transferring, readyAt: 5_000)
-        try j.setRestoreState("a", .failed, completedAt: 6_000, error: "network died")
+        try j.recordRestoreFault("a", .failed, error: "network died")
 
         try j.reopenRestore("a", .pending)
         let got = try #require(try j.restore(id: "a"))
@@ -124,6 +149,36 @@ import Foundation
         #expect(got.error == nil)
         #expect(got.completedAt == nil)
         #expect(got.readyAt == 5_000)     // the window survives — this is what keeps the resume free
+    }
+
+    /// **A stopped transfer stays stopped.** `restorePass` snapshots its work list and then awaits S3 for
+    /// each row, so a Stop can land while a pass is mid-flight; when that pass resumes it still holds the
+    /// old conclusion and writes it. Guarding the write at the SQL level (rather than asking every caller to
+    /// re-check) is what makes "Stop actually stops" structural — without it, pressing Stop during a pass
+    /// silently un-cancels itself and the transfer carries on.
+    @Test func aFinishedTransferCannotBeReanimatedByAnInFlightPass() throws {
+        let j = try tempJournal()
+        try j.addRestore(row("a", state: .pending))
+        try j.setRestoreState("a", .canceled)          // the user pressed Stop
+
+        // ...and now the pass that was already running writes what it concluded a moment ago.
+        try j.setRestoreState("a", .transferring, readyAt: 5_000)
+        try j.recordRestoreFault("a", .failed, error: "late fault from the same pass")
+
+        let got = try #require(try j.restore(id: "a"))
+        #expect(got.state == .canceled, "a stale pass must not revive a transfer the user stopped")
+        #expect(got.readyAt == nil)
+        #expect(got.error == nil)
+    }
+
+    /// The deliberate revival is exempt — that's the whole job of `reopenRestore`, and it is only ever
+    /// reached by the user pressing Pick back up.
+    @Test func reopenIsTheOneWayBackFromStopped() throws {
+        let j = try tempJournal()
+        try j.addRestore(row("a", state: .pending))
+        try j.setRestoreState("a", .canceled)
+        try j.reopenRestore("a", .pending)
+        #expect(try j.restore(id: "a")?.state == .pending)
     }
 
     @Test func deleteRemovesOnlyThatRow() throws {

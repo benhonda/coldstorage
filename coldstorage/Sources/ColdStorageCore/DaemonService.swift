@@ -603,7 +603,7 @@ public actor DaemonService {
         let now = Int(Date().timeIntervalSince1970)
         return try session.journal.listRestores().map { r in
             RestoreRowDTO(id: r.id, fileId: r.fileId,
-                          relativePath: paths[r.fileId] ?? (r.out as NSString).lastPathComponent,
+                          relativePath: paths[r.fileId] ?? URL(fileURLWithPath: r.out).lastPathComponent,
                           out: r.out, state: r.state.rawValue, tier: r.tier.rawValue, jobId: r.jobId,
                           bytes: r.bytes, requestedAt: r.requestedAt, readyAt: r.readyAt,
                           completedAt: r.completedAt, error: r.error,
@@ -654,9 +654,11 @@ public actor DaemonService {
 
         var changed = false
         for row in active {
-            // `needsAuthorization` is the app's move, not ours — the backend has to be paid before anything
-            // can thaw. Stepping it here would just re-earn the same answer every pass.
-            guard row.state != .needsAuthorization else { continue }
+            // `needsAuthorization` rows are stepped too, even though the move is the app's (the backend has
+            // to be paid before anything can thaw). Skipping them would make the state a dead end: if those
+            // blobs DO get thawed — the user re-quoted and paid, warming the very same objects — the row
+            // could never notice, because the only way to know is to ask S3. A HeadObject per pass is
+            // nothing, and it buys a state that heals itself instead of one that needs rescuing.
             let now = Int(Date().timeIntervalSince1970)
             do {
                 let outcome = try await session.restoreEngine.restore(
@@ -702,9 +704,21 @@ public actor DaemonService {
                     }
                 }
             } catch {
-                // Record the fault ON the transfer so the user can see which one broke and why, instead of
-                // a bare toast detached from any row. Retryable from the Transfers page.
-                try? session.journal.setRestoreState(row.id, .failed, error: "\(error)")
+                // Classify before condemning — via `FailureKind`, the same SSOT the upload path uses, so
+                // there is one answer in this codebase to "is this worth another try?".
+                //
+                // Marking every error `.failed` (as this first did) is a data-loss-shaped bug: `.failed`
+                // is not active, so the run loop never touches the row again. One flaky HeadObject in the
+                // middle of a 48-hour wait would permanently strand a transfer the user PAID for, with no
+                // retry and nothing to notice it — they'd have to spot it and press Pick back up themselves.
+                //
+                // So transient faults leave the row exactly where it is (the next pass retries, which is
+                // the whole point of a self-progressing engine) and only record WHY, so the page can say
+                // we hit a snag and are still going. Only a permanent fault — a hash mismatch, AccessDenied,
+                // a config fault — is terminal.
+                let kind = FailureKind.classify(error)
+                try? session.journal.recordRestoreFault(row.id, kind.isPermanent ? .failed : row.state,
+                                                        error: kind.message)
                 changed = true
             }
         }
@@ -818,14 +832,24 @@ public actor DaemonService {
             guard let f = try session.journal.fileMapping(file) else {
                 throw ColdStorageError.invalidRequest("no archived file '\(file)'")
             }
-            // Bulk is the only tier we quote at, so it's the only tier we may request: asking S3 for a
-            // faster one would spend money the backend never charged for (root RETRIEVAL.md).
-            let tier = try RestoreTier.parse(p["tier"] ?? RestoreTier.bulk.rawValue)
+            // A NEW request for a file supersedes any transfer of it still in flight. Without this, the
+            // "Ask again" route out of a stalled `needsAuthorization` transfer leaves the dead row behind:
+            // it is still `isActive`, so it sits in "In progress" and pads the sidebar count forever, beside
+            // the live transfer that replaced it. Stopping it says what actually happened — this request took
+            // over — and costs nothing, since a superseded row never paid for a thaw of its own.
+            for stale in (try? session.journal.activeRestores())?.filter({ $0.fileId == file }) ?? [] {
+                try? session.journal.setRestoreState(stale.id, .canceled)
+            }
             // RECORD FIRST, step second. The row is what makes this transfer survive a restart, a sign-out,
             // and a closed app — and the user may already have PAID for it by the time we get here, so it
             // must be durable before any network call gets a chance to fail.
+            //
+            // Tier is NOT a parameter. Bulk is the only tier the backend quotes at, so requesting a faster
+            // one would spend money we never charged for (root RETRIEVAL.md) — and a wire param the caller
+            // can set is exactly how that happens by accident. There is nothing to get wrong if there is
+            // nothing to pass.
             let row = RestoreRow(id: UUID().uuidString, fileId: file, out: out, jobId: p["jobId"],
-                                 state: .pending, tier: tier, bytes: f.length,
+                                 state: .pending, tier: .bulk, bytes: f.length,
                                  requestedAt: Int(Date().timeIntervalSince1970))
             try session.journal.addRestore(row)
             publishRestoresChanged()
@@ -849,7 +873,7 @@ public actor DaemonService {
         case "resumeRestore":
             let session = try requireSession("resumeRestore")
             guard let id = p["id"] else { throw ColdStorageError.invalidRequest("resumeRestore requires params.id") }
-            guard let row = try session.journal.restore(id: id) else {
+            guard try session.journal.restore(id: id) != nil else {
                 throw ColdStorageError.invalidRequest("no transfer '\(id)'")
             }
             // Re-open even when the thaw window has lapsed: the next pass will discover the blobs are cold
@@ -859,7 +883,6 @@ public actor DaemonService {
             try session.journal.reopenRestore(id, .pending)
             publishRestoresChanged()
             Task { await self.restorePass(session) }
-            _ = row
             return AnyEncodable(try restoreRowDTOs(session))
         case "forgetRestore":
             let session = try requireSession("forgetRestore")

@@ -359,30 +359,64 @@ public final class Journal: @unchecked Sendable {
             """, [.text(id)]).first.map(restoreRow)
     }
 
+    /// The in-flight states, as SQL placeholders + binds starting at `from`. Derived from
+    /// `RestoreState.isActive` rather than spelled out, so "what counts as in flight" has one definition
+    /// (PILLAR3) and adding a state can't leave a query behind.
+    private func activeStateHoles(from: Int) -> (sql: String, binds: [Bind]) {
+        let states = RestoreState.allCases.filter(\.isActive).map(\.rawValue)
+        let sql = states.indices.map { "?\($0 + from)" }.joined(separator: ",")
+        return (sql, states.map(Bind.text))
+    }
+
     /// The transfers the run loop should push forward this pass — everything still working. Ordered oldest
     /// first so the longest-waiting transfer is served first.
     public func activeRestores() throws -> [RestoreRow] {
         lock.lock(); defer { lock.unlock() }
-        let states = RestoreState.allCases.filter(\.isActive).map(\.rawValue)
-        let holes = states.indices.map { "?\($0 + 1)" }.joined(separator: ",")
+        let active = activeStateHoles(from: 1)
         return try run("""
             SELECT id, fileId, out, jobId, state, tier, bytes, requestedAt, readyAt, completedAt, error
-            FROM restores WHERE state IN (\(holes)) ORDER BY requestedAt ASC, id ASC
-            """, states.map(Bind.text)).map(restoreRow)
+            FROM restores WHERE state IN (\(active.sql)) ORDER BY requestedAt ASC, id ASC
+            """, active.binds).map(restoreRow)
     }
 
-    /// Advance one transfer. `readyAt`/`completedAt`/`error` are only ever SET here, never cleared by a
-    /// `nil` argument — `nil` means "leave it alone", so a `pending → transferring` step can't erase the
-    /// `readyAt` that a free resume is decided from. Clearing on retry is explicit (`reopenRestore`).
+    /// Advance one transfer after a step SUCCEEDED. `readyAt`/`completedAt` are only ever set, never
+    /// cleared by a `nil` argument — `nil` means "leave it alone", so a `pending → transferring` step can't
+    /// erase the `readyAt` a free resume is decided from.
+    ///
+    /// `error` is the opposite: it is CLEARED, because the step just worked. A recorded fault is history
+    /// the moment the thing succeeds, and leaving it behind would pin a stale "we hit a snag" note on a
+    /// transfer that has since recovered — the same class of lie this whole feature exists to stop telling.
+    /// Recording a fault is a separate method on purpose: two intents, two names, no tri-state flag.
+    ///
+    /// **Only moves a transfer that is still IN FLIGHT** (`WHERE state IN (active)`), and that guard is the
+    /// point rather than a nicety. `restorePass` snapshots its work list and then awaits S3 for each row, so
+    /// a Stop can land mid-pass; without this the pass would resume and write its stale conclusion over the
+    /// top, quietly un-cancelling a transfer the user had stopped. Making it structural means no future
+    /// caller has to remember. Deliberate revivals go through `reopenRestore`, which is exempt.
     public func setRestoreState(_ id: String, _ state: RestoreState,
-                                readyAt: Int? = nil, completedAt: Int? = nil, error: String? = nil) throws {
+                                readyAt: Int? = nil, completedAt: Int? = nil) throws {
         lock.lock(); defer { lock.unlock() }
+        let active = activeStateHoles(from: 5)
         try run("""
             UPDATE restores SET state=?2,
-              readyAt=COALESCE(?3, readyAt), completedAt=COALESCE(?4, completedAt), error=COALESCE(?5, error)
-            WHERE id=?1
+              readyAt=COALESCE(?3, readyAt), completedAt=COALESCE(?4, completedAt), error=NULL
+            WHERE id=?1 AND state IN (\(active.sql))
             """, [.text(id), .text(state.rawValue), readyAt.map(Bind.int) ?? .null,
-                  completedAt.map(Bind.int) ?? .null, error.map(Bind.text) ?? .null])
+                  completedAt.map(Bind.int) ?? .null] + active.binds)
+    }
+
+    /// Record why a step failed. `state` is the caller's classification: a permanent fault lands `.failed`,
+    /// a transient one stays where it was so the run loop retries it next pass (see `restorePass`). Either
+    /// way the reason is stored ON the transfer, so the page can name what went wrong rather than showing a
+    /// bare toast detached from any row.
+    ///
+    /// Same in-flight guard as `setRestoreState`, for the same reason: a fault from a pass that was already
+    /// running must not reanimate a transfer the user stopped while it ran.
+    public func recordRestoreFault(_ id: String, _ state: RestoreState, error: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        let active = activeStateHoles(from: 4)
+        try run("UPDATE restores SET state=?2, error=?3 WHERE id=?1 AND state IN (\(active.sql))",
+                [.text(id), .text(state.rawValue), .text(error)] + active.binds)
     }
 
     /// Put a stopped/failed transfer back to work: clear the stale error so the row doesn't carry the last

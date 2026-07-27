@@ -72,12 +72,7 @@ const STATUS_FROM_TRANSFER: Partial<Record<RestoreRow["state"], FileStatus>> = {
 const applyRestore = (file: ArchivedFile, r: RestoreRow | undefined): ArchivedFile => {
   const status = r && STATUS_FROM_TRANSFER[r.state];
   if (!r || !status) return file;
-  return {
-    ...file,
-    status,
-    transferId: r.id,
-    localPath: r.state === "saved" ? r.out : (file.localPath ?? null),
-  };
+  return { ...file, status, localPath: r.state === "saved" ? r.out : (file.localPath ?? null) };
 };
 
 export const useFiles = (

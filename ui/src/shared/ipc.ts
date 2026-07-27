@@ -27,7 +27,7 @@ export type {
   Source,
   Status,
 } from "../daemon/protocol.ts";
-export { ACTIVE_RESTORE_STATES, isActiveRestore } from "../daemon/protocol.ts";
+export { isActiveRestore } from "../daemon/protocol.ts";
 
 import type { Commands, DaemonEventName, DaemonEvents, Method, ParamsArg } from "../daemon/protocol.ts";
 

@@ -138,12 +138,20 @@ export type RestoreState =
   | "canceled"
   | "failed";
 
-/** The states that still count as in-flight — what the Transfers page files under "Active" and what the
- * sidebar badge counts. Mirrors `RestoreState.isActive` in `Models.swift`. */
-export const ACTIVE_RESTORE_STATES = ["needsAuthorization", "pending", "transferring"] as const;
+/** Is this transfer still working (or waiting on us)? What the Transfers page files under "In progress"
+ * and what the sidebar badge counts. Mirrors `RestoreState.isActive` in `Models.swift` — the Swift side is
+ * the SSOT, this is its mirror, and both are exhaustive over the same six states.
+ *
+ * A `Set<RestoreState>` rather than an array + `.includes`, because the array form needs a cast to
+ * `readonly string[]` to accept a `RestoreState` — and a cast here would be load-bearing for what the app
+ * treats as live work (PILLAR4: type-casting only as a last resort). This needs none. */
+const ACTIVE_RESTORE_STATES: ReadonlySet<RestoreState> = new Set([
+  "needsAuthorization",
+  "pending",
+  "transferring",
+]);
 
-export const isActiveRestore = (s: RestoreState): boolean =>
-  (ACTIVE_RESTORE_STATES as readonly string[]).includes(s);
+export const isActiveRestore = (s: RestoreState): boolean => ACTIVE_RESTORE_STATES.has(s);
 
 /**
  * One requested transfer, straight from the daemon's `restores` journal table.
@@ -296,12 +304,17 @@ export interface Commands {
   listRestores: { params: Record<string, never>; result: RestoreRow[] };
   /** Start a transfer: record it durably, then take the first step. Call this only once the restore is
    * AUTHORIZED (paid, or free under the allowance) — `jobId` links the row to what was paid. The daemon's
-   * run loop drives it from here, so it keeps going with the app closed.
+   * run loop drives it from here, so it keeps going with the app closed. A new request for a file
+   * SUPERSEDES any transfer of it still in flight (the old row is stopped), so a re-ask can't leave a dead
+   * row padding the count.
+   *
+   * There is no `tier`: bulk is the only tier the backend quotes at, so letting a caller name a faster one
+   * would spend money nobody charged for (root RETRIEVAL.md).
    *
    * Every one of these commands answers with the WHOLE list, so the caller never has to reconcile a
    * mutation against its own copy — it just adopts the reply. */
   requestRestore: {
-    params: { file: string; out: string; jobId?: string; tier?: string };
+    params: { file: string; out: string; jobId?: string };
     result: RestoreRow[];
   };
   /** Stop a transfer. This stops the COPY, not the thaw: a Glacier retrieval can't be called back and the

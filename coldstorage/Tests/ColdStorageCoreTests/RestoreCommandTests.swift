@@ -240,6 +240,25 @@ import Crypto
         #expect(try Data(contentsOf: URL(fileURLWithPath: dest)) == payload)
     }
 
+    /// Asking for a file again SUPERSEDES the transfer of it still in flight, rather than stacking a
+    /// second live row beside it. Without this, the "Ask again" way out of a stalled transfer leaves the
+    /// dead one sitting in "In progress" and padding the sidebar count for good.
+    @Test func askingAgainSupersedesTheTransferStillInFlight() async throws {
+        let f = fixture()          // frozen vault ⇒ the first transfer stays active
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let session = try await signedInWithArchivedFile(f)
+
+        let first = rows(try await reply(f.daemon, "requestRestore", ["file": "f1", "out": "/tmp/a.jpg"]).result)
+        let firstId = try #require(first.first?["id"] as? String)
+
+        _ = try await reply(f.daemon, "requestRestore", ["file": "f1", "out": "/tmp/b.jpg"])
+
+        let all = try session.journal.listRestores()
+        #expect(all.count == 2, "history keeps both — superseding is not deleting")
+        #expect(try session.journal.activeRestores().count == 1, "only the newest request may be live")
+        #expect(all.first(where: { $0.id == firstId })?.state == .canceled)
+    }
+
     // MARK: - refusals
 
     @Test func requestingAnUnknownFileIsRejected() async throws {
