@@ -63,6 +63,14 @@ engines. `DaemonService` holds a single `private var session: UserSession?` and 
   lived here, for the local MinIO loop. Both were retired 2026-07-14 — MinIO proved nothing the test suite
   doesn't prove deterministically, and a second identity path into a security-sensitive daemon is not
   something to carry for a convenience.)*
+- **Staging vs production is an account-backend lane, not a vault lane.** `ENV=staging|production`
+  (baked by `ui:mac:bake-config`) switches only which account-backend the app talks to — sandbox vs
+  live Paddle, and which Neon key-blob DB. Cognito and the S3 vault bucket are **shared**: sign in as
+  the same user in either lane and you read/write the same `blobs/<sub>/` prefix. Upload in staging,
+  restore in prod → same objects. Deliberate — a staging vault would always be near-empty and prove
+  nothing, and bucket versioning (noncurrent versions never expired outside the reap path) is the
+  guard against a buggy build. The one real hazard is reclamation testing: a reap-tagged blob's
+  noncurrent version expires after 1 day, so test reap/delete changes against a scratch identity.
 - **`VaultPrefix`** (`VaultPrefix.swift`) is the only way to spell a user's S3 namespace:
   `.key(for: blobId)` (no trailing slash) vs `.listing` (**with** the trailing slash, which
   `ListObjectsV2` and the IAM `s3:prefix` condition `blobs/<sub>/*` both require). A bare
