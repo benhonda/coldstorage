@@ -15,6 +15,12 @@
       "skillPath": "skills/engineering/adpharm-stack/SKILL.md",
       "computedHash": "70203f29fb79a69586703f9f993a82803bae8eeda77a05879615a22a4fd7ce8c"
     },
+    "agentation": {
+      "source": "benjitaylor/agentation",
+      "sourceType": "github",
+      "skillPath": "skills/agentation/SKILL.md",
+      "computedHash": "6ba2c955bee6ab3e9c7781b2553e3574b4c9ec35e539437d0831bfe368de8550"
+    },
     "ai-gateway": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",

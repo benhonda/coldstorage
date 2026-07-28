@@ -8,6 +8,7 @@ import {
   isRouteErrorResponse,
   useRouteLoaderData,
 } from "react-router";
+import { Agentation } from "agentation";
 import { getPreferencesFromRequest } from "~/lib/preferences/preference-cookie.server";
 import { getAllPublicEnv } from "~/lib/env/all-server-env";
 import { blockingThemeScript } from "~/lib/theme/blocking-theme-script";
@@ -85,6 +86,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         {children}
+        {/* Agentation annotation toolbar — dev only; `import.meta.env.DEV` is identical on
+            server + client under Vite, so no hydration mismatch. */}
+        {import.meta.env.DEV && <Agentation />}
         <ScrollRestoration />
         <Scripts />
       </body>
