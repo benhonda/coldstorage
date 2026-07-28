@@ -44,7 +44,13 @@ const CANVAS = 1024
 const BODY = 824
 const GUTTER = (CANVAS - BODY) / 2
 /** Mark height as a fraction of the tile body. */
-const MARK_SCALE = 0.62
+const MARK_SCALE = 0.9
+/**
+ * Vertical nudge as a fraction of the tile body, positive = down. The mark's lift shadow hangs off
+ * its bottom edge, so true geometric centring reads as sitting slightly high — this optically
+ * recentres it.
+ */
+const MARK_NUDGE_Y = 0.02
 
 /**
  * The dark-variant-on-dark-tile pairing is a design decision, not a toggle — a macOS app has exactly
@@ -112,7 +118,7 @@ function nestMark(file: string): string {
 
   const k = (BODY * MARK_SCALE) / h
   const x = GUTTER + (BODY - w * k) / 2
-  const y = GUTTER + (BODY - h * k) / 2
+  const y = GUTTER + (BODY - h * k) / 2 + BODY * MARK_NUDGE_Y
 
   // MUST be a capture-then-assert, not a bare .replace: a regex that doesn't match makes String.replace a
   // silent no-op returning the original string. The nested <svg> would keep its delivered width/height and
