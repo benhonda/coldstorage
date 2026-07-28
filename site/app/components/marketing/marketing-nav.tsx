@@ -34,7 +34,7 @@ export function MarketingNav({ links, cta, solid }: MarketingNavProps) {
             top, which did nothing on the pages that aren't the home page. */}
         <a className="csf-mktnav__brand" href="/" aria-label="ColdStorage — home">
           <BrandMark className="csf-mktnav__mark" />
-          <Wordmark />
+          <Wordmark className="csf-mktnav__wordmark" />
         </a>
         <nav className="csf-mktnav__links" aria-label="Primary">
           {links.map((l) => (

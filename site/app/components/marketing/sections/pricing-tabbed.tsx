@@ -70,42 +70,47 @@ export function SectionPricingTabbed({ showHead = true }: SectionPricingTabbedPr
           </div>
         ) : null}
         <Reveal y={20}>
-          <div className="cs-pricing__tabs" role="tablist" aria-label="Pricing">
-            {TABS.map((t, i) => {
-              const active = tab === t.value;
-              return (
-                <button
-                  key={t.value}
-                  ref={(el) => {
-                    tabRefs.current[i] = el;
-                  }}
-                  type="button"
-                  role="tab"
-                  id={`${baseId}-tab-${t.value}`}
-                  aria-selected={active}
-                  aria-controls={`${baseId}-panel-${t.value}`}
-                  tabIndex={active ? 0 : -1}
-                  className="cs-pricing__tab"
-                  data-active={active}
-                  onClick={() => setTab(t.value)}
-                  onKeyDown={(e) => onKeyDown(e, i)}
-                >
-                  <span className="cs-pricing__tab-t">{t.label}</span>
-                  <span className="cs-pricing__tab-s">{t.sub}</span>
-                </button>
-              );
-            })}
-          </div>
-          {/* `key={tab}` re-mounts the panel so the fade-in animation replays on switch. */}
-          <div
-            key={tab}
-            className="cs-pricing__panel"
-            role="tabpanel"
-            id={`${baseId}-panel-${tab}`}
-            aria-labelledby={`${baseId}-tab-${tab}`}
-            tabIndex={0}
-          >
-            {tab === "storage" ? <PricingStorage /> : <PricingRetrieval />}
+          {/* One card owns both the tablist and the panel: the tabs are the card's header
+              row (full-bleed, hairline under, accent underline on the active tab) rather
+              than free-floating buttons above it. */}
+          <div className="cs-pricing__card cs-pricing__card--tabbed">
+            <div className="cs-pricing__tabs" role="tablist" aria-label="Pricing">
+              {TABS.map((t, i) => {
+                const active = tab === t.value;
+                return (
+                  <button
+                    key={t.value}
+                    ref={(el) => {
+                      tabRefs.current[i] = el;
+                    }}
+                    type="button"
+                    role="tab"
+                    id={`${baseId}-tab-${t.value}`}
+                    aria-selected={active}
+                    aria-controls={`${baseId}-panel-${t.value}`}
+                    tabIndex={active ? 0 : -1}
+                    className="cs-pricing__tab"
+                    data-active={active}
+                    onClick={() => setTab(t.value)}
+                    onKeyDown={(e) => onKeyDown(e, i)}
+                  >
+                    <span className="cs-pricing__tab-t">{t.label}</span>
+                    <span className="cs-pricing__tab-s">{t.sub}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {/* `key={tab}` re-mounts the panel so the fade-in animation replays on switch. */}
+            <div
+              key={tab}
+              className="cs-pricing__panel"
+              role="tabpanel"
+              id={`${baseId}-panel-${tab}`}
+              aria-labelledby={`${baseId}-tab-${tab}`}
+              tabIndex={0}
+            >
+              {tab === "storage" ? <PricingStorage /> : <PricingRetrieval />}
+            </div>
           </div>
         </Reveal>
       </div>
@@ -113,10 +118,11 @@ export function SectionPricingTabbed({ showHead = true }: SectionPricingTabbedPr
   );
 }
 
-/** Tab one — the six storage sizes, cheapest first, free tier flagged. */
+/** Tab one — the six storage sizes, cheapest first, free tier flagged.
+    Renders bare content — the shared tabbed card in the section owns the chrome. */
 function PricingStorage() {
   return (
-    <div className="cs-pricing__card">
+    <>
       <table className="cs-pricing__table">
         <thead>
           <tr>
@@ -192,15 +198,16 @@ function PricingStorage() {
           {PRICING.renewNote}
         </span>
       </div>
-    </div>
+    </>
   );
 }
 
-/** Tab two — what pulling files back out costs, at pass-through rates. */
+/** Tab two — what pulling files back out costs, at pass-through rates.
+    Renders bare content — the shared tabbed card in the section owns the chrome. */
 function PricingRetrieval() {
   return (
     <div className="cs-pricing__retrieval">
-      <div className="cs-pricing__card">
+      <div>
         <p
           style={{
             margin: "4px 0 8px",

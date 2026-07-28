@@ -65,11 +65,12 @@
   /* Fade in after the row has started opening; fade out immediately on close. */
   transition-delay: 0s, 60ms;
 }
-/* Padding lives here (not on the panel) so the 0fr row clamps it away too — no residual
-   gap under a closed row, and nothing to animate separately. */
+/* No padding here, deliberately: this element is the 0fr row's item, and a border-box
+   element can never be shorter than its own padding — padding-bottom on it survived the
+   collapse as a ~24px ghost gap under every closed row. The padding lives one level
+   down, on the answer, where the clamped row genuinely hides it. */
 .csf-accordion__panel-inner {
   overflow: hidden;
-  padding: 0 4px 24px;
 }
 @media (prefers-reduced-motion: reduce) {
   .csf-accordion__panel {
@@ -78,6 +79,8 @@
 }
 .csf-accordion__a {
   margin: 0;
+  /* Moved off __panel-inner — see the comment there. */
+  padding: 0 4px 24px;
   max-width: 62ch;
   font: 400 var(--text-base) / 1.65 var(--font-ui);
   color: var(--text-secondary);

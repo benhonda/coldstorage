@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-07-28
+
+- feat(site): the pricing tabs become the card's header row — full-bleed, hairline under, accent underline on the active tab — instead of pills floating above it; `--cs-pricing-card-pad` is the one inset both the row and the card read.
+- fix(site): closed FAQ rows no longer leave a ~24px ghost gap — the padding moved off `accordion__panel-inner` (a border-box element can't collapse below its own padding) down to the answer.
+- fix(site): right-aligned money headers in `cs-pricing__table` — the `th` element selector was outranking the bare alignment class.
+- chore(site): `agentation` annotation toolbar mounts in dev only (`import.meta.env.DEV` in `root.tsx`), plus its skill in `.claude/`/`.agents/`.
+- docs(daemon): `coldstorage/DESIGN.md` records that staging and prod SHARE Cognito and the S3 vault — only the account-backend differs — so reap/delete changes get tested against a scratch identity.
+
 ## 2026-07-27
 
 - fix(daemon): a "Hit a snag" note now clears the moment a restore pass answers — `restorePass` only wrote the row on a STATE change, so an expired-token fault stayed pinned to a healthy days-long thaw. `authenticate` also kicks a pass, so fresh credentials heal in-flight downloads immediately instead of on the next beat.
