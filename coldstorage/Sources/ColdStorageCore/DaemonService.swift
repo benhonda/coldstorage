@@ -647,7 +647,9 @@ public actor DaemonService {
     ///
     /// Each row is stepped independently and a failure is recorded on THAT row, never thrown: one bad
     /// transfer must not abort the pass for the others, and it must not crash the run loop.
-    private func restorePass(_ session: UserSession) async {
+    /// Internal (not private) so tests can drive a pass deterministically — production callers are the
+    /// run loop and the fire-and-forget kicks (`requestRestore`/`resumeRestore`/`authenticate`).
+    func restorePass(_ session: UserSession) async {
         // Skip if a pass is already in flight; it will pick up anything this one would have. No `await`
         // between the check and the set, so the acquire is atomic on the actor — no reentrancy gap.
         if restoring { return }
@@ -708,18 +710,23 @@ public actor DaemonService {
                     bus.publish(DaemonEvent("restoreCompleted", ["file": row.fileId, "out": row.out]))
                     changed = true
                 case .thawInProgress, .thawRequested:
-                    // Still warming. Only a state CHANGE is worth an event — a row that was already
-                    // `pending` last pass is still pending, and re-announcing it every interval would
-                    // repaint the app for no news.
-                    if row.state != .pending {
+                    // Still warming. Only NEWS is worth a write + event: a state change, or a recorded
+                    // fault this successful step just disproved. `setRestoreState` clears `error` (a
+                    // recorded fault is history the moment the thing succeeds — see Journal), and a row
+                    // whose state didn't move never reaches it via the state check alone, so without the
+                    // `error` leg a transient snag ("token expired" after an overnight sleep) would stay
+                    // pinned to a healthy transfer for the rest of a days-long thaw. A row that was
+                    // already clean and `pending` last pass still writes/announces nothing.
+                    if row.state != .pending || row.error != nil {
                         try session.journal.setRestoreState(row.id, .pending)
                         changed = true
                     }
                 case .authorizationRequired:
                     // The backend hasn't thawed these blobs (payment never landed, or the 5-day window
                     // lapsed and they refroze). Honest state: this needs authorizing again, and the app
-                    // must re-quote rather than wait on a thaw that is never coming.
-                    if row.state != .needsAuthorization {
+                    // must re-quote rather than wait on a thaw that is never coming. Same `error` leg as
+                    // above: a step that ANSWERED (even "pay first") clears any stale snag note.
+                    if row.state != .needsAuthorization || row.error != nil {
                         try session.journal.setRestoreState(row.id, .needsAuthorization)
                         changed = true
                     }
@@ -1038,9 +1045,17 @@ public actor DaemonService {
             // above just had Cognito accept this very token (see IDToken).
             let sub = try IDToken.sub(of: idToken)
             if let current = session, current.belongs(toSub: sub) {
+                // Fresh credentials just landed — push in-flight transfers NOW rather than waiting out
+                // the run loop's beat. This is the recovery half of the post-sleep story: the wake-up
+                // pass fails on the stale token, the app re-authenticates within moments, and this kick
+                // turns "heals within 5 minutes" into "heals immediately". Same fire-and-forget shape as
+                // the transfer commands; `restorePass` no-ops when nothing is active.
+                Task { await self.restorePass(current) }
                 return AnyEncodable(AuthDTO(ok: true, identityId: identityId))
             }
-            beginSession(try sessions.make(.user(sub: sub, identityId: identityId)))
+            let fresh = try sessions.make(.user(sub: sub, identityId: identityId))
+            beginSession(fresh)
+            Task { await self.restorePass(fresh) }
             return AnyEncodable(AuthDTO(ok: true, identityId: identityId))
         case "deauthenticate":
             // **Sign-out: where a session dies.** Drop the STS creds immediately (rather than letting them
