@@ -13,40 +13,13 @@ import Crypto
 /// is RECORDED, that it comes back on the next read, and that stopping/resuming/forgetting do what their
 /// names claim.
 @Suite struct RestoreCommandTests {
-    /// A vault whose objects are still FROZEN. `FakeVault` reports every object `.ready`, so a transfer
-    /// against it downloads and completes within the same run-loop pass — which is the wrong fixture for
-    /// testing what happens to a transfer that is still in flight. Frozen + `canSelfThaw: false` is the
-    /// real multi-user shape (the daemon may not thaw; the backend must), and it holds a transfer active
-    /// deterministically instead of racing the pass.
-    private final class FrozenVault: Vault, @unchecked Sendable {
-        private let inner = FakeVault()
-        func thawState(key: String) async throws -> ThawState { .needed }
-        func requestThaw(key: String, days: Int, tier: RestoreTier) async throws {}
-        func getRange(key: String, offset: Int, length: Int) async throws -> AsyncThrowingStream<Data, Error> {
-            throw ColdStorageError.s3("InvalidObjectState: still frozen")
-        }
-        func usageBytes(prefix: VaultPrefix) async throws -> Int { try await inner.usageBytes(prefix: prefix) }
-        // The upload half is irrelevant here — forward it so the fake stays one implementation, not two.
-        func createUpload(key: String) async throws -> String { try await inner.createUpload(key: key) }
-        func existingParts(key: String, uploadId: String) async throws -> Set<Int> {
-            try await inner.existingParts(key: key, uploadId: uploadId)
-        }
-        func uploadPart(key: String, uploadId: String, number: Int, data: Data) async throws -> (etag: String, sha: String) {
-            try await inner.uploadPart(key: key, uploadId: uploadId, number: number, data: data)
-        }
-        func complete(key: String, uploadId: String, parts: [PartRow]) async throws {
-            try await inner.complete(key: key, uploadId: uploadId, parts: parts)
-        }
-        func verify(key: String) async throws { try await inner.verify(key: key) }
-        func markReclaimable(key: String) async throws { try await inner.markReclaimable(key: key) }
-    }
-
     private func fixture(frozen: Bool = true) -> (daemon: DaemonService, sessions: SessionFactory, root: URL) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("cs-restorecmd-\(UUID().uuidString)", isDirectory: true)
         // `canSelfThaw: false` = the multi-user daemon, which is the interesting one: it may not thaw, so
-        // the paid-retrieval gate is live.
-        let store: any Vault = frozen ? FrozenVault() : FakeVault()
+        // the paid-retrieval gate is live. Frozen (`StuckVault`, see FakeVault.swift) holds a transfer
+        // active deterministically instead of racing the pass.
+        let store: any Vault = frozen ? StuckVault(at: .needed) : FakeVault()
         let sessions = SessionFactory(dataRoot: root, store: store, canSelfThaw: false)
         return (DaemonService(bus: EventBus(), sessions: sessions), sessions, root)
     }

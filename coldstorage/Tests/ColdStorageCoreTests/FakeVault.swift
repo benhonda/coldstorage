@@ -151,3 +151,35 @@ final class FakeVault: Vault, @unchecked Sendable {
     }
     func usageBytes(prefix: VaultPrefix) async throws -> Int { lock.withLock { _objects.values.reduce(0) { $0 + $1.count } } }
 }
+
+/// `FakeVault`, stuck at one thaw state. `FakeVault` reports every object `.ready`, so a transfer against
+/// it downloads and completes within the same run-loop pass — the wrong fixture for anything about a
+/// transfer still in flight. Pinning the state holds a transfer active DETERMINISTICALLY instead of racing
+/// the pass: `.needed` + `canSelfThaw: false` (the real multi-user shape — the daemon may not thaw; the
+/// backend must) lands `.authorizationRequired`; `.inProgress` lands `.thawInProgress` (row stays pending).
+/// A decorator here rather than another knob on `FakeVault` itself: the upload half forwards untouched, and
+/// a fixed answer needs no state — one fake stays one implementation (this file's whole reason to exist).
+final class StuckVault: Vault, @unchecked Sendable {
+    private let inner = FakeVault()
+    private let state: ThawState
+    init(at state: ThawState) { self.state = state }
+    func thawState(key: String) async throws -> ThawState { state }
+    func requestThaw(key: String, days: Int, tier: RestoreTier) async throws {}
+    func getRange(key: String, offset: Int, length: Int) async throws -> AsyncThrowingStream<Data, Error> {
+        throw ColdStorageError.s3("InvalidObjectState: still frozen")
+    }
+    func usageBytes(prefix: VaultPrefix) async throws -> Int { try await inner.usageBytes(prefix: prefix) }
+    // The upload half is irrelevant to a stuck thaw — forward it so the fake stays one implementation.
+    func createUpload(key: String) async throws -> String { try await inner.createUpload(key: key) }
+    func existingParts(key: String, uploadId: String) async throws -> Set<Int> {
+        try await inner.existingParts(key: key, uploadId: uploadId)
+    }
+    func uploadPart(key: String, uploadId: String, number: Int, data: Data) async throws -> (etag: String, sha: String) {
+        try await inner.uploadPart(key: key, uploadId: uploadId, number: number, data: data)
+    }
+    func complete(key: String, uploadId: String, parts: [PartRow]) async throws {
+        try await inner.complete(key: key, uploadId: uploadId, parts: parts)
+    }
+    func verify(key: String) async throws { try await inner.verify(key: key) }
+    func markReclaimable(key: String) async throws { try await inner.markReclaimable(key: key) }
+}

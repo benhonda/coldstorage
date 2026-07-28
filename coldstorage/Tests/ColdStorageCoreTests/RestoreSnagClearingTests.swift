@@ -9,34 +9,6 @@ import Foundation
 /// that clears `error`) was never reached. These pin the fix: a pass that ANSWERS clears the fault, state
 /// change or not — while a clean, unchanged row still writes nothing.
 @Suite struct RestoreSnagClearingTests {
-    /// A vault frozen at one thaw state, so a pass deterministically lands the outcome under test:
-    /// `.inProgress` ⇒ `.thawInProgress` (row stays `pending`), `.needed` + `canSelfThaw: false` ⇒
-    /// `.authorizationRequired` (row stays `needsAuthorization`). Upload half forwards to `FakeVault`
-    /// so the fake stays one implementation.
-    private final class StuckVault: Vault, @unchecked Sendable {
-        private let inner = FakeVault()
-        private let state: ThawState
-        init(thawedTo state: ThawState) { self.state = state }
-        func thawState(key: String) async throws -> ThawState { state }
-        func requestThaw(key: String, days: Int, tier: RestoreTier) async throws {}
-        func getRange(key: String, offset: Int, length: Int) async throws -> AsyncThrowingStream<Data, Error> {
-            throw ColdStorageError.s3("InvalidObjectState: still frozen")
-        }
-        func usageBytes(prefix: VaultPrefix) async throws -> Int { try await inner.usageBytes(prefix: prefix) }
-        func createUpload(key: String) async throws -> String { try await inner.createUpload(key: key) }
-        func existingParts(key: String, uploadId: String) async throws -> Set<Int> {
-            try await inner.existingParts(key: key, uploadId: uploadId)
-        }
-        func uploadPart(key: String, uploadId: String, number: Int, data: Data) async throws -> (etag: String, sha: String) {
-            try await inner.uploadPart(key: key, uploadId: uploadId, number: number, data: data)
-        }
-        func complete(key: String, uploadId: String, parts: [PartRow]) async throws {
-            try await inner.complete(key: key, uploadId: uploadId, parts: parts)
-        }
-        func verify(key: String) async throws { try await inner.verify(key: key) }
-        func markReclaimable(key: String) async throws { try await inner.markReclaimable(key: key) }
-    }
-
     /// A signed-in session over `store` with one archived file (`f1` in blob `b1`) and one live transfer
     /// row (`r1`, in `state`) carrying the recorded overnight fault — the exact shape `restorePass` leaves
     /// behind after a transient failure (state kept, error set).
@@ -62,7 +34,7 @@ import Foundation
     }
 
     @Test func aGoodPassClearsTheSnagNoteEvenThoughAWarmingRowStaysPending() async throws {
-        let f = try fixture(store: StuckVault(thawedTo: .inProgress), rowState: .pending)
+        let f = try fixture(store: StuckVault(at: .inProgress), rowState: .pending)
         defer { try? FileManager.default.removeItem(at: f.root) }
         #expect(try f.session.journal.restore(id: "r1")?.error != nil)
 
@@ -74,7 +46,7 @@ import Foundation
     }
 
     @Test func aGoodPassClearsTheSnagNoteOnAnUnpaidRowToo() async throws {
-        let f = try fixture(store: StuckVault(thawedTo: .needed), rowState: .needsAuthorization)
+        let f = try fixture(store: StuckVault(at: .needed), rowState: .needsAuthorization)
         defer { try? FileManager.default.removeItem(at: f.root) }
 
         await f.daemon.restorePass(f.session)   // still frozen + may not self-thaw ⇒ needsAuthorization again

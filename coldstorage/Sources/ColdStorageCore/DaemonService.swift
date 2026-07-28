@@ -1044,18 +1044,19 @@ public actor DaemonService {
             // Safe to read the token's claims un-verified ONLY here, and only because `auth.authenticate`
             // above just had Cognito accept this very token (see IDToken).
             let sub = try IDToken.sub(of: idToken)
+            let active: UserSession
             if let current = session, current.belongs(toSub: sub) {
-                // Fresh credentials just landed — push in-flight transfers NOW rather than waiting out
-                // the run loop's beat. This is the recovery half of the post-sleep story: the wake-up
-                // pass fails on the stale token, the app re-authenticates within moments, and this kick
-                // turns "heals within 5 minutes" into "heals immediately". Same fire-and-forget shape as
-                // the transfer commands; `restorePass` no-ops when nothing is active.
-                Task { await self.restorePass(current) }
-                return AnyEncodable(AuthDTO(ok: true, identityId: identityId))
+                active = current
+            } else {
+                active = try sessions.make(.user(sub: sub, identityId: identityId))
+                beginSession(active)
             }
-            let fresh = try sessions.make(.user(sub: sub, identityId: identityId))
-            beginSession(fresh)
-            Task { await self.restorePass(fresh) }
+            // Fresh credentials just landed — push in-flight transfers NOW rather than waiting out the
+            // run loop's beat. This is the recovery half of the post-sleep story: the wake-up pass fails
+            // on the stale token, the app re-authenticates within moments, and this kick turns "heals
+            // within 5 minutes" into "heals immediately". Same fire-and-forget shape as the transfer
+            // commands; `restorePass` no-ops when nothing is active.
+            Task { await self.restorePass(active) }
             return AnyEncodable(AuthDTO(ok: true, identityId: identityId))
         case "deauthenticate":
             // **Sign-out: where a session dies.** Drop the STS creds immediately (rather than letting them
