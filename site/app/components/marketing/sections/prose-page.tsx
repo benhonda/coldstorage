@@ -20,15 +20,16 @@
 import "./prose-page.css";
 import { PageHero } from "./page-hero";
 import { Reveal } from "~/lib/marketing/motion";
-import { DOWNLOAD_START_PATH } from "~/lib/marketing/download";
+import { DOWNLOAD_PATH } from "~/lib/marketing/download";
 import type { ProseBlock, ProsePageContent } from "~/lib/marketing/content";
 import { Button } from "~/components/ds/button";
 
 export type ProsePageProps = {
   content: ProsePageContent;
   /**
-   * Where the closing CTA points. Defaults to the auto-start download, which is right for
-   * every page that's selling the app; `/open-source` overrides it with the repo URL.
+   * Where the closing CTA points. Defaults to the download page (which never auto-starts the
+   * file), right for every page that's selling the app; `/open-source` overrides it with the
+   * repo URL.
    */
   ctaHref?: string;
   /** Leading glyph on the CTA button. `download` unless the CTA isn't a download. */
@@ -37,7 +38,7 @@ export type ProsePageProps = {
 
 export function ProsePage({
   content,
-  ctaHref = DOWNLOAD_START_PATH,
+  ctaHref = DOWNLOAD_PATH,
   ctaIcon = "download",
 }: ProsePageProps) {
   return (

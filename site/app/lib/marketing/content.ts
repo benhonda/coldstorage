@@ -917,33 +917,66 @@ export const CONTACT_PAGE: ContactPage = {
  * head copy that lived outside this file; they moved here when the page picked up a `PageHero`.
  */
 export type DownloadPage = {
-  /** The visitor pressed a button that said "Download", so the file is already on its way. */
-  started: PageHeadContent;
-  /** The visitor pressed "Get started" / "Choose", which read like navigation. Nothing fetched. */
-  waiting: PageHeadContent;
+  /** One head for every arrival — the page never auto-starts, so there's nothing to narrate. */
+  head: PageHeadContent;
   note: string;
-  actions: { start: string; startAgain: string; releases: string };
+  /** Warn-only banner shown when the browser positively identifies an Intel Mac (see
+   *  `components/marketing/arch-notice.tsx`). Never blocks the download — detection can be wrong. */
+  intelNotice: string;
+  actions: { start: string; releases: string };
 };
 
 export const DOWNLOAD_PAGE: DownloadPage = {
-  started: {
-    eyebrow: "ColdStorage for Mac",
-    title: "Your download should start shortly",
-    intro:
-      "If it doesn't start on its own, use the button below. Once it lands, open the .dmg and drag ColdStorage into Applications — then open the app and drag in what you want to keep.",
-  },
-  waiting: {
+  head: {
     eyebrow: "ColdStorage for Mac",
     title: "Download ColdStorage",
     intro:
       "Hit the button and the .dmg starts downloading. Open it, drag ColdStorage into Applications, then open the app and drag in what you want to keep — that's the whole setup.",
   },
+  // The arch requirement lives in the BUTTON label (the Screen Studio pattern — their detected
+  // case reads "Download for Apple Silicon"), so the note carries only the OS floor + terms.
   note: "Free app · macOS 14 or later · storage from $9.99 a year",
+  intelNotice:
+    "This looks like an Intel Mac. ColdStorage needs Apple silicon (M1 or later), so it won't run on this one. Detection can be wrong though — if this is actually an Apple silicon Mac, the download will work fine.",
   actions: {
-    start: "Download for Mac",
-    startAgain: "Download again",
+    // Named after the one build we ship — the label IS the compatibility statement, same as
+    // Screen Studio's "Download for Apple Silicon" button.
+    start: "Download for Apple Silicon",
     releases: "All releases",
   },
+};
+
+/* ───────────────────────────  Releases (/releases)  ─────────────────────── */
+
+/*
+ * `/releases` — the on-site version archive, fed live from the GitHub Releases API (the same
+ * feed the `/download.dmg` resolver reads). Copy only; the release rows themselves are data,
+ * not copy.
+ */
+export type ReleasesPage = {
+  head: PageHeadContent;
+  /** Pill on the newest row. */
+  latest: string;
+  /** Per-row download link label. */
+  download: string;
+  /** Shown when the GitHub API can't be reached — the page must say so, not sit empty. */
+  unavailable: string;
+  /** Label on the external fallback link (goes to GitHub, and says so). */
+  github: string;
+};
+
+export const RELEASES_PAGE: ReleasesPage = {
+  head: {
+    eyebrow: "ColdStorage for Mac",
+    title: "All releases",
+    intro:
+      "Every version of the app, newest first. Unless you need an older build for a reason, grab the latest — it's the same file the download page serves.",
+  },
+  latest: "Latest",
+  download: "Download",
+  unavailable:
+    "We couldn't load the release list just now. You can still get every version straight from GitHub, where the builds are published.",
+  github: "Releases on GitHub",
 };
 
 /* ─────────────────────────────  Brand (/brand)  ──────────────────────────── */

@@ -7,7 +7,7 @@
  * stale in the fifth.
  */
 import { useSolidNav } from "~/lib/marketing/site";
-import { DOWNLOAD_START_PATH } from "~/lib/marketing/download";
+import { DOWNLOAD_PATH } from "~/lib/marketing/download";
 import { FOOTER, HERO, NAV_LINKS } from "~/lib/marketing/content";
 import { MarketingNav } from "~/components/marketing/marketing-nav";
 import { MarketingFooter } from "~/components/marketing/marketing-footer";
@@ -16,8 +16,8 @@ import type * as React from "react";
 export type MarketingPageProps = {
   children: React.ReactNode;
   /**
-   * Where the nav's CTA points. Defaults to the auto-start download, which is right for every
-   * page — the CTA reads "Download for Mac", and a button that says download should download.
+   * Where the nav's CTA points. Defaults to the download page — which never auto-starts the
+   * file; the visitor starts it from the page's own button.
    */
   ctaHref?: string;
   /**
@@ -31,7 +31,7 @@ export type MarketingPageProps = {
 
 export function MarketingPage({
   children,
-  ctaHref = DOWNLOAD_START_PATH,
+  ctaHref = DOWNLOAD_PATH,
   forceSolid = false,
   mainClassName,
 }: MarketingPageProps) {

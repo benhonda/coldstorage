@@ -50,6 +50,7 @@ export const INDEXABLE_ROUTES: readonly IndexableRoute[] = [
   { path: "/compare", priority: 0.9, changefreq: "monthly" },
   { path: "/faq", priority: 0.8, changefreq: "monthly" },
   { path: "/download", priority: 0.8, changefreq: "weekly" },
+  { path: "/releases", priority: 0.4, changefreq: "weekly" },
   { path: "/about", priority: 0.6, changefreq: "yearly" },
   { path: "/source", priority: 0.6, changefreq: "monthly" },
   { path: "/help", priority: 0.6, changefreq: "monthly" },

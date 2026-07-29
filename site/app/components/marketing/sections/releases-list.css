@@ -1,0 +1,41 @@
+/* Section · ReleasesList — bordered rows on the raised surface, one per build. */
+.cs-releases {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.cs-releases__row {
+  padding: 22px clamp(20px, 3vw, 32px);
+}
+.cs-releases__row + .cs-releases__row {
+  border-top: 1px solid var(--border-subtle);
+}
+.cs-releases__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.cs-releases__version {
+  font: 600 16px / 1.3 var(--font-ui);
+  color: var(--text-primary);
+}
+.cs-releases__meta {
+  font: 400 14px / 1.4 var(--font-ui);
+  color: var(--text-tertiary);
+}
+.cs-releases__action {
+  margin-left: auto;
+}
+.cs-releases__notes {
+  margin: 10px 0 0;
+  max-width: 70ch;
+  font: 400 14px / 1.55 var(--font-ui);
+  color: var(--text-secondary);
+  white-space: pre-line;
+}

@@ -524,14 +524,20 @@ case is **skipped**, not neutered.
 - **"Download for Mac" CTA target** — _RESOLVED 2026-07-05, page added 2026-07-10:_ all three CTAs
   (nav + hero + closing) link to a single `DOWNLOAD_PATH` (`app/lib/marketing/download.ts`) → now the
   standalone **`/download` page** (`($lang).download.tsx` — CtaPanel-based: install steps, a manual
-  "Download for Mac" button + an "All releases" fallback). _Settled 2026-07-18:_ **the button's label
-  decides whether arriving starts the file.** A CTA that says "Download…" sends you to
-  `DOWNLOAD_START_PATH` (`/download?start=1`), where a `<meta http-equiv="refresh">` starts the .dmg
-  and the page reads "Your download should start shortly"; a CTA that doesn't say download (the
-  pricing table's "Get started"/"Choose") sends you to `DOWNLOAD_PATH` (`/download`), which starts
-  nothing and invites the click. The manual button is on both — fallback for a blocked auto-start,
-  and the only control on the no-param path. The param is resolved in the **loader**, so `meta()` and
-  the component share one decision and the auto-start survives no-JS. The actual file fetch is
+  "Download for Apple Silicon" button — the label is the compatibility statement, Screen Studio
+  style — + an "All releases" link to the on-site **`/releases`** page, `($lang).releases.tsx`: the
+  version archive, fed by the same GitHub Releases API as the `.dmg` resolver, edge-cached hourly,
+  falling back to a plain GitHub link only when the API is down). _Re-settled 2026-07-28
+  (supersedes the
+  2026-07-18 label-decides-auto-start scheme):_ **the page NEVER auto-starts the file** — every CTA
+  goes to `DOWNLOAD_PATH` (`/download`), `DOWNLOAD_START_PATH`/`?start=1` and the
+  `<meta http-equiv="refresh">` are gone, and the visitor's click on the page's button is the only
+  fetch trigger (Screen Studio's model). The page carries the arm64 requirement two ways: the note
+  line states "Apple silicon Macs (M1 or later), macOS 14+" for everyone, and
+  `components/marketing/arch-notice.tsx` shows a warn-only amber banner when the browser
+  *positively* identifies an Intel Mac (Chromium UA-CH `architecture`, else the WebGL renderer
+  string; Safari masks both → stays silent and the note line covers it). The button is never hidden
+  or disabled — detection can be wrong, and the notice says so. The actual file fetch is
   `DOWNLOAD_DMG_PATH` → the **`/download.dmg` resource route** (`download[.]dmg.tsx`, the former
   `/download` 302), which resolves the *latest* GitHub Releases build and 302s to its `.dmg`
   (edge-cached hourly; falls back to the releases page on failure). No version is hardcoded, so

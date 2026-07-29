@@ -12,7 +12,7 @@
  */
 import "./hero-statement.css";
 import { Reveal } from "~/lib/marketing/motion";
-import { DOWNLOAD_START_PATH } from "~/lib/marketing/download";
+import { DOWNLOAD_PATH } from "~/lib/marketing/download";
 import { HERO } from "~/lib/marketing/content";
 import { Button } from "~/components/ds/button";
 import { MediaFrame } from "~/components/marketing/shared/media-frame";
@@ -53,7 +53,7 @@ export function SectionHeroStatement() {
               marginTop: 32,
             }}
           >
-            <Button variant="primary" size="lg" icon="download" href={DOWNLOAD_START_PATH}>
+            <Button variant="primary" size="lg" icon="download" href={DOWNLOAD_PATH}>
               {HERO.cta}
             </Button>
             <span style={{ font: "400 14px/1.4 var(--font-ui)", color: "var(--text-tertiary)" }}>

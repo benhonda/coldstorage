@@ -17,7 +17,7 @@ import { PageHero } from "./page-hero";
 // see the note on `ProseBand` for what happens when you do.
 import { ProseBand } from "./prose-page";
 import { Reveal } from "~/lib/marketing/motion";
-import { DOWNLOAD_START_PATH } from "~/lib/marketing/download";
+import { DOWNLOAD_PATH } from "~/lib/marketing/download";
 import { COMPARE_PAGE } from "~/lib/marketing/content";
 import { Button } from "~/components/ds/button";
 
@@ -121,7 +121,7 @@ export function ComparePage() {
                 flexWrap: "wrap",
               }}
             >
-              <Button variant="primary" size="lg" icon="download" href={DOWNLOAD_START_PATH}>
+              <Button variant="primary" size="lg" icon="download" href={DOWNLOAD_PATH}>
                 {content.cta.label}
               </Button>
               <span style={{ font: "400 15px/1.4 var(--font-ui)", color: "var(--text-secondary)" }}>

@@ -5,7 +5,7 @@
  * panel for a full-bleed tinted band that closes the page.
  */
 import { Reveal } from "~/lib/marketing/motion";
-import { DOWNLOAD_START_PATH } from "~/lib/marketing/download";
+import { DOWNLOAD_PATH } from "~/lib/marketing/download";
 import { CLOSE } from "~/lib/marketing/content";
 import { Button } from "~/components/ds/button";
 
@@ -31,7 +31,7 @@ export function SectionClosingBand() {
             {CLOSE.lead}
           </p>
           <div style={{ marginTop: 28 }}>
-            <Button variant="primary" size="lg" icon="download" href={DOWNLOAD_START_PATH}>
+            <Button variant="primary" size="lg" icon="download" href={DOWNLOAD_PATH}>
               {CLOSE.cta}
             </Button>
           </div>

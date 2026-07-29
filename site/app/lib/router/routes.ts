@@ -21,6 +21,7 @@ export const routePaths = [
   "/:lang/pricing",
   "/:lang/privacy",
   "/:lang/refunds",
+  "/:lang/releases",
   "/:lang/source",
   "/:lang/terms",
   "/about",
@@ -36,6 +37,7 @@ export const routePaths = [
   "/pricing",
   "/privacy",
   "/refunds",
+  "/releases",
   "/robots[/]txt",
   "/sitemap[/]xml",
   "/source",
@@ -58,6 +60,7 @@ export type Params = {
   "/:lang/pricing": { lang: string };
   "/:lang/privacy": { lang: string };
   "/:lang/refunds": { lang: string };
+  "/:lang/releases": { lang: string };
   "/:lang/source": { lang: string };
   "/:lang/terms": { lang: string };
 };

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-07-29
+
+- feat(site): `/download` never auto-starts — `?start=1`/meta-refresh gone, every CTA lands on the page and the visitor's click fetches the .dmg; button reads "Download for Apple Silicon" + warn-only `ArchNotice` for detected Intel Macs.
+- feat(site): `/releases` page (`($lang).releases.tsx`) — on-site version archive fed by the same GitHub Releases API as the .dmg resolver; "All releases" now points here, not raw GitHub.
+- chore(site): agentation toolbar posts to the agentation-mcp HTTP server (`endpoint: localhost:4747`) instead of copy-paste.
+
 ## 2026-07-28
 
 - feat(site): the pricing tabs become the card's header row — full-bleed, hairline under, accent underline on the active tab — instead of pills floating above it; `--cs-pricing-card-pad` is the one inset both the row and the card read.
