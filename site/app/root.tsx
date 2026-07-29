@@ -87,8 +87,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <body>
         {children}
         {/* Agentation annotation toolbar — dev only; `import.meta.env.DEV` is identical on
-            server + client under Vite, so no hydration mismatch. */}
-        {import.meta.env.DEV && <Agentation />}
+            server + client under Vite, so no hydration mismatch. `endpoint` is Agent Sync:
+            annotations post to the agentation-mcp HTTP server (spawned alongside the MCP
+            stdio server that Claude Code registers), instead of copy-paste. */}
+        {import.meta.env.DEV && <Agentation endpoint="http://localhost:4747" />}
         <ScrollRestoration />
         <Scripts />
       </body>
