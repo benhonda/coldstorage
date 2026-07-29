@@ -36,12 +36,13 @@
   margin-right: auto;
 }
 .csf-mktnav__mark {
-  height: 30px; /* the mark's artboard has shadow slack, so it reads ~28px optically */
+  height: 36px; /* the mark's artboard has shadow slack, so it reads ~33px optically */
 }
 .csf-mktnav__wordmark {
-  /* Caller-side sizing, the way wordmark.css intends: a step up from the role's --text-md
-     so the brand reads as the anchor of the bar, not just another link. */
-  font-size: var(--text-lg);
+  /* Caller-side sizing, the way wordmark.css intends: two steps up from the role's
+     --text-md so the brand reads as the anchor of the bar, not just another link.
+     The 76px bar has plenty of headroom for this. */
+  font-size: var(--text-xl);
 }
 .csf-mktnav__links {
   display: flex;
