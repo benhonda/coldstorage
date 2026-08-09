@@ -1,26 +1,29 @@
 ---
 name: skill-editor
-description: Fold a change into an existing skill surgically — edit in place over appending, keep it tight. Use when modifying a skill that already exists — editing its SKILL.md, references/, or assets/ to apply a fix, correction, carried-back deviation, new convention/rule, or feedback — rather than creating a skill from scratch (that's skill-creator). Reach for it on "carry this back to the skill", "update the skill", "fix the skill's docs/example", "the skill says X but should say Y", or any time you're about to hand-edit a skill's files.
+description: Fold a change into an existing skill surgically — delete or edit in place over appending, keep it tight. Trigger the moment you're about to Edit/Write any file under an existing skill (SKILL.md, references/**, assets/**) — the file path alone is reason enough, no special phrasing required. Covers a fix, correction, carried-back deviation, new convention/rule, or feedback; not for creating a skill from scratch (that's skill-creator). Also matches phrases like "carry this back to the skill", "update the skill", "fix the skill's docs/example", "the skill says X but should say Y".
 ---
 
 Apply a requested change/feedback to a skill so the skill stays tight and stays editable next time. The skill is a set of instructions, not a logbook — every edit should leave it reading like it was written that way from the start, not like a stack of patches.
 
 **Read the whole skill first.** A change almost always relates to something already there. You can't pick the right move without knowing what's already said.
 
-## The move: edit in place > append > new section
+## The move: delete > edit in place > append > new section
 
 Default to the **smallest, most surgical** change. Pick by what the feedback actually is:
 
+- **Delete.** The instruction is wrong, obsolete, redundant, or was never earning its keep → cut it and write nothing back. Deleting is a complete, legitimate edit on its own; don't reach for a replacement line just to avoid leaving a gap. When one bad idea has spread, cut every instance in one pass rather than trimming the loudest one.
 - **Surgical edit (default).** The change refines, corrects, narrows, or contradicts an existing instruction → rewrite that instruction in place. Do NOT leave the old wording and add the new alongside it — that breeds contradictions and bloat. One instruction, one place.
 - **Append to an existing set.** The change is a genuinely new, parallel item to a set that already exists — a new rule in a "don't do this" list, a new step in a sequence → add it to that set, in the right order. Don't start a new list for it.
-- **New section (rare, must be earned).** Only when the change is a new dimension nothing existing covers and it fits nowhere above. If you're reaching for this, re-check the two options above first.
+- **New section (rare, must be earned).** Only when the change is a new dimension nothing existing covers and it fits nowhere above. If you're reaching for this, re-check the options above first.
+
+These combine. Clearing out what's stale first often shows the new instruction belongs in a spot you'd otherwise have missed — so delete, then edit or add into the space that opens up.
 
 ## Keep it tight
 
 - Match the skill's existing density, voice, and formatting. Don't import a new style.
-- **Cut as you go.** If your edit makes an earlier line redundant or stale, delete it — and sweep for the same instruction stated elsewhere, reconciling or cutting duplicates (SSOT). Net length should rarely grow — a good edit often *shrinks* the skill.
-- No narrative, no justification, no "we changed this because…". Rationale lives in the commit/changelog, never in the skill body.
-- Don't restate the 4 pillars or repeat what another skill already owns — link/reference instead (DRY across skills too).
+- **Cut as you go.** Sweep for anything your change just made redundant or stale, including the same instruction restated elsewhere (SSOT). Net length should rarely grow — a good edit often *shrinks* the skill.
+- No narrative, no justification, no "we changed this because…". Rationale lives in the commit message, never in the skill body.
+- Don't restate the engineering pillars or repeat what another skill already owns — link/reference instead (DRY across skills too).
 
 ## Guardrails
 

@@ -137,7 +137,7 @@ async function parsePaths(paths: string[]) {
     // "_app.admin.edit.($assetId).tsx"
     // "($lang)._app.admin.edit.tsx"
     // we need to handle paths that contain "($"
-    const _path = path.replace(/\.tsx$/, "");
+    const _path = path.replace(/\.tsx?$/, "");
     const parts = _path.split(".");
 
     // identify indexes of dynamic segments (e.g., "($lang)")

@@ -1,19 +1,14 @@
 # Type-safe routing (generouted) + type-safe search params
 
-Compile-time-checked navigation and URL state. No raw string paths, no manual
-`URLSearchParams`.
+Compile-time-checked navigation and URL state. No raw string paths, no manual `URLSearchParams`.
 
 **Read when:** adding routes, navigating/redirecting, or reading/writing query params.
 
 ## Routing
 
 ### Contract
-- **Foundation:** `app/routes.ts` = `flatRoutes()` from `@react-router/fs-routes` is what
-  turns the `routes/` file tree into RR7 routes. generouted sits *on top* as a type
-  layer — it does not replace this.
-- The generouted generator emits `app/lib/router/routes.ts` — a **different file** from
-  the `app/routes.ts` config above — exposing a typed `Path` union + `Params` map and
-  typed `Link`/`NavLink`/`useNavigate`/`useParams`/`redirect`/`generatePath`.
+- **Foundation:** `app/routes.ts` = `flatRoutes()` from `@react-router/fs-routes` is what turns the `routes/` file tree into RR7 routes. generouted sits *on top* as a type layer — it does not replace this.
+- The generouted generator emits `app/lib/router/routes.ts` — a **different file** from the `app/routes.ts` config above — exposing a typed `Path` union + `Params` map and typed `Link`/`NavLink`/`useNavigate`/`useParams`/`redirect`/`generatePath`.
 - Every navigation is compile-checked; an unknown path or wrong param is a type error.
 
 ### Non-negotiables
@@ -23,14 +18,14 @@ Compile-time-checked navigation and URL state. No raw string paths, no manual
 | generated-types | `app/lib/router/routes.ts` (the generouted type file, distinct from `app/routes.ts`) is generated (`task generate`), never hand-edited | regen scans `routes/`; manual edits get clobbered |
 | typed-nav-only | navigate only via the generated wrappers — never `<a href>`/string paths | makes wrong URLs unrepresentable (constraining) |
 | file-naming | `$param`→`:param`, `.`→`/`, `(_grp)`=layout/group, `($lang)`=i18n segment | the generator depends on this exact convention |
+| implicit-nesting | before naming any new route file whose dot-path has more than one segment, check for an existing route file matching the leading segment(s) — it's the **parent**, and the new file nests under it whether you intended that or not. Its loader runs first, on every request to the child path. If nesting isn't intended, opt out with a trailing `_` on the parent segment (e.g. `auth.google_.callback.tsx`, not `auth.google.callback.tsx`) — URL is unchanged, nesting is broken | any parent loader that redirects or short-circuits (an OAuth kickoff step, a wizard/checkout step, an auth guard) fires before the child ever runs — no error, the child silently never executes, and it's easy to miss since nothing throws |
 | i18n-paths | path building respects the en-unprefixed / `/fr` rule | owned by `references/i18n.md`; don't concat `/fr` by hand |
 
 ## Search params
 
 ### Contract
 - A zod schema is the single source of truth for query-param shape + types.
-- `parseSearchParams`/`stringifySearchParams` round-trip losslessly (arrays survive);
-  `useSearchParams()` exposes typed read + update helpers.
+- `parseSearchParams`/`stringifySearchParams` round-trip losslessly (arrays survive); `useSearchParams()` exposes typed read + update helpers.
 
 ### Non-negotiables
 | key | rule | why |
@@ -40,15 +35,8 @@ Compile-time-checked navigation and URL state. No raw string paths, no manual
 | hook-api | mutate via `updateSearchParams(partial)` (merges, drops null) / `toggleSearchParam(key,val)` | don't mutate the URL directly |
 
 ## Engine — copy faithfully
-- Routing: `assets/lib/router/{generouted-components.tsx, generouted-generate-routes.ts,
-  router-utils.ts, server-responses.server.ts}`. `task generate` produces
-  `app/lib/router/routes.ts` (per-project; never hand-edit). Also wire the RR7 route
-  config — `app/routes.ts` = `export default flatRoutes() satisfies RouteConfig` (from
-  `@react-router/fs-routes` + `@react-router/dev/routes`) — required boilerplate, not
-  generouted output.
-- Search params: `assets/hooks/use-search-params.ts` + `assets/lib/search-params-utils.ts`
-  + `assets/lib/search-params.defaults.ts` (the schema — **edit this per app**) +
-  `assets/lib/types/type-utils.ts`.
+- Routing: `assets/lib/router/{generouted-components.tsx, generouted-generate-routes.ts, router-utils.ts, server-responses.server.ts}`. `task generate` produces `app/lib/router/routes.ts` (per-project; never hand-edit). Also wire the RR7 route config — `app/routes.ts` = `export default flatRoutes() satisfies RouteConfig` (from `@react-router/fs-routes` + `@react-router/dev/routes`) — required boilerplate, not generouted output.
+- Search params: `assets/hooks/use-search-params.ts` + `assets/lib/search-params-utils.ts` + `assets/lib/search-params.defaults.ts` (the schema — **edit this per app**) + `assets/lib/types/type-utils.ts`.
 
 Placement + deps: SKILL.md. Adjust only if a current dep API forces it.
 
@@ -64,9 +52,6 @@ const { searchParamsObj, updateSearchParams, toggleSearchParam } = useSearchPara
 
 ## Verify at latest
 - **react-router v7** — `useNavigate`/`useParams`/`redirect`/`Link` + `setSearchParams`.
-- **@react-router/fs-routes** + **@react-router/dev** — the `flatRoutes()` foundation +
-  `RouteConfig` type (install both at latest).
-- **generouted approach** — confirm the project's current route-type generation; if a
-  better-maintained RR7 type-safe routing approach is now standard, evaluate it but keep
-  generated-types + typed-wrappers + no-raw-paths.
+- **@react-router/fs-routes** + **@react-router/dev** — the `flatRoutes()` foundation + `RouteConfig` type (install both at latest).
+- **generouted approach** — confirm the project's current route-type generation; if a better-maintained RR7 type-safe routing approach is now standard, evaluate it but keep generated-types + typed-wrappers + no-raw-paths.
 - **zod**, and the generator's `prettier`/`glob` deps.

@@ -1,0 +1,8 @@
+# Processes for `task mcp:dev` — runs the Worker dev server and the MCP Inspector
+# side by side (they always go together). Launched via `bunx mprocs` from this dir.
+# Switch panes with arrow keys; restart a pane with `r`; quit with `q`.
+procs:
+  worker:
+    shell: bunx wrangler dev
+  inspector:
+    shell: bunx @modelcontextprotocol/inspector

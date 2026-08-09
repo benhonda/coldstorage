@@ -15,7 +15,7 @@ Every method returns a discriminated union; the SDK catches network, JSON, and H
 ```ts
 type EmailSdkResult<T> =
   | { data: T; error: null }
-  | { data: null; error: { message: string } };
+  | { data: null; error: SdkError };
 ```
 
 So **no try/catch around SDK calls** — check `error` and narrow:

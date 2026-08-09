@@ -5,9 +5,7 @@ Server-side Google OAuth with a session cookie.
 **Read when:** adding Google sign-in, the OAuth callback, or session handling around it.
 
 ## Contract
-- Authorization-code flow: build a Google auth URL with a CSRF `state` → user authorizes
-  → callback receives a `code` → server exchanges it for tokens → fetches the profile →
-  upserts the user → creates a session cookie → redirects into the app.
+- Authorization-code flow: build a Google auth URL with a CSRF `state` → user authorizes → callback receives a `code` → server exchanges it for tokens → fetches the profile → upserts the user → creates a session cookie → redirects into the app.
 - The client never handles tokens.
 
 ## Non-negotiables
@@ -19,9 +17,9 @@ Server-side Google OAuth with a session cookie.
 | normalized-profile | return provider-agnostic fields: `provider`, `provider_id` (OpenID `sub`), `email`, `display_name`, `avatar_url`, `avatar_base64`, raw `provider_data` | a second provider can slot in |
 | session-cookie | httpOnly, `secure` in prod, `sameSite=lax`, signed with `SESSION_SECRET`, sliding expiry. **Default to a signed (stateless) cookie**; the db example's `internalSessionsTable` is only for when you need server-side revocation | standard secure session — one session model, not two |
 | callback-in-loader | exchange→upsert→session lives in the callback route loader | server-only, not a client component |
+| callback-no-nest | this is a kickoff→callback pair — apply `references/routing.md`'s `implicit-nesting` rule so the callback isn't swallowed | — |
 
-Secrets come from validated env (`references/env.md`); the user is persisted via the DB
-layer (`references/db.md`).
+Secrets come from validated env (`references/env.md`); the user is persisted via the DB layer (`references/db.md`).
 
 ## Engine
 None — this is Shape. Implement at current best practice, honoring the table above.
@@ -41,8 +39,6 @@ type OAuth2Profile = {
 ```
 
 ## Verify at latest
-- **Google OAuth** — current auth/token/userinfo endpoints, scopes, and recommended
-  params (`access_type`, `prompt`) per Google's docs.
+- **Google OAuth** — current auth/token/userinfo endpoints, scopes, and recommended params (`access_type`, `prompt`) per Google's docs.
 - **react-router v7** — session storage, loader/redirect, `Set-Cookie`.
-- Consider whether a maintained auth/OAuth library is now the best-practice choice over
-  hand-rolling the exchange — but keep every non-negotiable above if you adopt one.
+- Consider whether a maintained auth/OAuth library is now the best-practice choice over hand-rolling the exchange — but keep every non-negotiable above if you adopt one.

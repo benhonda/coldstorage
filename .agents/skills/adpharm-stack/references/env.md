@@ -1,13 +1,11 @@
 # Environment variables — validated, fail-fast
 
-Config parsed + validated at module load, so a missing/malformed var crashes the
-process immediately with a clear error instead of surfacing as `undefined` mid-request.
+Config parsed + validated at module load, so a missing/malformed var crashes the process immediately with a clear error instead of surfacing as `undefined` mid-request.
 
 **Read when:** adding an env var, or a new service that needs config.
 
 ## Contract
-- Every var is declared in a **zod schema** and read through a parsed, typed object —
-  never `process.env.FOO` scattered around.
+- Every var is declared in a **zod schema** and read through a parsed, typed object — never `process.env.FOO` scattered around.
 - Parsing happens at import with `.parse()` → fail fast and loud on anything missing/wrong.
 - Server vs client are split; client-exposed vars are marked by a `PUBLIC_` prefix.
 
@@ -21,10 +19,7 @@ process immediately with a clear error instead of surfacing as `undefined` mid-r
 | deployed-vars-tf | a new/changed env var key lands in **both** places: the app's zod schema (validates + reads it) **and** the TF env-var resource (provisions it on Vercel) — never by hand in the Vercel UI | zod-only ⇒ deployed app crashes at boot (TF never provisioned it); TF-only ⇒ var exists but the app never reads it. Split + which TF resource: `references/terraform.md` |
 
 ## Engine — copy faithfully (`assets/lib/env/_core/env-map.generate.ts`)
-The consolidation generator. `task generate` runs it to build `lib/env/all-server-env.ts`
-+ `lib/env/all-client-env.ts` (the `PUBLIC_` filter for the client) — generated
-per-project, never hand-edited. Pipeline: `references/taskfile.md`. The per-service
-schema files themselves are Shape.
+The consolidation generator. `task generate` runs it to build `lib/env/all-server-env.ts` + `lib/env/all-client-env.ts` (the `PUBLIC_` filter for the client) — generated per-project, never hand-edited. Pipeline: `references/taskfile.md`. The per-service schema files themselves are Shape.
 
 ## Shape — write fresh per service (illustration, not gospel)
 ```ts
@@ -38,5 +33,4 @@ export const awsS3Env = z.object({
 
 ## Verify at latest
 - **zod** — enum/default/`infer` and the recommended way to parse/coerce `process.env`.
-- The framework's mechanism for exposing public env to the client (how RR7 + Vercel
-  inject it) — use the current idiom, not an old hand-rolled global.
+- The framework's mechanism for exposing public env to the client (how RR7 + Vercel inject it) — use the current idiom, not an old hand-rolled global.

@@ -1,20 +1,14 @@
 # Server actions (writes only)
 
-A typed pipeline from a client call to a server handler and back, for **writes
-(mutations)**. Reads do **not** go here — see `references/data-fetching.md`.
+A typed pipeline from a client call to a server handler and back, for **writes (mutations)**. Reads do **not** go here — see `references/data-fetching.md`.
 
 **Read when:** adding a mutation, wiring a form submit, or any "write something" call.
 
 ## Contract
-- `useAction(definition)` → `{ submit, data, error, isSubmitting }`, fully typed from the
-  definition.
-- `submit(input)` POSTs JSON to the **current route's** action; that action is the one
-  shared dispatcher (`action_handler`), which looks the action up in a generated map by
-  directory name and runs the matching server handler.
-- The handler gets zod-validated input and returns a value whose type flows back to
-  `data`. Errors return as `{ message_unsafe, message_safe }`, never an unhandled throw.
-- After a successful write, RR7 auto-revalidates loaders; refresh SWR-cached reads via
-  `mutate()` from `onSuccess` (see `references/data-fetching.md`).
+- `useAction(definition)` → `{ submit, data, error, isSubmitting }`, fully typed from the definition.
+- `submit(input)` POSTs JSON to the **current route's** action; that action is the one shared dispatcher (`action_handler`), which looks the action up in a generated map by directory name and runs the matching server handler.
+- The handler gets zod-validated input and returns a value whose type flows back to `data`. Errors return as `{ message_unsafe, message_safe }`, never an unhandled throw.
+- After a successful write, RR7 auto-revalidates loaders; refresh SWR-cached reads via `mutate()` from `onSuccess` (see `references/data-fetching.md`).
 
 ## Non-negotiables
 | key | rule | why |
@@ -29,10 +23,7 @@ A typed pipeline from a client call to a server handler and back, for **writes
 | dev-loud-guards | keep the hook's dev warnings (e.g. suspected infinite submit loops) | failures surface immediately |
 
 ## Engine — copy faithfully (`assets/lib/actions/_core/*`, `assets/hooks/use-action.ts`)
-`action-utils(.ts/.server.ts)`, `action-runner.server.ts`, `action-map.generate.ts`, and
-the `use-action` hook. `task generate` produces the imported `action-map.ts` (per-project;
-never hand-edit). Placement + deps: see SKILL.md; pipeline: `references/taskfile.md`.
-Adjust only if a current dep API forces it.
+`action-utils(.ts/.server.ts)`, `action-runner.server.ts`, `action-map.generate.ts`, and the `use-action` hook. `task generate` produces the imported `action-map.ts` (per-project; never hand-edit). Placement + deps: see SKILL.md; pipeline: `references/taskfile.md`. Adjust only if a current dep API forces it.
 
 ## Shape — write fresh per action (illustration, not gospel)
 ```ts

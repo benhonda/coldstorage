@@ -1,0 +1,127 @@
+# Engine — the `mcp:` task block (adpharm-mcp-stack skill). Merge into the consuming repo's
+# root Taskfile.yml (TP1: everything runs through tasks). Replace `<app>-mcp` with the
+# Worker's directory and swap the secret names in mcp:secrets / mcp:secret:*.
+# Merged from the two shipped reference builds (silo-cdp-mcp + adapts-mcp).
+
+version: "3"
+
+tasks:
+  # ── <app>-mcp: remote MCP server (Cloudflare Worker) ──────────────────────
+  # Guard: fail with an actionable message instead of a raw wrangler error.
+  # Wired in as `deps:` on everything that talks to the Cloudflare API.
+  mcp:check-cf-auth:
+    desc: Verify wrangler is logged in to Cloudflare (guards deploy/secrets/tail/kv)
+    dir: <app>-mcp
+    silent: true
+    cmds:
+      - |
+        if ! bunx wrangler whoami --json 2>/dev/null | grep -qE '"loggedIn":[[:space:]]*true'; then
+          echo ""
+          echo "Not authed to Cloudflare. Set CLOUDFLARE_API_TOKEN in the root .env (preferred) or run 'task mcp:cf-login'."
+          exit 1
+        fi
+
+  # Preferred devcontainer auth: CLOUDFLARE_API_TOKEN in the root .env (dotenv-loaded;
+  # "Edit Cloudflare Workers" token template) — no callback, nothing to forward.
+  # Browser OAuth below is the fallback for non-container use: the OAuth page always
+  # redirects the HOST browser to localhost:8976, which only reaches wrangler if VS Code
+  # forwards host 8976 to THIS container — stale forwards survive "Stop Forwarding Port"
+  # and can silently deliver the auth code to a different container. `--callback-host
+  # 0.0.0.0` binds the callback to all interfaces so a correct forward reaches it.
+  mcp:cf-login:
+    desc: Log in to Cloudflare via browser OAuth (fallback — prefer CLOUDFLARE_API_TOKEN in .env)
+    dir: <app>-mcp
+    interactive: true
+    cmds:
+      - bunx wrangler login --callback-host 0.0.0.0
+
+  mcp:cf-whoami:
+    desc: Show the authenticated Cloudflare account (verify login)
+    dir: <app>-mcp
+    interactive: true
+    cmds:
+      - bunx wrangler whoami
+
+  # Provisioning tasks keep console steps in version control — this is the IaC-equivalent
+  # record for the resources that legitimately aren't in Terraform (see the skill's ops
+  # reference: wrangler.jsonc is the IaC).
+  # Requires account_id already set in wrangler.jsonc — a placeholder fails with
+  # "could not retrieve internal account ID [code: 10015]" (looks like a login error; isn't).
+  mcp:kv-create:
+    desc: Create the OAuth KV namespace (decline the auto-edit; paste id into wrangler.jsonc)
+    dir: <app>-mcp
+    interactive: true
+    deps: [mcp:check-cf-auth]
+    cmds:
+      - 'echo ">> Answer N to \"add it on your behalf?\" — the binding is already in wrangler.jsonc and MUST stay named OAUTH_KV (the OAuth provider requires that exact name; the suggested name derived from the namespace title is wrong). Paste the printed id into kv_namespaces[0].id."'
+      - bunx wrangler kv namespace create <app>-mcp-oauth
+
+  mcp:cookie-key:
+    desc: Generate a random 32-byte hex key (for COOKIE_ENCRYPTION_KEY etc.)
+    silent: true
+    cmds:
+      - openssl rand -hex 32
+
+  # Set ALL secrets in sequence (first run) …
+  mcp:secrets:
+    desc: Set the Worker's production secrets (interactive — prompts for each)
+    dir: <app>-mcp
+    interactive: true
+    deps: [mcp:check-cf-auth]
+    cmds:
+      - bunx wrangler secret put <SECRET_ONE>
+      - bunx wrangler secret put <SECRET_TWO>
+
+  # … plus one task per secret you'll actually rotate. Rotation is the common case
+  # after day one; making people re-enter all of them invites paste errors.
+  mcp:secret:db:
+    desc: Set just the data-store credential
+    dir: <app>-mcp
+    interactive: true
+    deps: [mcp:check-cf-auth]
+    cmds:
+      - bunx wrangler secret put <SECRET_TWO>
+
+  # Worker dev server + MCP Inspector together (they always go together), via mprocs.
+  mcp:dev:
+    desc: Run the Worker + MCP Inspector together (mprocs)
+    dir: <app>-mcp
+    interactive: true
+    cmds:
+      - bunx mprocs
+
+  mcp:inspector:
+    desc: Launch only the MCP Inspector (e.g. to test the deployed prod /mcp URL)
+    dir: <app>-mcp
+    interactive: true
+    cmds:
+      - bunx @modelcontextprotocol/inspector
+
+  mcp:types:
+    desc: Regenerate the Worker's Env types (worker-configuration.d.ts)
+    dir: <app>-mcp
+    interactive: true
+    cmds:
+      - bunx wrangler types
+
+  mcp:typecheck:
+    desc: Typecheck the Worker (regenerates Env types first)
+    dir: <app>-mcp
+    cmds:
+      - bun run typecheck
+
+  mcp:deploy:
+    desc: Deploy the Worker to Cloudflare
+    dir: <app>-mcp
+    interactive: true
+    deps: [mcp:check-cf-auth]
+    cmds:
+      - bunx wrangler deploy {{.CLI_ARGS}}
+
+  mcp:tail:
+    desc: Stream live Worker logs (auth audit trail, errors)
+    dir: <app>-mcp
+    interactive: true
+    deps: [mcp:check-cf-auth]
+    cmds:
+      - bunx wrangler tail {{.CLI_ARGS}}

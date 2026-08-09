@@ -9,7 +9,7 @@ Spec-driven development goes wrong when the spec gets treated as scripture. It i
 
 You write a spec on day 1. On day 12 you're deep in the build and the spec says "dogfood it, stand up test infrastructure, validate end-to-end." But the live goal has become "get this to production so we can test it there." A spec-as-scripture agent reads the doc, sees the instruction, and dutifully builds the testing scaffold nobody now wants — burning tokens to delay the actual goal. The spec said necessary; it didn't say *sufficient*. **The instruction existing is not a reason to follow it.** The reason to follow it is that it still serves what we're trying to do right now.
 
-This is the same skepticism the `checkpoint` skill applies at wrap-up — *docs are suspects, not witnesses.* This skill is the creation-side dual: write the spec so it admits up front that it's a suspect, and treat it like one while you build.
+This is the same skepticism the `docs-master` skill applies at wrap-up — *docs are suspects, not witnesses.* This skill is the creation-side dual: write the spec so it admits up front that it's a suspect, and treat it like one while you build.
 
 ## Write specs as drafts, not contracts
 
@@ -34,6 +34,7 @@ Before you act on any spec item, run a two-second altitude check: **does this st
 - If yes — proceed, no ceremony.
 - If it's drifted — **stop and surface it at the decision level**, don't silently obey and don't silently skip: *"Spec says X (written 2026-06-17, status DRAFT). We now seem to be aiming at Y, which makes X look stale — confirm before I follow it?"* Then, once resolved, **update the spec's status/text so it stops misleading the next agent.** A stale line you worked around but left in the doc is a trap you re-armed.
 - Specs are **leads, not orders.** Necessary, not sufficient. The current goal always outranks the written one.
+- **Repo-state claims in a doc are void on arrival.** "Uncommitted", "unpushed", "unapplied", "tests failing" describe a moment that has passed — re-derive them live (`git status` / `git log`, rerun the check) before acting on one, then delete the claim so it stops misleading the next reader.
 
 This is where "are you sure?" bites hardest, weeks deep. The behavioral rules are SSOT in root `CLAUDE.md` — re-read them, don't restate them: a question is a request to re-examine (defend-or-revise with reasoning), not a verdict; don't cave; solve the *actual* problem rather than rabbit-holing into adjacent work; report back at the user's altitude. A spec-driven build is a long arc — protect the altitude across all of it, because that's exactly where it erodes.
 
@@ -41,7 +42,7 @@ This is where "are you sure?" bites hardest, weeks deep. The behavioral rules ar
 
 - Lead with the **goal and the open questions**, not a finished blueprint. At `EXPLORING`, the most valuable thing the spec holds is what's *undecided* — make those explicit so they get resolved instead of silently defaulted.
 - Don't over-build the plan. The spec is a thinking tool we co-edit, not a deliverable to impress with. Match its depth to how settled the work actually is.
-- Follow the repo's real conventions and the 4 pillars when you do start building — but keep the spec and the code honest about which parts are still soft.
+- Follow the repo's real conventions and the engineering pillars when you do start building — but keep the spec and the code honest about which parts are still soft.
 
 ## Phasing: hardest-first, never kick the can
 
@@ -60,8 +61,8 @@ Throwaway prototypes are fine — but only when **labeled throwaway and actually
 
 ## Handing off
 
-When you pause or wrap, use the **`checkpoint`** skill to reconcile the spec against what the code actually does now and bump its status accordingly. A `SETTLED` spec the code already diverged from is precisely the stale-scripture trap the next agent will walk into — leave it reconciled, not aspirational.
+When you pause or wrap, use the **`docs-master`** skill to reconcile the spec against what the code actually does now and bump its status accordingly. A `SETTLED` spec the code already diverged from is precisely the stale-scripture trap the next agent will walk into — leave it reconciled, not aspirational.
 
 ---
 
-**tldr:** A spec is provisional thinking, not law. Write it with a status banner + dated, tagged decisions so it admits that. Before executing any spec item, check it against the *current* goal — flag drift, don't obey it blindly, and update the doc when it's stale. Phase hardest-first — defer scope, never quality; no can-kicking. Keep altitude and don't cave (see `CLAUDE.md`); hand off via `checkpoint`.
+**tldr:** A spec is provisional thinking, not law. Write it with a status banner + dated, tagged decisions so it admits that. Before executing any spec item, check it against the *current* goal — flag drift, don't obey it blindly, and update the doc when it's stale. Phase hardest-first — defer scope, never quality; no can-kicking. Keep altitude and don't cave (see `CLAUDE.md`); hand off via `docs-master`.

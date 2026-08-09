@@ -1,53 +1,39 @@
 ---
 name: add-and-commit
-description: Add and commit changes, update changelog & readme.
+description: Add and commit changes, update readme.
 model: claude-sonnet-5
 effort: low
 ---
 
 Quick add + commit of ALL pending changes (except out of scope below). **No typecheck, no fix, no lint** — this is a stenographer, not a reviewer. Keep it quick. Changes may be ongoing - be aware.
 
-File locations: @CHANGELOG.md , @README.md
+File locations: @README.md
 
 ## What to do
 
 1. Run `git status` + `git diff` now — a live call, never a memory or an earlier result from this session; the tree may have moved since. Cover the whole tree, not just cwd. **Dotfile config dirs count** — `.devcontainer/`, `.claude/`, `.agents/` and the like are in scope; don't skip them as "not code" or mistake them for scratch.
 2. Group the diff into logical commits. **Break it up if the changes are unrelated** — separate concerns get separate commits. One commit if everything coheres.
-3. For each commit: stage the relevant files by name (no `git add -A`), update the **nearest** CHANGELOG.md with a tight entry (see _Which changelog_ below), commit.
+3. For each commit: stage the relevant files by name (no `git add -A`), commit.
 4. Update README.md only if a pending change makes it factually wrong. Don't polish it.
 
-## Which changelog — nearest wins (monorepos)
+## Commit messages — the record
 
-A monorepo has a **root** CHANGELOG.md and often **per-project** ones (`apps/x/CHANGELOG.md`, `packages/y/CHANGELOG.md`). Route each entry to the **nearest** changelog walking up from the changed files:
+`git log` is the SSOT for what shipped. **Never write a CHANGELOG.md entry** — no hand-maintained duplicate of the history. The first time you meet a live-looking CHANGELOG.md in a repo, close it out: one line under the H1 — `> **Closed.** Kept as history only — \`git log\` is the SSOT for what shipped. Don't append.` — then never touch that file again. Never delete it; the history stays readable. Where a published package genuinely needs a changelog, it's generated from these commits, not typed.
 
-- A commit's changes live under one project → log to **that project's** changelog, not the root.
-- Changes span multiple projects → log to **each** affected project's changelog (and prefer splitting into per-project commits — see _Breaking up commits_).
-- Changes are genuinely repo-wide (root tooling, `Taskfile.yml`, top-level config) or no nested changelog exists for that path → log to the **root** CHANGELOG.md.
+That puts the whole quality bar on the message:
 
-Don't create new changelog files — only update ones that already exist; otherwise fall back to the root.
-
-## CHANGELOG.md entries — tight, not novels
-
-One sentence. Type prefix + what shipped. Skip the _why-it-matters_ essay; the diff and commit message carry the rest.
-
-```markdown
-## YYYY-MM-DD
-
-- feat: `/v2` landing page composed from binder components.
-- fix: `FlowStoryboard` skyline-packs branches so sibling sub-flows stop overlapping.
-- refactor: `ImportPreview` always-editing — top bar reads `Cancel · EDITING · Save`.
+```
+fix: FlowStoryboard skyline-packs branches so sibling sub-flows stop overlapping
 ```
 
 **Prefixes:** `feat:` `fix:` `refactor:` `docs:` `chore:`
 
 **Rules:**
 
-- One line per change. ~120 chars max. If you need a second clause, you're writing a novel — cut it.
-- Name the artifact (component, route, file, flag). No vague "improved X".
-- Today's date as `## YYYY-MM-DD`. Append under today if the section exists.
-- Skip pure styling/spacing/font tweaks. Skip internal renames. Skip anything a `git log` glance would cover.
-
-**Test:** if the line wouldn't help future-Ben remember what changed in one scan, drop it.
+- Subject = type prefix + the named artifact (component, route, file, flag) + what changed. No vague "improved X".
+- Keep the subject to one line, ~120 chars. When it won't fit, that's a **body**, not a longer subject — blank line, then the detail.
+- Body only when the subject can't carry it: a non-obvious why, a gotcha, a carry-back from a downstream fix. Not an essay; the diff is right there.
+- In a monorepo, name the project the change lands in so the log stays scannable per-project.
 
 ## Breaking up commits
 
@@ -56,7 +42,7 @@ Examples of when to split:
 - Design-system change + an unrelated docs update → two commits.
 - Bug fix + a new feature on a different surface → two commits.
 - Skill/tooling chore mixed with product code → split the chore out.
-- Changes in two different projects of a monorepo → split per project, so each lands with its own changelog entry.
+- Changes in two different projects of a monorepo → split per project.
 
 Don't split for the sake of it. A feature that touches 8 files is still one commit.
 

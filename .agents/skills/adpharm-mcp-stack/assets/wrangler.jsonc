@@ -1,0 +1,51 @@
+/**
+ * Wrangler config TEMPLATE for a remote MCP server (adpharm-mcp-stack skill).
+ * Replace every <PLACEHOLDER>; keep the rationale comments — they're load-bearing.
+ * This file IS the IaC for the Worker (see the skill's ops reference): don't
+ * Terraform a single Worker + KV.
+ * Docs: https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "<app>-mcp",
+	"main": "src/index.ts",
+	// Pin the account explicitly so deploys can't land in whatever account
+	// wrangler happens to be logged into.
+	"account_id": "<CLOUDFLARE_ACCOUNT_ID>",
+	// Public surface = exactly one URL. workers.dev is the connector endpoint MCP
+	// clients hit; preview URLs would add per-version public hostnames we don't need
+	// (auth gates them either way, but fewer endpoints = smaller surface for a gateway).
+	"workers_dev": true,
+	"preview_urls": false,
+	"compatibility_date": "<TODAY-ISH — set when scaffolding, then leave alone>",
+	// nodejs_compat: needed by the OAuth provider (and e.g. the Neon serverless driver).
+	// global_fetch_strictly_public: routes all fetch() over the public internet —
+	// enables claude.ai's CIMD auth path and hardens the OAuth server against SSRF.
+	// Only safe when the Worker fetches public hosts exclusively (IdP, app URL, DB proxy).
+	"compatibility_flags": [
+		"nodejs_compat",
+		"global_fetch_strictly_public"
+	],
+	// Deliberately NO durable_objects / migrations blocks: the MCP handler is stateless
+	// (createMcpHandler — the deprecated McpAgent's per-session DO is vestigial here).
+	// If you deliberately need server-side session state, add a DO binding + a migration
+	// with new_sqlite_classes (SQLite-backed DOs are the only free-plan-eligible kind).
+	// Stores OAuth grants/tokens/state. Namespace created via `task mcp:kv-create`
+	// (dashboard title "<app>-mcp-oauth"); the binding name must stay OAUTH_KV —
+	// @cloudflare/workers-oauth-provider requires that exact name.
+	"kv_namespaces": [
+		{
+			"binding": "OAUTH_KV",
+			"id": "<KV_NAMESPACE_ID — paste from `task mcp:kv-create` output>"
+		}
+	],
+	// Plain (non-secret) vars only. Secrets are set with `wrangler secret put`
+	// (`task mcp:secrets`) — never put them here.
+	"vars": {},
+	"observability": {
+		"enabled": true
+	},
+	"dev": {
+		"port": 8989
+	}
+}

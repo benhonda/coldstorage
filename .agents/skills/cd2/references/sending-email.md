@@ -26,7 +26,16 @@ const { data, error } = await client.send({
 // data.id is the DB record id — store it for delivery-status lookups
 ```
 
-On success, `data.id` is the DB record id — store it if you’ll need [delivery status](/status/) later.
+### Result
+
+| Field        | Type     | Description                                                                             |
+| ------------ | -------- | --------------------------------------------------------------------------------------- |
+| `id`         | `string` | Database record ID — use with `emails.get()` for traceability                           |
+| `messageId?` | `string` | RFC 5322 `Message-ID` the mail went out with — match replies against it to thread them. |
+
+Store `id` if you’ll need [delivery status](/status/) later.
+
+Store `messageId` if replies matter to you. It’s what a recipient’s mail client quotes back in `In-Reply-To`, so matching incoming replies against it is what makes them thread onto the message you sent — without it, every reply reads as the start of a new conversation. It’s absent on scheduled sends, which haven’t been given one yet when the call returns, and whenever the transport won’t disclose one. Absent rather than empty, deliberately: there’s no placeholder you could store and safely mistake for a real id.
 
 ### Parameters
 
@@ -41,9 +50,47 @@ On success, `data.id` is the DB record id — store it if you’ll need [deliver
 | `bcc`         | `string \| string[]`     | No       | Blind carbon copy                                                                                                                               |
 | `replyTo`     | `string`                 | No       | Reply-to address                                                                                                                                |
 | `headers`     | `Record<string, string>` | No       | Custom headers, forwarded to SES                                                                                                                |
+| `attachments` | `EmailAttachment[]`      | No       | Files to send with the message                                                                                                                  |
 | `scheduledAt` | `string`                 | No       | Schedule the send for a future time — ISO 8601 (e.g. `2026-07-01T09:00:00Z`). Must be in the future and ≤30 days out. Omit to send immediately. |
 
 At least one of `html` / `text` is required.
+
+## Attachments
+
+Pass `attachments` to send files along with the message. Content is base64, and it’s raw base64 — if you’ve got a `data:application/pdf;base64,` prefix on there, strip it. That prefix is the single most common reason a send gets rejected.
+
+| Field         | Type     | Required | Description                                                                                                                                           |
+| ------------- | -------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `filename`    | `string` | Yes      | Filename the recipient sees. Required — an unnamed attachment is unopenable.                                                                          |
+| `content`     | `string` | Yes      | File bytes, base64-encoded (no `data:` prefix).                                                                                                       |
+| `contentType` | `string` | No       | MIME type, e.g. `application/pdf`. Guessed from the filename when omitted.                                                                            |
+| `contentId`   | `string` | No       | Set to embed the file in the HTML body rather than list it as a download: reference it as `<img src="cid:THIS_VALUE">`. Omit for a normal attachment. |
+
+```ts
+import { readFileSync } from "node:fs";
+
+await client.send({
+  from: "Billing <billing@yourdomain.com>",
+  to: "customer@example.com",
+  subject: "Your invoice",
+  html: "<p>Invoice attached.</p>",
+  attachments: [
+    {
+      filename: "invoice.pdf",
+      content: readFileSync("./invoice.pdf").toString("base64"),
+      contentType: "application/pdf",
+    },
+  ],
+});
+```
+
+Give an attachment a `contentId` and it gets embedded in the HTML body instead of listed as a download — reference it from your markup as `<img src="cid:THE_VALUE">`. That’s how you put a logo in a template without hotlinking to an image that may not load.
+
+Attachments ride inside the JSON request body, base64-encoded, which is what sets the size limit: **3MB total across all files on one send**, measured decoded. Base64 inflates by about a third, so 3MB of files is already a 4MB request, against a 4.5MB platform cap on the body — the remaining headroom is what your `html`, `text` and headers have to fit in. Nothing here comes from SES, which would take 40MB; it’s the cost of carrying files inside JSON. This is for ordinary documents, not video.
+
+Attachments don’t work on scheduled sends yet. A scheduled email is stored as a row and rebuilt when its timer fires, and that row has nowhere to keep the bytes — so pairing `attachments` with `scheduledAt` is refused outright rather than sending later with the files quietly missing.
+
+The SDK checks all of this before it sends anything, so a malformed attachment — or one bound for a scheduled send — fails immediately rather than after you’ve spent a round trip uploading it. The API re-checks everything regardless; it can’t take a client’s word for it. `MAX_TOTAL_ATTACHMENT_BYTES` and `validateAttachments` are exported if you want to budget files or show the problem in your own UI first.
 
 ## Scheduling
 
@@ -74,3 +121,5 @@ Sending fails with a 4xx otherwise:
 * `from`, `to`, `subject` required; at least one of `html` / `text` required (422).
 * The `from` domain must be owned by the API key’s team **and** have sending enabled (403: “Sending domain not authorized for this team”).
 * Domain-scoped keys can only send from their scoped domains; only system keys are unrestricted (403: “API key not authorized for this domain”).
+* Every attachment needs a `filename` and valid raw base64 `content`, and the decoded total must be ≤3MB (422). The SDK runs the same check locally first.
+* Attachments can’t be combined with `scheduledAt` (422: “Attachments are not supported on scheduled sends yet”).

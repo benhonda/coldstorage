@@ -6,6 +6,14 @@ output: prefixed
 vars:
   AWS_PROFILE: "pharmer"
 
+# Exported to every task's process env so app code (the S3 client's local
+# fromSSO()) and check-aws-identity read the same profile the tasks do — one
+# fact, declared once here. Note the precedence: an AWS_PROFILE already
+# exported in the developer's shell still wins over this (go-task lets the
+# real env override `env:`), so the gate reports "$AWS_PROFILE", not the var.
+env:
+  AWS_PROFILE: "{{.AWS_PROFILE}}"
+
 dotenv:
   - .env
   - .env.vercel
@@ -31,9 +39,23 @@ tasks:
       vars: [AWS_PROFILE]
     silent: true
     cmds:
+      # NOT `aws sts get-caller-identity`: the CLI answers from its own role-cred
+      # cache (~/.aws/cli/cache), which stays green until those creds hit their own
+      # expiry — the permission set's session duration, 1h by default and up to 12h —
+      # even though the SSO token behind them is already dead. In that window the
+      # gate says ready while the app's fromSSO() and terraform, which read the token
+      # itself, are failing. Resolving through fromSSO() means the gate and the app
+      # share one code path and can never disagree. `web` = app #1's dir (rename with
+      # it) — where @aws-sdk/credential-providers is installed; drop the `cd` entirely
+      # if this repo was flattened to a single standalone app (no subdir).
+      # The braces matter: without them a failing `cd` writes to the task's stderr
+      # instead of $err, and the fallback branch prints an empty reason.
       - |
-        if ! aws sts get-caller-identity --profile {{.AWS_PROFILE}}; then
-          echo "\nYour '{{.AWS_PROFILE}}' AWS profile is not logged in. Run 'task login'."
+        if ! err=$({ cd web && bun -e 'import("@aws-sdk/credential-providers").then(m=>m.fromSSO()()).then(()=>{},e=>{console.error(e.message);process.exit(1)})'; } 2>&1 >/dev/null); then
+          case "$err" in
+            *[Ee]xpired*|*[Ss][Ss][Oo]*|*[Tt]oken*) echo "Your '$AWS_PROFILE' AWS SSO session has expired. Run 'task login'." ;;
+            *) echo "AWS credential check failed: $err" ;;
+          esac
           exit 1
         fi
 
@@ -51,7 +73,7 @@ tasks:
       - .env.vercel
     interactive: true
     cmds:
-      - bunx --bun react-router dev
+      - bunx react-router dev
 
   start:
     aliases: [dev]

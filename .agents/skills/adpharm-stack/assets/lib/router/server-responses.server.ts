@@ -26,15 +26,17 @@ export function serverRedirect(linkToOrDirectPath: LinkToOrDirectPath, serverRed
     // for "rawAbsolutePath" links
     //
     const { rawAbsolutePath } = linkToOrDirectPath as { rawAbsolutePath: string };
-    // safely redirect
+    // decode ONLY to validate (catches encoded tricks like %2F%2Fevil.com) — the redirect
+    // itself uses the raw value so encoded query params survive intact
     const decoded = decodeURIComponent(rawAbsolutePath);
 
-    // if the url is not a relative path, redirect to the default path
-    if (!decoded.startsWith("/") || decoded.startsWith("//")) {
+    // open-redirect guard: must be a same-origin relative path — "//" and "/\" are
+    // treated as protocol-relative by browsers, so they fall back to the default path
+    if (!decoded.startsWith("/") || decoded.startsWith("//") || decoded.startsWith("/\\")) {
       Location = generatePathForLinkTo(serverRedirectArgs?.defaultRedirectTo || { to: "/" });
+    } else {
+      Location = rawAbsolutePath;
     }
-
-    Location = decoded;
   } else if ("externalUrl" in linkToOrDirectPath) {
     //
     // for "externalUrl" links

@@ -1,22 +1,18 @@
 # AWS access — clients & credentials (local SSO ↔ Vercel OIDC)
 
-How the app authenticates to AWS with no long-lived keys. **Owns the AWS identity facts**
-(profile, region, OIDC) that other references link to.
+How the app authenticates to AWS with no long-lived keys. **Owns the AWS identity facts** (profile, region, OIDC) that other references link to.
 
 **Read when:** creating an AWS SDK client (S3, etc.) or touching how the app gets creds.
 
 ## Contract
-- AWS SDK clients resolve credentials **by environment**: production (on Vercel) via
-  OIDC role assumption (short-lived); locally via a named SSO profile. Same client code.
-- No AWS access keys anywhere — the bridge is an IAM role ARN (`AWS_ROLE_ARN`) the Vercel
-  OIDC token assumes.
+- AWS SDK clients resolve credentials **by environment**: production (on Vercel) via OIDC role assumption (short-lived); locally via a named SSO profile. Same client code.
+- No AWS access keys anywhere — the bridge is an IAM role ARN (`AWS_ROLE_ARN`) the Vercel OIDC token assumes.
 
 ## Non-negotiables
 | key | rule | why |
 | --- | --- | --- |
 | credential-branch | `NODE_ENV === "production"` → Vercel OIDC `awsCredentialsProvider({ roleArn })`; else → local SSO | short-lived creds in prod, no stored secrets |
-| profile-pharmer | local SSO profile is `pharmer` | shared Adpharm profile (`task login` does the SSO login — see `references/taskfile.md`) |
-| region | default region `ca-central-1` unless a resource truly lives elsewhere | team default |
+| account-profile | most projects live in the **Adpharm AWS account** → profile `pharmer`, region `ca-central-1` — but some projects target **other AWS accounts**. The repo's Taskfile `AWS_PROFILE` var is the per-repo SSOT for which account; when bootstrapping into a non-Adpharm account, **ask the user** for the profile/region — never assume `pharmer` | `task login` does the SSO login (`references/taskfile.md`); account facts aren't guessable |
 | role-arn-from-infra | `AWS_ROLE_ARN` comes from infra, validated in env, set as a TF-managed Vercel var | never paste an ARN by hand (env: `references/env.md`; wiring: `references/terraform.md`) |
 | server-singleton | clients are `*.server.ts`, instantiated once | not per-request |
 | allow-only-iam | any IAM policy for new access is ALLOW, never DENY | team policy |
@@ -37,12 +33,11 @@ export const s3Client = new S3Client({
   credentials:
     process.env.NODE_ENV === "production"
       ? awsCredentialsProvider({ roleArn: serverEnv.AWS_ROLE_ARN })
-      : fromSSO({ profile: "pharmer" }),
+      : fromSSO(), // profile from AWS_PROFILE, which the Taskfile exports (its SSOT — account-profile row)
 });
 ```
 Any new AWS service uses the same branch — only the client class changes.
 
 ## Verify at latest
 - **`@aws-sdk/*` v3** — current client package + `@aws-sdk/credential-providers` `fromSSO`.
-- **`@vercel/functions`** — current import/name for the OIDC provider and Vercel's current
-  OIDC setup; this integration evolves.
+- **`@vercel/functions`** — current import/name for the OIDC provider and Vercel's current OIDC setup; this integration evolves.

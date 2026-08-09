@@ -1,8 +1,6 @@
 # Reading data — loaders vs useSWR (writes → actions)
 
-How to **read/list** data. SSR-first as the baseline, but client loading with `useSWR` +
-a dedicated resource route is a first-class path, not an exception. Writes never go here —
-they use `references/actions.md`.
+How to **read/list** data. SSR-first as the baseline, but client loading with `useSWR` + a dedicated resource route is a first-class path, not an exception. Writes never go here — they use `references/actions.md`.
 
 **Read when:** fetching or listing data for a page or component.
 
@@ -11,8 +9,7 @@ they use `references/actions.md`.
   - **Server HTML (SEO / shareable / above-the-fold / critical) → RR7 `loader`.**
   - **Client-interactive / non-critical / live / post-mount → `useSWR` + a resource route.**
   - **Any write → the action framework.**
-- "API routes" here means **RR7 resource routes** (a route module with a `loader`, no
-  default export) returning JSON, consumed by SWR.
+- "API routes" here means **RR7 resource routes** (a route module with a `loader`, no default export) returning JSON, consumed by SWR.
 
 ## Non-negotiables
 | key | rule | why |
@@ -25,8 +22,7 @@ they use `references/actions.md`.
 | writes-not-here | never write through a read path; mutations go through `references/actions.md` | reads and writes are separate by design |
 
 ## Engine
-None — this is Shape. **Don't build a bespoke read cache**; `useSWR` is a maintained
-library (install `swr@latest`). Consider TanStack Query only as a deliberate alternative.
+None — this is Shape. **Don't build a bespoke read cache**; `useSWR` is a maintained library (install `swr@latest`). Consider TanStack Query only as a deliberate alternative.
 
 ## Shape — write fresh (illustration, not gospel)
 ```ts
@@ -48,5 +44,4 @@ useSWR("/api/projects", fetcher, { fallbackData: loaderData.projects });
 
 ## Verify at latest
 - **swr** — current `useSWR`/`mutate` API + `fallbackData`. (TanStack Query if chosen.)
-- **react-router v7** — resource-route shape, and `defer`/`Await`/`Suspense` for streaming
-  slow loader data.
+- **react-router v7** — resource-route shape, and `defer`/`Await`/`Suspense` for streaming slow loader data.
