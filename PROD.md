@@ -776,12 +776,14 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
     one upload, so the cap-reached gate + upsell + restore flow are all exercisable without pushing
     25 GB. `resolveFreeTierBytes()` gates it on `PADDLE_ENVIRONMENT`, so production ignores it
     outright: the "forever" promise cannot be shrunk by a config value.
-  - **C. Surfaces — app DONE ✅ (2026-07-13), site REMAINING.** In-app: `SubscribeModal` is now
+  - **C. Surfaces — app DONE ✅ (2026-07-13), site DONE ✅.** In-app: `SubscribeModal` is now
     `reason`-aware ("Your free storage is full" when a free vault blocks a deposit vs. a plain "Choose
     a plan" from Settings), AccountCard + Settings say **"Free"** rather than "No plan", and the
     Storage row reads *"6 GB of 25 GB"* off the same entitlement (no hardcoded cap anywhere in the
-    app — it's the backend's number). Remaining: the site pricing section gains the free tier
-    (design-synced upstream per `site/SPEC.md`, not hand-edited).
+    app — it's the backend's number). Site: the pricing section carries the free tier (`cbead7c`) —
+    a `25 GB / Free` row in `site/app/lib/marketing/content.ts` (deliberately not a `PLAN_SIZES`
+    row, same entitlement-not-product rule as the backend) rendered by `pricing-tabbed.tsx` with
+    the free badge + its own CTA, and the pull-back tab shows the free monthly amounts.
 - ~~**Same-email, two sign-in methods = two Cognito accounts.**~~ **DECIDED + BUILT ✅ (2026-07-17,
   Ben): ONE EMAIL = ONE ACCOUNT, linked automatically at the door** — the industry default
   (Clerk/Supabase/Firebase ship it out of the box), keyed on VERIFIED email both sides (Google's
