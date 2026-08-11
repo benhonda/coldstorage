@@ -71,10 +71,21 @@ export const NON_INDEXABLE_ROUTES: Readonly<Record<string, string>> = {
   "/download.dmg": "Resource route (302 to the current release asset), not a page.",
 };
 
-/** The canonical production origin. Every absolute URL we emit is built from this one value. */
-export const SITE_ORIGIN = "https://coldstorage.sh";
+/**
+ * The canonical production origin. Every absolute URL we emit is built from this one value.
+ *
+ * `www`, and it MUST match what Vercel actually serves. This said `https://coldstorage.sh` until
+ * 2026-08-11, while the Vercel project has the apex 308-redirecting to `www.coldstorage.sh` — so the
+ * canonical tag, `og:url`, every sitemap entry and both JSON-LD `url` fields all pointed at a URL that
+ * never returns 200, and named a host other than the one serving the page. Crawlers were being handed
+ * a redirect as the canonical, and Google's OAuth brand verification was checking a home page that
+ * bounced off the URL it had on file.
+ *
+ * If the primary domain ever moves, change it HERE — not in the deployment to match the code.
+ */
+export const SITE_ORIGIN = "https://www.coldstorage.sh";
 
-/** Absolute URL for a site-relative path, e.g. `/pricing` → `https://coldstorage.sh/pricing`. */
+/** Absolute URL for a site-relative path, e.g. `/pricing` → `https://www.coldstorage.sh/pricing`. */
 export function absoluteUrl(path: string): string {
   return path === "/" ? SITE_ORIGIN : `${SITE_ORIGIN}${path}`;
 }

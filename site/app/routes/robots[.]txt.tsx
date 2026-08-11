@@ -62,7 +62,7 @@ export function loader() {
     agents.map((ua) => `User-agent: ${ua}\nAllow: /\n${disallows}`).join("\n\n");
 
   const body = [
-    "# ColdStorage — https://coldstorage.sh",
+    `# ColdStorage — ${SITE_ORIGIN}`,
     "# Everything here is public marketing copy. Crawl it.",
     "",
     "User-agent: *",
