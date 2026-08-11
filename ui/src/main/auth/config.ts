@@ -14,10 +14,6 @@ import { schemeRedirectUri, type OAuthConfig } from "./oauth.ts";
 
 const nonEmpty = (v: string | undefined): string | undefined => (v && v.length > 0 ? v : undefined);
 
-/** The region for the email-OTP lane's cognito-idp calls, read from the managed-login host
- * (`<prefix>.auth.<region>.amazoncognito.com`). Empty for a non-standard domain → email lane off. */
-const regionFromDomain = (domain: string): string => domain.match(/\.auth\.([a-z0-9-]+)\.amazoncognito\.com$/)?.[1] ?? "";
-
 export const resolveOAuthConfig = (): OAuthConfig | null => {
   const packaged = app.isPackaged;
   const cfg = packaged ? readAppConfig(dataDir()) : {};
@@ -31,6 +27,12 @@ export const resolveOAuthConfig = (): OAuthConfig | null => {
     // callback routes back to the staging app, not prod. Must be a registered Cognito callback URL (infra
     // `app_oauth_callback_urls`). Dev: the loopback listener (unpackaged Electron can't receive deep links).
     redirectUri: packaged ? schemeRedirectUri(appIdentity().scheme) : LOOPBACK_REDIRECT_URI,
-    region: regionFromDomain(domain),
+    // The pool's region, taken from the SAME field the daemon and the bucket use — it is one infra
+    // output (`aws_region`), already carried by config.json and the dev handoff, so there is exactly
+    // one spelling of it (PILLAR3). It used to be REGEXED BACK OUT of the managed-login hostname,
+    // which quietly tied the email-OTP lane to the host happening to end in `.amazoncognito.com`:
+    // moving sign-in to `auth.coldstorage.sh` (2026-08-10) would have yielded an empty region and
+    // silently disabled email sign-in, with Google still working and nothing logged.
+    region: (packaged ? cfg.region : nonEmpty(process.env.AWS_REGION)) ?? "",
   };
 };

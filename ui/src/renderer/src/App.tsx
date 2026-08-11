@@ -311,6 +311,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
         onEmailStart={() => Promise.resolve()}
         onEmailSubmit={() => Promise.resolve()}
         onEmailCancel={() => {}}
+        onCancelSignIn={() => {}}
         checking
       />
     );
@@ -329,6 +330,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           onEmailStart={(email) => api.startEmailSignIn(email)}
           onEmailSubmit={(code) => api.submitEmailCode(code)}
           onEmailCancel={() => void api.cancelEmailSignIn()}
+          onCancelSignIn={() => void api.cancelSignIn()}
         />
       );
     }

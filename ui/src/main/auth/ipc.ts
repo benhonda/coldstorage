@@ -12,6 +12,7 @@ export const registerAuthIpc = (auth: AuthManager): (() => void) => {
   ipcMain.handle(IPC.authStatus, () => auth.status());
   ipcMain.handle(IPC.authSignIn, () => auth.signIn());
   ipcMain.handle(IPC.authSignOut, () => auth.signOut());
+  ipcMain.handle(IPC.authCancelSignIn, () => auth.cancelSignIn());
   ipcMain.handle(IPC.authEmailStart, (_e, email: string) => auth.startEmailSignIn(email));
   ipcMain.handle(IPC.authEmailSubmit, (_e, code: string) => auth.submitEmailCode(code));
   ipcMain.handle(IPC.authEmailCancel, () => auth.cancelEmailSignIn());
@@ -24,6 +25,7 @@ export const registerAuthIpc = (auth: AuthManager): (() => void) => {
     ipcMain.removeHandler(IPC.authStatus);
     ipcMain.removeHandler(IPC.authSignIn);
     ipcMain.removeHandler(IPC.authSignOut);
+    ipcMain.removeHandler(IPC.authCancelSignIn);
     ipcMain.removeHandler(IPC.authEmailStart);
     ipcMain.removeHandler(IPC.authEmailSubmit);
     ipcMain.removeHandler(IPC.authEmailCancel);

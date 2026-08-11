@@ -57,6 +57,9 @@ export class AuthManager {
   private readonly useLoopback: boolean;
   private tokens: TokenSet | null = null;
   private pending: PendingSignIn | null = null;
+  /** Fires at the pending attempt's own `expiresAt` to unwind one whose callback never came (the
+   * browser tab was closed) — without it the UI sits on "finish in your browser" forever. */
+  private pendingTimer: ReturnType<typeof setTimeout> | null = null;
   /** The one automatic restart for the account-linking first-sign-in error has been spent (re-armed
    * by any user-initiated signIn), so a genuine repeat failure surfaces instead of looping. */
   private linkRetryUsed = false;
@@ -177,9 +180,30 @@ export class AuthManager {
       }
     }
     this.pending = pending;
+    // Unwind at the same instant `expiresAt` declares the attempt dead (one deadline, two readers: this
+    // timer for the no-callback case, handleCallbackUrl for a late one) rather than stranding the UI on
+    // "finish in your browser" for an authorization code that can no longer be exchanged. The reason is
+    // surfaced, not swallowed — the user may still be mid-flow in a browser we've now stopped listening for.
+    this.pendingTimer = setTimeout(() => {
+      this.clearPending();
+      this.lastError = "it timed out waiting for the browser. Give it another go.";
+      this.emitStatus();
+    }, pending.expiresAt - Date.now());
     this.lastError = null;
     this.emitStatus();
     await shell.openExternal(buildAuthorizeUrl(this.cfg, { state, challenge, identityProvider: "Google" }));
+  }
+
+  /**
+   * Abandon an in-progress browser sign-in and go back to signed-out, so the user can pick a different
+   * lane. Needed because closing the browser tab produces no callback at all: nothing else would ever
+   * clear `pending` (short of the TTL above), leaving the sign-in card stuck on "finish in your browser".
+   */
+  cancelSignIn(): void {
+    if (!this.cfg || !this.pending) return;
+    this.clearPending();
+    this.lastError = null;
+    this.emitStatus();
   }
 
   /** Whether the email-OTP lane is available (region resolved) — the UI hides the email option if not. */
@@ -303,6 +327,8 @@ export class AuthManager {
   private clearPending(): void {
     this.pending?.stopLoopback?.();
     this.pending = null;
+    if (this.pendingTimer) clearTimeout(this.pendingTimer);
+    this.pendingTimer = null;
   }
 
   /** Take a token set live: schedule its refresh, persist the refresh token + lane, tell everyone. */

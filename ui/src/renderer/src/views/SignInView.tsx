@@ -15,13 +15,23 @@ interface Props {
   onEmailStart: (email: string) => Promise<void>;
   onEmailSubmit: (code: string) => Promise<void>;
   onEmailCancel: () => void;
+  /** Abandon an in-progress browser sign-in — the way back out when the browser tab got closed. */
+  onCancelSignIn: () => void;
   /** Startup: the real sign-in state isn't known yet — show the card with a disabled "Checking…" button. */
   checking?: boolean;
 }
 
 type Step = "choose" | "email" | "code";
 
-export const SignInView = ({ auth, onSignIn, onEmailStart, onEmailSubmit, onEmailCancel, checking = false }: Props): React.JSX.Element => {
+export const SignInView = ({
+  auth,
+  onSignIn,
+  onEmailStart,
+  onEmailSubmit,
+  onEmailCancel,
+  onCancelSignIn,
+  checking = false,
+}: Props): React.JSX.Element => {
   const [step, setStep] = useState<Step>("choose");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -78,8 +88,20 @@ export const SignInView = ({ auth, onSignIn, onEmailStart, onEmailSubmit, onEmai
         <>
           <p className="cs-signin-text">Finish signing in in your browser.</p>
           <Button variant="ghost" onClick={onSignIn}>
-            Start over
+            Open the browser again
           </Button>
+          {/* Closing the browser tab sends no callback, so this is the ONLY way back to the lane
+              choice — without it the card sits here until the attempt times out. */}
+          <button
+            type="button"
+            className="cs-linkbtn"
+            onClick={() => {
+              setStep("choose");
+              onCancelSignIn();
+            }}
+          >
+            Cancel
+          </button>
         </>
       );
     }

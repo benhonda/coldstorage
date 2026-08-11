@@ -65,7 +65,7 @@ module.exports = {
   mac: {
     category: "public.app-category.utilities",
     // 1024px source; electron-builder rasterises every Apple size slot from it (bundled resvg —
-    // no iconutil/Xcode needed). Regenerate with `task ui:icon:build`; see ui/scripts/gen-icon.mjs.
+    // no iconutil/Xcode needed). Regenerate with `task ui:icon:build`; see ui/scripts/gen-icon.ts.
     icon: "build/icon.png",
     hardenedRuntime: true, // required for notarization; entitlements below carve out what Electron needs
     gatekeeperAssess: false,

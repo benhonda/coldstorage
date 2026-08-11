@@ -381,7 +381,10 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   (`cognito-idp.ts` — SignUp/ConfirmSignUp/InitiateAuth/RespondToAuthChallenge, no SDK). `manager.ts`
   holds tokens (access/ID in memory, refresh token safeStorage-encrypted), is **lane-aware** (each
   session tagged `oauth`|`email`, refreshed at its own endpoint), and runs the daemon handoff (fresh ID
-  token → `authenticate`). The renderer sees only `AuthStatus` over IPC — never a token. Gate UI:
+  token → `authenticate`). A closed browser tab sends no callback at all, so the pending OAuth attempt
+  has two ways out besides success: a user-facing **Cancel** (`auth:cancelSignIn`) and a self-expiry at
+  the code's 5-minute TTL — the `signingIn` card is never a dead end. The renderer sees only
+  `AuthStatus` over IPC — never a token. Gate UI:
   `views/SignInView.tsx` (Google + the email step machine) + the account card in Settings.
 - `ui/src/main/vault/` — the zero-knowledge vault (PROD.md Phase 5b): the encryption-key half of being
   signed in. `manager.ts` decides per-device — cached MK → `unlockVault`; new account → `mintVault` +

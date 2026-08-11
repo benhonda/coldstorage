@@ -39,6 +39,7 @@ const api: ColdstoreApi = {
   getAuthStatus: () => ipcRenderer.invoke(IPC.authStatus),
   signIn: () => ipcRenderer.invoke(IPC.authSignIn),
   signOut: () => ipcRenderer.invoke(IPC.authSignOut),
+  cancelSignIn: () => ipcRenderer.invoke(IPC.authCancelSignIn),
   startEmailSignIn: (email: string) => ipcRenderer.invoke(IPC.authEmailStart, email),
   submitEmailCode: (code: string) => ipcRenderer.invoke(IPC.authEmailSubmit, code),
   cancelEmailSignIn: () => ipcRenderer.invoke(IPC.authEmailCancel),

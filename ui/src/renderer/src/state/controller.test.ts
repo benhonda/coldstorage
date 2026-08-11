@@ -80,6 +80,7 @@ const makeApi = (initial: ConnectionState) => {
     getAuthStatus: () => Promise.resolve({ configured: false, state: "signedOut", email: null, name: null, error: null, emailAvailable: false }),
     signIn: () => Promise.resolve(),
     signOut: () => Promise.resolve(),
+    cancelSignIn: () => Promise.resolve(),
     startEmailSignIn: () => Promise.resolve(),
     submitEmailCode: () => Promise.resolve(),
     cancelEmailSignIn: () => Promise.resolve(),

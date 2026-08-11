@@ -9,14 +9,18 @@
  */
 
 export interface OAuthConfig {
-  /** Managed-login host, e.g. `coldstorage-production-….auth.ca-central-1.amazoncognito.com`. */
+  /** Managed-login host — `auth.coldstorage.sh` (the custom domain), or the
+   * `coldstorage-production-….auth.ca-central-1.amazoncognito.com` prefix host on builds baked before
+   * the custom domain existed. Both stay live; infra hands over whichever is current (auth-domain.tf). */
   domain: string;
   /** The desktop app client id (public — cognito.tf `aws_cognito_user_pool_client.app`). */
   clientId: string;
   /** Must byte-match a registered callback URL (cognito.tf `app_oauth_callback_urls`). */
   redirectUri: string;
   /** AWS region of the user pool — for the email-OTP lane's `cognito-idp.{region}.amazonaws.com` calls
-   * (5b-3). Empty if it couldn't be determined, in which case the email lane is unavailable (Google still works). */
+   * (5b-3). Comes straight from the infra handoff's `region` (auth/config.ts), the same value the bucket
+   * and daemon use. Empty only when nothing supplied it, in which case the email lane is unavailable
+   * (Google still works). */
   region: string;
 }
 

@@ -59,6 +59,8 @@ export const IPC = {
   authSignIn: "auth:signIn",
   /** invoke: sign out (drops the stored session + revokes it server-side). */
   authSignOut: "auth:signOut",
+  /** invoke: abandon an in-progress browser sign-in (the user closed the browser tab). */
+  authCancelSignIn: "auth:cancelSignIn",
   /** invoke: email-code lane — send a one-time code to `(email)`. */
   authEmailStart: "auth:emailStart",
   /** invoke: email-code lane — submit the code `(code)` to finish signing in. */
@@ -369,6 +371,9 @@ export interface ColdstoreApi {
   signIn(): Promise<void>;
   /** Sign out: drops the stored session and revokes it server-side. */
   signOut(): Promise<void>;
+  /** Abandon an in-progress browser sign-in (the user closed the browser tab and wants back out).
+   * Returns the status to `signedOut` so the sign-in card offers the lane choice again. */
+  cancelSignIn(): Promise<void>;
   /** Email-code lane: send a one-time code to `email` (handles both sign-in and self-service signup).
    * Resolves when the code is on its way; rejects with a user-facing message on a bad email / error. */
   startEmailSignIn(email: string): Promise<void>;
