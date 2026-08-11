@@ -40,10 +40,21 @@ output "cognito_identity_pool_id" {
 }
 
 output "cognito_domain" {
-  # Full managed-login host. The domain resource is count-gated on a federated IdP being enabled;
-  # empty string when OAuth is off (the app treats that as "sign-in not configured").
-  value       = local.oauth_enabled ? "${one(aws_cognito_user_pool_domain.main[*].domain)}.auth.${var.aws_region}.amazoncognito.com" : ""
-  description = "→ app: the managed-login (hosted UI) host for /oauth2/authorize + /oauth2/token."
+  # ONE host, never two: the custom domain (auth.coldstorage.sh) once configured, the amazoncognito.com
+  # prefix host otherwise, "" when OAuth is off (the app treats that as "sign-in not configured").
+  # Both hosts stay live — see auth-domain.tf — but only this one is handed to clients, so there is
+  # never a question of which is current. Computed in auth-domain.tf.
+  value       = local.managed_login_host
+  description = "→ app: the managed-login host for /oauth2/authorize + /oauth2/token."
+}
+
+# The one piece of this flow Terraform CANNOT own: Google's OAuth client lives in the Google Cloud
+# console, so this URI has to be pasted into its authorized redirect URIs by hand. Surfaced as an
+# output so the value is read out of the plan rather than reconstructed from memory (PILLAR5) — a typo
+# here is a dead sign-in button with a redirect_uri_mismatch and no other symptom.
+output "google_oauth_redirect_uri" {
+  value       = local.managed_login_host == "" ? "" : "https://${local.managed_login_host}/oauth2/idpresponse"
+  description = "→ Google Cloud console (manual): the OAuth client's authorized redirect URI."
 }
 
 output "cognito_user_role_arn" {

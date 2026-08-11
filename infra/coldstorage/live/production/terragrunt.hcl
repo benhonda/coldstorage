@@ -15,4 +15,8 @@ inputs = {
   # Google sign-in (PROD.md: passwordless auth, 2026-07-02). Creds stored in SSM via
   # `task tf:coldstorage:google-creds` (2026-07-02).
   enable_google_idp = true
+
+  # Serve managed login from a host we own, so Google's consent screen stops naming an AWS domain we
+  # can never brand-verify (2026-08-10 — the full reasoning is in modules/stack/auth-domain.tf).
+  auth_custom_domain = "auth.coldstorage.sh"
 }

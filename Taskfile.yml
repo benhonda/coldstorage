@@ -1755,9 +1755,9 @@ tasks:
         done
 
   # ------------------------------------------------------------------ infra — tf:coldstorage:* (domain: infra/coldstorage)
-  # Storage buckets (S3 Glacier Deep Archive + R2) + lifecycle rules. State in
-  # terraform-state-sensitive (pharmer / ca-central-1); ENV-scoped; shared planned first.
-  # NOTE: infra/coldstorage scaffolding is the next build chunk — surface wired per convention.
+  # The S3 Glacier Deep Archive vault + lifecycle rules, Cognito (pool/identity pool/per-user role), the
+  # Cognito Lambdas, and the managed-login custom domain. ENV-scoped; shared planned first. State bucket,
+  # region and profile are NOT restated here — they come from the `vars:` block at the top of this file.
   tf:coldstorage:_validate-env:
     internal: true
     requires:
@@ -1765,11 +1765,22 @@ tasks:
     cmds:
       - 'case "{{.ENV}}" in production|staging) ;; *) echo "ENV must be production|staging"; exit 1 ;; esac'
 
-  # The pre-sign-up Lambda (modules/stack/lambda.tf) is packaged from a BUILT artifact — typecheck +
+  # The Cognito Lambdas (modules/stack/lambda.tf) are packaged from BUILT artifacts — typecheck +
   # unit tests + bundle here, so a plan/apply can never ship a stale or broken dist. Idempotent + fast.
+  # One task, both functions: plan/apply depend on this, and a per-function task would be a second
+  # thing to remember to wire up the next time a trigger is added.
   tf:coldstorage:lambda:build:
-    desc: Build the Cognito pre-sign-up Lambda (typecheck + tests + bundle → dist/index.mjs)
-    dir: infra/coldstorage/modules/stack/lambda/pre-signup
+    desc: Build both Cognito Lambdas — pre-sign-up + custom email sender (typecheck + tests + bundle)
+    cmds:
+      - task: tf:coldstorage:lambda:build:one
+        vars: { LAMBDA: pre-signup }
+      - task: tf:coldstorage:lambda:build:one
+        vars: { LAMBDA: custom-email-sender }
+  tf:coldstorage:lambda:build:one:
+    internal: true
+    requires:
+      vars: [LAMBDA]
+    dir: infra/coldstorage/modules/stack/lambda/{{.LAMBDA}}
     cmds:
       - bun install
       - bun run typecheck
@@ -1811,14 +1822,31 @@ tasks:
     cmds:
       - terragrunt apply {{.CLI_ARGS}}
 
+  # Shared-first, matching plan/apply. This used to init ONLY the env stack, which left `shared` with
+  # no way to be initialised through the task surface at all — so when `modules/shared` gained the
+  # Vercel OIDC provider, its lock file went stale and BOTH plan and apply died on "Inconsistent
+  # dependency lock file" with the only documented fix being a raw terraform command (2026-08-10).
   tf:coldstorage:init:
     requires:
       vars: [ENV]
     deps: [check-aws-identity]
-    dir: infra/coldstorage/live/{{.ENV}}
     cmds:
       - task: tf:coldstorage:_validate-env
+      - task: tf:coldstorage:init:shared
+      - task: tf:coldstorage:init:env
+  tf:coldstorage:init:env:
+    internal: true
+    dir: infra/coldstorage/live/{{.ENV}}
+    cmds:
       - terragrunt init {{.CLI_ARGS}}
+  # -upgrade, not a bare init: a bare init reads the stale lock and fails the same way. Re-resolving
+  # is the whole point of reaching for this task.
+  tf:coldstorage:init:shared:
+    desc: Init the shared ColdStorage stack, re-resolving providers (fixes "Inconsistent dependency lock file")
+    deps: [check-aws-identity]
+    dir: infra/coldstorage/live/shared
+    cmds:
+      - terragrunt init -upgrade {{.CLI_ARGS}}
 
   tf:coldstorage:google-creds:
     desc: Store the Google OAuth client id + secret in SSM (one-time; cognito.tf reads them once enable_google_idp=true)
@@ -1845,6 +1873,84 @@ tasks:
           --name /coldstorage/google-oauth-client-secret --type SecureString --overwrite --value "$G_CLIENT_SECRET" > /dev/null
         echo "✓ stored: id ${G_CLIENT_ID%%-*}-…(${#G_CLIENT_ID} chars), secret …(${#G_CLIENT_SECRET} chars)"
         echo "  If enable_google_idp is already true, re-plan+apply so Cognito picks up the new values: task tf:plan"
+
+  tf:coldstorage:auth-domain:
+    # The half of the branded-sign-in change Terraform CANNOT own. Cognito's custom domain
+    # (auth.coldstorage.sh) is applied from modules/stack/auth-domain.tf, but Google's OAuth client
+    # lives in the Google Cloud console, and brand verification is a human review — so two values have
+    # to be pasted over by hand. This task READS them out of the applied state instead of anyone
+    # retyping them from memory: a wrong redirect URI is a dead "Continue with Google" button whose
+    # only symptom is `redirect_uri_mismatch`.
+    #
+    # Also the after-apply smoke test. DNS + CloudFront + ACM take a few minutes to converge, so the
+    # domain existing in Terraform is not the same as the domain WORKING — this checks the real thing.
+    desc: "Show the manual Google-console values for the sign-in domain + smoke-test that it serves (ENV=production|staging)"
+    requires:
+      vars: [ENV]
+    deps: [check-aws-identity]
+    dir: infra/coldstorage/live/{{.ENV}}
+    cmds:
+      - task: tf:coldstorage:_validate-env
+      - |
+        host="$(terragrunt output -raw cognito_domain)"
+        [ -n "$host" ] || { echo "✗ no managed-login domain in {{.ENV}} — is a federated IdP enabled?"; exit 1; }
+        redirect="$(terragrunt output -raw google_oauth_redirect_uri)"
+        # The zone, not the host: Google's "Authorized domains" takes the registrable domain, and
+        # entering the full subdomain is the classic way to fail verification with no useful error.
+        zone="${host#*.}"
+
+        echo "Paste into Google Cloud console → APIs & Services:"
+        echo "  Clients → the ColdStorage OAuth client → Authorized redirect URIs:"
+        echo "      $redirect"
+        echo "  Branding → Authorized domains:"
+        echo "      $zone       ← the registrable domain, NOT $host"
+        echo "  Branding → App name + logo, then submit for verification."
+        echo "  (Until verification passes, Google keeps showing the domain instead of 'ColdStorage'.)"
+        echo
+
+        # Cognito answers /oauth2/authorize with a 302 to the IdP (or a 400 for a malformed request) —
+        # either proves the host is live and certificate-valid. A connection failure means DNS or the
+        # CloudFront distribution hasn't converged yet; give it a few minutes and re-run.
+        echo "→ smoke test https://$host/oauth2/authorize"
+        curl -s -o /dev/null -w "   HTTP %{http_code} in %{time_total}s (TLS to %{remote_ip})\n" \
+          --max-time 15 "https://$host/oauth2/authorize" \
+          || echo "   ✗ no response — DNS/CloudFront likely still converging (or the cert isn't attached yet)"
+
+  tf:coldstorage:cd2-key:
+    desc: Store the CD2 API key in SSM (one-time; lambda.tf reads it into the custom email sender)
+    interactive: true
+    deps: [check-aws-identity]
+    cmds:
+      - |
+        # Same pattern + same reasoning as tf:coldstorage:google-creds above (including why there are
+        # no --profile/--region flags). This one is NOT optional: the custom email sender reads it on
+        # every invocation, and without it Cognito's codes go nowhere — nobody can sign in.
+        read -r -s -p "CD2 API key (hidden): " CD2_KEY; echo
+        [ "${#CD2_KEY}" -ge 10 ] || { echo "✗ that key looks too short (${#CD2_KEY} chars) — nothing stored"; exit 1; }
+        aws ssm put-parameter \
+          --name /coldstorage/cd2-api-key --type SecureString --overwrite --value "$CD2_KEY" > /dev/null
+        echo "✓ stored: …(${#CD2_KEY} chars)"
+        echo "  Re-plan+apply so the Lambda picks up the new value: task tf:plan"
+
+  tf:coldstorage:alert-email:
+    desc: Store the ops alert email in SSM (one-time; alerts.tf subscribes it to the alarms topic)
+    interactive: true
+    deps: [check-aws-identity]
+    cmds:
+      - |
+        # In SSM rather than a tracked .tf for the same reason as the other secrets here: public repo.
+        # Plain String, not SecureString — an address is not a credential, and SecureString would mean
+        # a KMS decrypt on every plan for no benefit.
+        read -r -p "Ops alert email: " ALERT_EMAIL
+        case "$ALERT_EMAIL" in
+          ?*@?*.?*) ;;
+          *) echo "✗ that doesn't look like an email address — nothing stored"; exit 1 ;;
+        esac
+        aws ssm put-parameter \
+          --name /coldstorage/ops-alert-email --type String --overwrite --value "$ALERT_EMAIL" > /dev/null
+        echo "✓ stored: $ALERT_EMAIL"
+        echo "  After the next apply, AWS emails a SUBSCRIPTION CONFIRMATION to that address."
+        echo "  Until you click it the topic notifies nobody — apply succeeding is not proof the alarm can reach you."
 
   tf:adopt-vercel:
     # ── Run ONCE PER VERCEL STACK, before that stack's first apply ────────────────────────────────────
@@ -1962,8 +2068,8 @@ tasks:
         echo "✓ cleared $n .terragrunt-cache dir(s) — the next plan re-initializes against the current backend"
 
   tf:vercel-token:
-    # ROTATION, not setup. The Vercel provider in infra/{account-backend,site} authenticates with an API
-    # token read from SSM, and that parameter is ACCOUNT-scoped (one token per Vercel team) — in Ben's own
+    # ROTATION, not setup. The Vercel provider in infra/{account-backend,site,coldstorage} authenticates
+    # with an API token read from SSM, and that parameter is ACCOUNT-scoped (one token per Vercel team) — in Ben's own
     # account `vercel-log-drain` already created it, so ColdStorage reads it rather than minting a second
     # one for the same team. Only run this to replace an expired or leaked token.
     #

@@ -116,3 +116,12 @@ variable "app_oauth_callback_urls" {
   ]
   description = "Redirect URIs for the desktop app's hosted-UI OAuth (Google/Apple) flow: the packaged app's custom scheme + the dev-mode loopback. Only used when a federated IdP is enabled."
 }
+
+variable "mail_from" {
+  type = string
+  # Lowercase display name is the brand's wordmark casing rule (site app/components/ds/wordmark.tsx):
+  # the wordmark is `coldstorage`, the product name in prose is `ColdStorage`. The address is on
+  # m.coldstorage.sh, the subdomain verified for sending in CD2.
+  default     = "coldstorage <noreply@m.coldstorage.sh>"
+  description = "RFC 5322 From for the branded one-time-code email. The domain must be verified for sending in CD2, or every send is rejected with 403."
+}

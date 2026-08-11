@@ -724,6 +724,27 @@ each signed-in device: MK cached in the macOS Keychain (per-device escrow — no
   apply stored client_id `1000` — the creds task had used `read GID`, and GID is a READONLY built-in
   (the unix group id) in go-task's mvdan/sh; renamed vars + shape guards now prevent that class.)
   The app side (system-browser flow + `coldstorage://auth/callback` handling) landed + gate-passed in 5a.
+- **Branded Google consent screen** — **infra APPLIED ✅ (2026-08-10)**: `auth.coldstorage.sh` is live
+  and serving managed login (ACM cert ISSUED, Cognito custom domain ACTIVE on its CloudFront
+  distribution, apex CAA extended with `amazon.com` so ACM can renew). Both hosts serve, so no build in
+  the wild broke. **Remaining, and in this order:** (1) add the new redirect URI to the Google OAuth
+  client — *additively*, since flipping the app first would break sign-in with `redirect_uri_mismatch`;
+  (2) `task tf:coldstorage:creds-export` + rebake to move clients onto the new host; (3) submit branding
+  for verification. Background:
+  the sign-in screen names the host it redirects to, so on the
+  prefix domain users read `coldstorage-production-<acct-id>.auth.<region>.amazoncognito.com`. The app
+  name + logo only replace that after Google **brand verification**, which requires proving ownership of
+  the OAuth client's authorized domain in Search Console — impossible on a domain Amazon owns. So
+  managed login moves to a custom domain we own, `auth.coldstorage.sh`
+  (`infra/coldstorage/modules/stack/auth-domain.tf`: us-east-1 ACM cert + the two Vercel DNS records +
+  the second `aws_cognito_user_pool_domain`; the prefix domain stays live so existing builds keep
+  working). Three steps are Ben's and can't be Terraform's — `task tf:coldstorage:auth-domain` prints
+  the exact values and smoke-tests the host:
+  1. add `https://auth.coldstorage.sh/oauth2/idpresponse` to the OAuth client's authorized redirect URIs;
+  2. set Branding → authorized domain to `coldstorage.sh` (the registrable domain, not the subdomain —
+     entering the full host is the standard way to fail verification with an unhelpful error);
+  3. set app name + logo and submit for verification. **Until verification passes Google keeps showing
+     the domain** — but it will then be ours, which is already the win.
 - ~~**Free trial / plan tiers / retrieval-fee charging** — product/economics (private `strategy/`) — P4.~~
   **DECIDED ✅ (2026-07-12, Ben): no trial — a FREE TIER instead: 25 GB, every account, forever.
   Retrieval is passed through AT COST for everyone, free and paid — the margin is made on storage

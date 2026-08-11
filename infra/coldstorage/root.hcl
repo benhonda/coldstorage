@@ -3,9 +3,14 @@
 # `coldstorage` component root. State lives in a per-account bucket, keyed per component + path.
 #
 # Divergence from the reference (intentional, see infra/coldstorage/README.md): ColdStorage
-# is a Mac daemon + storage buckets, NOT a Vercel web app. So there is no Vercel provider,
-# no Vercel env vars, and no DNS/Route53 — `shared` is a near-empty placeholder kept only
-# to satisfy the shared-first task surface.
+# is a Mac daemon + storage buckets, NOT a Vercel web app. So there are no Vercel env vars
+# and no Route53 — `shared` is a near-empty placeholder kept only to satisfy the shared-first
+# task surface.
+#
+# The Vercel provider IS pinned, for one narrow job: the two DNS records that point
+# `auth.coldstorage.sh` at Cognito's managed login (modules/stack/auth-domain.tf). The zone lives in
+# Vercel; both record values are computed by that plan, so they belong to Terraform. Nothing else
+# here touches Vercel.
 #
 # ── WHERE THE ACCOUNT CONSTANTS COME FROM (changed 2026-07-27, see MIGRATION.md) ──────────────
 # Region + state bucket are NOT written here. They are `get_env` reads of variables the root
@@ -18,9 +23,11 @@
 # exported AWS_PROFILE natively, so naming it again here would only be a second place to forget.
 
 locals {
-  aws_region   = get_env("AWS_REGION")
-  state_bucket = get_env("COLDSTORE_TF_STATE_BUCKET")
-  project_name = "coldstorage"
+  aws_region       = get_env("AWS_REGION")
+  state_bucket     = get_env("COLDSTORE_TF_STATE_BUCKET")
+  vercel_team_slug = get_env("COLDSTORE_VERCEL_TEAM_SLUG")
+  vercel_token_ssm = get_env("COLDSTORE_VERCEL_TOKEN_SSM_PARAM")
+  project_name     = "coldstorage"
 
   # Space reclamation's cross-component constants — see the root `reclaim.constants.json` for why they
   # live in one file. Decoded HERE rather than in each live stack so a second env cannot be stood up
@@ -51,6 +58,8 @@ remote_state {
 }
 
 # Generated provider + version pins — single source of truth across shared/stack/(future) staging.
+# The `vercel` provider's `provider "vercel" {}` config block (api_token, team) lives in modules/stack
+# (it reads an SSM parameter via a `data` source) — this just pins the version, matching infra/site.
 generate "provider" {
   path      = "provider.tf"
   if_exists = "overwrite"
@@ -61,6 +70,10 @@ generate "provider" {
         aws = {
           source  = "hashicorp/aws"
           version = "~> 6.51"
+        }
+        vercel = {
+          source  = "vercel/vercel"
+          version = "~> 3.0"
         }
       }
     }
@@ -75,12 +88,33 @@ generate "provider" {
         }
       }
     }
+
+    # Second AWS provider, pinned to N. Virginia — NOT a preference. A Cognito custom domain is served by
+    # CloudFront, which is global and reads its certificate only from us-east-1, whatever region the user
+    # pool lives in. Used by modules/stack/auth-domain.tf's ACM resources and nothing else.
+    provider "aws" {
+      alias  = "us_east_1"
+      region = "us-east-1"
+
+      default_tags {
+        tags = {
+          Project   = "${local.project_name}"
+          ManagedBy = "terragrunt"
+        }
+      }
+    }
   EOF
 }
 
 inputs = {
   project_name = local.project_name
   aws_region   = local.aws_region
+
+  # Vercel, for the auth-domain DNS records only (modules/stack/auth-domain.tf). Same reads as
+  # infra/site — the Taskfile's `vars:` block is the SSOT for both. `shared` declares neither variable
+  # and Terraform ignores the extra TF_VAR_s.
+  vercel_team_slug       = local.vercel_team_slug
+  vercel_token_ssm_param = local.vercel_token_ssm
 
   # Terraform is a DERIVED consumer of the reclaim constants, never a second source of them. Passed to
   # every stack; `shared` declares none of these variables and Terraform ignores the extra TF_VAR_s.

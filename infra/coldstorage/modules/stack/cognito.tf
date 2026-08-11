@@ -44,6 +44,15 @@ resource "aws_cognito_user_pool" "main" {
   # and email-code always open the SAME account/vault. See lambda/pre-signup/decide.ts.
   lambda_config {
     pre_sign_up = aws_lambda_function.pre_signup.arn
+
+    # Branded one-time-code email (lambda.tf, "Custom email sender"). With this set Cognito stops
+    # sending mail itself and hands the KMS-encrypted code to our function instead — so kms_key_id
+    # is not optional here, it is the key the function decrypts with.
+    kms_key_id = aws_kms_key.email_codes.arn
+    custom_email_sender {
+      lambda_arn     = aws_lambda_function.custom_email_sender.arn
+      lambda_version = "V1_0"
+    }
   }
 
   # Email-based account recovery (account access only — see the zero-knowledge note above). Inert while
