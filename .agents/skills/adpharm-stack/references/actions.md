@@ -9,6 +9,7 @@ A typed pipeline from a client call to a server handler and back, for **writes (
 - `submit(input)` POSTs JSON to the **current route's** action; that action is the one shared dispatcher (`action_handler`), which looks the action up in a generated map by directory name and runs the matching server handler.
 - The handler gets zod-validated input and returns a value whose type flows back to `data`. Errors return as `{ message_unsafe, message_safe }`, never an unhandled throw.
 - After a successful write, RR7 auto-revalidates loaders; refresh SWR-cached reads via `mutate()` from `onSuccess` (see `references/data-fetching.md`).
+- `useOptimisticAction(definition, serverValue, toInput)` → `{ value, set, pending, error }` for **instant-effect** controls (a Switch, a Hide/Show menu item, a star). Render `value`, call `set(next)`: the control moves now, the write follows, a failure snaps it back. See `pending-is-visible`.
 
 ## Non-negotiables
 | key | rule | why |
@@ -19,8 +20,10 @@ A typed pipeline from a client call to a server handler and back, for **writes (
 | generated-map | the action map is generated, never hand-edited (run `task generate`) | a missing handler is caught at build, not runtime (loud) |
 | single-dispatch | one dispatcher *function* (`action_handler`): `useAction` submits to `"."` and every route that hosts actions does `export const action = action_handler`. Do NOT invent a global `/api/action` endpoint or change the submit target | it's one shared *handler*, not one shared *URL* — no per-action API routes, no engine rewrite |
 | revalidate-after-write | after success, let RR7 revalidate loaders automatically; for SWR-cached reads call `mutate(key)` in `onSuccess` | invalidation lives at the call site, not in a bespoke action cache |
-| safe-unsafe-errors | server normalizes errors to `{ message_unsafe, message_safe }`: log unsafe, show safe | never leak raw errors; never swallow them |
+| safe-unsafe-errors | handlers throw `ReadableError` (never `serverError` — see `references/routing.md`, `throw-by-listener`); the server normalizes to `{ message_unsafe, message_safe }`: log unsafe, show safe | the page survived and only the write failed, so it belongs in a toast, not an error screen; never leak raw errors, never swallow them |
 | dev-loud-guards | keep the hook's dev warnings (e.g. suspected infinite submit loops) | failures surface immediately |
+| pending-is-visible | **every** write reports in flight, and the report belongs to the control that started it. Commit-on-press (a Save button) → `loading={isSubmitting}` on the DS Button (`references/components.md`). Instant-effect (a Switch) → `useOptimisticAction`, never `isSubmitting` | a switch that waits for a round trip reads as a broken switch; it stays consistent because it's the hook + the DS component, not per-screen invention |
+| repeat-not-intent | the submit guard swallows an **identical** payload fired twice in quick succession; a **different** payload always goes through | it must catch the double-click without dropping a toggle flicked off and straight back on |
 
 ## Engine — copy faithfully (`assets/lib/actions/_core/*`, `assets/hooks/use-action.ts`)
 `action-utils(.ts/.server.ts)`, `action-runner.server.ts`, `action-map.generate.ts`, and the `use-action` hook. `task generate` produces the imported `action-map.ts` (per-project; never hand-edit). Placement + deps: see SKILL.md; pipeline: `references/taskfile.md`. Adjust only if a current dep API forces it.
@@ -38,11 +41,16 @@ export default createActionHandler(updateProfile, async ({ inputData }) => {
   // ...write to the DB...
   return { ok: true } as const;
 });
-// component
+// component — commit-on-press: pending lives on the button
 const { submit, data, error, isSubmitting } = useAction(updateProfile, {
   toastOnSuccess: { message: "Saved" },
   onSuccess: () => mutate("/api/profile"),  // refresh the SWR read, if any (loaders auto-revalidate)
 });
+<Button type="submit" loading={isSubmitting} loadingLabel="Saving…">Save</Button>
+
+// component — instant-effect: the control moves first, the write follows
+const hidden = useOptimisticAction(updateProfile, member.hidden, (hidden) => ({ id: member.id, hidden }));
+<Switch checked={hidden.value} onCheckedChange={hidden.set} />
 
 // wiring: each route that hosts actions re-exports the one dispatcher as its action.
 // app/routes/(_app).tsx
@@ -56,5 +64,5 @@ Forms use this + RR7 native form handling — there is no form generator (see SK
 
 ## Verify at latest
 - **zod** — `infer` + current top-level helpers (e.g. `z.email()` vs `z.string().email()`).
-- **react-router v7** — `ActionFunctionArgs`, `useFetcher` JSON submit, redirect/`Response`.
-- **sonner / use-debounce** — current toast + debounce APIs (`leading` semantics).
+- **react-router v7** — `ActionFunctionArgs`, `useFetcher` JSON submit, redirect/`Response`. Confirm `fetcher.submit` is still referentially stable: it's a dep of the hook's `submit` callback, so if it churns per render `submit` does too, and a `useEffect(…, [submit])` call site turns into the infinite loop `dev-loud-guards` warns about.
+- **sonner** — current toast API.

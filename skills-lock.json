@@ -20,7 +20,7 @@
       "sourceUrl": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",
       "skillPath": "skills/engineering/adpharm-stack/SKILL.md",
-      "computedHash": "273278e6fa1dd554ec3847e29e95eb06bdc210a63ce9b63c302236717f9750ca"
+      "computedHash": "e3b5b2e2ab5d281a976398cec6445ce49c820c0ad65a9edc4e15f3559f56169a"
     },
     "agentation": {
       "source": "benjitaylor/agentation",
@@ -30,9 +30,10 @@
     },
     "ai-gateway": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
+      "sourceUrl": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",
       "skillPath": "skills/vendor/ai-gateway/SKILL.md",
-      "computedHash": "09f138e5fc57efeffdec551ec31f092c53ec6362246ad1a17f4f64737802fc43"
+      "computedHash": "081658151ba70e1e2cc7153c41f7d347df8d53a00ad0dbd62238a8043d924024"
     },
     "ai-seo": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
@@ -117,9 +118,10 @@
     },
     "skill-creator": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
+      "sourceUrl": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",
       "skillPath": "skills/vendor/skill-creator/SKILL.md",
-      "computedHash": "b176d15cccfec151f259779b323938e3fae9de1a39b78dbe8d0bef9f4df91840"
+      "computedHash": "b7312cd2942ada465e3f917eab08ea2008bada8b8dcc38babe3b651a0742ce06"
     },
     "skill-editor": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
@@ -137,15 +139,17 @@
     },
     "typescript-advanced-types": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
+      "sourceUrl": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",
       "skillPath": "skills/vendor/typescript-advanced-types/SKILL.md",
-      "computedHash": "7787796bb8d370211770d7c41bf1c2a902dcdc95f2cdc7c5596f94e2298496a1"
+      "computedHash": "c620fe254f98915793ba260dbeb93a40a99289f01f5e50afff66c40470258877"
     },
     "vercel-composition-patterns": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
+      "sourceUrl": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",
       "skillPath": "skills/vendor/vercel-composition-patterns/SKILL.md",
-      "computedHash": "44e1f2f8267620f0f5b4b2f8bc3fbfb28553721d57bb22da7f3c33165f7a54ca"
+      "computedHash": "4e1a1d7bde7b37f1f5f3be410353e6e4303d363b403c432c9156bdd576a66c83"
     },
     "vercel-react-best-practices": {
       "source": "git@github.com:adpharm/adpharm-skills.git",

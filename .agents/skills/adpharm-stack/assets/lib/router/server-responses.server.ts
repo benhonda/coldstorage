@@ -1,4 +1,8 @@
 import {
+  HTTP_STATUS_TEXT,
+  type ServerErrorStatus,
+} from "~/lib/router/http-status";
+import {
   generatePathForLinkTo,
   type LinkTo,
   type LinkToOrDirectPath,
@@ -94,29 +98,17 @@ export function serverResponse(
 }
 
 /**
- * Throw this!
+ * Throw this! It reaches the nearest ErrorBoundary as a route error response.
+ *
+ * `customMsg` is not a log line — it is USER-FACING copy. The app's error screen
+ * prints it verbatim as the explanation whenever it differs from the protocol
+ * default, so write it the way you'd write it for a user: what happened, then what
+ * to do, no blame ("Roster not found." — not "roster lookup failed"). Omit it and
+ * the screen falls back to its own copy for that status.
  */
-export function serverError(code: 400 | 401 | 403 | 404 | 405 | 409 | 500 | 501, customMsg?: string) {
+export function serverError(code: ServerErrorStatus, customMsg?: string) {
   return new Response(null, {
     status: code,
-    statusText:
-      customMsg ??
-      (code === 400
-        ? "Bad Request"
-        : code === 401
-          ? "Unauthorized"
-          : code === 403
-            ? "Forbidden"
-            : code === 404
-              ? "Not Found"
-              : code === 405
-                ? "Method Not Allowed"
-                : code === 409
-                  ? "Conflict"
-                  : code === 500
-                    ? "Internal Server Error"
-                    : code === 501
-                      ? "Not Implemented"
-                      : "Internal Server Error"),
+    statusText: customMsg ?? HTTP_STATUS_TEXT[code],
   });
 }

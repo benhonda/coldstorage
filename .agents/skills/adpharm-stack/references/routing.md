@@ -34,8 +34,25 @@ Compile-time-checked navigation and URL state. No raw string paths, no manual `U
 | lossless-roundtrip | (de)serialize only via the parse/stringify pair; arrays survive | URL state stays type-correct |
 | hook-api | mutate via `updateSearchParams(partial)` (merges, drops null) / `toggleSearchParam(key,val)` | don't mutate the URL directly |
 
+## Errors
+
+### Contract
+- `serverError(status, msg?)` returns a `Response` you **throw** from middleware/loaders; it lands in the nearest `ErrorBoundary`. `msg` is user-facing copy, not a log line.
+- `HTTP_STATUS_TEXT` (shared, not `.server.ts`) is the status→reason-phrase table both ends read: `serverError` writes `statusText` from it, `isGenericStatusText(status, statusText)` tells the error screen "nobody authored this" from a real message.
+
+### Non-negotiables
+| key | rule | why |
+| --- | --- | --- |
+| throw-by-listener | middleware/loaders throw `serverError(404, "…")` (a Response); action handlers throw `ReadableError` | different listeners: the page IS the answer, so a loader failure needs a real status for caches/crawlers and lands in the boundary; an action failure left the page alive and `useAction` turns it into a toast. Backwards is not cosmetic — a `ReadableError` thrown from middleware renders a **500 "An unexpected error occurred"** with the real reason suppressed in prod |
+| real-error-boundary | a scaffolded app ships its own root `ErrorBoundary`, never React Router's template one | the template's is a bare unstyled `<h1>404</h1>` with no way out; shipping it is shipping a dead end |
+| status-copy-ssot | one function maps status → copy, used by the boundary **and** the root `meta` export (`MetaArgs` includes `error`) | the failing route's own `meta` never runs, so without this the tab title and the page disagree |
+| errors-have-an-exit | every error state renders a way out (home, back, the parent resource) | a 404 with no links is a dead end |
+| catch-all-404 | ship `app/routes/$.tsx` whose loader just `throw serverError(404)` | unmatched URLs take the same path as every other 404 instead of the framework default. The generouted generator drops paths ending in `/:`, so the splat never enters the typed `Path` union — nothing can `<Link to>` it, correct for a status rather than a place |
+| dev-detail-once | the dev-only diagnostic (stack/message) lives INSIDE the shared error screen, guarded once by `import.meta.env.DEV` | re-writing it per call site is how internals leak; the single guard is statically replaced, so the branch is dead-code-eliminated from the prod bundle |
+| boundary-replaces-layout | an `ErrorBoundary` on a layout route replaces that layout's **own element** — header and footer included. To keep the chrome, factor the shell into a component the boundary renders too | otherwise "add a boundary to keep the nav" silently deletes the nav |
+
 ## Engine — copy faithfully
-- Routing: `assets/lib/router/{generouted-components.tsx, generouted-generate-routes.ts, router-utils.ts, server-responses.server.ts}`. `task generate` produces `app/lib/router/routes.ts` (per-project; never hand-edit). Also wire the RR7 route config — `app/routes.ts` = `export default flatRoutes() satisfies RouteConfig` (from `@react-router/fs-routes` + `@react-router/dev/routes`) — required boilerplate, not generouted output.
+- Routing: `assets/lib/router/{generouted-components.tsx, generouted-generate-routes.ts, router-utils.ts, server-responses.server.ts, http-status.ts}` (+ `http-status.test.ts` — the `serverError`↔`isGenericStatusText` contract spans two files that never import each other). `task generate` produces `app/lib/router/routes.ts` (per-project; never hand-edit). Also wire the RR7 route config — `app/routes.ts` = `export default flatRoutes() satisfies RouteConfig` (from `@react-router/fs-routes` + `@react-router/dev/routes`) — required boilerplate, not generouted output.
 - Search params: `assets/hooks/use-search-params.ts` + `assets/lib/search-params-utils.ts` + `assets/lib/search-params.defaults.ts` (the schema — **edit this per app**) + `assets/lib/types/type-utils.ts`.
 
 Placement + deps: SKILL.md. Adjust only if a current dep API forces it.
