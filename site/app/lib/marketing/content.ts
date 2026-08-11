@@ -98,7 +98,20 @@ export const HERO: Hero = {
   // Carries a live price, so it is guarded: `task copy:check:site` re-derives both the figure and
   // the size from `PLAN_SIZES` (the entry plan) every run. Same treatment as `PRICING.tiers` —
   // a price written in copy that nothing checks is a price that goes stale silently.
-  lead: "Encrypted cloud backups for your files starting at $9.99 per year for 500 GB",
+  //
+  // It also has a JOB BEYOND COPY as of 2026-08-11, and the product name in it is load-bearing.
+  // Google's OAuth brand verification rejected the app twice over: the home page "does not explain
+  // the purpose of your app", and the consent-screen name `ColdStorage` "does not match the app name
+  // on your home page". Both trace to this line. The H1 is deliberately emotive and names nothing,
+  // and the only name rendered above the fold is the <Wordmark>, which is lowercase `coldstorage` by
+  // brand rule — so a reviewer scanning the page found a logotype and a feeling, and no plain
+  // statement of what the software is. The <title> and og: tags said it, but a human reviewer reads
+  // the page, not the head.
+  //
+  // So this line now opens with `ColdStorage` in prose case (which the wordmark rule already calls
+  // the correct form outside the logotype — see components/ds/wordmark.tsx) and says plainly what the
+  // app does before it says what it costs. Keep both properties if you rewrite it.
+  lead: "ColdStorage is a Mac app that encrypts your photos and files, then backs them up to the cloud. Starts at $9.99 a year for 500 GB.",
   cta: "Download for Mac",
   note: "Free to start: 25 GB, no card.",
 };
