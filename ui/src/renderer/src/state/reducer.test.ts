@@ -17,7 +17,7 @@ const status: AppState["status"] = {
   blobsVerified: 4,
   running: false,
   permanentlyFailedBlobs: 0,
-  sources: [{ id: "s1", kind: "folder", path: "/a", mountPath: "a", paused: false }],
+  sources: [{ id: "s1", kind: "folder", path: "/a", mountPath: "a", paused: false, lastScanAt: null, error: null }],
   bytesStored: 4096,
 };
 
@@ -33,12 +33,14 @@ const transfer = (id: string, state: RestoreRow["state"] = "pending"): RestoreRo
   bytes: 1234,
   requestedAt: 1_700_000_000,
   readyAt: null,
+  lastStepAt: null,
   completedAt: null,
   error: null,
   typicalWait: "~48 hours",
   typicalWaitSeconds: 48 * 60 * 60,
   freeUntil: null,
   resumable: false,
+  staleAfterSeconds: 24 * 60 * 60,
 });
 
 const signedIn = (email: string): Parameters<typeof reducer>[1] => ({
@@ -58,13 +60,13 @@ describe("connection + snapshot", () => {
   test("statusLoaded sets the snapshot; sourcesLoaded patches sources onto it", () => {
     const s = run(
       { type: "statusLoaded", status },
-      { type: "sourcesLoaded", sources: [{ id: "s2", kind: "folder", path: "/b", mountPath: "b", paused: false }] },
+      { type: "sourcesLoaded", sources: [{ id: "s2", kind: "folder", path: "/b", mountPath: "b", paused: false, lastScanAt: null, error: null }] },
     );
-    expect(s.status?.sources).toEqual([{ id: "s2", kind: "folder", path: "/b", mountPath: "b", paused: false }]);
+    expect(s.status?.sources).toEqual([{ id: "s2", kind: "folder", path: "/b", mountPath: "b", paused: false, lastScanAt: null, error: null }]);
   });
 
   test("sourcesLoaded is held (no-op) until a snapshot exists", () => {
-    const s = run({ type: "sourcesLoaded", sources: [{ id: "s2", kind: "folder", path: "/b", mountPath: "b", paused: false }] });
+    const s = run({ type: "sourcesLoaded", sources: [{ id: "s2", kind: "folder", path: "/b", mountPath: "b", paused: false, lastScanAt: null, error: null }] });
     expect(s.status).toBeNull();
     expect(s).toBe(initialState); // unchanged reference → store skips the notify
   });

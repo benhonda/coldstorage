@@ -38,7 +38,7 @@ const sessionlessStatus = (): Status => ({
 /** A controllable fake of the preload surface. */
 const makeApi = (initial: ConnectionState) => {
   let connectionState = initial;
-  let sources: Source[] = [{ id: "s1", kind: "folder", path: "/a", mountPath: "a", paused: false }];
+  let sources: Source[] = [{ id: "s1", kind: "folder", path: "/a", mountPath: "a", paused: false, lastScanAt: null, error: null }];
   let statusOverride: Status | null = null;
   let files: ListedFile[] = [{ id: "f1", relativePath: "a/b.jpg", size: 10, status: "archived", blobId: "blob-1", date: null }];
   // Seeded defaults, as a signed-IN daemon answers. Signed out it answers `[]` — successfully — which is
@@ -261,8 +261,8 @@ describe("controller sync policy", () => {
     await tick();
 
     f.setSources([
-      { id: "s1", kind: "folder", path: "/a", mountPath: "a", paused: false },
-      { id: "s2", kind: "folder", path: "/b", mountPath: "b", paused: false },
+      { id: "s1", kind: "folder", path: "/a", mountPath: "a", paused: false, lastScanAt: null, error: null },
+      { id: "s2", kind: "folder", path: "/b", mountPath: "b", paused: false, lastScanAt: null, error: null },
     ]);
     f.fireEvent("sourcesChanged", { added: "/b" });
     await tick();

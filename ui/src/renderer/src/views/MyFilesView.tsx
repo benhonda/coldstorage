@@ -939,7 +939,12 @@ const FileList = ({
             {status === "uploading" && <span className="cs-spinner" aria-hidden="true" />}
             {/* status icon by the ⋯: ✓ stored · ↑ uploading · ⚠ couldn't upload · ↓ transferring · saved-here.
                 An empty folder has nothing stored, so it shows no badge. */}
-            {!isEmptyFolder(row) && <StatusIcon status={status} />}
+            {/* `reason` is the daemon's own words for a fault (journal `files.error`), so a ⚠ or a stalled
+                row can say WHY on hover instead of leaving the user to guess. Folders roll up a status but
+                not a reason — a folder has no single fault to name. */}
+            {!isEmptyFolder(row) && (
+              <StatusIcon status={status} reason={row.type === "file" ? row.file.error : null} />
+            )}
             <IconButton
               icon="more_horiz"
               label="Actions"
@@ -1046,7 +1051,9 @@ const Gallery = ({
           <span className="cs-tile-thumb">{row.type === "folder" ? <Icon name="folder" size={40} /> : <KindIcon kind={row.file.kind} size={40} />}</span>
           <span className="cs-tile-foot">
             <span className="cs-tile-name" title={row.name}>{row.name}</span>
-            {!isEmptyFolder(row) && <StatusIcon status={rowStatus(row)} />}
+            {!isEmptyFolder(row) && (
+              <StatusIcon status={rowStatus(row)} reason={row.type === "file" ? row.file.error : null} />
+            )}
           </span>
         </button>
       );

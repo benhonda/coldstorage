@@ -84,7 +84,11 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
     () => state.files.filter(isFolderMarker).map((r) => r.relativePath),
     [state.files],
   );
-  const filesApi = useFiles(daemonFiles, persistedFolders, state.restores);
+  // The daemon's own "how long is too quiet?" window. `Infinity` until a snapshot arrives (startup, or a
+  // dropped connection): with no idea how often the daemon promised to look, silence proves nothing, so
+  // nothing gets called stale on the strength of not having asked.
+  const staleAfter = state.status?.staleAfterSeconds ?? Infinity;
+  const filesApi = useFiles(daemonFiles, persistedFolders, state.restores, staleAfter);
 
   // THE deposit gate — is there room for what's being deposited? (see `state/entitlement.ts`). "No
   // subscription" stopped being a reason to refuse a deposit when the free tier landed; only a FULL vault
@@ -447,6 +451,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           exec={exec}
           restores={state.restores}
           restoreProgress={state.restoreProgress}
+          staleAfter={staleAfter}
           onRequestAgain={(fileIds) => {
             setRequestFileIds(fileIds);
             setRoute("files");

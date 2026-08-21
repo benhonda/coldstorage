@@ -47,6 +47,16 @@ const status = await client.request("getStatus");
 if (typeof status.filesTotal !== "number" || !Array.isArray(status.sources)) {
   fail(`getStatus shape unexpected: ${JSON.stringify(status)}`);
 }
+if (typeof status.staleAfterSeconds !== "number") {
+  fail(`getStatus is missing 'staleAfterSeconds' — protocol.ts and the daemon DTO have drifted`);
+}
+for (const src of status.sources) {
+  // Same whole-shape drift guard as listFiles/listRestores, and it matters here for the nullable pair:
+  // a watched folder's scan clock + fault are how the app knows a backup has stopped.
+  for (const k of ["id", "kind", "path", "mountPath", "paused", "lastScanAt", "error"]) {
+    if (!(k in src)) fail(`getStatus source is missing '${k}' — protocol.ts and the daemon DTO have drifted`);
+  }
+}
 log(
   `getStatus → filesTotal=${status.filesTotal} archived=${status.filesArchived} ` +
     `verified=${status.blobsVerified} sources=${status.sources.length} ` +
@@ -59,6 +69,13 @@ if (!Array.isArray(files)) fail(`listFiles shape unexpected: ${JSON.stringify(fi
 for (const f of files) {
   if (typeof f.id !== "string" || typeof f.relativePath !== "string" || typeof f.size !== "number") {
     fail(`listFiles row malformed: ${JSON.stringify(f)}`);
+  }
+  // Whole-shape check, same as the transfers one below and for the same reason: `protocol.ts` is a
+  // hand-maintained mirror of the Swift DTO. It matters most for the NULLABLE fields — Swift's synthesized
+  // encoder would omit a nil entirely while `ListedFile` declares `T | null`, so a key that quietly stops
+  // being emitted is exactly the drift nothing else would notice.
+  for (const k of ["status", "blobId", "date", "lastAttemptAt", "error"]) {
+    if (!(k in f)) fail(`listFiles row is missing '${k}' — protocol.ts and the daemon DTO have drifted`);
   }
 }
 log(`listFiles → ${files.length} file(s)${files[0] ? ` (e.g. ${files[0].relativePath} ${files[0].status})` : ""}`);
@@ -110,8 +127,8 @@ log(`excludes → ${defaults.length} default(s) seeded; add/remove round-trips c
 const transfers = await client.request("listRestores");
 for (const t of transfers) {
   for (const k of ["id", "fileId", "relativePath", "out", "state", "tier", "bytes", "requestedAt",
-                   "readyAt", "completedAt", "error", "typicalWait", "typicalWaitSeconds", "freeUntil",
-                   "resumable"]) {
+                   "readyAt", "lastStepAt", "completedAt", "error", "typicalWait", "typicalWaitSeconds",
+                   "freeUntil", "resumable", "staleAfterSeconds"]) {
     if (!(k in t)) fail(`listRestores row is missing '${k}' — protocol.ts and the daemon DTO have drifted`);
   }
 }

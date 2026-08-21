@@ -321,7 +321,9 @@ Secrets live in Keychain, never in the UI.
   (the S3-derived storage-quota usage figure) is non-null whenever signed in, `null` only when not.
 - Semantics worth knowing: `movePath {from,to}` is the single primitive behind move AND rename (a
   journal `relativePath` prefix-sweep — no S3, no thaw, stable `id` preserved); `deletePath`
-  tombstones (`status=deleted`, rows kept for a deferred repack/GC); `filesChanged` carries
+  tombstones (`files.deletedAt`, rows kept for a deferred repack/GC — deletion is its own column, NOT a
+  `status`, so it doesn't clobber the row's kind/lifecycle and a re-deposit restores exactly what was
+  there; only the ids actually re-deposited are revived); `filesChanged` carries
   `{moved,to}` / `{created}` / `{deleted}` — plus `{signedIn}` / `{signedOut}`, the cue that the whole
   tree just changed owner; `authenticate idToken=…` / `deauthenticate` open and close the session
   (`../PROD.md` Phase 2); per-source pause lives on the source rows (`pauseSource`/`resumeSource` emit

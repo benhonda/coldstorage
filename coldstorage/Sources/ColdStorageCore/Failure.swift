@@ -52,6 +52,11 @@ public enum FailureKind: Sendable, Equatable {
         // transfer over a dropped connection (see the case's own doc).
         case ColdStorageError.shortRead(let m):
             return .transient(m)
+        // A watched folder we can't read is almost always an unplugged drive — it heals when it's plugged
+        // back in, so retrying is exactly right. The OTHER `ColdStorageError`s are config/data faults, hence
+        // the explicit case rather than letting the blanket rule below condemn this one.
+        case ColdStorageError.sourceUnreadable(let m):
+            return .transient(m)
         case let e as ColdStorageError:
             // integrity = corruption/hash mismatch; s3/staging = our precondition or config — none self-heal.
             return .permanent("\(e)")

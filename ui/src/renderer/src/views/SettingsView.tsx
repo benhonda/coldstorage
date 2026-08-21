@@ -39,10 +39,16 @@ const TABS = [
 
 /** A watched folder's at-a-glance state. The daemon only exposes a GLOBAL `running` flag (no per-source
  * progress), so a catch-up shows every un-paused folder as syncing — accurate, since a run scans them all.
- * `paused` means the user stopped watching it (the folder + its uploaded files stay; it's just not synced). */
-type FolderState = "paused" | "syncing" | "current";
-const folderBadge: Record<FolderState, { tone: "warning" | "accent" | "success"; icon: string; label: string }> = {
+ * `paused` means the user stopped watching it (the folder + its uploaded files stay; it's just not synced).
+ *
+ * `broken` is the one that had no way to be said (2026-08-21). A folder the daemon can't read — unplugged
+ * drive, deleted folder, revoked permission — used to fall through to `current` and render a green
+ * **"Up to date"**, which is the most damaging sentence this product could put on screen: the backup had
+ * stopped and the app was affirming it hadn't. */
+type FolderState = "paused" | "broken" | "syncing" | "current";
+const folderBadge: Record<FolderState, { tone: "warning" | "accent" | "success" | "danger"; icon: string; label: string }> = {
   paused: { tone: "warning", icon: "visibility_off", label: "Not watching" },
+  broken: { tone: "danger", icon: "error", label: "Can't reach it" },
   syncing: { tone: "accent", icon: "sync", label: "Syncing…" },
   current: { tone: "success", icon: "cloud_done", label: "Up to date" },
 };
@@ -136,7 +142,11 @@ export const SettingsView = ({
   /** Destination as breadcrumb text: "Backups/Photos" → "My Files / Backups / Photos". */
   const dest = (m: string): string => ["My Files", ...m.split("/").filter(Boolean)].join(" / ");
 
-  const folderState = (s: Source): FolderState => (s.paused ? "paused" : running ? "syncing" : "current");
+  // Precedence: the user's own choice first (a paused folder isn't broken, it's off), then whether we can
+  // actually reach it, and only then the live/idle split. `error` outranks `running` deliberately — a run
+  // being in progress elsewhere says nothing about the folder that just failed to scan.
+  const folderState = (s: Source): FolderState =>
+    s.paused ? "paused" : s.error ? "broken" : running ? "syncing" : "current";
 
   // Two distinct ideas, both behind the row's ⋯ (not bare buttons — neither should be a one-misclick):
   //   · Stop/Start watching — a reversible pause. The folder stays in the list and its uploaded files stay
@@ -253,9 +263,13 @@ export const SettingsView = ({
                         <Icon name="subdirectory_arrow_right" size={16} />
                         {s.mountPath ? dest(s.mountPath) : "My Files"}
                       </div>
+                      {st === "broken" && <div className="cs-watch-error">{s.error}</div>}
                     </div>
                     {/* Status at a glance — the badge carries the live state (amber Paused on a dimmed row
-                        reads loud, so the folder never looks protected when it isn't). */}
+                        reads loud, so the folder never looks protected when it isn't). A broken folder adds
+                        the daemon's own words underneath: "Can't reach it" tells you to act, the reason
+                        tells you what to do (plug the drive in vs. grant access), and they are different
+                        problems with the same badge. */}
                     <Badge tone={badge.tone} icon={badge.icon}>{badge.label}</Badge>
                     <IconButton
                       icon="more_horiz"

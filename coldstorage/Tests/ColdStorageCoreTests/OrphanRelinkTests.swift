@@ -59,4 +59,31 @@ import Foundation
         #expect(f.store.createdKeys.count == createdAfterFirst)       // no re-upload
         #expect(try f.journal.isFileArchived(items[0].id) == true)
     }
+
+    /// **A repair may not re-link a member whose CONTENT changed.** The repair pass uploads nothing — it
+    /// re-encrypts only to recompute spans — so if the file was edited since it was sealed, those spans
+    /// describe bytes that aren't in S3. Nothing downstream catches it: the drift guard compares against the
+    /// file's own CURRENT hash (which matches — it hashed the new bytes), and `verify` is a HEAD. It surfaces
+    /// at restore, as garbage, which for a backup product is the worst possible place to find out.
+    ///
+    /// Reachable from an ordinary edit: an archived file whose bytes change is re-planned by `upsert`, which
+    /// leaves its old blob holding an unlinked member — an orphan by definition.
+    @Test func aBlobIsNotRepairedFromMembersWhoseContentChanged() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.base) }
+        let file = f.base.appendingPathComponent("data/f.bin")
+
+        _ = try await f.engine.run(source: f.source, prefix: .dev)
+        let sealedBlob = try #require(try f.journal.listFiles().first?.blobId)
+
+        // Edit it — much longer, so a span measured over the new bytes cannot describe the old object.
+        try Data(String(repeating: "rewritten, and far longer than before. ", count: 40).utf8).write(to: file)
+        _ = try await f.engine.run(source: f.source, prefix: .dev)
+
+        let row = try #require(try f.journal.listFiles().first)
+        #expect(row.status == .archived)
+        #expect(row.blobId != sealedBlob,
+                "the edited file was re-linked to the blob sealed from its OLD bytes — its recorded span points into ciphertext that never held it, and the corruption only shows up at restore")
+        #expect(f.store.createdKeys.count == 2, "the new bytes were never uploaded")
+    }
 }

@@ -192,6 +192,53 @@ it had worked.
    `requestedAt + typicalWaitSeconds - now` as *"About 1 day 17 hours left."* It's AWS's typical case, not
    a deadline: past it the row reads *"Taking longer than the usual ~48 hours. Still waiting."* rather
    than a clock at zero.
+   **…and that reassurance now has a ceiling (2026-08-21).** "Still waiting" had no upper bound and the row
+   had no freshness: `requestedAt` was its only clock, so a transfer nothing had checked on in a month
+   rendered identically to a healthy 48-hour wait — the page narrating work that wasn't happening, which is
+   exactly what a `pending` state must never do. The daemon now stamps `lastStepAt` on every active row
+   every pass, **whatever the outcome** (`restorePass`; a freshness clock that only ticks on success goes
+   quiet precisely when it matters), and publishes `restoresChanged` on every pass rather than only on
+   state news — "we checked, still warming" *is* the news. A `pending` row therefore reads one of three
+   ways: counting down; over the estimate but actively watched ("Still waiting"); or **stalled** — nothing
+   has checked within the daemon's own `staleAfterSeconds`, or it has run past 2× the estimate while we
+   *were* checking. A stalled row goes red, swaps its clock icon for a warning, says when we last actually
+   looked, and grows the same **"Ask again"** the unpaid state has — a row that admits it's stuck while
+   offering only "Stop" is a dead end.
+   The staleness threshold comes **from the daemon** — `Status.staleAfterSeconds`, derived from the run
+   loop's real beat (`RestoreRow.staleAfter`; `COLDSTORE_INTERVAL` makes it configurable) — for the same
+   reason `typicalWait` does: only the party that sets the cadence can say what a suspicious silence looks
+   like. The renderer briefly kept its own "a day", which was right for the default beat and silently wrong
+   for any other. It rode on each restore row before landing on the snapshot, which read fine until the file
+   tree needed the same number and there was no restore row to take it from. `Infinity` when no snapshot has
+   arrived: with no idea how often the daemon promised to look, silence proves nothing.
+   The verdict itself is `restoreStall` in `daemon/protocol.ts`, next to `isActiveRestore`, because **two
+   surfaces answer to it**: this page's copy/button, and the My Files status overlay — which no longer
+   paints a stalled *or* unpaid download as "Waiting on deep storage". A file whose download isn't moving
+   reads as what it is, safely stored; the thing needing action lives on Downloads, which says it plainly.
+
+### Uploads got the same treatment (2026-08-21)
+The tree renders a journal `planned` file as **"Uploading"**, and that arrow had the older version of the
+same problem — no expiry, and no reason. Two of the three ways an upload stops getting anywhere already
+wrote journal truth (a permanent fault and an over-quota refusal both `markFilesFailed`, precisely because
+a row stuck on "Uploading" forever is a lie). The third — a **transient** fault, the one that repeats —
+touched the journal not at all: it went out as a `blobFailed` bus event and nowhere else, so if the app
+wasn't open when it fired, no trace of it existed anywhere.
+
+Now: `Journal.recordFileFault` persists the reason **without** flipping status (the file legitimately stays
+queued — that is what transient means), `files.lastAttemptAt` stamps every outcome, and both reach the app
+on `ListedFile`. A file that isn't getting anywhere resolves to a **`stalled`** status — `sync_problem`,
+warning tone, deliberately *not* the `failed` ⚠, because nothing has given up. `uploadStall` names which
+kind: `retrying` (a fault is recorded) or `unattended` (silence past the daemon's window).
+
+`files.error` had been sitting in the journal **unread since failures were first persisted** — even a
+permanently failed file showed a bare ⚠ that couldn't say why. It's now on the row icon's label and in
+Get info.
+
+One asymmetry is deliberate: a null `lastAttemptAt` is **not** a stall, where a null `lastStepAt` is. A
+restore row is created by an explicit user request and handed to the loop, so never-stepped means the loop
+isn't running on something someone paid for. A `planned` file is created *by* the loop moments before it
+attempts the file — null is the ordinary state of a fresh deposit, and flagging it would light up every
+drop the instant it appeared.
    **The download itself now has a real bar (2026-07-27).** The engine streams the ranged GET
    frame-by-frame and narrates plaintext bytes as they land (`restoreProgress` events, folded into the
    store's ephemeral `restoreProgress` slice), so a `transferring` row draws a measured determinate bar +
@@ -243,13 +290,25 @@ conditionality is structural, not a card that appears mid-page.
 ### General — how this Mac backs up
 - **Watched folders:** list + "Add a watched folder" + **"Sync now"** (global catch-up). Each row: a
   rounded accent folder tile, source → destination (`~`-shortened Mac path over `↳ My Files / <mount>`),
-  a live status badge (🟢 Up to date · 🔵 Syncing… · 🟠 Not watching — driven by the live `run.active`,
-  not the poll-only `status.running`), and a ghost `⋯` with **Stop/Start watching** (persistent
+  a live status badge (🟢 Up to date · 🔵 Syncing… · 🟠 Not watching · 🔴 **Can't reach it** — driven by
+  the live `run.active`, not the poll-only `status.running`), and a ghost `⋯` with **Stop/Start watching** (persistent
   per-source pause; the amber badge + dimmed row keep a stopped folder from looking protected) and
   **Remove…** (confirm — uploaded files stay). Watched folders carry a **destination mount**
   (`mountPath`, defaults to the source basename, never root) chosen in the add dialog via the shared
   `FolderTree` drill-in picker; Model A (mirror mount) — watched trees stay daemon-owned/structure-
   preserving, reorg is reserved for manual deposits. Manual deposits are unaffected by pause.
+  **A folder we can't read now says so (2026-08-21) — and this was the worst of the three.** `LocalDirSource`
+  opened with `guard let en = fm.enumerator(at: root, …) else { return [] }`, so an unmounted drive, a
+  deleted folder or a revoked permission produced an EMPTY list — indistinguishable from "nothing new."
+  The run completed cleanly, `runFinished` fired, and this row rendered a green **Up to date** every five
+  minutes for a backup that had stopped. The walk now throws `sourceUnreadable` naming *which* problem it
+  is (gone vs. unreadable — plug the drive in vs. grant access are different fixes), the daemon records it
+  per-source (`sources.lastScanAt` + `sources.error`, stamped every pass either way), and the row shows a
+  red **Can't reach it** with the daemon's own words underneath.
+  The two halves had to land together: `MultiSource` stops at the first throw, so an honest walk ALONE
+  would have turned a silent partial failure into a loud total one — one unplugged drive halting every
+  other folder. `ScanReportingSource` records each folder's outcome and isolates its failure, which is what
+  makes returning `[]` after a fault a different act from returning `[]` in silence.
 - **Don't back up (excludes):** friendly removable chips over real gitignore-style globs, seeded with
   smart defaults; daemon is the SSOT (journal-persisted, applied *inside* the directory walk so junk
   is never hashed and node_modules is pruned whole). Per-source extras are a later refinement.

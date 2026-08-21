@@ -106,8 +106,8 @@ import Foundation
 
     /// The escape hatch that makes "a delete beats the scanner" safe to live with: **explicitly putting the
     /// file back works.** A rescan can't revive a tombstone, but dragging the file in again is the user
-    /// asking for it, and `deposit` calls `restorePath` for exactly this. Without it, deleting something
-    /// would silently blacklist it forever and re-adding it would look like a broken app.
+    /// asking for it, and a deposit runs with `explicitDeposit` for exactly this. Without it, deleting
+    /// something would silently blacklist it forever and re-adding it would look like a broken app.
     @Test func explicitlyRestoringADeletedPathReArchivesIt() async throws {
         let f = try fixture()
         defer { try? FileManager.default.removeItem(at: f.base) }
@@ -119,7 +119,7 @@ import Foundation
         _ = try await f.engine.run(source: source, prefix: .dev)
         #expect(try f.journal.listFiles().isEmpty)          // a rescan alone leaves it deleted
 
-        try f.journal.restorePath("a.jpg")                  // what an explicit re-deposit does
+        try f.journal.reviveFiles(ids: ["a.jpg"])           // what an explicit re-deposit does
         _ = try await f.engine.run(source: source, prefix: .dev)
 
         #expect(try f.journal.listFiles().count == 1, "re-depositing a deleted file did not bring it back")
@@ -187,9 +187,68 @@ import Foundation
         let eligible = Date().addingTimeInterval(Double(Journal.minimumStorageDays) * 86_400 + 60)
         #expect(try f.journal.reclaimedCreditBytes(now: eligible) > 0)
 
-        try f.journal.restorePath("a.jpg")   // the user drags it back in
+        try f.journal.reviveFiles(ids: ["a.jpg"])   // the user drags it back in
         #expect(try f.journal.reclaimedCreditBytes(now: eligible) == 0,
                 "a restored file is still credited as reclaimed — its bytes are counted as freed while it is being stored again")
+    }
+
+    /// **The crash window in the middle of a reclaim.** `reapDeleted` writes the expiry tag to S3 and then
+    /// records it; die in between and the blob is still `verified` while its object is queued for deletion —
+    /// a state nothing could see, and re-depositing those files re-linked them to bytes on their way out.
+    /// Deep Archive's expiry is measured from object CREATION, so an old blob can be swept within the day.
+    ///
+    /// The intent marker (`reapTaggedAt`, written BEFORE the tag) makes that state legible, and an explicit
+    /// re-deposit takes the tag back off.
+    @Test func revivingAFileTakesTheExpiryTagBackOffItsObject() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.base) }
+        let source = LocalDirSource(root: f.root)
+
+        try write("a.jpg", to: f.root)
+        _ = try await f.engine.run(source: source, prefix: .dev)
+        let blobId = try #require(try f.journal.listFiles().first?.blobId)
+        let key = try #require(try f.journal.blobS3Key(blobId))
+        try f.journal.deletePath("a.jpg")
+
+        // A reclaim that died after tagging but before `markBlobReaped` — the blob stays `verified`.
+        try f.journal.markBlobReapTagIntent(blobId)
+        try await f.store.markReclaimable(key: key)
+        #expect(try f.journal.isBlobVerified(blobId) == true)
+
+        // The user drags the file back in.
+        _ = try await f.engine.run(source: source, prefix: .dev, explicitDeposit: true)
+
+        #expect(f.store.untagCalls == [key],
+                "the object is still queued for lifecycle expiry while a live file points at it — S3 will delete bytes the journal calls safe")
+        #expect(try f.journal.isFileArchived("a.jpg") == true, "the revived file lost the bytes it still had")
+
+        // The journal recorded the untag, so an ordinary pass doesn't ask S3 again. (An ordinary pass is
+        // also what RETRIES a failed untag — the check is an invariant re-read every run, not a one-shot
+        // handed over by the revive that caused it.)
+        _ = try await f.engine.run(source: source, prefix: .dev)
+        #expect(f.store.untagCalls == [key], "the tag was cleared twice — the journal never recorded the first")
+    }
+
+    /// A file EDITED between the delete and the re-drop must come back on its new bytes. The revive re-plans
+    /// it (its content hash no longer matches), and the repair pass must not then quietly re-link it to the
+    /// blob sealed from the old bytes — see `OrphanRelinkTests`.
+    @Test func revivingAnEditedFileUploadsTheNewBytes() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.base) }
+        let source = LocalDirSource(root: f.root)
+
+        try write("a.jpg", to: f.root)
+        _ = try await f.engine.run(source: source, prefix: .dev)
+        let firstBlob = try #require(try f.journal.listFiles().first?.blobId)
+        try f.journal.deletePath("a.jpg")
+
+        try Data(String(repeating: "edited while it was out of the vault. ", count: 40).utf8)
+            .write(to: f.root.appendingPathComponent("a.jpg"))
+        _ = try await f.engine.run(source: source, prefix: .dev, explicitDeposit: true)
+
+        let row = try #require(try f.journal.listFiles().first)
+        #expect(row.status == .archived)
+        #expect(row.blobId != firstBlob, "the vault would hand back the bytes this file had BEFORE it was edited")
     }
 
     /// Reaping is irreversible, so an incomplete journal must never authorise it. A member with no file row

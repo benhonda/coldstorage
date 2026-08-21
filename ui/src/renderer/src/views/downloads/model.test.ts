@@ -28,12 +28,14 @@ const row = (over: Partial<RestoreRow> = {}): RestoreRow => ({
   bytes: 100,
   requestedAt: ASKED,
   readyAt: null,
+  lastStepAt: null,
   completedAt: null,
   error: null,
   typicalWait: "~48 hours",
   typicalWaitSeconds: 48 * HOUR,
   freeUntil: null,
   resumable: false,
+  staleAfterSeconds: 24 * 60 * 60,
   ...over,
 });
 

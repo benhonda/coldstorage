@@ -79,8 +79,18 @@ public struct SourceRow: Sendable {
     /// isn't auto-synced). Persistent (journal-backed) so a deliberate pause survives a daemon restart —
     /// unlike the old transient global flag this replaced. Manual deposits are unaffected (always honored).
     public let paused: Bool
-    public init(id: String, kind: SourceKind, path: String?, mountPath: String = "", paused: Bool = false) {
+    /// When this source was last SCANNED — stamped every pass, success or failure. `nil` until the first
+    /// pass touches it. The third of the freshness clocks (`RestoreRow.lastStepAt`, `FileRow.lastAttemptAt`),
+    /// and the one guarding the product's core promise: without it, "we are backing this folder up" was an
+    /// unfalsifiable claim that survived the folder being unplugged.
+    public let lastScanAt: Int?
+    /// Why the last scan failed, or nil — an unmounted drive, a deleted folder, a revoked permission.
+    /// Cleared the moment a scan succeeds.
+    public let error: String?
+    public init(id: String, kind: SourceKind, path: String?, mountPath: String = "", paused: Bool = false,
+                lastScanAt: Int? = nil, error: String? = nil) {
         self.id = id; self.kind = kind; self.path = path; self.mountPath = mountPath; self.paused = paused
+        self.lastScanAt = lastScanAt; self.error = error
     }
 }
 
@@ -100,9 +110,12 @@ public struct FileSpan: Sendable {
     }
 }
 
-/// `deleted` is a TOMBSTONE: the user removed the file from their tree, but its row + blob mapping are
-/// kept (bytes are reclaimed once every file sharing their blob is deleted — see `UploadEngine.reapDeleted` — deep storage has a 180-day minimum, so eager
-/// deletion saves nothing). Tombstoned files drop out of `listFiles` and the file count.
+/// **There is no `deleted` case, deliberately.** Deletion is a `files.deletedAt` timestamp, ORTHOGONAL to
+/// the lifecycle this enum describes — a tombstoned file is still "an archived file", it is just also
+/// deleted. It used to be a status, and overloading one column with row-KIND (`folder`), upload LIFECYCLE
+/// and DELETEDNESS meant tombstoning destroyed the other two: reviving a row had nothing to restore *to*, so
+/// it guessed `discovered`, which turned folder markers into phantom files and stranded them as permanently
+/// "uploading" (see `Journal.reviveFiles` and `FolderReviveTests`). Deleting is now non-destructive to state.
 ///
 /// `folder` is a FOLDER MARKER: a path-only row (size 0, no blob) that anchors a just-created EMPTY folder
 /// so it survives a reload — otherwise an empty folder, having no files beneath it to imply its path, would
@@ -110,10 +123,10 @@ public struct FileSpan: Sendable {
 /// becomes a browsable file; `movePath`/`deletePath` sweep it by path like any other row. Once real files
 /// land under the folder the marker is redundant (the path is implied) but harmless — the UI dedups by name.
 /// `uploading`/`verifying` are declared but never persisted — the journal only ever writes `planned`,
-/// `archived`, `failed`, `deleted` and `folder` (plus `discovered` as the decoder's fallback). They're the
+/// `archived`, `failed` and `folder` (plus `discovered` as the decoder's fallback). They're the
 /// hooks for a future per-file progress state. A `staging` case sat here too until the upload engine stopped
 /// staging (2026-07-14) — it named a step that no longer exists, so it's gone.
-public enum FileStatus: String, Codable, Sendable { case discovered, planned, uploading, verifying, archived, failed, deleted, folder }
+public enum FileStatus: String, Codable, Sendable { case discovered, planned, uploading, verifying, archived, failed, folder }
 /// `reaped` = every file in the blob was deleted and the object has been tagged for lifecycle expiry. A
 /// terminal state, distinct from `aborted` (which is an upload that never landed): the bytes DID land, were
 /// whole, and are now being reclaimed. Kept as a row rather than dropped so a second pass doesn't re-tag it,
@@ -145,12 +158,22 @@ public enum ColdStorageError: Error, CustomStringConvertible {
     /// re-runs the download from scratch and succeeds. Folding it into `.s3` permanently stranded a
     /// transfer over one dropped connection.
     case shortRead(String)
+    /// A watched folder could not be READ — unmounted external drive, folder deleted or renamed, macOS
+    /// permission revoked. Its own case because the alternative was catastrophic and silent: the walk
+    /// returned an empty array, which is indistinguishable from "the folder is fine and has nothing new",
+    /// so a backup that had stopped happening reported "nothing new to archive" every five minutes forever.
+    ///
+    /// TRANSIENT by classification (it isn't in `permanentS3Codes`, and the default is transient), which is
+    /// the right call: the overwhelmingly common cause is a drive that will be plugged back in, and the next
+    /// pass should simply try again. `ScanReportingSource` keeps one bad folder from aborting the others.
+    case sourceUnreadable(String)
     /// The bare message — so `"\(error)"` (CLI stderr, daemon wire `error` field) reads cleanly instead
     /// of leaking the case name (`invalidRequest("…")`).
     public var description: String {
         switch self {
         case .s3(let m), .integrity(let m), .invalidRequest(let m), .photosAccess(let m),
-             .photosNoneResolved(let m), .contentDrift(let m), .shortRead(let m): return m
+             .photosNoneResolved(let m), .contentDrift(let m), .shortRead(let m),
+             .sourceUnreadable(let m): return m
         }
     }
 }
@@ -334,15 +357,23 @@ public struct RestoreRow: Sendable, Equatable {
     /// When the thaw was first observed READY (i.e. when the 5-day download window started). `nil` until
     /// then. This is what makes a free resume decidable: within 5 days of this, the blob is still warm.
     public let readyAt: Int?
+    /// When the run loop last actually ASKED about this transfer — stamped every pass, whatever the answer
+    /// (`restorePass`). `nil` until the first pass touches it.
+    ///
+    /// Its job is to keep `pending` falsifiable. `pending` asserts something current — S3 says a thaw is
+    /// running *right now* — but with `requestedAt` as the row's only clock, "still warming" and "nothing
+    /// has looked at this since July" were the same pixels forever, and only the second is actionable.
+    /// Pairs with `error`: this says when we last tried, `error` says how it went.
+    public let lastStepAt: Int?
     public let completedAt: Int?
     public let error: String?
 
     public init(id: String, fileId: String, out: String, jobId: String?, state: RestoreState,
                 tier: RestoreTier, bytes: Int, requestedAt: Int, readyAt: Int? = nil,
-                completedAt: Int? = nil, error: String? = nil) {
+                lastStepAt: Int? = nil, completedAt: Int? = nil, error: String? = nil) {
         self.id = id; self.fileId = fileId; self.out = out; self.jobId = jobId; self.state = state
         self.tier = tier; self.bytes = bytes; self.requestedAt = requestedAt; self.readyAt = readyAt
-        self.completedAt = completedAt; self.error = error
+        self.lastStepAt = lastStepAt; self.completedAt = completedAt; self.error = error
     }
 }
 
@@ -351,6 +382,20 @@ extension RestoreRow {
     /// this window costs nothing (the blob is already warm); past it, getting the file back is a genuinely
     /// new retrieval and correctly a new charge (root `RETRIEVAL.md`, "Thaw window: 5 days").
     public static let thawWindowSeconds = 5 * 24 * 60 * 60
+
+    /// How long a transfer may go un-stepped before the app must stop calling its wait live.
+    ///
+    /// Derived from the run loop's OWN beat, and computed here rather than in the app, for the reason
+    /// `typicalWait` moved to the backend (root `RETRIEVAL.md`): only the party that sets the cadence can
+    /// honestly say what a suspicious silence looks like. The renderer briefly hardcoded a day, which was
+    /// right for a 300s beat and silently wrong for any other — and `COLDSTORE_INTERVAL` is configurable.
+    ///
+    /// The floor dominates at normal cadence and is what the number is really for: `restorePass` is
+    /// sequential, so one multi-hour download legitimately holds up every row behind it, and a threshold
+    /// tight enough to catch that would cry stalled over a transfer that is working perfectly.
+    public static func staleAfter(intervalSeconds: Int) -> Int {
+        max(intervalSeconds * 24, 24 * 60 * 60)
+    }
 
     /// Can a stopped transfer be picked back up **without paying again**? True only while the blob this job
     /// already paid to thaw is still warm. Pure so the rule lives in one place and is unit-testable — the

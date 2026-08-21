@@ -119,6 +119,7 @@ public actor UploadEngine {
                     skipBlobIds: Set<String> = [],
                     prefix: VaultPrefix,
                     quota: QuotaLimit? = nil,
+                    explicitDeposit: Bool = false,
                     onFileArchived: (@Sendable (String, String) async -> Void)? = nil,
                     onProgress: (@Sendable (UploadProgress) async -> Void)? = nil,
                     onRunProgress: (@Sendable (RunProgress) async -> Void)? = nil) async throws -> [BlobFailure] {
@@ -128,7 +129,26 @@ public actor UploadEngine {
         // the memory is going somewhere we haven't looked.
         let items = try await source.enumerate()
         log("UploadEngine: scanned \(items.count) item(s) — RSS \(ProcessMemory.resident)")
-        try journal.upsert(items)
+        // `explicitDeposit` is the user re-dropping these exact items, which is the only thing that may bring
+        // a deleted file back (`Journal.reviveFiles`).
+        try journal.upsert(items, reviving: explicitDeposit)
+        // ── UN-TAG BEFORE ANYTHING RELIES ON THOSE BYTES ───────────────────────────────────────────────
+        // A live file pointing at an object queued for lifecycle expiry is the one inconsistency here that
+        // destroys data on a timer rather than surfacing as an error. Re-checked every run, not just after
+        // the revive that can cause it, so a reclaim that died mid-flight heals on the next pass instead of
+        // waiting for a deposit that may never come.
+        for blob in (try? journal.blobsNeedingUntag()) ?? [] {
+            do {
+                try await store.unmarkReclaimable(key: blob.s3Key)
+                try journal.clearReapTag(blob.id)
+                log("UploadEngine: blob \(blob.id) un-tagged — a live file still needs its bytes")
+            } catch {
+                // Left tagged AND recorded as tagged, so the next run tries again. Named because the failure
+                // mode is bytes quietly disappearing on the lifecycle sweep's schedule.
+                log("UploadEngine: blob \(blob.id) UN-TAG FAILED (will retry next pass) — its object is "
+                    + "queued for lifecycle expiry while a live file points at it: \(error)")
+            }
+        }
         var failures: [BlobFailure] = []
         // `prefix` lands every blob under the caller's own S3 namespace (`blobs/<cognito-identity-id>`) —
         // the per-user isolation the IAM role enforces. The journal records the resulting full `s3Key`,
@@ -150,6 +170,17 @@ public actor UploadEngine {
             let present = members.compactMap { scanned[$0] }
             guard present.count == members.count else {
                 log("UploadEngine: orphan blob \(blobId) NOT repairable — \(members.count - present.count) of \(members.count) member(s) missing from the scan; its files stay UNLINKED until they are back")
+                continue
+            }
+            // **And the members' CONTENT must still be what the blob was sealed from.** Presence is not
+            // enough: this pass re-encrypts to recompute spans and uploads NOTHING, so if a member was edited
+            // since it was sealed, the spans describe bytes that are not in S3 — measured over the new file,
+            // recorded against the old object. Nothing downstream catches it (the drift guard compares
+            // against the file's CURRENT hash, and `verify` is only a HEAD), so it surfaces at restore, as
+            // garbage. The blob id IS the content SSOT — it hashes member ids + content hashes — so
+            // recomputing it over the scanned items answers the question exactly.
+            guard BlobPlanner.stableId(present) == blobId else {
+                log("UploadEngine: orphan blob \(blobId) NOT repairable — a member's content changed since it was sealed; its files stay UNLINKED and will be re-planned under a new blob")
                 continue
             }
             // Members come back in SEAL order (`blob_members.ordinal`), so `present` is already correct.
@@ -254,6 +285,10 @@ public actor UploadEngine {
                 continue
             }
             do {
+                // Intent BEFORE the side effect. If we die after the tag lands but before `markBlobReaped`,
+                // this is the only record that S3 is holding an expiry against bytes the journal still calls
+                // verified — and `reviveFiles` reads it to take the tag back off if the files return.
+                try journal.markBlobReapTagIntent(blobId)
                 try await store.markReclaimable(key: key)
                 try journal.markBlobReaped(blobId)
                 reaped += 1

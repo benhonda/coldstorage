@@ -1595,7 +1595,13 @@ button.cs-kv:hover { background: var(--surface-hover); }
   font-variant-numeric: tabular-nums;
 }
 .cs-download-eta .csf-icon { flex: none; }
+/* A wait we've stopped being able to vouch for (see `remaining` in DownloadsView) — amber reads as "on its
+   way", which is the one thing this line no longer claims. */
+.cs-download-eta--stalled { color: var(--negative); }
 .cs-download-note { font: var(--type-label); color: var(--text-tertiary); margin-top: var(--space-1); }
+/* The daemon's own words for why a watched folder can't be scanned — sits under the destination line so the
+   "Can't reach it" badge is followed by what to do about it. */
+.cs-watch-error { font: var(--type-label); color: var(--negative); margin-top: var(--space-1); }
 /* The download bar + readout on a `transferring` row (fed by live `restoreProgress` events). */
 .cs-download-progress {
   display: flex;

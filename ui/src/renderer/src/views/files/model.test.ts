@@ -25,6 +25,7 @@ import {
   uploadPercent,
   uniquifyPath,
   planDeposit,
+  uploadStall,
   withName,
 } from "./model.ts";
 
@@ -35,6 +36,8 @@ const file = (relativePath: string, size: number, status: ArchivedFile["status"]
   status,
   kind: "other",
   date: null,
+  lastAttemptAt: null,
+  error: null,
 });
 
 const sample: ArchivedFile[] = [
@@ -143,6 +146,8 @@ describe("aggregates", () => {
       status: "archived",
       blobId: "blob-1",
       date: null,
+      lastAttemptAt: null,
+      error: null,
       ...over,
     });
 
@@ -155,6 +160,8 @@ describe("aggregates", () => {
         status: "frozen",
         kind: "photo",
         date: null,
+        lastAttemptAt: null,
+        error: null,
       });
     });
 
@@ -328,5 +335,47 @@ describe("restore destination paths (the folder-flattening fix)", () => {
 
   test("a file outside the base falls back to its name rather than a negative slice", () => {
     expect(restoreOutPath("Docs/tax.pdf", "Photos", "/tmp")).toBe("/tmp/tax.pdf");
+  });
+});
+
+/**
+ * The upload half of the honesty pair (2026-08-21). A journal `planned` file renders as "Uploading", and
+ * until the daemon recorded transient faults and stamped `lastAttemptAt` that arrow had no expiry and no
+ * reason — a file whose blob had been failing all week looked exactly like one queued a second ago.
+ */
+describe("uploadStall", () => {
+  const DAY = 24 * 3600;
+  const NOW = 1_700_000_000;
+  const queued = (over: Partial<ArchivedFile> = {}): ArchivedFile => ({
+    ...file("Photos/beach.jpg", 100, "uploading"),
+    ...over,
+  });
+
+  test("a healthy queued file — recently attempted, no fault — is not stalled", () => {
+    expect(uploadStall(queued({ lastAttemptAt: NOW - 60 }), NOW, DAY)).toBeNull();
+  });
+
+  test("a recorded fault reads as retrying, however recent the attempt", () => {
+    // It IS being attended to — but the row must name the snag rather than show a healthy arrow.
+    expect(uploadStall(queued({ lastAttemptAt: NOW - 5, error: "S3 RequestTimeout" }), NOW, DAY)).toBe("retrying");
+  });
+
+  test("silence past the daemon's own window reads as unattended", () => {
+    expect(uploadStall(queued({ lastAttemptAt: NOW - 3 * DAY }), NOW, DAY)).toBe("unattended");
+    // ...and the window is the daemon's, so a slow-beat daemon forgives the same gap.
+    expect(uploadStall(queued({ lastAttemptAt: NOW - 3 * DAY }), NOW, 7 * DAY)).toBeNull();
+  });
+
+  test("a never-attempted file is QUEUED, not stalled — the deliberate asymmetry with restores", () => {
+    // A `planned` row is created BY the run loop moments before it attempts the file, so null is the
+    // ordinary state of a fresh deposit. Flagging it would light up every drop the instant it appeared.
+    // (A restore row is the opposite: created by an explicit user request, so never-stepped IS a stall.)
+    expect(uploadStall(queued({ lastAttemptAt: null }), NOW, DAY)).toBeNull();
+  });
+
+  test("only an upload can stall this way", () => {
+    for (const status of ["frozen", "failed", "pending", "transferring", "here"] as const) {
+      expect(uploadStall(queued({ status, lastAttemptAt: NOW - 90 * DAY }), NOW, DAY)).toBeNull();
+    }
   });
 });

@@ -63,6 +63,17 @@ export interface Source {
   /** Per-source pause: when true the scheduled scan skips this folder (still registered, just not
    * auto-synced). Persistent. Toggle via `pauseSource`/`resumeSource`. Manual deposits are unaffected. */
   paused: boolean;
+  /** Unix seconds this folder was last SCANNED — stamped every pass, success or failure. Null until the
+   * first pass touches it.
+   *
+   * The third freshness clock, after {@link RestoreRow.lastStepAt} and {@link ListedFile.lastAttemptAt},
+   * and the one that matters most: a watched folder IS the promise that files are being backed up, and
+   * without a clock that promise couldn't be checked. */
+  lastScanAt: number | null;
+  /** Why the last scan failed, or null — an unmounted drive, a deleted folder, a revoked permission.
+   * Cleared the moment a scan succeeds. Until this existed a folder that had silently stopped backing up
+   * was listed in Settings exactly like a working one, and the failure lived only in an ephemeral event. */
+  error: string | null;
 }
 
 /**
@@ -79,6 +90,17 @@ export interface ListedFile {
   blobId: string | null;
   /** Capture/creation date as Unix epoch SECONDS, or null when the journal has none (legacy rows). */
   date: number | null;
+  /** Unix seconds the upload path last actually TRIED this file — every outcome, success or fault. Null when
+   * no attempt has been made yet (scanned into the journal while the daemon was idle, or a legacy row).
+   *
+   * The upload twin of {@link RestoreRow.lastStepAt}, and needed for the same reason: the tree renders a
+   * queued file as "Uploading", and with no clock that claim has no expiry — a file nothing has tried in
+   * weeks looks exactly like one mid-flight. */
+  lastAttemptAt: number | null;
+  /** Why the last attempt failed, or null. Set on a `failed` file (permanent fault) AND on one still queued
+   * after a TRANSIENT one — those keep retrying, so the row is honestly still in flight while naming the
+   * snag. Cleared the moment an attempt succeeds. */
+  error: string | null;
 }
 
 /** How a deposit resolves a name-collision (the Finder-style prompt). Mirrors Swift `ConflictPolicy`.
@@ -114,6 +136,14 @@ export interface Status {
    * rather than failing the whole snapshot (see `getStatus` in `DaemonService.swift`). So a null here does
    * not imply an empty vault — pair it with `signedIn` before showing it as a figure. */
   bytesStored: number | null;
+  /** How long in-flight work may go untouched before the app must stop calling it live — from THIS daemon's
+   * real loop cadence, which `COLDSTORE_INTERVAL` makes configurable. The renderer must never restate a
+   * threshold of its own, for the same reason {@link RestoreRow.typicalWait} comes from the party that picks
+   * the tier: only the daemon knows how often it promised to look.
+   *
+   * On the SNAPSHOT rather than on each row, because it is one fact about the daemon and BOTH halves of the
+   * app ask it — a stalled download and an unattended upload measure silence the same way. */
+  staleAfterSeconds: number;
 }
 
 /**
@@ -153,6 +183,47 @@ const ACTIVE_RESTORE_STATES: ReadonlySet<RestoreState> = new Set([
 
 export const isActiveRestore = (s: RestoreState): boolean => ACTIVE_RESTORE_STATES.has(s);
 
+/** Why a `pending` transfer has stopped being a wait anyone can vouch for. Three distinguishable causes,
+ * because the app says something different about each — but one predicate, because every surface has to
+ * agree on *whether* a transfer is going nowhere. */
+export type RestoreStall =
+  /** No pass has ever touched it. */
+  | "neverChecked"
+  /** Not stepped within the daemon's own {@link Status.staleAfterSeconds}. */
+  | "unchecked"
+  /** Actively stepped, but run to {@link OVERDUE_MULTIPLE}× the estimated wait and still frozen. */
+  | "overdue";
+
+/** How far past the estimate a thaw may run before "taking longer than usual" stops being a fair reading of
+ * it. Bulk retrieval overruns ~48 hours routinely; it does not overrun by days. (The *staleness* threshold
+ * is NOT a constant here — it's a fact about the daemon's own cadence and arrives per-row.) */
+const OVERDUE_MULTIPLE = 2;
+
+/**
+ * Has this transfer stopped moving on its own? `null` when it's fine — counting down, over the estimate but
+ * still being watched, or in a state that isn't waiting on a thaw at all.
+ *
+ * Lives here, beside {@link isActiveRestore}, rather than in the page that first needed it, because more
+ * than one surface answers to it: the Downloads row's copy and its "Ask again" button, and the file tree's
+ * status overlay. Two definitions of "stuck" that could drift is the same class of bug as the two duration
+ * formatters and the daemon's deleted rate card — one question, one answer.
+ */
+export const restoreStall = (
+  r: RestoreRow,
+  now: number,
+  /** The daemon's own window ({@link Status.staleAfterSeconds}). `Infinity` when there is no snapshot to
+   * read it from — with no idea how often the daemon promised to look, silence proves nothing, so nothing
+   * is called stale. */
+  staleAfterSeconds: number,
+): RestoreStall | null => {
+  if (r.state !== "pending") return null;
+  if (r.lastStepAt === null) return "neverChecked";
+  // Freshness first: we can't call a thaw overdue on evidence we haven't gathered.
+  if (now - r.lastStepAt > staleAfterSeconds) return "unchecked";
+  if (now - r.requestedAt > r.typicalWaitSeconds * OVERDUE_MULTIPLE) return "overdue";
+  return null;
+};
+
 /**
  * One requested transfer, straight from the daemon's `restores` journal table.
  *
@@ -181,6 +252,14 @@ export interface RestoreRow {
   requestedAt: number;
   /** Unix seconds the thaw was first seen READY — when the 5-day download window opened. Null until then. */
   readyAt: number | null;
+  /** Unix seconds the daemon last ASKED S3 about this transfer — stamped every pass, whatever the answer.
+   * Null on a transfer no pass has touched yet (and on rows that predate the column).
+   *
+   * This is what makes {@link RestoreState} `pending` checkable instead of merely believable. `pending`
+   * claims a thaw is running *right now*; paired with `requestedAt` alone, a row nothing had looked at since
+   * July rendered exactly like a healthy 48-hour wait, and the page cheerfully said "still waiting" forever.
+   * Read it with `error`: this says when we last tried, `error` says how it went. */
+  lastStepAt: number | null;
   completedAt: number | null;
   error: string | null;
   /** How long the thaw takes, in plain words, from the tier we actually quote at. The app must never

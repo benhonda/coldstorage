@@ -7,6 +7,12 @@ import Csqlite3
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
+/// Line to the daemon's stderr (→ `coldstored.err.log`, tailed by `task daemon:mac:logs`). A schema
+/// migration that silently rewrites rows is exactly the invisible work this product refuses to do.
+private func log(_ message: String) {
+    FileHandle.standardError.write(Data("\(message)\n".utf8))
+}
+
 public struct PartRow: Sendable {
     public var blobId: String
     public var partNumber: Int
@@ -31,10 +37,34 @@ public struct FileRow: Sendable {
     /// Capture/creation date as Unix epoch seconds; nil when unknown (legacy rows, or a source that
     /// carries no date). The daemon renders it to an ISO-8601 string at the IPC boundary.
     public let createdAt: Int?
-    public init(id: String, relativePath: String, size: Int, status: FileStatus, blobId: String?, createdAt: Int?) {
+    /// When the upload path last actually TRIED this file — every outcome, success or fault. `nil` means no
+    /// attempt has been made yet, which is the honest reading of a file that was scanned into the journal
+    /// while the daemon was idle. The upload twin of `RestoreRow.lastStepAt`, and for the same reason: the
+    /// tree renders `planned` as "Uploading", and without a clock that claim has no expiry.
+    public let lastAttemptAt: Int?
+    /// Why the last attempt failed, or nil. Present on a `failed` file (a permanent fault) AND on one still
+    /// queued after a TRANSIENT fault — those keep retrying, so the row stays honest about being in flight
+    /// while still naming the snag. Cleared the moment an attempt succeeds.
+    public let error: String?
+    public init(id: String, relativePath: String, size: Int, status: FileStatus, blobId: String?,
+                createdAt: Int?, lastAttemptAt: Int? = nil, error: String? = nil) {
         self.id = id; self.relativePath = relativePath; self.size = size
         self.status = status; self.blobId = blobId; self.createdAt = createdAt
+        self.lastAttemptAt = lastAttemptAt; self.error = error
     }
+}
+
+/// A blob whose object is TAGGED for lifecycle expiry while a live file still points at it — bytes S3 is
+/// scheduled to delete that the journal calls safe. Two ways in: `reapDeleted` dying between the tag and
+/// `markBlobReaped`, or a deleted file being revived onto a blob that was already tagged.
+///
+/// Modelled as an INVARIANT the engine re-checks every run (`Journal.blobsNeedingUntag`) rather than an
+/// event handed along from the revive that caused it. Same reason the intent marker exists at all: a
+/// one-shot repair that fails has nothing watching it, and the failure mode here is silent data loss.
+public struct MistaggedBlob: Sendable {
+    public let id: String
+    public let s3Key: String
+    public init(id: String, s3Key: String) { self.id = id; self.s3Key = s3Key }
 }
 
 public final class Journal: @unchecked Sendable {
@@ -67,7 +97,7 @@ public final class Journal: @unchecked Sendable {
               id TEXT PRIMARY KEY, relativePath TEXT NOT NULL, size INTEGER NOT NULL,
               contentHash TEXT NOT NULL, status TEXT NOT NULL, blobId TEXT,
               "offset" INTEGER, length INTEGER, firstFrame INTEGER, plaintextSha256 TEXT, error TEXT,
-              createdAt INTEGER);
+              createdAt INTEGER, deletedAt INTEGER, lastAttemptAt INTEGER);
             CREATE TABLE IF NOT EXISTS blobs(
               id TEXT PRIMARY KEY, s3Key TEXT NOT NULL, uploadId TEXT,
               noncePrefix BLOB, wrappedDEK BLOB, status TEXT NOT NULL);
@@ -84,7 +114,8 @@ public final class Journal: @unchecked Sendable {
               PRIMARY KEY(blobId, fileId));
             CREATE TABLE IF NOT EXISTS sources(
               id TEXT PRIMARY KEY, kind TEXT NOT NULL, path TEXT, addedAt INTEGER NOT NULL DEFAULT 0,
-              mountPath TEXT NOT NULL DEFAULT '', paused INTEGER NOT NULL DEFAULT 0);
+              mountPath TEXT NOT NULL DEFAULT '', paused INTEGER NOT NULL DEFAULT 0,
+              lastScanAt INTEGER, error TEXT);
             CREATE TABLE IF NOT EXISTS excludes(
               pattern TEXT PRIMARY KEY, addedAt INTEGER NOT NULL DEFAULT 0);
             -- Requested transfers (getting a copy back onto this Mac). Journal-backed, not app-held, for
@@ -94,7 +125,8 @@ public final class Journal: @unchecked Sendable {
             CREATE TABLE IF NOT EXISTS restores(
               id TEXT PRIMARY KEY, fileId TEXT NOT NULL, out TEXT NOT NULL, jobId TEXT,
               state TEXT NOT NULL, tier TEXT NOT NULL, bytes INTEGER NOT NULL DEFAULT 0,
-              requestedAt INTEGER NOT NULL, readyAt INTEGER, completedAt INTEGER, error TEXT);
+              requestedAt INTEGER NOT NULL, readyAt INTEGER, lastStepAt INTEGER,
+              completedAt INTEGER, error TEXT);
             CREATE INDEX IF NOT EXISTS restores_state ON restores(state);
             """)
         if excludesIsNew {
@@ -112,6 +144,16 @@ public final class Journal: @unchecked Sendable {
         if !sourceCols.contains("paused") {
             try exec("ALTER TABLE sources ADD COLUMN paused INTEGER NOT NULL DEFAULT 0")
         }
+        // Per-source scan outcome. Before these, a run failure was an ephemeral `error` bus event and
+        // nothing else — so a watched folder that had stopped backing up was listed in Settings exactly like
+        // one that was working, and if the app wasn't open when it broke there was no trace at all. Nullable,
+        // not backfilled: a folder we have never scanned since this shipped has no honest scan time.
+        if !sourceCols.contains("lastScanAt") {
+            try exec("ALTER TABLE sources ADD COLUMN lastScanAt INTEGER")
+        }
+        if !sourceCols.contains("error") {
+            try exec("ALTER TABLE sources ADD COLUMN error TEXT")
+        }
         // Idempotent column add for journals created before `createdAt` existed. Nullable (no DEFAULT): a
         // legacy row's true capture date is unknown, so it stays NULL → "—" in the UI rather than a faked
         // value. New/re-scanned rows get the real `IngestItem.createdAt` via `upsert`.
@@ -119,17 +161,99 @@ public final class Journal: @unchecked Sendable {
         if !fileCols.contains("createdAt") {
             try exec("ALTER TABLE files ADD COLUMN createdAt INTEGER")
         }
-        // When a blob's object landed in S3 — the clock Deep Archive's 180-day minimum runs on, and
-        // therefore the clock the user's space comes back on. Nullable: a legacy blob's upload time is
-        // unknown, and `reclaimedCreditBytes` treats unknown as "not yet eligible" rather than guessing in
-        // the direction that would hand out space we're still paying for.
+        // The upload half of the freshness clock `restores.lastStepAt` is for a download. Nullable and NOT
+        // backfilled, for the same reason: a legacy row has no record of when the upload path last tried it,
+        // and "planned" alone cannot tell a queued file apart from an abandoned one.
+        if !fileCols.contains("lastAttemptAt") {
+            try exec("ALTER TABLE files ADD COLUMN lastAttemptAt INTEGER")
+        }
+        // Deletion as its OWN column, so tombstoning stops destroying the row's kind + lifecycle. Not a bare
+        // column add — it carries existing tombstones over and repairs what the old scheme corrupted.
+        if !fileCols.contains("deletedAt") {
+            try migrateDeletionOffStatus()
+        }
         let memberCols = try run("PRAGMA table_info(blob_members)").compactMap { $0["name"] as? String }
         if !memberCols.contains("ordinal") {
             try exec("ALTER TABLE blob_members ADD COLUMN ordinal INTEGER NOT NULL DEFAULT 0")
         }
+        // `archivedAt`: when a blob's object landed in S3 — the clock Deep Archive's 180-day minimum runs on,
+        // and therefore the clock the user's space comes back on. Nullable: a legacy blob's upload time is
+        // unknown, and `reclaimedCreditBytes` treats unknown as "not yet eligible" rather than guessing in
+        // the direction that would hand out space we're still paying for.
         let blobCols = try run("PRAGMA table_info(blobs)").compactMap { $0["name"] as? String }
         if !blobCols.contains("archivedAt") {
             try exec("ALTER TABLE blobs ADD COLUMN archivedAt INTEGER")
+        }
+        // `reapTaggedAt`: when we asked S3 to tag this object for lifecycle expiry — written BEFORE the tag
+        // call, as an intent marker, so "tagged" is never something only S3 knows. `reapDeleted` crashing
+        // between the tag and `markBlobReaped` used to leave a `verified` blob whose object was quietly
+        // scheduled for deletion, with nothing anywhere able to tell. That state is now legible as
+        // `verified AND reapTaggedAt IS NOT NULL`, and `reviveFiles` hands it back for untagging.
+        if !blobCols.contains("reapTaggedAt") {
+            try exec("ALTER TABLE blobs ADD COLUMN reapTaggedAt INTEGER")
+        }
+        // Idempotent column add for journals created before `lastStepAt` existed. Nullable, and deliberately
+        // NOT backfilled from `requestedAt`: a legacy row genuinely has no record of when it was last
+        // checked, and inventing one would hand the app a freshness it can't vouch for — the exact lie the
+        // column exists to stop. NULL reads as "never checked", which for a row that has sat pending since
+        // before this shipped is the truth.
+        let restoreCols = try run("PRAGMA table_info(restores)").compactMap { $0["name"] as? String }
+        if !restoreCols.contains("lastStepAt") {
+            try exec("ALTER TABLE restores ADD COLUMN lastStepAt INTEGER")
+        }
+    }
+
+    /// Move deletion out of `files.status` and into `files.deletedAt`, and repair the rows the old scheme
+    /// corrupted. One-shot: gated on the column's absence, and every statement is idempotent anyway.
+    ///
+    /// **Why the old scheme had to go.** `status` encoded three independent things at once — the row's KIND
+    /// (`folder` marker vs file), its upload LIFECYCLE, and whether it was DELETED. Tombstoning overwrote the
+    /// first two to record the third, so the pre-delete state was simply gone. Un-tombstoning had nothing to
+    /// restore *to* and guessed `discovered` for the whole subtree, which produced two user-visible bugs:
+    /// a folder marker came back as a phantom FILE named after the folder, and every file that had ever been
+    /// in a re-deposited folder came back whether or not it was re-dropped. Neither can ever be planned
+    /// (nothing on disk feeds them), and `discovered` renders as "uploading", so they sat there for ever.
+    ///
+    /// **The backfill.** A tombstone's original status is unrecoverable, so it is inferred from evidence that
+    /// survived: the `folder:` id prefix marks a marker, and a non-null `blobId` marks a file that reached
+    /// `archived` (`deletePath` never cleared it — only the old revive did). Anything else is `planned`,
+    /// which costs at most one re-upload if it is ever revived, and never loses bytes.
+    ///
+    /// **The repair.** `discovered` was only ever written by the old revive (nothing else in the codebase
+    /// writes it — it is otherwise just `listFiles`' decode fallback), so every persisted `discovered` row is
+    /// a phantom from that bug. They are re-tombstoned, which is what the user asked for when they deleted
+    /// them, and re-linked to their blob where it is still verified so those bytes become reclaimable again —
+    /// the old revive nulled `blobId`, which is what stopped `fullyDeletedBlobIds` from ever seeing them.
+    /// Files the user genuinely re-deposited are untouched: `upsert` moved those to `planned` immediately.
+    private func migrateDeletionOffStatus() throws {
+        try exec("ALTER TABLE files ADD COLUMN deletedAt INTEGER")
+        let now = Int(Date().timeIntervalSince1970)
+        // Both passes recover a status the same way, so the recovery lives in one place.
+        let recoveredStatus = """
+            CASE WHEN id LIKE 'folder:%' THEN '\(FileStatus.folder.rawValue)'
+                 WHEN blobId IS NOT NULL THEN '\(FileStatus.archived.rawValue)'
+                 ELSE '\(FileStatus.planned.rawValue)' END
+            """
+        try transaction {
+            let tombstones = try run("SELECT count(*) c FROM files WHERE status = 'deleted'")
+                .first?["c"] as? Int ?? 0
+            try run("UPDATE files SET deletedAt = ?1, status = \(recoveredStatus) WHERE status = 'deleted'",
+                    [.int(now)])
+            // Phantoms: re-link first (the re-linked `blobId` is what `recoveredStatus` reads), then
+            // re-tombstone. Only a still-`verified` blob may be re-linked — a reaped one's bytes are on their
+            // way out, and pointing a row at them would be a lie about where the file is.
+            let phantoms = try run("SELECT count(*) c FROM files WHERE status = ?1",
+                                   [.text(FileStatus.discovered.rawValue)]).first?["c"] as? Int ?? 0
+            try run("""
+                UPDATE files SET blobId = (
+                    SELECT m.blobId FROM blob_members m JOIN blobs b ON b.id = m.blobId
+                     WHERE m.fileId = files.id AND b.status = ?2 LIMIT 1)
+                 WHERE status = ?1 AND blobId IS NULL
+                """, [.text(FileStatus.discovered.rawValue), .text(BlobStatus.verified.rawValue)])
+            try run("UPDATE files SET deletedAt = ?2, status = \(recoveredStatus) WHERE status = ?1",
+                    [.text(FileStatus.discovered.rawValue), .int(now)])
+            log("Journal: migrated deletion off `status` — \(tombstones) tombstone(s) carried over, "
+                + "\(phantoms) phantom row(s) from the folder-revive bug re-deleted")
         }
     }
 
@@ -209,20 +333,28 @@ public final class Journal: @unchecked Sendable {
 
     // MARK: - operations
     /// Upsert discovered files; skip ones already archived with the same hash (idempotent re-scan).
-    public func upsert(_ items: [IngestItem]) throws {
+    ///
+    /// `reviving` says whether this scan is the user EXPLICITLY asking for these items — a drag-drop deposit
+    /// or a photo pick — as opposed to a watched folder's periodic re-scan. Only an explicit ask may bring a
+    /// tombstoned file back (see `reviveFiles`); a re-scan must never, or deleting anything inside a watched
+    /// folder would be undone by the next poll. Scoping the revive to `items` is what stops a re-deposited
+    /// folder resurrecting every file that was *ever* in it.
+    public func upsert(_ items: [IngestItem], reviving: Bool = false) throws {
         lock.lock(); defer { lock.unlock() }
         try transaction {
+        if reviving { try reviveFilesLocked(ids: items.map(\.id)) }
         for it in items {
-            let cur = try run("SELECT status, contentHash FROM files WHERE id=?1", [.text(it.id)])
-            if let r = cur.first, (r["status"] as? String) == FileStatus.archived.rawValue,
-               (r["contentHash"] as? String) == it.content.planKey { continue }
+            let cur = try run("SELECT status, contentHash, deletedAt FROM files WHERE id=?1", [.text(it.id)])
             // **A deletion outranks a rescan.** Depositing a file doesn't remove it from disk, so a watched
             // folder keeps finding it forever. Letting discovery overwrite a tombstone made deleting
             // meaningless — the file returned within the poll interval, was re-uploaded, and its old blob
             // stopped counting as fully-deleted, so nothing was ever reclaimed either. The user's explicit
-            // "remove this" beats the scanner's "I can still see it". Re-adding is an explicit act:
-            // `restorePath` clears the tombstone, and the deposit command calls it.
-            if let r = cur.first, (r["status"] as? String) == FileStatus.deleted.rawValue { continue }
+            // "remove this" beats the scanner's "I can still see it". Anything still tombstoned here was not
+            // in an explicit deposit (`reviveFiles` above cleared those), so it stays deleted. Checked FIRST,
+            // so the archived short-circuit below is only ever asked about live rows.
+            if let r = cur.first, r["deletedAt"] != nil { continue }
+            if let r = cur.first, (r["status"] as? String) == FileStatus.archived.rawValue,
+               (r["contentHash"] as? String) == it.content.planKey { continue }
             // `createdAt` is captured here at discovery (the SSOT moment for intrinsic file metadata).
             // `size` is best-effort here — a Photos asset is size 0 until streamed; `markFileArchived`
             // overwrites it with the exact plaintext byte count once the bytes are sealed.
@@ -233,6 +365,82 @@ public final class Journal: @unchecked Sendable {
                 """, [.text(it.id), .text(it.relativePath), .int(it.size), .text(it.content.planKey), .text(FileStatus.planned.rawValue),
                       it.createdAt.map { .int(Int($0.timeIntervalSince1970)) } ?? .null])
         }
+        }
+    }
+
+    /// Bring tombstoned rows back — the deliberate counterpart to `deletePath`, and the ONLY way a deleted
+    /// file returns. Scoped to the ids the user explicitly re-deposited, never to a path prefix: re-dropping
+    /// a folder used to un-delete its whole former subtree, so files that were no longer on disk came back as
+    /// rows nothing could ever upload.
+    ///
+    /// Clearing `deletedAt` restores the row exactly as it was, which for a file whose blob is still
+    /// `verified` means it stays `archived` — correct, because those bytes never left S3, and honest, because
+    /// the tree says "stored" instead of miming an upload that isn't happening. If the blob is gone (reaped,
+    /// or never there) the row drops to `planned` with its stale link cleared, so the next pass re-uploads it.
+    /// A file whose CONTENT changed since it was archived is handled downstream by `upsert`'s hash check.
+    ///
+    /// Reviving onto a blob that was tagged for expiry is NOT handled here: that's an invariant
+    /// (`blobsNeedingUntag`) the engine re-checks every run, so it self-heals instead of depending on this
+    /// call's caller to notice.
+    /// Internal, not public: the ONLY production caller is `upsert(reviving:)`, which scopes it to the items
+    /// a deposit actually enumerated. Exposing an un-scoped revive is how the path-prefix version got called
+    /// with a folder name in the first place.
+    func reviveFiles(ids: [String]) throws {
+        lock.lock(); defer { lock.unlock() }
+        try transaction { try reviveFilesLocked(ids: ids) }
+    }
+
+    /// Caller holds `lock` and is inside a transaction.
+    private func reviveFilesLocked(ids: [String]) throws {
+        var kept = 0, replanned = 0
+        for id in ids {
+            guard let r = try run("SELECT status, blobId, deletedAt FROM files WHERE id=?1", [.text(id)]).first,
+                  r["deletedAt"] != nil else { continue }
+            let blob = try (r["blobId"] as? String).flatMap {
+                try run("SELECT status FROM blobs WHERE id=?1", [.text($0)]).first
+            }
+            // A folder marker holds no bytes, so "are its bytes still there?" doesn't apply to it — it just
+            // comes back as the marker it was. Re-planning one turned it into a phantom FILE named after the
+            // folder, which is the bug this whole path exists to not repeat.
+            let isMarker = (r["status"] as? String) == FileStatus.folder.rawValue
+            let bytesStillThere = (blob?["status"] as? String) == BlobStatus.verified.rawValue
+            if isMarker || bytesStillThere {
+                try run("UPDATE files SET deletedAt=NULL WHERE id=?1", [.text(id)])
+                kept += 1
+            } else {
+                try run("UPDATE files SET deletedAt=NULL, status=?2, blobId=NULL WHERE id=?1",
+                        [.text(id), .text(FileStatus.planned.rawValue)])
+                replanned += 1
+            }
+        }
+        // A revive that keeps its bytes uploads NOTHING, so it leaves no trace in the run's "N new item(s)"
+        // line — the deposit looks like it did nothing at all. Say what came back and how, or the fastest
+        // path in the product is also the only one with no record of having happened.
+        if kept + replanned > 0 {
+            log("Journal: revived \(kept + replanned) deleted file(s) — \(kept) re-linked to bytes still in "
+                + "S3, \(replanned) queued for re-upload")
+        }
+    }
+
+    /// **Bytes S3 is scheduled to delete that a live file still points at.** A `verified` blob carrying a
+    /// reap-tag intent while at least one of its members is un-deleted — see `MistaggedBlob` for the two ways
+    /// in. The engine re-checks this every run and clears the tag (then `clearReapTag`), so a reclaim that
+    /// died halfway, or a revive onto an already-tagged blob, heals itself rather than waiting for the
+    /// lifecycle sweep to take the bytes.
+    ///
+    /// `reaped` blobs are deliberately excluded: their members were ALL deleted, so a revived one is
+    /// re-planned onto fresh bytes (`reviveFiles`) and the old object is genuinely dead. Un-tagging it would
+    /// resurrect garbage nothing references — and that the user has already been credited for.
+    public func blobsNeedingUntag() throws -> [MistaggedBlob] {
+        lock.lock(); defer { lock.unlock() }
+        return try run("""
+            SELECT DISTINCT b.id, b.s3Key FROM blobs b
+              JOIN blob_members m ON m.blobId = b.id
+              JOIN files f ON f.id = m.fileId
+             WHERE b.status = ?1 AND b.reapTaggedAt IS NOT NULL AND f.deletedAt IS NULL
+            """, [.text(BlobStatus.verified.rawValue)]).compactMap {
+            guard let id = $0["id"] as? String, let key = $0["s3Key"] as? String else { return nil }
+            return MistaggedBlob(id: id, s3Key: key)
         }
     }
 
@@ -252,8 +460,8 @@ public final class Journal: @unchecked Sendable {
         // prefix test movePath/deletePath use (no LIKE-wildcard escaping).
         let exists = try run("""
             SELECT 1 FROM files
-            WHERE (relativePath=?1 OR substr(relativePath, 1, length(?1) + 1) = ?2) AND status != ?3 LIMIT 1
-            """, [.text(path), .text("\(path)/"), .text(FileStatus.deleted.rawValue)])
+            WHERE (relativePath=?1 OR substr(relativePath, 1, length(?1) + 1) = ?2) AND deletedAt IS NULL LIMIT 1
+            """, [.text(path), .text("\(path)/")])
         guard exists.isEmpty else { return }
         try run("""
             INSERT INTO files(id, relativePath, size, contentHash, status) VALUES(?1,?2,0,'',?3)
@@ -284,13 +492,32 @@ public final class Journal: @unchecked Sendable {
 
     public func listSources() throws -> [SourceRow] {
         lock.lock(); defer { lock.unlock() }
-        return try run("SELECT id, kind, path, mountPath, paused FROM sources ORDER BY id").map {
+        return try run("SELECT id, kind, path, mountPath, paused, lastScanAt, error FROM sources ORDER BY id").map {
             SourceRow(id: $0["id"] as? String ?? "",
                       kind: SourceKind(rawValue: $0["kind"] as? String ?? "") ?? .folder,
                       path: $0["path"] as? String,
                       mountPath: $0["mountPath"] as? String ?? "",
-                      paused: ($0["paused"] as? Int ?? 0) != 0)
+                      paused: ($0["paused"] as? Int ?? 0) != 0,
+                      lastScanAt: $0["lastScanAt"] as? Int,
+                      error: $0["error"] as? String)
         }
+    }
+
+    /// Record what happened the last time this source was scanned — `nil` error means it worked.
+    ///
+    /// Called once per source per pass, on every outcome (`ScanReportingSource` → `currentSource`). The
+    /// third instance of the same fix as `stampRestoreStep` and `recordFileFault`, and the one with the most
+    /// at stake: a watched folder is the promise that files are being backed up, and until this existed a
+    /// folder that had silently stopped was listed exactly like a working one.
+    ///
+    /// Clears `error` on success for the reason every sibling does — a recorded fault is history the moment
+    /// the thing works, and a stale "couldn't read your drive" on a folder that's been fine since Tuesday is
+    /// its own kind of lie.
+    public func markSourceScanned(_ id: String, error: String?) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("""
+            UPDATE sources SET lastScanAt=CAST(strftime('%s','now') AS INTEGER), error=?2 WHERE id=?1
+            """, [.text(id), error.map(Bind.text) ?? .null])
     }
 
     // MARK: - excludes registry (gitignore-style patterns; the SSOT the scan filters by)
@@ -324,6 +551,7 @@ public final class Journal: @unchecked Sendable {
                    bytes: r["bytes"] as? Int ?? 0,
                    requestedAt: r["requestedAt"] as? Int ?? 0,
                    readyAt: r["readyAt"] as? Int,
+                   lastStepAt: r["lastStepAt"] as? Int,
                    completedAt: r["completedAt"] as? Int,
                    error: r["error"] as? String)
     }
@@ -334,19 +562,19 @@ public final class Journal: @unchecked Sendable {
     public func addRestore(_ r: RestoreRow) throws {
         lock.lock(); defer { lock.unlock() }
         try run("""
-            INSERT INTO restores(id, fileId, out, jobId, state, tier, bytes, requestedAt, readyAt, completedAt, error)
-            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+            INSERT INTO restores(id, fileId, out, jobId, state, tier, bytes, requestedAt, readyAt, lastStepAt, completedAt, error)
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
             """, [.text(r.id), .text(r.fileId), .text(r.out), r.jobId.map(Bind.text) ?? .null,
                   .text(r.state.rawValue), .text(r.tier.rawValue), .int(r.bytes), .int(r.requestedAt),
-                  r.readyAt.map(Bind.int) ?? .null, r.completedAt.map(Bind.int) ?? .null,
-                  r.error.map(Bind.text) ?? .null])
+                  r.readyAt.map(Bind.int) ?? .null, r.lastStepAt.map(Bind.int) ?? .null,
+                  r.completedAt.map(Bind.int) ?? .null, r.error.map(Bind.text) ?? .null])
     }
 
     /// Newest first — the order the Transfers page renders in (Active on top, then history).
     public func listRestores() throws -> [RestoreRow] {
         lock.lock(); defer { lock.unlock() }
         return try run("""
-            SELECT id, fileId, out, jobId, state, tier, bytes, requestedAt, readyAt, completedAt, error
+            SELECT id, fileId, out, jobId, state, tier, bytes, requestedAt, readyAt, lastStepAt, completedAt, error
             FROM restores ORDER BY requestedAt DESC, id DESC
             """).map(restoreRow)
     }
@@ -354,7 +582,7 @@ public final class Journal: @unchecked Sendable {
     public func restore(id: String) throws -> RestoreRow? {
         lock.lock(); defer { lock.unlock() }
         return try run("""
-            SELECT id, fileId, out, jobId, state, tier, bytes, requestedAt, readyAt, completedAt, error
+            SELECT id, fileId, out, jobId, state, tier, bytes, requestedAt, readyAt, lastStepAt, completedAt, error
             FROM restores WHERE id=?1
             """, [.text(id)]).first.map(restoreRow)
     }
@@ -374,7 +602,7 @@ public final class Journal: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         let active = activeStateHoles(from: 1)
         return try run("""
-            SELECT id, fileId, out, jobId, state, tier, bytes, requestedAt, readyAt, completedAt, error
+            SELECT id, fileId, out, jobId, state, tier, bytes, requestedAt, readyAt, lastStepAt, completedAt, error
             FROM restores WHERE state IN (\(active.sql)) ORDER BY requestedAt ASC, id ASC
             """, active.binds).map(restoreRow)
     }
@@ -403,6 +631,21 @@ public final class Journal: @unchecked Sendable {
             WHERE id=?1 AND state IN (\(active.sql))
             """, [.text(id), .text(state.rawValue), readyAt.map(Bind.int) ?? .null,
                   completedAt.map(Bind.int) ?? .null] + active.binds)
+    }
+
+    /// Stamp that the run loop just tried to move this transfer — the freshness half of `RestoreRow`.
+    ///
+    /// Called once per active row per pass, on EVERY outcome including a thrown one, because the question it
+    /// answers is "did anything look at this recently?", not "did it go well". `error` answers the second.
+    /// Separating them is what lets the page tell a healthy 48-hour wait apart from a transfer nothing has
+    /// touched in a month, which it previously could not do at all.
+    ///
+    /// Touches only `lastStepAt`, so it can never disturb state, `readyAt` or a fault recorded by the same
+    /// pass — and it carries no in-flight guard for the same reason: recording that we looked at a row is
+    /// true regardless of what the row became while we looked, and it cannot reanimate anything.
+    public func stampRestoreStep(_ id: String, at: Int) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("UPDATE restores SET lastStepAt=?2 WHERE id=?1", [.text(id), .int(at)])
     }
 
     /// Record why a step failed. `state` is the caller's classification: a permanent fault lands `.failed`,
@@ -442,7 +685,7 @@ public final class Journal: @unchecked Sendable {
     /// per-path queries).
     public func livePaths() throws -> Set<String> {
         lock.lock(); defer { lock.unlock() }
-        return Set(try run("SELECT relativePath FROM files WHERE status != 'deleted'")
+        return Set(try run("SELECT relativePath FROM files WHERE deletedAt IS NULL")
             .compactMap { $0["relativePath"] as? String })
     }
 
@@ -451,13 +694,15 @@ public final class Journal: @unchecked Sendable {
     /// `.discovered` rather than dropping the row (the file still exists; the UI coarsens status anyway).
     public func listFiles() throws -> [FileRow] {
         lock.lock(); defer { lock.unlock() }
-        return try run("SELECT id, relativePath, size, status, blobId, createdAt FROM files WHERE status != 'deleted' ORDER BY relativePath").map {
+        return try run("SELECT id, relativePath, size, status, blobId, createdAt, lastAttemptAt, error FROM files WHERE deletedAt IS NULL ORDER BY relativePath").map {
             FileRow(id: $0["id"] as? String ?? "",
                     relativePath: $0["relativePath"] as? String ?? "",
                     size: $0["size"] as? Int ?? 0,
                     status: FileStatus(rawValue: $0["status"] as? String ?? "") ?? .discovered,
                     blobId: $0["blobId"] as? String,
-                    createdAt: $0["createdAt"] as? Int)
+                    createdAt: $0["createdAt"] as? Int,
+                    lastAttemptAt: $0["lastAttemptAt"] as? Int,
+                    error: $0["error"] as? String)
         }
     }
 
@@ -483,32 +728,22 @@ public final class Journal: @unchecked Sendable {
             """, [.text(to), .text(from), .text("\(from)/")])
     }
 
-    /// Tombstone the subtree rooted at `path` (status → `.deleted`) — the journal edit behind a file/folder
+    /// Tombstone the subtree rooted at `path` (`deletedAt` → now) — the journal edit behind a file/folder
     /// delete. The row and its blob mapping are KEPT, not removed: the encrypted bytes stay in S3 until every file sharing
     /// their blob is deleted too, at which point `UploadEngine.reapDeleted` tags the object for lifecycle
     /// expiry (deep storage's 180-day minimum makes eager deletion pointless, and the kept mapping is how
     /// `fullyDeletedBlobIds` finds them). Tombstoned files drop out of `listFiles` + the file
-    /// count. Sweeps `path` and every descendant; already-tombstoned rows are skipped (idempotent).
+    /// count. Sweeps `path` and every descendant; already-tombstoned rows keep their original `deletedAt`
+    /// (idempotent, and the timestamp stays the moment the user actually deleted it).
+    ///
+    /// `status` is deliberately untouched — see `FileStatus`. It records where the file got to in the upload
+    /// lifecycle, which stays true of a deleted file and is exactly what `reviveFiles` needs if it comes back.
     public func deletePath(_ path: String) throws {
         lock.lock(); defer { lock.unlock() }
         try run("""
-            UPDATE files SET status = ?1
-            WHERE (relativePath = ?2 OR substr(relativePath, 1, length(?2) + 1) = ?3) AND status != ?1
-            """, [.text(FileStatus.deleted.rawValue), .text(path), .text("\(path)/")])
-    }
-
-    /// Un-tombstone the subtree at `path` — the deliberate counterpart to `deletePath`, and the ONLY way a
-    /// deleted file comes back. A rescan can't do it (`upsert` skips tombstoned rows), because "the file is
-    /// still on disk" is not the user asking for it again; re-depositing it is. Rows return to `discovered`
-    /// so the next run re-archives them, whether or not the old bytes are still in S3 — the blob may already
-    /// have been reclaimed, and re-uploading is the only answer that's correct either way.
-    public func restorePath(_ path: String) throws {
-        lock.lock(); defer { lock.unlock() }
-        try run("""
-            UPDATE files SET status = ?1, blobId = NULL
-            WHERE (relativePath = ?2 OR substr(relativePath, 1, length(?2) + 1) = ?3) AND status = ?4
-            """, [.text(FileStatus.discovered.rawValue), .text(path), .text("\(path)/"),
-                  .text(FileStatus.deleted.rawValue)])
+            UPDATE files SET deletedAt = ?1
+            WHERE (relativePath = ?2 OR substr(relativePath, 1, length(?2) + 1) = ?3) AND deletedAt IS NULL
+            """, [.int(Int(Date().timeIntervalSince1970)), .text(path), .text("\(path)/")])
     }
 
     /// Create the blob row **and record its membership**, in one transaction. Membership is written here —
@@ -552,9 +787,8 @@ public final class Journal: @unchecked Sendable {
             SELECT DISTINCT m.blobId FROM blob_members m
               JOIN blobs b ON b.id = m.blobId
               LEFT JOIN files f ON f.id = m.fileId
-             WHERE b.status = ?1 AND (f.status IS NULL OR f.status NOT IN (?2, ?3))
-            """, [.text(BlobStatus.verified.rawValue), .text(FileStatus.archived.rawValue),
-                  .text(FileStatus.deleted.rawValue)])
+             WHERE b.status = ?1 AND (f.status IS NULL OR (f.status != ?2 AND f.deletedAt IS NULL))
+            """, [.text(BlobStatus.verified.rawValue), .text(FileStatus.archived.rawValue)])
             .compactMap { $0["blobId"] as? String }
     }
 
@@ -579,9 +813,19 @@ public final class Journal: @unchecked Sendable {
               LEFT JOIN files f ON f.id = m.fileId
              WHERE b.status = ?1
              GROUP BY m.blobId
-            HAVING SUM(CASE WHEN f.status IS NULL OR f.status != ?2 THEN 1 ELSE 0 END) = 0
-            """, [.text(BlobStatus.verified.rawValue), .text(FileStatus.deleted.rawValue)])
+            HAVING SUM(CASE WHEN f.deletedAt IS NULL THEN 1 ELSE 0 END) = 0
+            """, [.text(BlobStatus.verified.rawValue)])
             .compactMap { $0["blobId"] as? String }
+    }
+
+    /// Record that we are ABOUT to tag this blob's object for expiry — written before the S3 call, so the
+    /// intent survives a crash mid-reclaim. Without it, a daemon that died between the tag and
+    /// `markBlobReaped` left a `verified` blob whose bytes S3 was quietly scheduled to delete, and nothing
+    /// could tell: re-depositing those files re-linked them to an object already on its way out.
+    public func markBlobReapTagIntent(_ blobId: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("UPDATE blobs SET reapTaggedAt=COALESCE(reapTaggedAt, ?1) WHERE id=?2",
+                [.int(Int(Date().timeIntervalSince1970)), .text(blobId)])
     }
 
     /// Record that a blob's object has been tagged for lifecycle expiry. Moves it out of `verified`, so
@@ -589,6 +833,13 @@ public final class Journal: @unchecked Sendable {
     public func markBlobReaped(_ blobId: String) throws {
         lock.lock(); defer { lock.unlock() }
         try run("UPDATE blobs SET status=?1 WHERE id=?2", [.text(BlobStatus.reaped.rawValue), .text(blobId)])
+    }
+
+    /// Record that a blob's reap tag has been CLEARED in S3 — the object is no longer queued for expiry.
+    /// Written only after the untag succeeds (see `reviveFiles`).
+    public func clearReapTag(_ blobId: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("UPDATE blobs SET reapTaggedAt=NULL WHERE id=?1", [.text(blobId)])
     }
 
     /// Deep Archive's minimum billable storage duration. The clock the user's space comes back on, because
@@ -638,9 +889,8 @@ public final class Journal: @unchecked Sendable {
               JOIN files f ON f.id = m.fileId
              WHERE b.status = ?1 AND b.archivedAt IS NOT NULL
                AND b.archivedAt <= ?2 AND b.archivedAt > ?3
-               AND f.status = ?4
-            """, [.text(BlobStatus.reaped.rawValue), .int(eligibleBefore), .int(staleBefore),
-                  .text(FileStatus.deleted.rawValue)])
+               AND f.deletedAt IS NOT NULL
+            """, [.text(BlobStatus.reaped.rawValue), .int(eligibleBefore), .int(staleBefore)])
         return (rows.first?["bytes"] as? Int) ?? 0
     }
 
@@ -649,13 +899,13 @@ public final class Journal: @unchecked Sendable {
     /// - **`archived`** — the bytes are already in S3 under a blob id derived from the membership they had
     ///   when sealed. Re-planning them alongside newly-arrived neighbours mints a different id, misses the
     ///   `isBlobVerified` check, and re-uploads what's already stored.
-    /// - **`deleted`** — the user removed it. Skipping it in `upsert` is not enough on its own: the row
+    /// - **tombstoned** — the user removed it. Skipping it in `upsert` is not enough on its own: the row
     ///   would still be planned, uploaded, and marked `archived` again, resurrecting it through the back
     ///   door. A deletion has to hold all the way through the pipeline, not just at discovery.
     public func settledFileIds() throws -> Set<String> {
         lock.lock(); defer { lock.unlock() }
-        return Set(try run("SELECT id FROM files WHERE status IN (?1, ?2)",
-                           [.text(FileStatus.archived.rawValue), .text(FileStatus.deleted.rawValue)])
+        return Set(try run("SELECT id FROM files WHERE status = ?1 OR deletedAt IS NOT NULL",
+                           [.text(FileStatus.archived.rawValue)])
             .compactMap { $0["id"] as? String })
     }
 
@@ -699,8 +949,8 @@ public final class Journal: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         func count(_ sql: String) -> Int { (try? run(sql).first?["c"] as? Int) ?? 0 }
         // `folder` markers anchor empty folders — they aren't files, so they don't count toward the total.
-        return (count("SELECT count(*) c FROM files WHERE status NOT IN ('deleted','folder')"),
-                count("SELECT count(*) c FROM files WHERE status='archived'"),
+        return (count("SELECT count(*) c FROM files WHERE deletedAt IS NULL AND status != 'folder'"),
+                count("SELECT count(*) c FROM files WHERE deletedAt IS NULL AND status='archived'"),
                 count("SELECT count(*) c FROM blobs WHERE status='verified'"))
     }
 
@@ -748,15 +998,16 @@ public final class Journal: @unchecked Sendable {
     public func markBlobArchived(_ blobId: String, spans: [FileSpan]) throws {
         lock.lock(); defer { lock.unlock() }
         try transaction {
-        try run("UPDATE blobs SET status=?1, archivedAt=COALESCE(archivedAt, ?3) WHERE id=?2",
+        // `reapTaggedAt` is cleared here because this blob's object has just been (re)written: a fresh object
+        // version carries no tags, so any expiry we had queued against the old one is gone with it.
+        try run("UPDATE blobs SET status=?1, archivedAt=COALESCE(archivedAt, ?3), reapTaggedAt=NULL WHERE id=?2",
                 [.text(BlobStatus.verified.rawValue), .text(blobId), .int(Int(Date().timeIntervalSince1970))])
         for s in spans {
             try run("""
                 UPDATE files SET status=?1, blobId=?2, "offset"=?3, length=?4, firstFrame=?5, plaintextSha256=?6,
-                    size=?7, error=NULL WHERE id=?8 AND status!=?9
+                    size=?7, error=NULL WHERE id=?8 AND deletedAt IS NULL
                 """, [.text(FileStatus.archived.rawValue), .text(blobId), .int(s.offset), .int(s.length),
-                      .int(s.firstFrame), .text(s.plaintextSha256), .int(s.size), .text(s.id),
-                      .text(FileStatus.deleted.rawValue)])
+                      .int(s.firstFrame), .text(s.plaintextSha256), .int(s.size), .text(s.id)])
         }
         }
     }
@@ -767,8 +1018,14 @@ public final class Journal: @unchecked Sendable {
     /// plaintext + per-frame AEAD tags).
     public func markFileArchived(_ id: String, blobId: String, offset: Int, length: Int, firstFrame: Int, plaintextSha256: String, size: Int) throws {
         lock.lock(); defer { lock.unlock() }
+        // `error=NULL` because a recorded fault is history the moment the thing succeeds — the same rule
+        // `setRestoreState` follows. It was harmless while nothing read `files.error`; the instant the tree
+        // started showing the reason, a stale note would pin "couldn't upload" to a file that is safely
+        // stored. `lastAttemptAt` is stamped from SQLite's own clock so no call site has to thread a
+        // timestamp through (and every write here means exactly "we just tried, now").
         try run("""
-            UPDATE files SET status=?1, blobId=?2, "offset"=?3, length=?4, firstFrame=?5, plaintextSha256=?6, size=?7 WHERE id=?8
+            UPDATE files SET status=?1, blobId=?2, "offset"=?3, length=?4, firstFrame=?5, plaintextSha256=?6,
+              size=?7, error=NULL, lastAttemptAt=CAST(strftime('%s','now') AS INTEGER) WHERE id=?8
             """, [.text(FileStatus.archived.rawValue), .text(blobId), .int(offset), .int(length), .int(firstFrame), .text(plaintextSha256), .int(size), .text(id)])
     }
 
@@ -785,8 +1042,33 @@ public final class Journal: @unchecked Sendable {
             // re-plans an already-stored file (and then fails, or is refused over quota) marks that file ⚠ in
             // the tree, telling the user a backup they already have didn't happen. The bytes are fine either
             // way; the lie is the damage, and it is the one claim this product cannot afford to get wrong.
-            try run("UPDATE files SET status=?1, error=?2 WHERE id=?3 AND status!=?4",
-                    [.text(FileStatus.failed.rawValue), .text(error), .text(id), .text(FileStatus.archived.rawValue)])
+            try run("""
+                UPDATE files SET status=?1, error=?2, lastAttemptAt=CAST(strftime('%s','now') AS INTEGER)
+                WHERE id=?3 AND status!=?4
+                """, [.text(FileStatus.failed.rawValue), .text(error), .text(id), .text(FileStatus.archived.rawValue)])
+        }
+    }
+
+    /// Record a TRANSIENT upload fault against a blob's files: why the last attempt failed, and that one was
+    /// made — without touching `status`, so the run loop picks them up again next pass.
+    ///
+    /// The gap this fills is the upload twin of `recordRestoreFault`. A transient blob failure used to touch
+    /// the journal not at all: the fault went out as a `blobFailed` bus EVENT and nowhere else, so a file
+    /// whose upload kept failing sat at `planned` — which the tree renders as "Uploading" — with no record
+    /// and no clock. If the app wasn't open when the event fired, there was no trace of it anywhere. The
+    /// permanent and over-quota cases were already given journal truth (`markFilesFailed`); this is the
+    /// third case, and the one that repeats.
+    ///
+    /// Same never-touch-an-archived-file guard as `markFilesFailed`, for exactly the reason given there: a
+    /// later blob's snag says nothing about bytes already verified in S3.
+    public func recordFileFault(_ ids: [String], error: String) throws {
+        guard !ids.isEmpty else { return }
+        lock.lock(); defer { lock.unlock() }
+        for id in ids {
+            try run("""
+                UPDATE files SET error=?1, lastAttemptAt=CAST(strftime('%s','now') AS INTEGER)
+                WHERE id=?2 AND status!=?3
+                """, [.text(error), .text(id), .text(FileStatus.archived.rawValue)])
         }
     }
 

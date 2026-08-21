@@ -22,7 +22,55 @@ import type { ConflictPolicy, ListedFile } from "../../../../shared/ipc.ts";
  * calling that "Transferring" left people watching a transfer that never budged. `pending` = deep storage
  * is waking up; `transferring` = bytes are actually moving. (`gettingBack`, which meant both, is gone.)
  */
-export type FileStatus = "frozen" | "uploading" | "failed" | "pending" | "transferring" | "here";
+export type FileStatus =
+  | "frozen"
+  | "uploading"
+  /** Queued or retrying, but nothing is getting anywhere — see {@link uploadStall}. Distinct from `failed`
+   * on purpose: `failed` is a permanent fault the daemon has stopped retrying, this one is still in the
+   * queue. Same distinction, and the same reason for it, as a stalled download vs a failed one. */
+  | "stalled"
+  | "failed"
+  | "pending"
+  | "transferring"
+  | "here";
+
+/** Why an upload has stopped being something the tree can call "Uploading". Two causes, said differently:
+ * one is a snag we're working through, the other is silence. Deliberately mirrors `RestoreStall` — same
+ * question on the other half of the product. */
+export type UploadStall =
+  /** Attempts are happening and failing — `error` names the snag, and the daemon keeps retrying. */
+  | "retrying"
+  /** Nothing has tried in longer than the daemon's own window (or ever). */
+  | "unattended";
+
+/**
+ * Has this file's upload stopped getting anywhere? `null` while it's fine — queued and being worked, or in
+ * a state that isn't an upload at all.
+ *
+ * `staleAfterSeconds` is the daemon's number, taken from the same place the Downloads page takes it (a
+ * restore row) so both halves of the app measure silence against the loop's real beat rather than a
+ * constant either of them invented.
+ *
+ * A file with an `error` is "retrying" even if it was tried a second ago: it IS being attended to, and the
+ * row should say what's wrong rather than pretend the queue is healthy.
+ *
+ * **A null `lastAttemptAt` is NOT a stall here** — the opposite of how the download side reads a null
+ * `lastStepAt`, and the asymmetry is real rather than an oversight. A restore row is created by an explicit
+ * user request and then handed to the run loop, so "never stepped" means the loop isn't running on
+ * something someone just paid for. A `planned` file is created BY the loop, mid-pass, moments before it
+ * attempts it — so null is the ordinary transient state of a freshly queued file, and calling that stalled
+ * would flag every new deposit. It resolves either way on the pass that is already underway.
+ */
+export const uploadStall = (
+  f: ArchivedFile,
+  now: number,
+  staleAfterSeconds: number,
+): UploadStall | null => {
+  if (f.status !== "uploading") return null;
+  if (f.error !== null) return "retrying";
+  if (f.lastAttemptAt !== null && now - f.lastAttemptAt > staleAfterSeconds) return "unattended";
+  return null;
+};
 
 /** Coarse type, drives the row icon (and, when R2 lands, whether a thumbnail exists). */
 export type FileKind = "photo" | "video" | "audio" | "document" | "archive" | "other";
@@ -39,6 +87,10 @@ export interface ArchivedFile {
   kind: FileKind;
   /** Archived/modified instant (ISO), or null if the journal doesn't expose one. */
   date: string | null;
+  /** Unix seconds the upload path last tried this file; null if it never has. Feeds {@link uploadStall}. */
+  lastAttemptAt: number | null;
+  /** Why the last upload attempt failed, or null — shown on the row rather than left in the journal. */
+  error: string | null;
   /** When `here`: the local path the thawed bytes landed at. */
   localPath?: string | null;
   /** For an optimistic (not-yet-uploaded) drop: the local absolute source path, so a failed upload can be
@@ -215,7 +267,11 @@ export const moveIsNoop = (targets: readonly RowTarget[], toDir: string): boolea
 const rollupStatus = (s: Set<FileStatus>): FileStatus =>
   s.has("failed")
     ? "failed"
-    : s.has("uploading")
+    : // A stalled upload inside outranks a healthy one: "some of this folder is moving" is the less useful
+      // truth when part of it has stopped, and the folder is how the user finds the file to act on.
+      s.has("stalled")
+      ? "stalled"
+      : s.has("uploading")
       ? "uploading"
       : s.has("transferring")
         ? "transferring"
@@ -465,4 +521,6 @@ export const fileFromJournal = (row: ListedFile): ArchivedFile => ({
   status: STATUS_FROM_JOURNAL[row.status] ?? "uploading",
   kind: kindFromName(row.relativePath),
   date: row.date != null ? new Date(row.date * 1000).toISOString() : null,
+  lastAttemptAt: row.lastAttemptAt,
+  error: row.error,
 });

@@ -13,9 +13,11 @@
  * journal row; the daemon's run loop drives it and the app READS the list (`listRestores`). We overlay
  * the newest transfer per file here, so a file the user asked back shows `pending` (deep storage is
  * waking up) / `transferring` (bytes moving) / `here` (saved) in the tree. Pass the store's `restores` in.
+ * A download that ISN'T moving — unpaid, or stalled — deliberately overlays nothing; see `applyRestore`.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { RestoreRow } from "../../../../shared/ipc.ts";
+import { restoreStall } from "../../../../shared/ipc.ts";
 import {
   type ArchivedFile,
   type FileStatus,
@@ -26,6 +28,7 @@ import {
   parentOf,
   reparent,
   rewritePrefix,
+  uploadStall,
   withName,
 } from "./model.ts";
 
@@ -60,25 +63,53 @@ export interface FilesApi {
  * arrive, the archive is untouched), so those keep the journal's own status and surface on the Transfers
  * page instead of putting a scary mark on a file that is perfectly fine. */
 const STATUS_FROM_TRANSFER: Partial<Record<RestoreRow["state"], FileStatus>> = {
-  // Awaiting payment reads as pending too: from the file's point of view a copy is on the way, and the
-  // thing that needs doing about it belongs on the Downloads page, not on a tree row.
-  needsAuthorization: "pending",
   pending: "pending",
   transferring: "transferring",
   saved: "here",
 };
 
-/** Overlay a file's newest transfer onto its row. */
-const applyRestore = (file: ArchivedFile, r: RestoreRow | undefined): ArchivedFile => {
+/**
+ * Overlay a file's newest transfer onto its row — but only while that transfer is actually MOVING.
+ *
+ * `pending` on a tree row means one thing: deep storage is waking this up, hands off, it'll arrive. Two
+ * kinds of download can't say that and used to anyway. An unpaid one (`needsAuthorization`) is waiting on
+ * the user's card, not on AWS — it was mapped here on the reasoning that "a copy is on the way", which is
+ * the one thing it isn't. And a stalled one (`restoreStall` — nothing has checked on it in longer than the
+ * daemon's own window, or it has run far past its estimate) is a wait nobody can vouch for.
+ *
+ * Both now leave the file reading exactly what it is: safely stored. That is the truth about the FILE —
+ * the archive is untouched, nothing is at risk — and the thing that needs doing about the download is on
+ * the Downloads page, which states it plainly and offers the button. The alternative, a scary mark on a
+ * file that is perfectly fine, would trade one wrong impression for another.
+ */
+const applyRestore = (
+  file: ArchivedFile,
+  r: RestoreRow | undefined,
+  now: number,
+  staleAfter: number,
+): ArchivedFile => {
   const status = r && STATUS_FROM_TRANSFER[r.state];
-  if (!r || !status) return file;
+  if (!r || !status || restoreStall(r, now, staleAfter) !== null) return file;
   return { ...file, status, localPath: r.state === "saved" ? r.out : (file.localPath ?? null) };
 };
+
+/**
+ * Flip a file that says "Uploading" to `stalled` when it has stopped getting anywhere ({@link uploadStall}).
+ *
+ * The upload twin of the guard in {@link applyRestore}, and the older of the two problems: `planned` in the
+ * journal renders as "Uploading", and until the daemon started recording transient faults and stamping
+ * `lastAttemptAt`, that arrow had no expiry and no reason attached. A file whose blob had been failing all
+ * week looked exactly like one queued a second ago.
+ */
+const applyUpload = (file: ArchivedFile, now: number, staleAfter: number): ArchivedFile =>
+  uploadStall(file, now, staleAfter) !== null ? { ...file, status: "stalled" } : file;
 
 export const useFiles = (
   daemonFiles: ArchivedFile[],
   persistedFolders: string[],
   restores: readonly RestoreRow[],
+  /** The daemon's own silence window (`Status.staleAfterSeconds`); `Infinity` with no snapshot. */
+  staleAfter: number,
 ): FilesApi => {
   const [base, setBase] = useState<ArchivedFile[]>(daemonFiles);
   // Empty folders, now journal-backed (status `folder` markers, fed in as `persistedFolders`). Held in
@@ -109,10 +140,15 @@ export const useFiles = (
   }, [restores]);
 
   // Overlay transfer status by file id — keeps the tree truthful as a real thaw progresses.
-  const files = useMemo(
-    () => base.map((file) => applyRestore(file, newestByFile.get(file.id))),
-    [base, newestByFile],
-  );
+  //
+  // `Date.now()` inside the memo rather than a ticking clock: staleness turns over on a scale of a day, and
+  // this recomputes on every `restores` change — which is now once per daemon pass while anything is in
+  // flight, plus every mount. The moment that matters most is app-open after a long absence, and that is a
+  // mount. A 15s interval here would buy nothing but renders.
+  const files = useMemo(() => {
+    const now = Math.floor(Date.now() / 1000);
+    return base.map((file) => applyUpload(applyRestore(file, newestByFile.get(file.id), now, staleAfter), now, staleAfter));
+  }, [base, newestByFile, staleAfter]);
 
   const deposit = useCallback((items: { name: string; srcPath?: string; size?: number }[], intoDir: string): string[] => {
     const stamp = ++depositSeq;
@@ -126,6 +162,11 @@ export const useFiles = (
       status: "uploading",
       kind: kindFromName(it.name),
       date: null,
+      // Nothing has tried this yet — it was dropped a moment ago and the deposit command is still in
+      // flight. `null` is exactly right and is exactly why `uploadStall` treats a null attempt as "queued",
+      // not "abandoned": otherwise every fresh drop would flag itself the instant it appeared.
+      lastAttemptAt: null,
+      error: null,
       srcPath: it.srcPath ?? null, // remembered so a failed upload can be retried
     }));
     if (added.length === 0) return [];

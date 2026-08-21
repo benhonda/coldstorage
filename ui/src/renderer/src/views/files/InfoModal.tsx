@@ -70,7 +70,7 @@ export const InfoModal = ({
           <div>
             <KeyValueRow label="Kind" value={sel.file.kind} />
             <KeyValueRow label="Size" value={formatBytes(sel.file.size)} />
-            <KeyValueRow label="Status" value={statusLabel(sel.file.status)} />
+            <KeyValueRow label="Status" value={statusLabel(sel.file.status, sel.file.error)} />
             <KeyValueRow label="Uploaded" value={formatDate(sel.file.date)} />
             {/* A "Ready by" row used to sit here, reading `file.readyBy` — a field nothing ever wrote, so
                 it never rendered once. The honest version points at where a download actually lives now. */}

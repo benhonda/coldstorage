@@ -35,7 +35,22 @@ public struct LocalDirSource: IngestSource {
     public func walk() throws -> [Entry] {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
-        guard let en = fm.enumerator(at: root, includingPropertiesForKeys: keys) else { return [] }
+        // **`return []` used to live here, and it was the worst silent failure in the product.** A watched
+        // folder that can't be read — external drive unmounted, folder deleted or renamed, macOS permission
+        // revoked — makes `enumerator(at:)` return nil, and an empty result is INDISTINGUISHABLE from "the
+        // folder is fine and has nothing new." So a backup that had stopped happening completed a clean run,
+        // published `runFinished`, and reported "nothing new to archive" every five minutes indefinitely.
+        // The one failure a backup product must never hide, hidden by one line.
+        //
+        // `fileExists` is checked separately from the enumerator so the message can say WHICH it was: a
+        // vanished folder and an unreadable one need different things from the user (plug the drive back in
+        // vs. grant access), and "couldn't read it" alone sends them looking in the wrong place.
+        guard fm.fileExists(atPath: root.path) else {
+            throw ColdStorageError.sourceUnreadable("\(root.path) isn't there — if it's on an external drive, plug it back in")
+        }
+        guard let en = fm.enumerator(at: root, includingPropertiesForKeys: keys) else {
+            throw ColdStorageError.sourceUnreadable("can't read \(root.path) — check this Mac's permission for that folder")
+        }
         var entries: [Entry] = []
         // Drain via nextObject() rather than `for…in`: macOS Foundation marks NSEnumerator's
         // Sequence iterator unavailable in async contexts (Linux's swift-corelibs doesn't). Lazy, so

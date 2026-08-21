@@ -25,8 +25,8 @@
  * own bar with — one mechanism, both directions.
  */
 import { useEffect, useState } from "react";
-import type { ColdstoreApi, RestoreRow, RestoreState } from "../../../shared/ipc.ts";
-import { isActiveRestore } from "../../../shared/ipc.ts";
+import type { ColdstoreApi, RestoreRow, RestoreStall, RestoreState } from "../../../shared/ipc.ts";
+import { isActiveRestore, restoreStall } from "../../../shared/ipc.ts";
 import { etaSeconds, throughput, type RestoreProgress } from "../state/reducer.ts";
 import { Badge, Button, EmptyState, Icon, Modal } from "../ui/primitives.tsx";
 import { Page } from "../ui/layout.tsx";
@@ -60,20 +60,51 @@ const useNow = (everyMs = 15_000): number => {
 const day = (unixSeconds: number): string =>
   new Date(unixSeconds * 1000).toLocaleDateString("en-US", { month: "long", day: "numeric" });
 
+/** What a waiting row says about its wait, and whether that wait is still one the page can stand behind.
+ * `stalled` drives the tone, the icon, and whether the row offers a way out — it is the difference between
+ * narrating a wait and admitting we've lost track of one. */
+export interface WaitNote {
+  text: string;
+  stalled: boolean;
+}
+
+/** How each stall reads to the user. The VERDICT is `restoreStall`'s — shared, because the file tree
+ * answers to it too; only the wording is this page's. */
+const STALL_TEXT: Record<RestoreStall, (r: RestoreRow) => string> = {
+  neverChecked: () => "Nothing has checked on this yet. It picks up on its own while the app is running.",
+  unchecked: (r) => `Last checked ${day(r.lastStepAt ?? 0)}. It picks up on its own while the app is running.`,
+  overdue: (r) =>
+    `Well past the usual ${r.typicalWait}, and still frozen — this one looks stuck. Ask for it again to start over.`,
+};
+
 /**
  * How much of the thaw is left, for a row that's waiting on one. Null for every other state: a download
  * that's moving, done, stopped or unpaid has no thaw to count down, and nothing here should invent one
  * for it.
  *
- * Past the estimate we say so rather than showing a clock at zero or running it negative. A bulk
- * retrieval that overruns ~48 hours is normal and not a fault, so the copy has to hold "still fine,
- * still waiting" without either alarming anyone or pretending the estimate still stands.
+ * Three readings, in the order they stop being true:
+ *
+ * 1. **Counting down** — inside the estimate. The daemon's own number, ticking.
+ * 2. **Over the estimate, but we're watching** — a bulk retrieval that runs past ~48 hours is normal and
+ *    not a fault, so this says "still waiting" without alarm and without pretending the estimate stands.
+ * 3. **Stalled** — `restoreStall` says so, and the page stops describing a thaw it can't vouch for.
+ *
+ * (3) is what this could not express at all before, and its absence was a real lie: with `requestedAt` as
+ * the only clock, reading (2) had no upper bound, so a transfer nothing had touched since July said
+ * "Taking longer than usual. Still waiting." indefinitely — cheerful, reassuring, and false.
  */
-export const remaining = (r: RestoreRow, now: number): string | null => {
+export const remaining = (r: RestoreRow, now: number, staleAfterSeconds: number): WaitNote | null => {
   if (r.state !== "pending") return null;
+
+  const stall = restoreStall(r, now, staleAfterSeconds);
+  if (stall) return { text: STALL_TEXT[stall](r), stalled: true };
+
   const left = r.requestedAt + r.typicalWaitSeconds - now;
-  if (left <= 0) return `Taking longer than the usual ${r.typicalWait}. Still waiting.`;
-  return timeLeftSentence(left) || null;
+  if (left > 0) {
+    const sentence = timeLeftSentence(left);
+    return sentence ? { text: sentence, stalled: false } : null;
+  }
+  return { text: `Taking longer than the usual ${r.typicalWait}. Still waiting.`, stalled: false };
 };
 
 /** How each state reads to the user — the wire→page translation (see the header). `pending` rather than
@@ -210,7 +241,18 @@ interface RowActions {
 
 /** The action strip, shared by single-file rows and grouped rows — the conditions read off the group's
  * headline state, so one file and three hundred behave identically. */
-const Actions = ({ g, a }: { g: DownloadGroup; a: RowActions }): React.JSX.Element => {
+const Actions = ({
+  g,
+  a,
+  stalled = false,
+}: {
+  g: DownloadGroup;
+  a: RowActions;
+  /** This request's wait has stopped being one we can vouch for (see {@link remaining}). Earns the same
+   * "Ask again" the unpaid state gets: both are transfers going nowhere on their own, and a row that tells
+   * you it's stuck while offering only "Stop" is a dead end wearing a diagnosis. */
+  stalled?: boolean;
+}): React.JSX.Element => {
   const anyResumable = g.rows.some((r) => r.resumable);
   return (
     <div className="cs-download-actions">
@@ -219,7 +261,7 @@ const Actions = ({ g, a }: { g: DownloadGroup; a: RowActions }): React.JSX.Eleme
           Show in Finder
         </Button>
       )}
-      {g.state === "needsAuthorization" && (
+      {(g.state === "needsAuthorization" || stalled) && (
         <Button variant="secondary" size="sm" icon="refresh" onClick={() => a.onRequestAgain(g)}>
           Ask again
         </Button>
@@ -247,6 +289,14 @@ const Actions = ({ g, a }: { g: DownloadGroup; a: RowActions }): React.JSX.Eleme
   );
 };
 
+/** The wait line under a waiting row — a countdown, or the admission that we've lost track of it. */
+const WaitLine = ({ wait }: { wait: WaitNote }): React.JSX.Element => (
+  <div className={`cs-download-eta${wait.stalled ? " cs-download-eta--stalled" : ""}`}>
+    <Icon name={wait.stalled ? "error_outline" : "schedule"} size={16} />
+    {wait.text}
+  </div>
+);
+
 /** A one-file group for a row acting alone (a single-file request, or one member of an expanded group) —
  * so file rows and request rows share the action path instead of maintaining two. */
 const soloGroup = (r: RestoreRow): DownloadGroup => groupDownloads([r])[0]!;
@@ -256,6 +306,7 @@ const FileRow = ({
   r,
   g,
   now,
+  staleAfter,
   progress,
   child = false,
   actions,
@@ -266,6 +317,8 @@ const FileRow = ({
   g: DownloadGroup;
   /** Ticking clock from the page, so every row's countdown moves off one interval rather than N. */
   now: number;
+  /** The daemon's own silence window ({@link Status.staleAfterSeconds}); `Infinity` with no snapshot. */
+  staleAfter: number;
   /** This row's live download progress — present only while it's `transferring` (the reducer prunes it
    * the moment the row's state moves on). */
   progress: RestoreProgress | undefined;
@@ -274,7 +327,7 @@ const FileRow = ({
 }): React.JSX.Element => {
   const s = STATE[r.state];
   const note = detail(r);
-  const left = remaining(r, now);
+  const wait = remaining(r, now, staleAfter);
   return (
     <div className={`cs-download${child ? " cs-download--child" : ""}`}>
       <span className={`cs-download-icon cs-download-icon--${s.tone}`}>
@@ -292,19 +345,15 @@ const FileRow = ({
           {r.state === "saved" && r.completedAt ? ` · saved ${when(r.completedAt)}` : ""}
         </div>
         {/* The headline fact for a waiting download, so it reads above the standing explanation rather
-            than buried inside it. */}
-        {left && (
-          <div className="cs-download-eta">
-            <Icon name="schedule" size={16} />
-            {left}
-          </div>
-        )}
+            than buried inside it. A stalled wait swaps the clock for a warning: the line is no longer a
+            countdown, and dressing it as one would undercut what it now says. */}
+        {wait && <WaitLine wait={wait} />}
         {r.state === "transferring" && (
           <DownloadBar fraction={progressFraction(progress)} line={progress ? progressLine(progress) : null} />
         )}
         {note && <div className="cs-download-note">{note}</div>}
       </div>
-      <Actions g={g} a={actions} />
+      <Actions g={g} a={actions} stalled={wait?.stalled === true} />
     </div>
   );
 };
@@ -313,20 +362,24 @@ const FileRow = ({
 const GroupRow = ({
   g,
   now,
+  staleAfter,
   progress,
   actions,
 }: {
   g: DownloadGroup;
   now: number;
+  staleAfter: number;
   progress: Record<string, RestoreProgress>;
   actions: RowActions;
 }): React.JSX.Element => {
   const [open, setOpen] = useState(false);
   const s = STATE[g.state];
   const note = groupDetail(g);
-  // The countdown speaks for the slowest pending file — the request is done thawing when it is.
-  const wait = latestPendingRow(g.rows);
-  const left = wait ? remaining(wait, now) : null;
+  // The countdown speaks for the slowest pending file — the request is done thawing when it is. Its
+  // verdict speaks for the whole request too: if the file we're waiting longest on has gone unchecked,
+  // every file behind it in the same pass has as well.
+  const slowest = latestPendingRow(g.rows);
+  const wait = slowest ? remaining(slowest, now, staleAfter) : null;
   return (
     <div className="cs-download-request">
       <div className="cs-download">
@@ -354,12 +407,7 @@ const GroupRow = ({
             {formatBytes(g.bytes)} · asked {when(g.requestedAt)}
             {g.state === "saved" && g.completedAt ? ` · saved ${when(g.completedAt)}` : ""}
           </div>
-          {left && (
-            <div className="cs-download-eta">
-              <Icon name="schedule" size={16} />
-              {left}
-            </div>
-          )}
+          {wait && <WaitLine wait={wait} />}
           {g.state === "transferring" && (
             // The request's bar is measured too: bytes saved + bytes mid-flight over its total (see
             // `groupFraction`). The line counts files — the truer signal for a many-small-files ask.
@@ -370,7 +418,7 @@ const GroupRow = ({
           )}
           {note && <div className="cs-download-note">{note}</div>}
         </div>
-        <Actions g={g} a={actions} />
+        <Actions g={g} a={actions} stalled={wait?.stalled === true} />
       </div>
       {open && (
         <div className="cs-download-children">
@@ -380,6 +428,7 @@ const GroupRow = ({
               r={r}
               g={soloGroup(r)}
               now={now}
+              staleAfter={staleAfter}
               progress={progress[r.id]}
               child
               actions={actions}
@@ -396,11 +445,16 @@ export const DownloadsView = ({
   exec,
   restores,
   restoreProgress,
+  staleAfter,
   onRequestAgain,
 }: {
   api: ColdstoreApi;
   exec: Exec;
   restores: readonly RestoreRow[];
+  /** The daemon's own silence window (`Status.staleAfterSeconds`) — how long a transfer may go untouched
+   * before this page stops calling its wait live. `Infinity` when there's no daemon snapshot to read it
+   * from: with no idea how often it promised to look, silence proves nothing. */
+  staleAfter: number;
   /** Live download progress by row id (the store's `restoreProgress` slice) — feeds each downloading
    * row's bar. */
   restoreProgress: Record<string, RestoreProgress>;
@@ -429,12 +483,20 @@ export const DownloadsView = ({
       for (const r of g.rows) exec(() => api.request("forgetRestore", { id: r.id }));
     },
     onReveal: (g) => void api.revealInFinder(g.rows.length === 1 ? (g.rows[0]?.out ?? "/") : commonOutDir(g.rows)),
-    // Re-ask exactly the files that need re-buying (unpaid, or failed past their window) — not the whole
-    // request; the files that already landed are done and would only pad the new quote.
+    // Re-ask exactly the files that need re-buying (unpaid, failed past their window, or waiting on a thaw
+    // we've stopped being able to vouch for) — not the whole request; the files that already landed are
+    // done and would only pad the new quote. Re-asking a still-`pending` file is safe by construction:
+    // `requestRestore` supersedes any in-flight transfer of the same file, so the stuck row is stopped
+    // rather than left to sit in "In progress" beside the one replacing it.
     onRequestAgain: (g) =>
       onRequestAgain(
         g.rows
-          .filter((r) => r.state === "needsAuthorization" || (r.state === "failed" && !r.resumable))
+          .filter(
+            (r) =>
+              r.state === "needsAuthorization" ||
+              (r.state === "failed" && !r.resumable) ||
+              (r.state === "pending" && restoreStall(r, now, staleAfter) !== null),
+          )
           .map((r) => r.fileId),
       ),
   };
@@ -465,11 +527,12 @@ export const DownloadsView = ({
                     r={g.rows[0]!}
                     g={g}
                     now={now}
+                    staleAfter={staleAfter}
                     progress={restoreProgress[g.rows[0]!.id]}
                     actions={actions}
                   />
                 ) : (
-                  <GroupRow key={g.key} g={g} now={now} progress={restoreProgress} actions={actions} />
+                  <GroupRow key={g.key} g={g} now={now} staleAfter={staleAfter} progress={restoreProgress} actions={actions} />
                 ),
               )}
             </section>
@@ -479,9 +542,9 @@ export const DownloadsView = ({
               <h2 className="cs-downloads-heading">Earlier</h2>
               {past.map((g) =>
                 g.rows.length === 1 ? (
-                  <FileRow key={g.key} r={g.rows[0]!} g={g} now={now} progress={undefined} actions={actions} />
+                  <FileRow key={g.key} r={g.rows[0]!} g={g} now={now} staleAfter={staleAfter} progress={undefined} actions={actions} />
                 ) : (
-                  <GroupRow key={g.key} g={g} now={now} progress={restoreProgress} actions={actions} />
+                  <GroupRow key={g.key} g={g} now={now} staleAfter={staleAfter} progress={restoreProgress} actions={actions} />
                 ),
               )}
             </section>

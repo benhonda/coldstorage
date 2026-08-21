@@ -99,6 +99,11 @@ final class FakeVault: Vault, @unchecked Sendable {
     var reclaimableKeys: Set<String> { lock.withLock { Set(_reclaimCalls) } }
     var reclaimCalls: [String] { lock.withLock { _reclaimCalls } }
     func markReclaimable(key: String) async throws { lock.withLock { _reclaimCalls.append(key) } }
+    /// Every `unmarkReclaimable` CALL, in order — same reasoning as `_reclaimCalls`: a test that asserts a
+    /// tag was taken back off must be able to see a second, redundant untag too.
+    private var _untagCalls: [String] = []
+    var untagCalls: [String] { lock.withLock { _untagCalls } }
+    func unmarkReclaimable(key: String) async throws { lock.withLock { _untagCalls.append(key) } }
 
     func verify(key: String) async throws {
         guard !retainParts || lock.withLock({ _objects[key] != nil }) else { throw ColdStorageError.s3("no such object \(key)") }
@@ -162,8 +167,16 @@ final class FakeVault: Vault, @unchecked Sendable {
 final class StuckVault: Vault, @unchecked Sendable {
     private let inner = FakeVault()
     private let state: ThawState
-    init(at state: ThawState) { self.state = state }
-    func thawState(key: String) async throws -> ThawState { state }
+    /// When set, `thawState` throws this instead of answering — the shape of a pass that couldn't reach S3
+    /// at all (expired token, network blip). Distinct from a frozen-but-reachable object, which is `state`.
+    private let thawError: (any Error)?
+    init(at state: ThawState, failingWith thawError: (any Error)? = nil) {
+        self.state = state; self.thawError = thawError
+    }
+    func thawState(key: String) async throws -> ThawState {
+        if let thawError { throw thawError }
+        return state
+    }
     func requestThaw(key: String, days: Int, tier: RestoreTier) async throws {}
     func getRange(key: String, offset: Int, length: Int) async throws -> AsyncThrowingStream<Data, Error> {
         throw ColdStorageError.s3("InvalidObjectState: still frozen")
@@ -182,4 +195,5 @@ final class StuckVault: Vault, @unchecked Sendable {
     }
     func verify(key: String) async throws { try await inner.verify(key: key) }
     func markReclaimable(key: String) async throws { try await inner.markReclaimable(key: key) }
+    func unmarkReclaimable(key: String) async throws { try await inner.unmarkReclaimable(key: key) }
 }

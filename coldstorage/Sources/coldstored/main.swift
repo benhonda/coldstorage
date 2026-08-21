@@ -133,7 +133,8 @@ if env["COLDSTORE_ONCE"] != nil {
     server.stop()
     print("coldstored: one-shot run complete")
 } else {
-    let interval = UInt64(env["COLDSTORE_INTERVAL"] ?? "300") ?? 300
+    let fallback = DaemonService.defaultIntervalSeconds
+    let interval = UInt64(env["COLDSTORE_INTERVAL"] ?? "\(fallback)") ?? UInt64(fallback)
     print("coldstored: starting archive loop (every \(interval)s)")
     try await daemon.runForever(intervalSeconds: interval)
 }

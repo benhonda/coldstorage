@@ -25,6 +25,17 @@ public protocol BlobStore: Sendable {
     /// Reclaims nothing before Deep Archive's 180-day minimum — expiring early still bills it. This stops the
     /// *ongoing* charge and frees the user's quota; it is not a refund.
     func markReclaimable(key: String) async throws
+
+    /// Take the reap tag back off — the object is in use again and must NOT expire. The reversibility
+    /// `markReclaimable` promises, made real: a deleted file that the user re-deposits before the lifecycle
+    /// sweep runs keeps the bytes it already had, instead of riding an object that quietly disappears.
+    ///
+    /// Implemented as a tagging PUT with an EMPTY tag set, which S3 documents as deleting the object's
+    /// existing tag set — deliberately, rather than `DeleteObjectTagging`, because it needs no IAM grant the
+    /// daemon doesn't already have (`s3:PutObjectTagging`; see `infra/coldstorage`'s Cognito role, which
+    /// grants tagging INSTEAD OF delete on purpose). Don't "clarify" this into `DeleteObjectTagging`: it
+    /// reads better and fails with AccessDenied.
+    func unmarkReclaimable(key: String) async throws
 }
 
 /// The other half of the same seam: what the RESTORE path needs (thaw + ranged read), plus the
@@ -112,6 +123,11 @@ public struct S3Store: Vault {
         _ = try await client.putObjectTagging(input: .init(
             bucket: bucket, key: key,
             tagging: .init(tagSet: [.init(key: Self.reapTagKey, value: Self.reapTagValue)])))
+    }
+
+    public func unmarkReclaimable(key: String) async throws {
+        _ = try await client.putObjectTagging(input: .init(
+            bucket: bucket, key: key, tagging: .init(tagSet: [])))
     }
 
     /// Sums `Size` (ciphertext bytes, as actually billed/stored) across every object under `prefix` —

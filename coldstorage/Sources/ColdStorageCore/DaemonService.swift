@@ -40,6 +40,11 @@ public actor DaemonService {
     /// we pay for twice, and two writers racing on one destination path. Same shape as `running` above, and
     /// separate from it on purpose — a busy upload must never block a paid-for restore.
     private var restoring = false
+    /// The run loop's beat, in seconds — the SSOT for it, so `coldstored` reads the default from here
+    /// rather than restating a number the daemon is the owner of. `runForever` overwrites it with whatever
+    /// it was actually started at; nothing else changes it.
+    public static let defaultIntervalSeconds = 300
+    private var intervalSeconds = DaemonService.defaultIntervalSeconds
     // Blobs that failed *permanently* (config/logic — won't self-heal) this session. Skipped on the next
     // pass so we don't re-stage+re-attempt a doomed blob every interval. In-memory by design: a restart
     // retries once (maybe the operator fixed the config). Persisting it would need a journal schema change.
@@ -159,20 +164,17 @@ public actor DaemonService {
         do {
             let session = try requireSession("deposit")
             let entries = paths.map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: $0), destDir: dir) }
-            // Re-depositing something you deleted is the ONE act that revives it. `upsert` refuses to let a
-            // rescan overwrite a tombstone (otherwise deleting from a watched folder is meaningless), so a
-            // dropped file that was previously deleted would land as a no-op and confuse the hell out of
-            // someone who just dragged it back in. Dropping it IS the explicit ask, so clear the tombstone.
-            for path in paths {
-                let vaultPath = dir.isEmpty ? URL(fileURLWithPath: path).lastPathComponent
-                                            : "\(dir)/\(URL(fileURLWithPath: path).lastPathComponent)"
-                try? session.journal.restorePath(vaultPath)
-            }
             let base = ExplicitPathsSource(entries: entries, exclude: excludeMatcher(session))
             // WAIT for any run in flight, then go — a deposit is the user's explicit action and must not be
             // dropped, but it also must not race a concurrent pass over the same journal.
+            //
+            // `explicitDeposit` is what lets this un-delete: dropping a file IS the ask, and a re-scan's
+            // "I can still see it on disk" is not. The revive is scoped to the items this source actually
+            // enumerates (`Journal.upsert`), NOT to the dropped path's whole former subtree — un-deleting by
+            // prefix brought back every file that had ever lived under a re-dropped folder, on-disk or not.
             try await withRunLock(skipIfBusy: false) {
-                try await performRun(session: session, source: resolveCollisions(session, base, conflicts))
+                try await performRun(session: session, source: resolveCollisions(session, base, conflicts),
+                                     explicitDeposit: true)
             }
         }
         catch { bus.publish(DaemonEvent("error", ["message": "deposit: \(error)"])) }
@@ -197,7 +199,10 @@ public actor DaemonService {
             let base = PhotoDepositSource(resolver: resolver, assetIds: assetIds,
                                           destDir: dir, scratchDir: session.scratchDir)
             try await withRunLock(skipIfBusy: false) {   // wait-then-run, like `deposit` — never dropped
-                try await performRun(session: session, source: resolveCollisions(session, base, conflicts))
+                // Explicit, exactly like a file drop — so re-picking a photo you deleted brings it back.
+                // It didn't before: this path never un-deleted anything, so the deposit silently no-op'd.
+                try await performRun(session: session, source: resolveCollisions(session, base, conflicts),
+                                     explicitDeposit: true)
             }
         }
         catch let e as ColdStorageError {
@@ -239,7 +244,8 @@ public actor DaemonService {
     /// skip-lists permanent ones (so a doomed blob isn't re-attempted every pass). **Must be called through
     /// `withRunLock`** — it does not manage the run lock itself, so calling it bare would defeat the mutual
     /// exclusion. Every call site does.
-    private func performRun(session: UserSession, source: IngestSource) async throws {
+    private func performRun(session: UserSession, source: IngestSource,
+                            explicitDeposit: Bool = false) async throws {
         bus.publish(DaemonEvent("runStarted"))
         let bus = self.bus
         let onFile: @Sendable (String, String) async -> Void = { id, blob in
@@ -286,6 +292,7 @@ public actor DaemonService {
                                                     skipBlobIds: permanentlyFailedBlobs,
                                                     prefix: session.prefix,
                                                     quota: quota,
+                                                    explicitDeposit: explicitDeposit,
                                                     onFileArchived: onFile, onProgress: onProgress,
                                                     onRunProgress: onRunProgress)
         } catch {
@@ -308,10 +315,19 @@ public actor DaemonService {
                 try? session.journal.markFilesFailed(f.files.map(\.id), error: f.kind.message)
             } else if f.kind.isOverQuota {
                 // Mark the files `failed` too, so their rows leave "uploading" — an over-quota file was upserted
-                // (status `discovered` = "uploading" in the UI) but never archived, and would otherwise sit
+                // (status `planned` = "uploading" in the UI) but never archived, and would otherwise sit
                 // pending FOREVER after the refusal. But do NOT skip-list the blob: unlike a permanent fault,
-                // this heals the moment there's room — a folder re-scan resets it to `discovered` and retries.
+                // this heals the moment there's room — a folder re-scan resets it to `planned` and retries.
                 try? session.journal.markFilesFailed(f.files.map(\.id), error: f.kind.message)
+            } else {
+                // TRANSIENT — and until now the only case that left NOTHING behind. The two above were given
+                // journal truth precisely because a file stuck reading "Uploading" forever is a lie; a
+                // transient fault repeats, so it is the one most likely to produce that row, and it was the
+                // one recorded nowhere but an ephemeral event. The file legitimately stays in flight (the
+                // next pass retries — that is what transient means), so this records only WHY and WHEN,
+                // leaving the status alone. `error` + `lastAttemptAt` together let the tree say "still
+                // going, here's the snag" instead of a bare optimistic arrow.
+                try? session.journal.recordFileFault(f.files.map(\.id), error: f.kind.message)
             }
         }
         try writeStatus(session)
@@ -325,6 +341,9 @@ public actor DaemonService {
     }
 
     public func runForever(intervalSeconds: UInt64) async throws {
+        // Recorded so `restoreRowDTOs` can derive `staleAfterSeconds` from the REAL cadence — the app must
+        // not have to guess at (or hardcode) how often we promise to look at a transfer.
+        self.intervalSeconds = Int(intervalSeconds)
         // Seed status.json so the UI has something on first connect — only when signed in; a signed-out
         // daemon has no user whose status it could write.
         if let session { try writeStatus(session) }
@@ -354,13 +373,29 @@ public actor DaemonService {
     /// don't (a photo library isn't a filesystem with gitignore-style junk).
     private func currentSource(_ session: UserSession) throws -> IngestSource {
         let matcher = excludeMatcher(session)
+        // Captured so the per-source callback can write without hopping back onto the actor — `Journal`
+        // carries its own lock, exactly like the restore path's `willDownload`/`onProgress` callbacks.
+        let journal = session.journal
+        let bus = self.bus
         let folders = try session.journal.listSources()
             .filter { $0.kind == .folder && !$0.paused }   // paused folders are skipped (still registered)
             .compactMap { row -> IngestSource? in
                 guard let path = row.path else { return nil }
                 let dir = LocalDirSource(root: URL(fileURLWithPath: path), exclude: matcher)
                 // Mount the folder at its chosen destination in the drive (daemon-owned placement).
-                return MountedSource(dir, mountPath: row.mountPath)
+                let mounted = MountedSource(dir, mountPath: row.mountPath)
+                // Each folder reports its OWN outcome and can't take the others down with it. Before this,
+                // `LocalDirSource` returned an empty list for a folder it couldn't read, so a backup that had
+                // stopped looked identical to one with nothing new — and there was no per-source state
+                // anywhere to say otherwise. See `ScanReportingSource` for why isolate-and-report had to
+                // land together rather than just letting the walk throw.
+                let id = row.id
+                return ScanReportingSource(mounted) { error in
+                    try? journal.markSourceScanned(id, error: error.map { "\($0)" })
+                    // Announce it too, so a live app updates the folder's row on the pass it breaks rather
+                    // than whenever something else happens to trigger a refetch.
+                    if error != nil { bus.publish(DaemonEvent("sourcesChanged", [:])) }
+                }
             }
         return MultiSource(folders + platformSources)
     }
@@ -411,13 +446,83 @@ public actor DaemonService {
         /// Bytes currently stored in S3 under this user's prefix (storage-quota enforcement's usage
         /// figure — see `currentUsageBytes`). `nil` when signed out.
         let bytesStored: Int?
+        /// How long a piece of in-flight work may go untouched before the app should stop calling it live —
+        /// derived from THIS daemon's real loop cadence (`RestoreRow.staleAfter`).
+        ///
+        /// Daemon-wide, so it lives on the daemon's snapshot. It briefly rode on each restore row instead,
+        /// which read fine until the file tree needed the same number and there was no restore row to take
+        /// it from — a per-row home for a per-daemon fact. One question ("how long is too quiet?"), one
+        /// answer, from the only party that knows the beat (`COLDSTORE_INTERVAL` makes it configurable).
+        let staleAfterSeconds: Int
     }
-    private struct SourceDTO: Encodable { let id, kind: String; let path: String?; let mountPath: String; let paused: Bool }
+    /// One registered ingest source. `lastScanAt`/`error` are its honesty pair — when we last scanned it and
+    /// what went wrong — so a watched folder that has stopped backing up can say so where it's listed,
+    /// instead of appearing identical to a working one.
+    ///
+    /// Explicit `encode(to:)` for the reason given on `FileDTO`: a synthesized encoder omits nils, while
+    /// `protocol.ts` declares these `T | null`.
+    private struct SourceDTO: Encodable {
+        let id, kind: String
+        let path: String?
+        let mountPath: String
+        let paused: Bool
+        let lastScanAt: Int?
+        let error: String?
+
+        enum CodingKeys: String, CodingKey { case id, kind, path, mountPath, paused, lastScanAt, error }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(id, forKey: .id)
+            try c.encode(kind, forKey: .kind)
+            try c.encode(path, forKey: .path)                // `encode`, not `encodeIfPresent` — emits null
+            try c.encode(mountPath, forKey: .mountPath)
+            try c.encode(paused, forKey: .paused)
+            try c.encode(lastScanAt, forKey: .lastScanAt)
+            try c.encode(error, forKey: .error)
+        }
+    }
     /// One browsable file (the `listFiles` element). `status` is the raw journal `FileStatus` — the UI
     /// coarsens it to its own browse states (frozen/uploading/…); we expose what we actually know.
     /// `date` is the capture/creation time as Unix epoch SECONDS (nil when unknown). Epoch keeps the wire
     /// type trivial + lossless; the renderer owns ISO/display formatting (epoch × 1000 → JS `Date`).
-    private struct FileDTO: Encodable { let id, relativePath: String; let size: Int; let status: String; let blobId: String?; let date: Int? }
+    /// One row of the browsable tree.
+    ///
+    /// `lastAttemptAt` + `error` are the file's honesty pair, the upload twin of what `RestoreRow` carries:
+    /// when the upload path last tried, and what went wrong if anything. Without them the tree renders
+    /// `planned` as "Uploading" with no expiry and no reason — and `error` had been sitting in the journal
+    /// unread the whole time, so even a permanently failed file showed a ⚠ that couldn't say why.
+    ///
+    /// Hand-written `encode(to:)` for the reason spelled out on `RestoreRowDTO`: the synthesized encoder
+    /// uses `encodeIfPresent`, so every nil here would be OMITTED from the JSON, while `protocol.ts`
+    /// declares these as `T | null` — a promise that the key is always present. That drift already existed
+    /// on `blobId`/`date` (latent: the readers happen to use `!=`, which tolerates `undefined`); adding two
+    /// more optionals to a contract nobody was keeping is how latent becomes real.
+    private struct FileDTO: Encodable {
+        let id, relativePath: String
+        let size: Int
+        let status: String
+        let blobId: String?
+        let date: Int?
+        let lastAttemptAt: Int?
+        let error: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id, relativePath, size, status, blobId, date, lastAttemptAt, error
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(id, forKey: .id)
+            try c.encode(relativePath, forKey: .relativePath)
+            try c.encode(size, forKey: .size)
+            try c.encode(status, forKey: .status)
+            try c.encode(blobId, forKey: .blobId)              // `encode`, not `encodeIfPresent` — emits null
+            try c.encode(date, forKey: .date)
+            try c.encode(lastAttemptAt, forKey: .lastAttemptAt)
+            try c.encode(error, forKey: .error)
+        }
+    }
     private struct AckDTO: Encodable { let ok: Bool }
 
     /// The answer to "will this come back?", so the client can say so instead of letting the user find out.
@@ -557,7 +662,7 @@ public actor DaemonService {
         let id, fileId, relativePath, out, state, tier: String
         let jobId: String?
         let bytes, requestedAt: Int
-        let readyAt, completedAt: Int?
+        let readyAt, lastStepAt, completedAt: Int?
         let error: String?
         /// How long the thaw takes, in plain words — so the app never invents its own wait.
         let typicalWait: String
@@ -578,7 +683,8 @@ public actor DaemonService {
         // Declared, not synthesized: writing `encode(to:)` by hand suppresses the compiler's own.
         enum CodingKeys: String, CodingKey {
             case id, fileId, relativePath, out, state, tier, jobId, bytes, requestedAt
-            case readyAt, completedAt, error, typicalWait, typicalWaitSeconds, freeUntil, resumable
+            case readyAt, lastStepAt, completedAt, error, typicalWait, typicalWaitSeconds, freeUntil
+            case resumable
         }
 
         func encode(to encoder: Encoder) throws {
@@ -593,6 +699,7 @@ public actor DaemonService {
             try c.encode(bytes, forKey: .bytes)
             try c.encode(requestedAt, forKey: .requestedAt)
             try c.encode(readyAt, forKey: .readyAt)
+            try c.encode(lastStepAt, forKey: .lastStepAt)  // `encode`, not `encodeIfPresent` — emits null
             try c.encode(completedAt, forKey: .completedAt)
             try c.encode(error, forKey: .error)
             try c.encode(typicalWait, forKey: .typicalWait)
@@ -614,7 +721,7 @@ public actor DaemonService {
                           relativePath: paths[r.fileId] ?? URL(fileURLWithPath: r.out).lastPathComponent,
                           out: r.out, state: r.state.rawValue, tier: r.tier.rawValue, jobId: r.jobId,
                           bytes: r.bytes, requestedAt: r.requestedAt, readyAt: r.readyAt,
-                          completedAt: r.completedAt, error: r.error,
+                          lastStepAt: r.lastStepAt, completedAt: r.completedAt, error: r.error,
                           typicalWait: r.tier.typicalWait, typicalWaitSeconds: r.tier.typicalWaitSeconds,
                           freeUntil: r.readyAt.map { $0 + RestoreRow.thawWindowSeconds },
                           resumable: r.isResumable(now: now))
@@ -630,7 +737,8 @@ public actor DaemonService {
     }
 
     private func sourceDTOs(_ session: UserSession) throws -> [SourceDTO] {
-        try session.journal.listSources().map { SourceDTO(id: $0.id, kind: $0.kind.rawValue, path: $0.path, mountPath: $0.mountPath, paused: $0.paused) }
+        try session.journal.listSources().map { SourceDTO(id: $0.id, kind: $0.kind.rawValue, path: $0.path, mountPath: $0.mountPath,
+                                                  paused: $0.paused, lastScanAt: $0.lastScanAt, error: $0.error) }
     }
 
 
@@ -664,7 +772,6 @@ public actor DaemonService {
         let bus = self.bus
         let journal = session.journal
 
-        var changed = false
         for row in active {
             // `needsAuthorization` rows are stepped too, even though the move is the app's (the backend has
             // to be paid before anything can thaw). Skipping them would make the state a dead end: if those
@@ -672,6 +779,10 @@ public actor DaemonService {
             // could never notice, because the only way to know is to ask S3. A HeadObject per pass is
             // nothing, and it buys a state that heals itself instead of one that needs rescuing.
             let now = Int(Date().timeIntervalSince1970)
+            // Stamp that we looked, whatever comes of looking. Unconditional by construction (`defer`), and
+            // its own write rather than folded into `setRestoreState`, because that only fires on NEWS — and
+            // a healthy pending row's news is precisely that there is none. See `RestoreRow.lastStepAt`.
+            defer { try? session.journal.stampRestoreStep(row.id, at: now) }
             do {
                 let outcome = try await session.restoreEngine.restore(
                     fileId: row.fileId, to: URL(fileURLWithPath: row.out), tier: row.tier,
@@ -708,7 +819,6 @@ public actor DaemonService {
                 case .restored:
                     try session.journal.setRestoreState(row.id, .saved, completedAt: now)
                     bus.publish(DaemonEvent("restoreCompleted", ["file": row.fileId, "out": row.out]))
-                    changed = true
                 case .thawInProgress, .thawRequested:
                     // Still warming. Only NEWS is worth a write + event: a state change, or a recorded
                     // fault this successful step just disproved. `setRestoreState` clears `error` (a
@@ -719,7 +829,6 @@ public actor DaemonService {
                     // already clean and `pending` last pass still writes/announces nothing.
                     if row.state != .pending || row.error != nil {
                         try session.journal.setRestoreState(row.id, .pending)
-                        changed = true
                     }
                 case .authorizationRequired:
                     // The backend hasn't thawed these blobs (payment never landed, or the 5-day window
@@ -728,7 +837,6 @@ public actor DaemonService {
                     // above: a step that ANSWERED (even "pay first") clears any stale snag note.
                     if row.state != .needsAuthorization || row.error != nil {
                         try session.journal.setRestoreState(row.id, .needsAuthorization)
-                        changed = true
                     }
                 }
             } catch {
@@ -747,10 +855,12 @@ public actor DaemonService {
                 let kind = FailureKind.classify(error)
                 try? session.journal.recordRestoreFault(row.id, kind.isPermanent ? .failed : row.state,
                                                         error: kind.message)
-                changed = true
             }
         }
-        if changed { publishRestoresChanged() }
+        // Unconditional, where this used to fire only on state news: every active row's `lastStepAt` just
+        // moved, so "we checked, still warming" IS the report. Withholding it is what let the page render a
+        // month-old wait as a live one. (Non-empty work list guaranteed — the empty case returned above.)
+        publishRestoresChanged()
     }
 
     private func handle(_ method: String, _ p: [String: String]) async throws -> AnyEncodable {
@@ -763,7 +873,8 @@ public actor DaemonService {
         case "getStatus":
             guard let session else {
                 return AnyEncodable(StatusDTO(signedIn: false, filesTotal: 0, filesArchived: 0, blobsVerified: 0,
-                                              running: false, permanentlyFailedBlobs: 0, sources: [], bytesStored: nil))
+                                              running: false, permanentlyFailedBlobs: 0, sources: [], bytesStored: nil,
+                                              staleAfterSeconds: RestoreRow.staleAfter(intervalSeconds: intervalSeconds)))
             }
             let s = try session.journal.summary()
             return AnyEncodable(StatusDTO(signedIn: true, filesTotal: s.total, filesArchived: s.archived,
@@ -777,7 +888,8 @@ public actor DaemonService {
                                           // whole snapshot down, and the client's 10 s request deadline
                                           // turned a slow listing into no status at all. A degraded field
                                           // the UI can label beats a status call that answers nothing.
-                                          bytesStored: try? await currentUsageBytes(session)))
+                                          bytesStored: try? await currentUsageBytes(session),
+                                          staleAfterSeconds: RestoreRow.staleAfter(intervalSeconds: intervalSeconds)))
         case "listSources":
             guard let session else { return AnyEncodable([SourceDTO]()) }
             return AnyEncodable(try sourceDTOs(session))
@@ -786,7 +898,7 @@ public actor DaemonService {
             guard let session else { return AnyEncodable([FileDTO]()) }
             return AnyEncodable(try session.journal.listFiles().map {
                 FileDTO(id: $0.id, relativePath: $0.relativePath, size: $0.size, status: $0.status.rawValue, blobId: $0.blobId,
-                        date: $0.createdAt)
+                        date: $0.createdAt, lastAttemptAt: $0.lastAttemptAt, error: $0.error)
             })
         case "listExcludes":
             guard let session else { return AnyEncodable([String]()) }
