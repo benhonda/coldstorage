@@ -4,7 +4,11 @@ set -e
 # install psql (postgresql-client) (UNTESTED)
 # gdb: debug wedged Swift processes (`gdb -p <pid> -batch -ex 'thread apply all bt'`). The toolchain's
 # lldb is unusable here — it needs libpython3.12, which isn't in the repos (system is 3.14).
-sudo apt-get update && sudo apt-get install -y postgresql-client xdg-utils gdb
+# libsodium-dev: the Swift core's Argon2id (swift-sodium's Linux systemLibrary target — see
+# coldstorage/Package.swift, which pins the 0.9 line precisely so apt's build works). Without it
+# `task daemon:build:dev` / `daemon:test` fail on a cold container, which is the loop this container
+# exists to run.
+sudo apt-get update && sudo apt-get install -y postgresql-client xdg-utils gdb libsodium-dev
 
 echo "Installing Bun"
 curl -fsSL https://bun.sh/install | bash
@@ -30,6 +34,11 @@ curl -fsSL https://claude.ai/install.sh | bash
 
 # Swift toolchain (for the ColdStorage daemon) — idempotent
 bash "$(dirname "$0")/install-swift.sh"
+
+# libsodium (Argon2id) — idempotent. The Taskfile said "the devcontainer post-create does it on rebuild"
+# while post-create only ever installed Swift, so a cold container could not build or test the Swift core
+# at all until someone happened to run `task daemon:setup` by hand. Same script the task runs.
+bash "$(dirname "$0")/install-libsodium.sh"
 
 
 # Pre-commit leak guard: point git at the tracked .githooks/ dir (gitleaks scans staged
