@@ -2,8 +2,8 @@
  * Section — Hero · statement: the headline over a wide media stage.
  *
  * Originally `Claude design · v4-sections.jsx` → `SectionV4Hero`: IIFE/`window` globals →
- * imports, `csInjectStyle` → a co-located stylesheet, `<image-slot>` → <MediaFrame> (see SPEC
- * "Open decisions" — media pending).
+ * imports, `csInjectStyle` → a co-located stylesheet, `<image-slot>` → the real thing: a silent
+ * looping screen recording of files being dragged into the app.
  *
  * The headline has moved on from upstream's three separately-revealed adjectives: it is one
  * sentence now, revealed as a unit, with a single accented noun. Copy is `HERO.headline` in
@@ -15,7 +15,7 @@ import { Reveal } from "~/lib/marketing/motion";
 import { DOWNLOAD_PATH } from "~/lib/marketing/download";
 import { HERO } from "~/lib/marketing/content";
 import { Button } from "~/components/ds/button";
-import { MediaFrame } from "~/components/marketing/shared/media-frame";
+import { DemoVideo } from "~/components/marketing/shared/demo-video";
 
 export function SectionHeroStatement() {
   return (
@@ -62,9 +62,10 @@ export function SectionHeroStatement() {
           </div>
         </Reveal>
         <Reveal delay={300} y={28} className="cs-hero-stage">
-          <MediaFrame
-            icon="play_circle"
-            label="Hero demo — app screenshot or video still"
+          <DemoVideo
+            src="/media/hero-drag-and-drop.mp4"
+            poster="/media/hero-drag-and-drop-poster.webp"
+            label="ColdStorage on a Mac: files dragged from Finder into the app, uploading as they land."
           />
         </Reveal>
       </div>

@@ -30,6 +30,7 @@
   min-height: 300px;
   border-radius: 28px;
   box-shadow: var(--shadow-card);
+  overflow: hidden; /* the video's own corners can't be rounded by the stage otherwise */
 }
 
 @media (max-width: 720px) {

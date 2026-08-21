@@ -1097,6 +1097,10 @@ export const FOOTER: Footer = {
         // immediately after seeing a number, and this is the page that answers it.
         { label: "Compare", href: "/compare" },
         { label: "FAQ", href: "/faq" },
+        // Chrome link, not just the in-body one on /download: the version archive is a real
+        // page people go looking for (an older build), and a page whose only route in is one
+        // sentence of prose is one rewrite away from being orphaned again.
+        { label: "All releases", href: "/releases" },
       ],
     },
     // "Transparency notes" and "Status" are gone (Ben, 2026-07-18). Neither had a page behind

@@ -9,10 +9,18 @@
   align-items: center;
 }
 
+/* No fixed aspect: the still is a 16:9-ish app-window screenshot, and upstream's 4/3 box
+   would have to crop the window's own edges off to fill it. The image sets the height. */
 .cs-dragin__media {
-  aspect-ratio: 4 / 3;
-  min-height: 300px;
+  overflow: hidden;
   border-radius: 24px;
+  box-shadow: var(--shadow-card);
+}
+
+.cs-dragin__img {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
 @media (max-width: 960px) {

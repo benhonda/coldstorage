@@ -1680,6 +1680,36 @@ tasks:
       # node, not bun — same reason as ssr:check:site (renderToPipeableStream).
       - node scripts/seo-check.ts
 
+  media:site:
+    desc: 'Encode a source screen recording or screenshot into site/public/media at the settings the site ships. Video → silent H.264 MP4 (+faststart) plus a first-frame WebP poster; image → 1600px WebP. Usage: task media:site SRC="recording.mp4" NAME=hero-drag-and-drop'
+    dir: site
+    requires:
+      vars: [SRC, NAME]
+    cmds:
+      # The encode settings live HERE, not in a doc: the next recording gets the same treatment
+      # by running the task rather than by someone remembering the flags.
+      - |
+        set -euo pipefail
+        command -v ffmpeg >/dev/null || { echo "ffmpeg not installed — brew install ffmpeg"; exit 1; }
+        mkdir -p public/media
+        case "{{.SRC}}" in
+          *.mp4|*.mov|*.MP4|*.MOV)
+            # -an: the clip autoplays as a moving screenshot, so the audio track is dead weight
+            # (and its absence is what makes autoplay unconditional). crf 22 keeps UI text crisp.
+            ffmpeg -y -i "{{.SRC}}" -an -c:v libx264 -profile:v high -level 4.0 \
+              -crf 22 -preset slower -pix_fmt yuv420p -movflags +faststart \
+              "public/media/{{.NAME}}.mp4"
+            ffmpeg -y -i "{{.SRC}}" -frames:v 1 -c:v libwebp -quality 82 -compression_level 6 \
+              "public/media/{{.NAME}}-poster.webp"
+            ;;
+          *)
+            # 1600px wide: ~2x the widest slot a still occupies in the 1200px marketing container.
+            ffmpeg -y -i "{{.SRC}}" -vf "scale=1600:-2:flags=lanczos" \
+              -c:v libwebp -quality 84 -compression_level 6 "public/media/{{.NAME}}.webp"
+            ;;
+        esac
+        ls -l public/media
+
   start:site:
     aliases: [dev:site]
     desc: Start the site (marketing) dev server

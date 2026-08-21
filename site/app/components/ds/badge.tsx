@@ -1,6 +1,6 @@
 /*
  * DS · Badge — reimplemented from the compiled DS bundle's API. Small pill status
- * label: accent (iceberg) or success (green). Prop surface as consumed by vault-mock.
+ * label: accent (iceberg) or success (green).
  */
 import "./badge.css";
 import * as React from "react";

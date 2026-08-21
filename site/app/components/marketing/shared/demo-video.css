@@ -1,0 +1,13 @@
+/*
+ * Marketing · DemoVideo — fills whatever stage it is dropped into.
+ * The clip is authored at the stage's own aspect ratio, so `cover` never actually crops;
+ * it is here so a re-cut asset that is a few pixels off can't letterbox the frame.
+ */
+.cs-demo-video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+  background: var(--surface-raised);
+}

@@ -7,7 +7,11 @@
 > **Company + support pages added 2026-07-18** — `/about`, `/source`, `/help`, `/contact`,
 > killing the footer's four dead links. `/contact` is the app's first `action` (Turnstile → zod
 > → CD2). typecheck + copy-check + build + `task ssr:check:site` all green.
-> Pending: **hero + drag-in media are placeholders**, the privacy/key-escrow claim needs a
+> **Real media landed 2026-08-21** — the hero plays a silent looping screen recording of files
+> being dragged into the app; the drag-in section shows the matching still. Assets are encoded by
+> `task media:site` into `public/media/`, and the placeholder frame + the orphaned vault mock are
+> gone.
+> Pending: the privacy/key-escrow claim needs a
 > product call, OIDC-trust re-apply (`coldstorage-web` slug), live Paddle token for prod
 > checkout, **two copy lines await Ben's confirmation**, **`infra/site` TF unapplied in the new AWS
 > account** (the 2026-07-27 account migration — see [`MIGRATION.md`](../MIGRATION.md) phase 2; the
@@ -483,18 +487,14 @@ case is **skipped**, not neutered.
   right place to stop, but it means a bounce shows up as silence rather than as an error. If
   that ever bites, poll `client.get(id)`.
 
-- **Hero + drag-in media are placeholders** — _OPEN, 2026-07-18._ Upstream ships both media
-  areas as empty `<image-slot>` drop zones ("Drop hero demo — app screenshot or video still");
-  design never filled them. Ben's call: ship **styled placeholder frames**
-  (`components/marketing/shared/media-frame.tsx`) at the exact aspect ratios the design
-  specifies, so composition and responsive behaviour are real. **This is the top thing the
-  page is waiting on** — swapping in the finished asset is a one-line change per slot
-  (`<MediaFrame>` → `<img>`/`<video>`).
-- **`vault-mock.tsx` + `mac-window.tsx` are now orphaned** — the animated Mac vault window
-  lost its only consumer when `hero-app-mock` was retired. **Deliberately kept, not deleted:**
-  it is the obvious candidate to fill the hero media slot above, it's a non-trivial SSR-safe
-  port, and its upstream source (`shared/vault-mock.jsx`) still exists. Either promote it into
-  the hero or delete it once real media lands — don't leave it drifting indefinitely.
+- **Hero + drag-in media** — _RESOLVED, 2026-08-21._ Both `<image-slot>` drop zones now hold
+  real product footage: the hero runs `shared/demo-video.tsx` (a silent, audio-stripped H.264
+  loop that pauses and grows controls under `prefers-reduced-motion`), the drag-in section an
+  intrinsically-sized WebP still. Encoding is a task, not a remembered set of ffmpeg flags —
+  `task media:site SRC=… NAME=…` writes both the MP4 and its first-frame poster into
+  `public/media/`. The placeholder `media-frame.tsx`, and the orphaned `vault-mock.tsx` +
+  `mac-window.tsx` that were being held as hero candidates, are deleted (git history keeps
+  them).
 - **Privacy copy is ahead of the product** — _NEEDS A DECISION._ The new privacy ledger says
   "We never get that key, and there's no copy on our side." The previous copy deliberately
   disclosed key escrow, and `PROD.md` still describes escrow as the live design. Either the

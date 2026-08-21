@@ -42,6 +42,7 @@ const EXPECTED: Record<string, string> = {
   "/help": "Help center",
   "/contact": "Send message",
   "/download": "Download ColdStorage",
+  "/releases": "All releases",
   "/privacy": "Privacy",
   "/terms": "Terms",
   "/refunds": "Refund",
