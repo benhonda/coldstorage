@@ -160,6 +160,13 @@ public enum ZeroKnowledgeKeys {
         return next
     }
 
+    /// Test-only seam onto {@link derive}, so `KdfGoldenVectorTests` can pin the KDF's output to a constant.
+    /// The golden vector is what makes the libsodium dependency safe to change at all — without it, every
+    /// existing user's vault key rides on a version bump that no test would notice.
+    static func deriveForTest(secret: String, salt: Data, opsLimit: Int, memLimit: Int) throws -> SymmetricKey {
+        try derive(secret: secret, salt: salt, opsLimit: opsLimit, memLimit: memLimit)
+    }
+
     private static func derive(secret: String, salt: Data, opsLimit: Int, memLimit: Int) throws -> SymmetricKey {
         guard let derived = Sodium().pwHash.hash(outputLength: 32, passwd: Bytes(secret.utf8), salt: Bytes(salt),
                                                  opsLimit: opsLimit, memLimit: memLimit, alg: .Argon2ID13) else {

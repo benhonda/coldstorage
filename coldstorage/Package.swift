@@ -14,6 +14,14 @@ let package = Package(
         // against our pinned 3.15.1 checkout; Apple's Argon2id PR isn't released yet). Wraps libsodium,
         // which defaults crypto_pwhash to Argon2id; ships a Linux systemLibrary target (apt libsodium-dev)
         // + a macOS/Apple-platform XCFramework, matching our Csqlite3 systemLibrary pattern below.
+        //
+        // Linux needs a libsodium NEWER THAN APT'S — `task daemon:setup` builds 1.0.22 from source for
+        // exactly this reason (see `_libsodium-dev`, which explains it): swift-sodium's Linux binding
+        // references AEGIS (libsodium 1.0.19+), `crypto_ipcrypt_*` and `crypto_kem_*` (1.0.22), while
+        // Ubuntu 24.04 still ships 1.0.18. All of those ARE in tagged releases — 1.0.22 has every one of
+        // them — so nothing here needs pinning down; the container just has to run the setup task.
+        // Apple platforms take the bundled XCFramework and touch no system lib, which is why a missing
+        // libsodium is invisible from the Mac.
         .package(url: "https://github.com/jedisct1/swift-sodium", from: "0.11.0"),
     ],
     targets: [
