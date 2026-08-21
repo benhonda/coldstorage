@@ -6,6 +6,7 @@ import handlerMap from "./action-map";
 
 export async function action_handler({
   request,
+  url,
 }: ActionFunctionArgs): Promise<ActionHandlerReturnType<ActionDefinitionData>> {
   const data = (await request.json()) as ActionDefinitionData;
 
@@ -15,8 +16,11 @@ export async function action_handler({
     const handler = handlerMap[data.actionDirectoryName];
     if (!handler) throw new Response(`Unknown action type: ${data.actionDirectoryName}`, { status: 400 });
 
-    // call the handler
-    const payload = await handler(data, request);
+    // call the handler. `url` is React Router's normalized URL — handlers must
+    // use it rather than re-deriving one from `request.url`, which under
+    // `future.v8_passThroughRequests` still carries the `.data` suffix and
+    // `_routes` params of the fetcher submission that got us here.
+    const payload = await handler(data, request, url);
 
     // redirect if needed
     if (payload.redirectResponse) {

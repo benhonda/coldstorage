@@ -7,7 +7,7 @@ Change it upstream, or fork it into `skills/<category>/` as a first-class skill.
 - source repo: https://github.com/anthropics/knowledge-work-plugins
 - source path: `product-management/skills/product-brainstorming`
 - ref: `HEAD`
-- commit: `8adeaf9d06bc14e653e76afe6dd6fad434138f76`
-- vendored: 2026-06-19 13:52 UTC
+- commit: `f68c710bbb3c08f776791c122697b584f907178d`
+- vendored: 2026-08-13 15:11 UTC
 
 Manifest entry: `vendor.json` -> `product-brainstorming`.

@@ -1,6 +1,6 @@
 ---
 name: adpharm-stack
-description: 'Build and extend Adpharm''s app stack the way Adpharm builds it — a React Router 7 web app or a Hono API, both on Vercel, sharing one foundation (Drizzle + Postgres, AWS via OIDC, Terraform, the Taskfile). Use this skill WHENEVER working in (or bootstrapping) an Adpharm app — anything touching server actions, type-safe routing or search params, inline en/fr i18n, the Drizzle DB layer, Google OAuth, AWS access (S3 / OIDC), AI/LLM calls via Vercel AI Gateway, env-var validation, dark/light theming or tweakcn themes, the Taskfile, Terraform/Terragrunt infra, or a Hono backend (JSON API / webhook / cron worker). Reach for it even when the user doesn''t name the stack: "add a login", "set up infra", "make a new action", "add a French version", "add a table", "wire up S3", "fix the theme flash", "scaffold a new app", or "spin up a Hono API" should all trigger it. It encodes the conventions to follow and the dead patterns to avoid. For analytics/event instrumentation, defer to the silo-analytics skill (HOW to fire events with @adpharm/silo-analytics) and the product-tracking skill (WHAT to track and why) — this skill does not cover tracking.'
+description: 'Build and extend Adpharm''s app stack the way Adpharm builds it — a React Router web app or a Hono API, both on Vercel, sharing one foundation (Drizzle + Postgres, AWS via OIDC, Terraform, the Taskfile). Use this skill WHENEVER working in (or bootstrapping) an Adpharm app — anything touching server actions, type-safe routing or search params, inline en/fr i18n, the Drizzle DB layer, Google OAuth, AWS access (S3 / OIDC), AI/LLM calls via Vercel AI Gateway, env-var validation, dark/light theming or tweakcn themes, the Taskfile, Terraform/Terragrunt infra, or a Hono backend (JSON API / webhook / cron worker). Reach for it even when the user doesn''t name the stack: "add a login", "set up infra", "make a new action", "add a French version", "add a table", "wire up S3", "fix the theme flash", "scaffold a new app", or "spin up a Hono API" should all trigger it. It encodes the conventions to follow and the dead patterns to avoid. For analytics/event instrumentation, defer to the silo-analytics skill (HOW to fire events with @adpharm/silo-analytics) and the product-tracking skill (WHAT to track and why) — this skill does not cover tracking.'
 ---
 
 # Adpharm Stack
@@ -9,10 +9,10 @@ Replaces the old `adpharm-shad` component registry. The registry shipped frozen 
 
 Adpharm apps share **one foundation** and come in a couple of **archetypes**. The foundation (every app): **Vercel deploy, Drizzle + Postgres (Neon), zod fail-fast env, a root Taskfile, Terraform/Terragrunt infra with AWS via OIDC, Bun, latest-deps**, and the engine-vs-shape doctrine below. Two archetypes sit on it:
 
-- **RR7 web app** — React Router 7 (SSR) UI on Vercel. The bulk of these references; it owns the `app/` + `~/` alias + client/server-split + codegen layout. ("RR7" names the archetype, not a pinned version — v8 verified compatible 2026-07-18, engines unchanged.)
+- **RR web app** — React Router (SSR) UI on Vercel. The bulk of these references; it owns the `app/` + `~/` alias + client/server-split + codegen layout. The archetype is version-agnostic: it names the shape, never a major.
 - **Hono API on Vercel** — a server/JSON backend (event ingest, sender, webhook, cron worker): all-server, `src/`-based, no UI shell. See `references/hono-api.md`.
 
-The foundation references (env, db, aws-oidc, terraform, taskfile) apply to **both**; the UI references (routing, i18n, theming, components, actions, data-fetching, project-setup) are RR7-web-only. Analytics is Silo (separate skills, below).
+The foundation references (env, db, aws-oidc, terraform, taskfile) apply to **both**; the UI references (routing, i18n, theming, components, actions, data-fetching, project-setup) are RR-web-only. Analytics is Silo (separate skills, below).
 
 ## Doctrine: structured flexibility, in two tiers
 
@@ -33,9 +33,13 @@ Everything in this skill serves the engineering pillars in CLAUDE.md — follow 
 
 Nothing in this skill pins a version — deliberately, so you always reach for current and there's no version churn to maintain. Add deps with `bun add <pkg>@latest` (Bun repo; never hand-edit `package.json`). After adding a dep, confirm its current API from its docs rather than assuming the shape you remember.
 
+- **A stale `peerDependencies` range is evidence, not a verdict — test it before you obey it.** `@vercel/react-router` declared `"@react-router/dev": "7"` for months after React Router 8 shipped and worked with 8 regardless; `bun` warns `incorrect peer dependency` and installs anyway. Settle it by exercising what the package actually *does*, not by reading its range — for the Vercel preset, add a temporary per-route function config and confirm it still produces its own server bundle (`per-route-function-config` in `references/project-setup.md`). Refusing a major on peer metadata alone strands the app a version behind for no reason.
+- **The `react-router`, `@react-router/dev`, `@react-router/node` and `@react-router/fs-routes` packages move as a set** — upgrade all four together, pinned to the same exact version. They peer-depend on each other, so a partial bump is a broken install.
+- **Take a framework major in flag-sized steps.** React Router gates each breaking change behind a `future.<next>_*` flag available on the *current* major: turn them on one per commit, on the old version, then bump and delete the block. A regression stays bisectable to a single behaviour instead of being buried in the upgrade. Adopt the build/bundler flag **last** — in the v8 cycle it silently suppressed the future-flag warnings for everything still unadopted, so a clean build stopped meaning anything.
+
 ## Using the engines (`assets/`)
 
-`assets/` holds the **RR7 web app** engines (a Hono API copies none — it's all Shape, `references/hono-api.md`). It mirrors a consuming RR7 app where the `~/` alias means `app/`:
+`assets/` holds the **RR web app** engines (a Hono API copies none — it's all Shape, `references/hono-api.md`). It mirrors a consuming RR app where the `~/` alias means `app/`:
 
 - `assets/lib/**` → `app/lib/**`, `assets/hooks/**` → `app/hooks/**`
 - `assets/{Taskfile.yml, drizzle.config.ts, vite.config.ts, tsconfig.json, react-router.config.ts, components.json}` → **project root** (the build/config shell — see `references/project-setup.md`)
@@ -50,7 +54,7 @@ When you (a future agent) change how something works: **edit the owning unit in 
 
 ## Routing map — read only what you're touching
 
-Rows are marked **[F]** foundation (both archetypes) or **[UI]** RR7-web-only. Building a Hono API? Start at `references/hono-api.md`; it reuses the **[F]** rows with all-server deltas.
+Rows are marked **[F]** foundation (both archetypes) or **[UI]** RR-web-only. Building a Hono API? Start at `references/hono-api.md`; it reuses the **[F]** rows with all-server deltas.
 
 | Working on… | Read | Engine in `assets/`? |
 | --- | --- | --- |
@@ -75,7 +79,7 @@ The analytics row points to **separate skills, not files here**: `silo-analytics
 
 **Bootstrapping a new app?** First pick the archetype. A **Hono API** is the lighter path — follow `references/hono-api.md` (`env` + `db` + `aws-oidc` as needed, `taskfile`, `terraform` to deploy); there's no vite/routing/i18n/theming shell.
 
-For an **RR7 web app**, first settle two things (`references/project-setup.md`): app at the repo root vs a subdir, and the project name (recommend `.devcontainer/devcontainer.json`'s `name`). Then scaffold only the pieces it needs, roughly: `project-setup` + `taskfile` + `env` → `routing` → `db` → `theming` → (auth + `aws-oidc` if accounts/uploads) → `actions`/`data-fetching` → `i18n` as required (analytics → the `silo-analytics` skill) → `terraform` when it's time to deploy.
+For an **RR web app**, first settle two things (`references/project-setup.md`): app at the repo root vs a subdir, and the project name (recommend `.devcontainer/devcontainer.json`'s `name`). Then scaffold only the pieces it needs, roughly: `project-setup` + `taskfile` + `env` → `routing` → `db` → `theming` → (auth + `aws-oidc` if accounts/uploads) → `actions`/`data-fetching` → `i18n` as required (analytics → the `silo-analytics` skill) → `terraform` when it's time to deploy.
 
 ## Parallelize multi-subsystem work (it's slow done serially)
 
@@ -99,7 +103,8 @@ They're **AI-shaped**: designed so an agent writes correct code first try. A goo
 
 ## Global guardrails (owned here)
 
-- Typecheck before done: `task typecheck` (it runs `task generate` first), else `bun run typecheck`. Match existing tooling (`Taskfile.yml` → `task`, `bun.lock` → bun).
+- Typecheck **and test** before done: `task typecheck` (it runs `task generate` first) then `task test` wherever tests exist, else `bun run typecheck` / `bun test`. Match existing tooling (`Taskfile.yml` → `task`, `bun.lock` → bun).
+- **Pure decisions out of `.server` modules.** A `*.server.ts` that imports validated env parses it at load, so anything living there can only be tested by standing up config. Put the decision logic — validation, matching, authorization, filtering — in a plain module and keep the `.server` file as the I/O wrapper that calls it. This is what makes the important logic directly testable, and it's the difference between a rule you can prove and one you can only hope about.
 - Infra: verify with `task tf:<component>:plan` / `terragrunt plan`; a clean plan is the only "done". **Never** run `apply`.
 - **Assume the repo's AWS SSO session is already live** (profile = the root Taskfile's `AWS_PROFILE`; `pharmer` in most repos — account rule: `references/aws-oidc.md`) — the default state is *logged in*. Just run AWS/TF tasks (plans, S3, etc.) directly. Do **not** pre-run `task login`, refuse, or treat yourself as logged out on a hunch. Only run `task login` (or flag it) **after** a command actually fails with expired/missing creds, or the user tells you you're logged out (identity facts: `references/aws-oidc.md`).
 - **Never** start a dev server (`task dev`/`bun run dev`/etc.) without explicit permission — global-CLAUDE.md TP5, restated here for the exact commands.

@@ -7,7 +7,7 @@ Change it upstream, or fork it into `skills/<category>/` as a first-class skill.
 - source repo: https://github.com/anthropics/skills
 - source path: `skills/skill-creator`
 - ref: `HEAD`
-- commit: `b29e7cf65e5cb78a5ac33d582270551bc74a14eb`
-- vendored: 2026-07-27 17:22 UTC
+- commit: `f17010c9bb483898c1d9c9f42dde2b3a98889434`
+- vendored: 2026-08-13 15:11 UTC
 
 Manifest entry: `vendor.json` -> `skill-creator`.

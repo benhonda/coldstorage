@@ -77,21 +77,31 @@ export function parseActionInput<T extends ActionDefinition>(
  * Helper to create a type-safe action handler
  *
  * Usage:
- * export default createActionHandler(myActionDefinition, async ({ inputData }, request) => {
+ * export default createActionHandler(myActionDefinition, async ({ inputData }, request, url) => {
  *   const parsed = myActionDefinition.inputDataSchema.parse(inputData);
  *   // return value is type-checked against output type
  *   return { result: "data" };
  * });
+ *
+ * `url` is React Router's normalized URL for the submission. Use it for any
+ * routing decision — `new URL(request.url)` is NOT equivalent, because
+ * `future.v8_passThroughRequests` leaves React Router's `.data` suffix and
+ * `index`/`_routes` search params on the raw request.
  */
 export function createActionHandler<T extends ActionDefinition>(
   definition: T,
   handler: (
     data: ActionDefinitionData<T>,
-    request: Request
+    request: Request,
+    url: URL
   ) => Promise<ActionDefinitionData<T>["outputData"] | ActionHandlerReturnType<ActionDefinitionData<T>>>
-): (data: ActionDefinitionData<T>, request: Request) => Promise<ActionHandlerReturnType<ActionDefinitionData<T>>> {
-  return async (data, request) => {
-    const result = await handler(data, request);
+): (
+  data: ActionDefinitionData<T>,
+  request: Request,
+  url: URL
+) => Promise<ActionHandlerReturnType<ActionDefinitionData<T>>> {
+  return async (data, request, url) => {
+    const result = await handler(data, request, url);
 
     // If handler returned a full payload (redirect/response/error), passthrough
     if (

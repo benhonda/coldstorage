@@ -33,4 +33,4 @@ export const awsS3Env = z.object({
 
 ## Verify at latest
 - **zod** — enum/default/`infer` and the recommended way to parse/coerce `process.env`.
-- The framework's mechanism for exposing public env to the client (how RR7 + Vercel inject it) — use the current idiom, not an old hand-rolled global.
+- The framework's mechanism for exposing public env to the client (how RR + Vercel inject it) — use the current idiom, not an old hand-rolled global.

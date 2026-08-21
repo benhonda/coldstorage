@@ -1,7 +1,5 @@
-import {
-  HTTP_STATUS_TEXT,
-  type ServerErrorStatus,
-} from "~/lib/router/http-status";
+import { data } from "react-router";
+import { type ServerErrorStatus } from "~/lib/router/http-status";
 import {
   generatePathForLinkTo,
   type LinkTo,
@@ -101,14 +99,18 @@ export function serverResponse(
  * Throw this! It reaches the nearest ErrorBoundary as a route error response.
  *
  * `customMsg` is not a log line — it is USER-FACING copy. The app's error screen
- * prints it verbatim as the explanation whenever it differs from the protocol
- * default, so write it the way you'd write it for a user: what happened, then what
- * to do, no blame ("Roster not found." — not "roster lookup failed"). Omit it and
- * the screen falls back to its own copy for that status.
+ * prints it verbatim as the explanation, so write it the way you'd write it for a
+ * user: what happened, then what to do, no blame ("Roster not found." — not
+ * "roster lookup failed"). Omit it and the screen falls back to its own copy.
+ *
+ * The copy rides in the response BODY via `data()`, never in `statusText`.
+ * `statusText` is a ByteString: Node's Response constructor throws a TypeError on
+ * any character above U+00FF — an em dash, a curly apostrophe, any accented
+ * character outside Latin-1 — and on newlines. That's most well-written English
+ * copy and most French copy, so authoring the message would throw INSIDE the
+ * loader and the user would get a generic 500 instead of the 404 you wrote.
+ * (Bun's Response accepts all of it, so this only ever failed in production.)
  */
 export function serverError(code: ServerErrorStatus, customMsg?: string) {
-  return new Response(null, {
-    status: code,
-    statusText: customMsg ?? HTTP_STATUS_TEXT[code],
-  });
+  return data({ message: customMsg ?? null }, { status: code });
 }

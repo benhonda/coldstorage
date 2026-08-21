@@ -1,11 +1,16 @@
-import { useFetcher, useNavigate, type SubmitOptions } from "react-router";
+import {
+  useFetcher,
+  useNavigate,
+  type FetcherSubmitOptions,
+  type SubmitTarget,
+} from "react-router";
 import type {
   ActionHandlerReturnType,
   ActionPayloadError,
   ActionDefinition,
   ActionDefinitionData,
 } from "~/lib/actions/_core/action-utils";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { logError } from "~/lib/logger";
 import { toast } from "sonner";
 
@@ -62,8 +67,6 @@ export function useAction<T extends ActionDefinition>(
 
   // Dedupe: track the last handled result id.
   const actionIdRef = useRef<string | null>(null);
-  // Abort a superseded in-flight request.
-  const abortControllerRef = useRef<AbortController | null>(null);
   // Detect submit() called during render (infinite loop) in dev.
   const renderCallCountRef = useRef(0);
   // Last payload submitted, for the accidental-repeat guard below.
@@ -88,14 +91,6 @@ export function useAction<T extends ActionDefinition>(
     renderCallCountRef.current = 0;
   });
 
-  // Abort any in-flight request on unmount.
-  useEffect(() => {
-    return () => {
-      abortControllerRef.current?.abort();
-      abortControllerRef.current = null;
-    };
-  }, []);
-
   const handleSuccess = useCallback(
     (data: ADD["outputData"]) => {
       extra?.onSuccess?.(data);
@@ -115,6 +110,10 @@ export function useAction<T extends ActionDefinition>(
 
   const handleError = useCallback(
     (error: ActionPayloadError) => {
+      // A failed write re-arms the duplicate guard: the next identical payload is a
+      // RETRY, not a bounce. Without this, a user correcting a fast failure by
+      // re-clicking the same control inside the window gets silently swallowed.
+      lastSubmitRef.current = null;
       extra?.onError?.(error);
       setActionState("error");
       // Users see the SAFE message (ReadableError detail, or a generic fallback) —
@@ -175,9 +174,22 @@ export function useAction<T extends ActionDefinition>(
     handleSuccess,
   ]);
 
-  // Submit the write. Swallows an accidental repeat; aborts a superseded request.
+  // Submit the write, swallowing an accidental repeat.
   const submit = useCallback(
-    (inputData: ADD["inputData"], submitOptions: SubmitOptions = {}) => {
+    /**
+     * Returns TRUE when the write was dispatched, FALSE when it was swallowed as a
+     * duplicate. Callers that move UI before the write lands must check it —
+     * a swallowed submit produces no onSuccess and no onError, so anything waiting
+     * on one of those to clean up would wait forever (see useOptimisticAction).
+     */
+    (
+      inputData: ADD["inputData"],
+      // FetcherSubmitOptions, NOT SubmitOptions: this hook always writes through a
+      // fetcher, and fetcher.submit ignores the navigation-only options
+      // (replace/state/navigate/fetcherKey/viewTransition). Typing the wider set
+      // here would advertise five knobs that silently do nothing.
+      submitOptions: FetcherSubmitOptions = {},
+    ): boolean => {
       try {
         const actionName = actionDefinition.actionDirectoryName;
 
@@ -193,7 +205,7 @@ export function useAction<T extends ActionDefinition>(
           last.key === key &&
           now - last.at < DUPLICATE_SUBMIT_WINDOW_MS
         ) {
-          return;
+          return false;
         }
         lastSubmitRef.current = { key, at: now };
 
@@ -209,32 +221,52 @@ export function useAction<T extends ActionDefinition>(
 
         trackActionCall(actionName);
 
-        abortControllerRef.current?.abort();
-        abortControllerRef.current = new AbortController();
         setActionState("submitting");
 
+        // There is no request-cancellation knob to reach for here, and none is
+        // needed: SubmitOptions carries no AbortSignal, and the router already
+        // aborts a fetcher's in-flight request when the same fetcher submits
+        // again. So only the LATEST result reaches the result effect — which is
+        // why anything sharing one hook instance across many rows (a board, a
+        // list) must settle optimistic state against loader truth rather than
+        // trusting a per-write callback to arrive for every write it fired.
         const options = {
           ...submitOptions,
           method: "post" as const,
           encType: "application/json" as const,
-          signal: abortControllerRef.current.signal,
         };
 
-        const payload = { actionDirectoryName: actionName, inputData };
+        // SubmitTarget's JSON-payload variant is JsonValue, which a generic
+        // inputData can't be proven to satisfy; the cast aligns the runtime shape
+        // with what fetcher.submit accepts under encType application/json.
+        // (PILLAR4: one narrow named cast, never `as any`.)
+        const payload = {
+          actionDirectoryName: actionName,
+          inputData,
+        } as SubmitTarget;
 
         // Submit to "." — the current route, whose `action` export is the shared
         // `action_handler` dispatcher. Override via extra.route only for a non-current target.
-        nativeFetcher.submit(payload as any, {
-          ...options,
-          action: extra?.route ?? ".",
-        });
+        //
+        // fetcher.submit returns a Promise; this function is synchronous (it returns
+        // dispatched-or-swallowed), so a rejection can only be caught off the promise.
+        // Left floating it would surface as an unhandled rejection and the write would
+        // fail with no pending state ever clearing and nothing shown (PILLAR5).
+        void nativeFetcher
+          .submit(payload, { ...options, action: extra?.route ?? "." })
+          .catch((error) => {
+            console.error("Error submitting action:", error);
+            setActionState("error");
+          });
+        return true;
       } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") {
-          // superseded request — ignore
-        } else {
-          console.error("Error submitting action:", error);
-          setActionState("error");
-        }
+        // Only synchronous failures land here — a payload that can't be serialized
+        // for the duplicate-guard key, say. The submission's own failure path is the
+        // .catch above.
+        console.error("Error submitting action:", error);
+        setActionState("error");
+        // Nothing was dispatched, so no result callback is coming.
+        return false;
       }
     },
     [actionDefinition.actionDirectoryName, extra?.route, nativeFetcher.submit],
@@ -275,25 +307,37 @@ export function useOptimisticAction<T extends ActionDefinition, TValue>(
   // null = "no local opinion, show the server's value".
   const [override, setOverride] = useState<{ value: TValue } | null>(null);
 
-  const action = useAction(actionDefinition, {
-    ...extra,
-    onSuccess: (data) => {
-      setOverride(null);
-      extra?.onSuccess?.(data);
-    },
-    onError: (error) => {
-      setOverride(null);
-      extra?.onError?.(error);
-    },
-  });
+  // Memoized: useAction's result effect depends on these callbacks, so a fresh
+  // object each render would re-run it every render — a loop hazard sitting right
+  // next to the one dev-loud-guards warns about.
+  const wrappedExtra = useMemo(
+    () => ({
+      ...extra,
+      onSuccess: (data: ActionDefinitionData<T>["outputData"]) => {
+        setOverride(null);
+        extra?.onSuccess?.(data);
+      },
+      onError: (error: ActionPayloadError) => {
+        setOverride(null);
+        extra?.onError?.(error);
+      },
+    }),
+    [extra],
+  );
+
+  const action = useAction(actionDefinition, wrappedExtra);
 
   return {
     /** What the control should render right now. */
     value: override ? override.value : serverValue,
-    /** Move the control and start the write, in that order. */
+    /** Start the write and move the control — both in this handler, so the user
+     *  still sees the control move on the same frame as the click. */
     set: (value: TValue) => {
-      setOverride({ value });
-      action.submit(toInput(value));
+      // Only take a local opinion if a write actually went out. A swallowed
+      // duplicate produces no result callback, so an override set here would
+      // never be cleared — the control would sit showing a value the server
+      // never got, with no pending state and no error, until a reload.
+      if (action.submit(toInput(value))) setOverride({ value });
     },
     /** True while the write is in flight — the control has ALREADY moved, so use
      *  this only for extra chrome, never to gate the UI. */

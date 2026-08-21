@@ -7,7 +7,7 @@ Change it upstream, or fork it into `skills/<category>/` as a first-class skill.
 - source repo: https://github.com/vercel/vercel-plugin
 - source path: `skills/ai-gateway`
 - ref: `HEAD`
-- commit: `3878c45e788c4d55f1715c33cab4ade962f69822`
-- vendored: 2026-08-07 05:13 UTC
+- commit: `11c32588786a9d49791372657433b88d49561874`
+- vendored: 2026-08-13 15:11 UTC
 
 Manifest entry: `vendor.json` -> `ai-gateway`.

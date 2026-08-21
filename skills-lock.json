@@ -13,14 +13,14 @@
       "sourceUrl": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",
       "skillPath": "skills/engineering/adpharm-mcp-stack/SKILL.md",
-      "computedHash": "f49060114029b13b18efc0020be578321e0ebdd143f539f83a594b92104013e2"
+      "computedHash": "eb48348e155f9d2133a05539c66ad10c5aa588cdc8747ab6bbc1dbac0b7fa5b1"
     },
     "adpharm-stack": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
       "sourceUrl": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",
       "skillPath": "skills/engineering/adpharm-stack/SKILL.md",
-      "computedHash": "e3b5b2e2ab5d281a976398cec6445ce49c820c0ad65a9edc4e15f3559f56169a"
+      "computedHash": "dc766295f8e6863e1bb55d0fb0ba338ea7ec05ea70fa16c48eb829cf9848ea25"
     },
     "agentation": {
       "source": "benjitaylor/agentation",
@@ -33,7 +33,7 @@
       "sourceUrl": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",
       "skillPath": "skills/vendor/ai-gateway/SKILL.md",
-      "computedHash": "081658151ba70e1e2cc7153c41f7d347df8d53a00ad0dbd62238a8043d924024"
+      "computedHash": "d300d692464a03c924b853f278ec2e7adf0d23b8dc93c570b5fe7fb5683841b0"
     },
     "ai-seo": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
@@ -98,9 +98,10 @@
     },
     "product-brainstorming": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
+      "sourceUrl": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",
       "skillPath": "skills/vendor/product-brainstorming/SKILL.md",
-      "computedHash": "9037034b9c938b44d00a4dad6d889b0aa4d3941393616f982bd531fa9c949b16"
+      "computedHash": "6d01ae777d700924cd8a5e2b6ba9b08c07bf16e7ae2e73e95f063e5febe705c9"
     },
     "product-marketing": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
@@ -121,7 +122,7 @@
       "sourceUrl": "git@github.com:adpharm/adpharm-skills.git",
       "sourceType": "git",
       "skillPath": "skills/vendor/skill-creator/SKILL.md",
-      "computedHash": "b7312cd2942ada465e3f917eab08ea2008bada8b8dcc38babe3b651a0742ce06"
+      "computedHash": "9762e4e9ec3ef8d97b7d64229cc8e9621234fb9cca7452a363fb0ac86f29172f"
     },
     "skill-editor": {
       "source": "git@github.com:adpharm/adpharm-skills.git",
