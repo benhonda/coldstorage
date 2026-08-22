@@ -81,8 +81,10 @@ On a Mac: `task daemon:mac:bootstrap` (creds → Keychain + launchd install), `t
 - **Inspect the journal:** it's **per signed-in user**, under the daemon's data root —
   `~/Library/Application Support/ColdStorage/users/<cognito-sub>/coldstore.sqlite`. There is no
   machine-wide journal.
-- **libsodium is built from source on Linux** (`task daemon:setup`) — Ubuntu's apt 1.0.18 predates
-  symbols swift-sodium needs; Apple platforms use the bundled XCFramework.
+- **libsodium is built from source on Linux** — Ubuntu's apt 1.0.18 predates symbols swift-sodium needs;
+  Apple platforms use the bundled XCFramework. The devcontainer does it on rebuild, and `task daemon:setup`
+  is the same script if you need it by hand (`.devcontainer/install-libsodium.sh`). Without it the Swift
+  core doesn't build at all, which is how it went missing unnoticed — the Mac never needs it.
 
 ## License
 
