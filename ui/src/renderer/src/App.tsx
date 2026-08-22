@@ -24,7 +24,7 @@ import type { Exec } from "./views/types.ts";
 import { useAppState } from "./useStore.ts";
 import { useResizable } from "./ui/useResizable.ts";
 import { useFiles } from "./views/files/useFiles.ts";
-import { fileFromJournal, isFolderMarker } from "./views/files/model.ts";
+import { fileFromJournal, isFolderMarker, isUploadOutstanding } from "./views/files/model.ts";
 import { FailuresPanel } from "./views/files/FailuresPanel.tsx";
 import { eventAction, type BlobFailure } from "./state/reducer.ts";
 import { bytesAvailable } from "./state/entitlement.ts";
@@ -95,8 +95,12 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   // is. "Used" is what's already in S3 (`bytesStored`) PLUS what's mid-upload but not yet counted there
   // (the optimistic "uploading" rows). Without the in-flight half, a burst of deposits all measure against
   // the same stale stored total and every one passes — the vault sails past its quota before it catches up.
+  // `isUploadOutstanding`, not `=== "uploading"`: a STALLED upload is still queued work whose bytes are
+  // still coming (the journal has it `planned` and the loop keeps retrying). Counting only the healthy ones
+  // would drop stalled files out of the quota and let the vault sail past its limit — the precise failure
+  // the paragraph above describes, reintroduced by a status the gate didn't know about.
   const inFlightBytes = useMemo(
-    () => filesApi.files.reduce((sum, f) => (f.status === "uploading" ? sum + f.size : sum), 0),
+    () => filesApi.files.reduce((sum, f) => (isUploadOutstanding(f.status) ? sum + f.size : sum), 0),
     [filesApi.files],
   );
   const signedIn = state.auth.configured && state.auth.state === "signedIn";

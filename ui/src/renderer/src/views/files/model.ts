@@ -34,6 +34,17 @@ export type FileStatus =
   | "transferring"
   | "here";
 
+/** Is this file's upload still OUTSTANDING — queued, in flight, or stuck but still going to be retried?
+ *
+ * `stalled` is a presentation refinement of `uploading`, not a different fate: the journal still has the
+ * file as `planned` and the run loop will keep attempting it. So every question of the form "are these
+ * bytes still coming?" must answer yes to both, and this exists so that can't be got wrong twice. The
+ * deposit gate's in-flight accounting is the one that bites: counting only `uploading` let a stalled file
+ * drop out of the quota, which is exactly how the vault sails past its limit (see App.tsx's `inFlightBytes`).
+ */
+export const isUploadOutstanding = (status: FileStatus): boolean =>
+  status === "uploading" || status === "stalled";
+
 /** Why an upload has stopped being something the tree can call "Uploading". Two causes, said differently:
  * one is a snag we're working through, the other is silence. Deliberately mirrors `RestoreStall` — same
  * question on the other half of the product. */
@@ -47,8 +58,8 @@ export type UploadStall =
  * Has this file's upload stopped getting anywhere? `null` while it's fine — queued and being worked, or in
  * a state that isn't an upload at all.
  *
- * `staleAfterSeconds` is the daemon's number, taken from the same place the Downloads page takes it (a
- * restore row) so both halves of the app measure silence against the loop's real beat rather than a
+ * `staleAfterSeconds` is the daemon's own number (`Status.staleAfterSeconds`), the same one the Downloads
+ * page reads, so both halves of the app measure silence against the loop's real beat rather than against a
  * constant either of them invented.
  *
  * A file with an `error` is "retrying" even if it was tried a second ago: it IS being attended to, and the

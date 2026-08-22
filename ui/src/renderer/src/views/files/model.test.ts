@@ -25,6 +25,7 @@ import {
   uploadPercent,
   uniquifyPath,
   planDeposit,
+  isUploadOutstanding,
   uploadStall,
   withName,
 } from "./model.ts";
@@ -376,6 +377,25 @@ describe("uploadStall", () => {
   test("only an upload can stall this way", () => {
     for (const status of ["frozen", "failed", "pending", "transferring", "here"] as const) {
       expect(uploadStall(queued({ status, lastAttemptAt: NOW - 90 * DAY }), NOW, DAY)).toBeNull();
+    }
+  });
+});
+
+/**
+ * The deposit gate counts bytes that are queued but not yet in S3. Adding a `stalled` status quietly
+ * dropped those files out of that count — a stalled upload is still coming, so under-counting is how the
+ * vault sails past its quota (the exact failure App.tsx's `inFlightBytes` comment describes).
+ */
+describe("isUploadOutstanding", () => {
+  test("a stalled upload still counts as bytes on their way", () => {
+    expect(isUploadOutstanding("uploading")).toBe(true);
+    expect(isUploadOutstanding("stalled")).toBe(true);
+  });
+
+  test("nothing else does — including a permanently failed upload", () => {
+    // `failed` means the daemon STOPPED retrying, so those bytes are not coming and must not be reserved.
+    for (const s of ["frozen", "failed", "pending", "transferring", "here"] as const) {
+      expect(isUploadOutstanding(s)).toBe(false);
     }
   });
 });
