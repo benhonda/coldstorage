@@ -6,11 +6,13 @@
 > actually headed now, the current goal wins: flag the conflict, don't silently obey.
 >
 > All four layers (infra, backend, daemon, UI) are BUILT and green; the infra is APPLIED.
-> What has NOT happened: a real restore priced, paid and thawed end-to-end against Paddle
-> sandbox. Until that runs, treat the flow below as designed-and-typechecked, not proven.
+> The front half is proven: on 2026-07-27 a restore was quoted, paid through sandbox Paddle,
+> and the thaw reached S3 (see [`MIGRATION.md`](./MIGRATION.md)). What has NOT happened is the
+> back half — thaw completes, the daemon downloads, decrypts, and the file lands. Until that
+> runs, treat the download side below as designed-and-typechecked, not proven.
 
-The engineering half of PROD.md's "retrieval pass-through steel thread" (phase A of the
-free-tier plan). The pricing/margin model behind it is private (`strategy/CANON.md` §7);
+The engineering half of the retrieval pass-through that gates the free-tier launch
+([`PROD.md`](./PROD.md)). The pricing/margin model behind it is private (`strategy/CANON.md` §7);
 this doc never needs those numbers — the backend quotes a price, everything else treats it as
 opaque cents.
 

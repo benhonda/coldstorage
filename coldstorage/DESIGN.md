@@ -359,7 +359,8 @@ destroyed at sign-out, so signed out there is nothing to serve. SQLite/WAL journ
 `ListParts` reconciliation + deterministic parts = crash-safe idempotent resume. Integrity is layered
 (plaintext SHA-256, per-frame GCM tags, per-part SHA-256 validated by S3, verify-after) and "archived"
 means verified. Locality-grouped ≤2 GB blobs of 4 MiB AEAD frames; per-blob DEK under a KEK that the
-ZK master-key hierarchy (built, wiring pending — PROD.md) will hand to the user without a format change.
+ZK master-key hierarchy (`ZeroKnowledgeKeys.swift`; hierarchy diagram in PROD.md) hands to the user
+without a format change.
 
 - **Empty files and empty blobs are archived, not failed.** A zero-byte file has no ciphertext, so its span is
   `length: 0`; `RestoreEngine` short-circuits rather than asking S3 for `bytes=N-(N-1)` (backwards → 416, so
