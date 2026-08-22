@@ -495,7 +495,9 @@ export const MyFilesView = ({
         ? api.request("deposit", { src: opts.wire, dest: opts.dest, ...extra })
         : api.request("depositPhotos", { assetIds: opts.wire, dest: opts.dest, ...extra });
     await sent.catch((e: unknown) => {
-      filesApi.setDepositStatus(optimisticIds, "failed"); // command rejected → ⚠ on the rows, don't strand them
+      // Command rejected → ⚠ on the rows, don't strand them — and carry the daemon's reason onto the row,
+      // so the failure the user just caused is at least as explicable as a background one.
+      filesApi.setDepositStatus(optimisticIds, "failed", `${e}`);
       throw e;
     });
   };
@@ -529,7 +531,7 @@ export const MyFilesView = ({
     if (paths.length === 0) {
       // Couldn't resolve any local paths → show ⚠ rows rather than vanishing.
       const ids = filesApi.deposit(dropped.map((f) => ({ name: f.name })), dir);
-      filesApi.setDepositStatus(ids, "failed");
+      filesApi.setDepositStatus(ids, "failed", "couldn't find these on disk to upload them");
       return;
     }
     depositPaths(paths);
@@ -547,7 +549,7 @@ export const MyFilesView = ({
     filesApi.setDepositStatus([file.id], "uploading");
     exec(() =>
       api.request("deposit", { src: srcPath, dest: parentOf(file.relativePath) }).catch((e: unknown) => {
-        filesApi.setDepositStatus([file.id], "failed");
+        filesApi.setDepositStatus([file.id], "failed", `${e}`);
         throw e;
       }),
     );

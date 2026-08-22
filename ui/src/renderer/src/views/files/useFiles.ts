@@ -46,8 +46,13 @@ export interface FilesApi {
    * uploading row counts against the quota before its bytes ever land in S3 (see `state/entitlement.ts`). */
   deposit: (items: { name: string; srcPath?: string; size?: number }[], intoDir: string) => string[];
   /** Set optimistic deposit rows' status (uploading ⇄ failed) by id — drives the retry cycle and keeps a
-   * failed upload visible ON the file (⚠ couldn't upload) rather than vanishing or stuck on "uploading". */
-  setDepositStatus: (ids: string[], status: FileStatus) => void;
+   * failed upload visible ON the file (⚠ couldn't upload) rather than vanishing or stuck on "uploading".
+   *
+   * `reason` rides along so the ⚠ can say WHY, the same as a journal-backed failure now does. Without it the
+   * most immediate failure — the deposit you just asked for, rejected a second ago — would be the one with
+   * no explanation, while a background fault from an hour ago had one. Passing `null` (a retry going back to
+   * "uploading") clears it, for the reason every sibling clears on success. */
+  setDepositStatus: (ids: string[], status: FileStatus, reason?: string | null) => void;
   /** Rename a file or folder (journal basename edit / prefix sweep). */
   rename: (target: RowTarget, newName: string) => void;
   /** Move files/folders under `toDir` (journal re-parent / prefix sweep — no S3, no thaw). */
@@ -179,10 +184,10 @@ export const useFiles = (
     return added.map((a) => a.id);
   }, []);
 
-  const setDepositStatus = useCallback((ids: string[], status: FileStatus): void => {
+  const setDepositStatus = useCallback((ids: string[], status: FileStatus, reason: string | null = null): void => {
     if (ids.length === 0) return;
     const set = new Set(ids);
-    setBase((prev) => prev.map((f) => (set.has(f.id) ? { ...f, status } : f)));
+    setBase((prev) => prev.map((f) => (set.has(f.id) ? { ...f, status, error: reason } : f)));
   }, []);
 
   const rename = useCallback((target: RowTarget, newName: string): void => {
