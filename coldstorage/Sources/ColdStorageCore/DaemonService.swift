@@ -209,13 +209,7 @@ public actor DaemonService {
             // Photo-access / nothing-resolved are user-recoverable: surface the bare message (already a clean
             // sentence) plus a `code` the UI keys an action off (e.g. `photosAccessDenied` → "Open Photos
             // settings"). Other ColdStorageErrors fall through to the generic surface below.
-            var data = ["message": e.description]
-            switch e {
-            case .photosAccess: data["code"] = "photosAccessDenied"
-            case .photosNoneResolved: data["code"] = "photosNoneResolved"
-            default: break
-            }
-            bus.publish(DaemonEvent("error", data))
+            bus.publish(DaemonEvent("error", Self.errorEventData(e)))
         }
         catch { bus.publish(DaemonEvent("error", ["message": "depositPhotos: \(error)"])) }
     }
@@ -371,6 +365,20 @@ public actor DaemonService {
     /// Live source set = registered folders + platform sources (Photos). Rebuilt each run so
     /// add/remove via IPC takes effect on the next pass. Folder walks carry the current excludes; Photos
     /// don't (a photo library isn't a filesystem with gitignore-style junk).
+    /// The `error` event payload for a user-recoverable fault: the bare message plus a `code` the UI keys an
+    /// action off (`photosAccessDenied` → "Open Photos settings"). Shared by the explicit photo deposit and
+    /// the scheduled scan, because the same denial reaching the user through two paths must not arrive
+    /// actionable through one and bare through the other.
+    static func errorEventData(_ error: Error) -> [String: String] {
+        var data = ["message": "\(error)"]
+        switch error {
+        case ColdStorageError.photosAccess: data["code"] = "photosAccessDenied"
+        case ColdStorageError.photosNoneResolved: data["code"] = "photosNoneResolved"
+        default: break
+        }
+        return data
+    }
+
     private func currentSource(_ session: UserSession) throws -> IngestSource {
         let matcher = excludeMatcher(session)
         // Captured so the per-source callback can write without hopping back onto the actor — `Journal`
@@ -391,13 +399,27 @@ public actor DaemonService {
                 // land together rather than just letting the walk throw.
                 let id = row.id
                 return ScanReportingSource(mounted) { error in
-                    try? journal.markSourceScanned(id, error: error.map { "\($0)" })
-                    // Announce it too, so a live app updates the folder's row on the pass it breaks rather
-                    // than whenever something else happens to trigger a refetch.
-                    if error != nil { bus.publish(DaemonEvent("sourcesChanged", [:])) }
+                    // Announce on a CHANGE — broke or healed — so a live app updates the folder's row on the
+                    // pass it happens. Publishing every pass would be noise; publishing only on failure (the
+                    // first cut) left a red "Can't reach it" sitting there after the drive was plugged back
+                    // in, because the fault cleared in the journal and nothing told anyone.
+                    let changed = (try? journal.markSourceScanned(id, error: error.map { "\($0)" })) ?? false
+                    if changed { bus.publish(DaemonEvent("sourcesChanged", [:])) }
                 }
             }
-        return MultiSource(folders + platformSources)
+        // Platform sources (the Photos library on macOS) get the SAME isolation. They have no journal row to
+        // record against — nothing ever creates a `.photos` source — but the half that matters here is that a
+        // denied Photos permission was aborting `MultiSource.enumerate()` and therefore the WHOLE run, so one
+        // revoked toggle stopped every watched folder from backing up. That is the exact failure mode the
+        // wrapper exists to prevent, and leaving it in place for Photos while fixing it for folders would
+        // have been arbitrary. The fault still reaches the user — now WITH its actionable `code`, where the
+        // aborting path published a bare message.
+        let platform = platformSources.map { source in
+            ScanReportingSource(source) { error in
+                if let error { bus.publish(DaemonEvent("error", Self.errorEventData(error))) }
+            }
+        }
+        return MultiSource(folders + platform)
     }
 
     func writeStatus(_ session: UserSession) throws {

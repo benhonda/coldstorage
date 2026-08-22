@@ -513,11 +513,20 @@ public final class Journal: @unchecked Sendable {
     /// Clears `error` on success for the reason every sibling does — a recorded fault is history the moment
     /// the thing works, and a stale "couldn't read your drive" on a folder that's been fine since Tuesday is
     /// its own kind of lie.
-    public func markSourceScanned(_ id: String, error: String?) throws {
+    /// Returns TRUE when this scan CHANGED the folder's health — broke, or healed.
+    ///
+    /// The caller announces on that, not on every write. Publishing per pass would be noise, and publishing
+    /// only on failure (the first cut) left the app showing a red "Can't reach it" after the drive was
+    /// plugged back in — the fault cleared in the journal and nothing told anyone. A recovery is exactly as
+    /// newsworthy as a break; it is the news the user is waiting for.
+    @discardableResult
+    public func markSourceScanned(_ id: String, error: String?) throws -> Bool {
         lock.lock(); defer { lock.unlock() }
+        let was = try run("SELECT error FROM sources WHERE id=?1", [.text(id)]).first?["error"] as? String
         try run("""
             UPDATE sources SET lastScanAt=CAST(strftime('%s','now') AS INTEGER), error=?2 WHERE id=?1
             """, [.text(id), error.map(Bind.text) ?? .null])
+        return (was == nil) != (error == nil)
     }
 
     // MARK: - excludes registry (gitignore-style patterns; the SSOT the scan filters by)

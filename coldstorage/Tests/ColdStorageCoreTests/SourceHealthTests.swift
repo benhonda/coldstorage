@@ -106,6 +106,20 @@ import Foundation
         try j.markSourceScanned("/Volumes/Photos", error: nil)   // drive plugged back in
         #expect(try read().error == nil, "a fault is history the moment the folder works again")
     }
+
+    /// The app is told on a CHANGE, and healing is a change. Announcing only failures left a red
+    /// "Can't reach it" on screen after the drive came back — the journal was right and nothing said so.
+    @Test func healthChangesAreAnnouncedInBothDirections() throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let j = try Journal(path: dir.appendingPathComponent("journal.sqlite").path)
+        try j.addSource(SourceRow(id: "s", kind: .folder, path: "/s", mountPath: "s"))
+
+        #expect(try j.markSourceScanned("s", error: nil) == false, "healthy → healthy is not news")
+        #expect(try j.markSourceScanned("s", error: "gone") == true, "it broke")
+        #expect(try j.markSourceScanned("s", error: "still gone") == false, "same fault, still not news")
+        #expect(try j.markSourceScanned("s", error: nil) == true, "it healed — the news they're waiting for")
+    }
 }
 
 /// Collects `ScanReportingSource` callbacks from the concurrent context they fire in.

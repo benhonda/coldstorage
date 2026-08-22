@@ -174,6 +174,14 @@ objects carrying them.
   corruption then surfaces at RESTORE, which is the worst possible moment for a backup product to discover
   it. A drifted blob fails `permanent`ly and correctly so: its id is derived from the OLD content hash, so
   that blob can never be archived again — the next scan re-hashes the file and plans it afresh under a new id.
+- **A source that can't be READ fails loudly, and alone (2026-08-21).** `LocalDirSource.walk` used to open
+  `guard let en = fm.enumerator(at: root, …) else { return [] }` — so an unmounted drive, a deleted folder or
+  a revoked permission produced an empty list, which is indistinguishable from "nothing new". The run
+  completed, `runFinished` fired, and the app showed the folder as up to date, every pass, forever. It now
+  throws `sourceUnreadable` (naming *which* — gone vs. unreadable), classified **transient** so the drive
+  coming back heals it. `ScanReportingSource` wraps each source to record the outcome
+  (`sources.lastScanAt`/`error`) and contain the failure — required, because `MultiSource` stops at the first
+  throw, so an honest walk alone would have let one unplugged drive halt every other folder's backup.
 - **Store:** embedded **SQLite, WAL mode**, via **`libsqlite3` directly** (the `Csqlite3` system module
   + a thin typed wrapper in `Journal.swift` — GRDB was the original sketch; the dep surface was kept
   minimal instead). This *is* the resumability guarantee.
