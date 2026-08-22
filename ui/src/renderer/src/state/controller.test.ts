@@ -111,7 +111,8 @@ const makeApi = (initial: ConnectionState) => {
       entCb = cb;
       return () => (entCb = null);
     },
-    getUpdateStatus: () => Promise.resolve({ state: "idle", version: null, percent: null, error: null }),
+    getUpdateStatus: () => Promise.resolve({ state: "idle", version: null, percent: null, error: null, lastCheckedAt: null }),
+    getAppInfo: () => Promise.resolve({ version: "9.9.9", electron: "42.0.0", packaged: true }),
     checkForUpdate: () => Promise.resolve(),
     restartToUpdate: () => Promise.resolve(),
     onUpdateStatus: (cb) => {

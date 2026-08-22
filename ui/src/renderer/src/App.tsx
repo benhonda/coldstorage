@@ -481,6 +481,10 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           onSubscriptionChanged={setSubscription}
           tab={settingsTab}
           onTabChange={setSettingsTab}
+          appInfo={state.appInfo}
+          update={state.update}
+          onCheckForUpdate={() => void api.checkForUpdate()}
+          onRestartToUpdate={() => void api.restartToUpdate()}
         />
       )}
 

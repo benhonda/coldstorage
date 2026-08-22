@@ -19,7 +19,7 @@
  */
 import type { ReactNode } from "react";
 import { useState } from "react";
-import type { AccountStatus, AuthStatus, EntitlementStatus, Source, SubscriptionInfo } from "../../../shared/ipc.ts";
+import type { AccountStatus, AppInfo, AuthStatus, EntitlementStatus, Source, SubscriptionInfo, UpdateStatus } from "../../../shared/ipc.ts";
 import { ChangePlanModal } from "./ChangePlanModal.tsx";
 import type { ViewProps } from "./types.ts";
 import type { ArchivedFile } from "./files/model.ts";
@@ -28,6 +28,7 @@ import { AddWatchedFolderModal } from "./files/AddWatchedFolderModal.tsx";
 import { ContextMenu, type MenuEntry } from "./files/ContextMenu.tsx";
 import { Badge, Button, Card, Chip, EmptyState, Field, Icon, IconButton, KeyValueRow, Modal, Skeleton, Tabs } from "../ui/primitives.tsx";
 import { Page } from "../ui/layout.tsx";
+import { VersionFooter } from "./VersionFooter.tsx";
 
 /** The Settings subpages. `general` = this-Mac behavior; `account` = identity/plan (configured installs only). */
 export type SettingsTab = "general" | "account";
@@ -79,6 +80,10 @@ export const SettingsView = ({
   onSubscriptionChanged,
   tab,
   onTabChange,
+  appInfo,
+  update,
+  onCheckForUpdate,
+  onRestartToUpdate,
 }: ViewProps & {
   /** Sign-in status (Phase 5). The Account subpage exists only for a configured (multi-user) install —
    * dogfood mode has no account, so no tab strip either. */
@@ -109,6 +114,11 @@ export const SettingsView = ({
    * App-owned state also means the last-visited tab survives a trip to My Files and back. */
   tab: SettingsTab;
   onTabChange: (tab: SettingsTab) => void;
+  /** Which build this is + the live auto-update state — the page foot ({@link VersionFooter}). */
+  appInfo: AppInfo | null;
+  update: UpdateStatus;
+  onCheckForUpdate: () => void;
+  onRestartToUpdate: () => void;
 }): React.JSX.Element => {
   const [adding, setAdding] = useState(false);
   const [pattern, setPattern] = useState("");
@@ -464,6 +474,9 @@ export const SettingsView = ({
       {hasAccount && <Tabs tabs={TABS} active={active} onChange={onTabChange} label="Settings sections" />}
 
       {active === "general" ? general : accountPage}
+
+      {/* Below the tab content, on both tabs: "what am I running?" is a fact about the app, not a setting. */}
+      <VersionFooter appInfo={appInfo} update={update} onCheck={onCheckForUpdate} onRestart={onRestartToUpdate} />
 
       {adding && (
         <AddWatchedFolderModal

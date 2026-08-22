@@ -1635,3 +1635,24 @@ button.cs-kv:hover { background: var(--surface-hover); }
   padding: var(--space-2) 0;
 }
 .cs-download--child + .cs-download--child { margin-top: 0; border-top: 1px solid var(--border-subtle); }
+
+/* ── Settings foot: which build this is + whether it's current (VersionFooter) ──
+   Quiet by construction — a rule above it, secondary text, small type. It sits below the cards on both
+   tabs, so it reads as a property of the app rather than one more setting to attend to. */
+.cs-about {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font: var(--type-label);
+}
+.cs-about-id { display: flex; align-items: center; gap: var(--space-2); color: var(--text-secondary); }
+.cs-about-id .csf-icon { color: var(--accent); }
+/* Flex-wrap, not nowrap: an update error carries the updater's own words and can run long — it wraps
+   above the button rather than squeezing it off the row. */
+.cs-about-line { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); }
+.cs-about-accent { color: var(--accent); }
+.cs-about-bad { color: var(--negative); }
+.cs-about-build { color: var(--text-tertiary); }

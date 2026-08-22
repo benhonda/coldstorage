@@ -2,14 +2,14 @@
  * Main-process OS integrations the renderer needs but can't reach (no Node in the renderer): the native
  * open panels (single-folder for a watched source / restore destination; files-AND-folders multi-select
  * for a deposit), the default Downloads directory (request-a-download dialog), revealing a restored copy in
- * Finder, and the native Photos picker
- * (the explicit photo-deposit path, UI option B). Kept separate from {@link registerBridge} (which is
+ * Finder, the native Photos picker
+ * (the explicit photo-deposit path, UI option B), and this build's own version facts (Settings' footer). Kept separate from {@link registerBridge} (which is
  * strictly the daemon-client seam).
  */
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
-import { IPC, type PhotoPick } from "../shared/ipc.ts";
+import { IPC, type AppInfo, type PhotoPick } from "../shared/ipc.ts";
 
 /** Deep-link straight to System Settings ▸ Privacy & Security ▸ Photos (macOS). The recovery path the
  * toast offers when a photo deposit failed for lack of (full) Photos access — `tccutil`/relaunch can't
@@ -50,6 +50,14 @@ const pickPhotos = (): Promise<PhotoPick[]> =>
 /** Register the dialog/path handlers. Returns a disposer that removes them. */
 export const registerSystemHandlers = (): (() => void) => {
   ipcMain.handle(IPC.downloadsDir, () => app.getPath("downloads"));
+  // Build facts for Settings' footer. `app.getVersion()` IS the SSOT read (packaged package.json /
+  // Info.plist) — never a version string typed into the renderer, which would drift the moment a release
+  // bumps package.json.
+  ipcMain.handle(IPC.appInfo, (): AppInfo => ({
+    version: app.getVersion(),
+    electron: process.versions.electron,
+    packaged: app.isPackaged,
+  }));
   ipcMain.handle(IPC.pickPhotos, () => pickPhotos());
   ipcMain.handle(IPC.openPhotosSettings, () => shell.openExternal(PHOTOS_PRIVACY_PANE));
   // Show a restored copy in Finder. `showItemInFolder` is already a no-op on a missing path, so a stale
@@ -83,6 +91,7 @@ export const registerSystemHandlers = (): (() => void) => {
 
   return () => {
     ipcMain.removeHandler(IPC.downloadsDir);
+    ipcMain.removeHandler(IPC.appInfo);
     ipcMain.removeHandler(IPC.chooseFolder);
     ipcMain.removeHandler(IPC.chooseUploads);
     ipcMain.removeHandler(IPC.pickPhotos);

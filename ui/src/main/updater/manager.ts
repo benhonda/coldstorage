@@ -33,7 +33,7 @@ export interface UpdaterPort {
  * long-lived (openAtLogin, stays alive when windows close), so it rarely quits into a natural check. */
 export const DEFAULT_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-const IDLE: UpdateStatus = { state: "idle", version: null, percent: null, error: null };
+const IDLE: UpdateStatus = { state: "idle", version: null, percent: null, error: null, lastCheckedAt: null };
 
 /** Best-effort read of a `version` string off an electron-updater `UpdateInfo` payload. */
 const readVersion = (payload: unknown): string | null => {
@@ -61,22 +61,27 @@ export class UpdateManager {
   readonly #listeners = new Set<(status: UpdateStatus) => void>();
   #timer: ReturnType<typeof setInterval> | null = null;
   readonly #port: UpdaterPort;
+  readonly #now: () => number;
 
-  constructor(port: UpdaterPort) {
+  /** `now` is injectable so the "checked at" stamp is assertable in tests; production passes Date.now. */
+  constructor(port: UpdaterPort, now: () => number = Date.now) {
     this.#port = port;
+    this.#now = now;
     port.autoDownload = true;
 
     // Fold electron-updater's event stream into UpdateStatus. Each handler patches only the fields it
     // knows (version survives from `available` through `downloading` into `ready`).
     port.on("checking-for-update", () => this.#patch({ state: "checking", error: null }));
     port.on("update-available", (info) =>
-      this.#patch({ state: "available", version: readVersion(info), percent: null, error: null }),
+      this.#patch({ state: "available", version: readVersion(info), percent: null, error: null, lastCheckedAt: this.#now() }),
     );
     port.on("download-progress", (p) => this.#patch({ state: "downloading", percent: readPercent(p) }));
     port.on("update-downloaded", (info) =>
       this.#patch({ state: "ready", version: readVersion(info) ?? this.#status.version, percent: 100, error: null }),
     );
-    port.on("update-not-available", () => this.#patch({ ...IDLE }));
+    // A definite "nothing newer" — the only thing that changes is the stamp, which is exactly what the
+    // Settings footer needs to say the check happened at all.
+    port.on("update-not-available", () => this.#patch({ ...IDLE, lastCheckedAt: this.#now() }));
     port.on("error", (e) => this.#patch({ state: "error", error: readMessage(e) }));
   }
 
@@ -123,7 +128,8 @@ export class UpdateManager {
       next.state === this.#status.state &&
       next.version === this.#status.version &&
       next.percent === this.#status.percent &&
-      next.error === this.#status.error
+      next.error === this.#status.error &&
+      next.lastCheckedAt === this.#status.lastCheckedAt
     ) {
       return; // no observable change — skip the notify (matches the store's identity-skip)
     }

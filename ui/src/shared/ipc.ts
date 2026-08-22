@@ -127,6 +127,8 @@ export const IPC = {
   updateRestart: "update:restart",
   /** push: the update status changed, `(status)`. */
   updateStatusChanged: "update:statusChanged",
+  /** invoke: static build facts about this app ({@link AppInfo}) — the Settings footer. */
+  appInfo: "app:info",
 } as const;
 
 /** Whether the main process currently holds a live socket to `coldstored`. */
@@ -316,6 +318,26 @@ export interface UpdateStatus {
   percent: number | null;
   /** The last update error, display-only. Null when none. */
   error: string | null;
+  /** When the feed last gave a DEFINITE answer (epoch ms) — newer build or nothing newer. Null before the
+   * first such answer, and left untouched by a failed check (which answers nothing). This is what lets the
+   * Settings footer distinguish "nothing newer, as of 3:42pm" from "we've never managed to ask" — without
+   * it, a manual check that finds nothing lands back on `idle` and reads as a button that did nothing. */
+  lastCheckedAt: number | null;
+}
+
+/**
+ * What build of the app this is — read once from the main process (Electron's own `app.getVersion()`,
+ * i.e. `package.json` version, which is the release SSOT `scripts/set-release-version.ts` writes). Static
+ * for the life of the process, so the renderer reads it once at first paint and never re-reads it.
+ */
+export interface AppInfo {
+  /** The app's own version, e.g. "0.1.5". */
+  version: string;
+  /** The Electron runtime it's on — support detail, shown beside the version. */
+  electron: string;
+  /** False in `electron-vite dev`. Load-bearing for honesty: auto-update only runs in the packaged,
+   * signed app, so an unpackaged build must not offer a "Check for updates" that can never find one. */
+  packaged: boolean;
 }
 
 /** One photo picked in the native picker: the PHAsset localIdentifier (drives the daemon `depositPhotos`)
@@ -458,4 +480,6 @@ export interface ColdstoreApi {
   restartToUpdate(): Promise<void>;
   /** Subscribe to auto-update status changes. */
   onUpdateStatus(listener: (status: UpdateStatus) => void): () => void;
+  /** This build's version + runtime ({@link AppInfo}) — static, read once. */
+  getAppInfo(): Promise<AppInfo>;
 }

@@ -105,13 +105,14 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
   // First paint: read the current connection + sign-in state and, if already connected, the snapshot
   // + tree + excludes.
   void (async () => {
-    const [state, auth, vault, account, entitlement, update] = await Promise.all([
+    const [state, auth, vault, account, entitlement, update, appInfo] = await Promise.all([
       api.getConnectionState(),
       api.getAuthStatus(),
       api.getVaultStatus(),
       api.getAccount(),
       api.getEntitlement(),
       api.getUpdateStatus(),
+      api.getAppInfo(),
     ]);
     store.dispatch({ type: "connection", state });
     store.dispatch({ type: "authChanged", auth });
@@ -119,6 +120,8 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
     store.dispatch({ type: "accountChanged", account });
     store.dispatch({ type: "entitlementChanged", entitlement });
     store.dispatch({ type: "updateChanged", update });
+    // Static for the process — read once here with the rest of first paint, never re-read.
+    store.dispatch({ type: "appInfoLoaded", appInfo });
     // We now know the real sign-in/vault state — drop the "checking…" gate. Done before the (slower)
     // connected refreshes so the right screen paints as soon as the auth answer is in.
     store.dispatch({ type: "initialized" });

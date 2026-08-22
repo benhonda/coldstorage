@@ -27,11 +27,15 @@ const makePort = () => {
   };
 };
 
+/** A fixed clock, so the "checked at" stamp is an exact value rather than a moving target. */
+const CLOCK = 1_700_000_000_000;
+const clock = (): number => CLOCK;
+
 describe("UpdateManager", () => {
   test("starts idle and turns on background auto-download", () => {
     const p = makePort();
-    const m = new UpdateManager(p.port);
-    expect(m.status()).toEqual({ state: "idle", version: null, percent: null, error: null });
+    const m = new UpdateManager(p.port, clock);
+    expect(m.status()).toEqual({ state: "idle", version: null, percent: null, error: null, lastCheckedAt: null });
     expect(p.port.autoDownload).toBe(true);
   });
 
@@ -62,12 +66,21 @@ describe("UpdateManager", () => {
     expect(m.status().percent).toBe(0);
   });
 
-  test("update-not-available resets to idle", () => {
+  test("update-not-available resets to idle, but stamps that the feed answered", () => {
     const p = makePort();
-    const m = new UpdateManager(p.port);
+    const m = new UpdateManager(p.port, clock);
     p.emit("update-available", { version: "0.2.0" });
     p.emit("update-not-available");
-    expect(m.status()).toEqual({ state: "idle", version: null, percent: null, error: null });
+    // The stamp is the whole point: "nothing newer, as of now" vs. "we have never had an answer" are
+    // different facts, and Settings' footer says them differently.
+    expect(m.status()).toEqual({ state: "idle", version: null, percent: null, error: null, lastCheckedAt: CLOCK });
+  });
+
+  test("a failed check leaves the last-checked stamp alone — it answered nothing", () => {
+    const p = makePort();
+    const m = new UpdateManager(p.port, clock);
+    p.emit("error", new Error("network down"));
+    expect(m.status().lastCheckedAt).toBeNull();
   });
 
   test("error surfaces the message and stays non-fatal", () => {

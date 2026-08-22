@@ -336,6 +336,20 @@ conditionality is structural, not a card that appears mid-page.
   dialog, My Files — still sum file rows; that's a different question, about *these files*, not *the vault*.)
 - **No "download location" setting** — destination is chosen per request in the dialog.
 
+### The page foot — which build, and is it current (`views/VersionFooter.tsx`)
+Below the cards on **both** tabs, quiet and rule-separated: `coldstorage <version>` (from main's
+`app.getVersion()` — the packaged `package.json`, never a string typed into the renderer), the Electron
+version, and a `development build` marker when unpackaged. Beside it, the auto-updater's live state and a
+**Check for updates** button (a **Restart to update** button instead once a build is `ready`).
+
+This is the only place the updater is visible when it isn't interrupting: `UpdateBanner` shows at `ready`
+alone, which left checking, downloading and — the expensive one — *failing* completely silent. So the
+footer names the error in the updater's own words. It also needs `UpdateStatus.lastCheckedAt`: without a
+stamp, a manual check that finds nothing lands back on `idle` and reads as a button that did nothing, and
+"nothing newer as of 3:42pm" is indistinguishable from "we have never had an answer". A dev build says
+auto-update is off rather than offering a check that can never succeed. Wording is tested
+(`VersionFooter.test.ts`), not eyeballed.
+
 ## Onboarding — the first-run wizard (2026-07-16)
 After sign-up, one wizard in the same `.cs-signin` gate-card frame, progress dots on top, one idea
 per screen: **name → tour ×3 → recovery code → 2 skippable questions → done**

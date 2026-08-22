@@ -9,6 +9,7 @@
  */
 import type {
   AccountStatus,
+  AppInfo,
   AuthStatus,
   ConnectionState,
   DaemonEventName,
@@ -115,6 +116,9 @@ export interface AppState {
   /** Auto-update status (Phase 6), pushed from main. Packaged app only — stays `idle` in dev. Drives the
    * quiet "Restart to update" affordance when a newer signed build has downloaded. */
   update: UpdateStatus;
+  /** This build's version + runtime, read once from main at first paint. Null until it lands (a beat), so
+   * the Settings footer can hold a placeholder rather than assert a version it doesn't have yet. */
+  appInfo: AppInfo | null;
   status: Status | null;
   /** The browsable tree, straight from the daemon's `listFiles` (journal-backed). Raw wire shape —
    * the file-browser maps it to its own model. Empty until the first read lands. */
@@ -143,7 +147,8 @@ export const initialState: AppState = {
   vault: { state: "locked", recoveryCode: null, error: null },
   account: { known: false, displayName: null, onboarded: false, recoveryCodeConfirmed: false, error: null },
   entitlement: { known: false, active: false, checkingOut: false, quotaBytes: null, error: null },
-  update: { state: "idle", version: null, percent: null, error: null },
+  update: { state: "idle", version: null, percent: null, error: null, lastCheckedAt: null },
+  appInfo: null,
   status: null,
   files: [],
   excludes: [],
@@ -169,6 +174,7 @@ export type Action =
   | { type: "accountChanged"; account: AccountStatus }
   | { type: "entitlementChanged"; entitlement: EntitlementStatus }
   | { type: "updateChanged"; update: UpdateStatus }
+  | { type: "appInfoLoaded"; appInfo: AppInfo }
   | { type: "statusLoaded"; status: Status }
   | { type: "sourcesLoaded"; sources: Source[] }
   | { type: "filesLoaded"; files: ListedFile[] }
@@ -285,6 +291,9 @@ export const reducer = (state: AppState, action: Action): AppState => {
 
     case "updateChanged":
       return { ...state, update: action.update };
+
+    case "appInfoLoaded":
+      return { ...state, appInfo: action.appInfo };
 
     case "statusLoaded":
       return { ...state, status: action.status };
