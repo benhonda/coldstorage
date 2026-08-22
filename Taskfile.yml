@@ -146,7 +146,7 @@ tasks:
 
   _libsodium-dev:
     # libsodium the C library — the Linux systemLibrary target swift-sodium's Argon2id path (ZeroKnowledgeKeys,
-    # PROD.md Phase 3) needs. Apple platforms instead get a prebuilt XCFramework bundled in the SPM package
+    # see PROD.md's key hierarchy) needs. Apple platforms instead get a prebuilt XCFramework bundled in the SPM package
     # itself, so this is a no-op there. The why-not-apt reasoning and the version live in the script, which
     # `.devcontainer/post-create.sh` also runs — one implementation, both entry points, exactly like
     # install-swift.sh beside it. (post-create only ran the Swift half until 2026-08-21, so a cold container
@@ -224,7 +224,7 @@ tasks:
         echo "✓ local archive state wiped. Re-add watched folders in Settings after the next launch."
 
   daemon:mac:sim-new-device:
-    desc: "Simulate signing in on a FRESH computer (PROD.md Phase 5b gate): delete this device's zero-knowledge MasterKey escrow (vault.json) so the next launch has no cached key and must prompt for the recovery code — proving the new-device unlock path without a second Mac. Keeps the sign-in session + the account's server-side key-blob, so it's a targeted 'forget my encryption key', not a full sign-out. QUIT the app first (it rewrites vault.json while running)."
+    desc: "Simulate signing in on a FRESH computer (PROD.md, the zero-knowledge key hierarchy): delete this device's zero-knowledge MasterKey escrow (vault.json) so the next launch has no cached key and must prompt for the recovery code — proving the new-device unlock path without a second Mac. Keeps the sign-in session + the account's server-side key-blob, so it's a targeted 'forget my encryption key', not a full sign-out. QUIT the app first (it rewrites vault.json while running)."
     vars:
       DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
     cmds:
@@ -236,7 +236,7 @@ tasks:
         echo "✓ forgot this device's MasterKey escrow. Next launch: sign in → you'll be asked for your recovery code."
 
   daemon:gate-test:
-    desc: "[devcontainer] ADVERSARIAL test of the per-user S3 boundary (PROD.md P2/P5a gate): mints a throwaway Cognito user (admin-create + password — USER_AUTH accepts PASSWORD as a factor, no inbox needed), exchanges its ID token for real STS creds via the identity pool, then proves own-prefix PUT is ALLOWED while a cross-prefix PUT and a GET of a real foreign object are DENIED. Cleans up the user/identity/probe object after."
+    desc: "[devcontainer] ADVERSARIAL test of the per-user S3 boundary (the per-user prefix boundary, see PROD.md): mints a throwaway Cognito user (admin-create + password — USER_AUTH accepts PASSWORD as a factor, no inbox needed), exchanges its ID token for real STS creds via the identity pool, then proves own-prefix PUT is ALLOWED while a cross-prefix PUT and a GET of a real foreign object are DENIED. Cleans up the user/identity/probe object after."
     deps: [check-aws-identity]
     dir: infra/coldstorage/live/production
     cmds:
@@ -1118,7 +1118,7 @@ tasks:
         fi
       # Bake the public config before electron-builder bundles it (Phase 6d). ENV=production: this is the
       # CUSTOMER build published to the public feed, so it must point at the prod account-backend lane
-      # (api.coldstorage.sh) — which must be stood up first (PROD.md Phase 4), else sign-in/checkout 404s.
+      # (api.coldstorage.sh) — which must be stood up first (PROD.md), else sign-in/checkout 404s.
       - task: ui:config:bake
         vars:
           ENV: production
@@ -1267,7 +1267,7 @@ tasks:
         echo "creds: nothing to wire — the daemon gets Cognito STS creds when you sign in. Verify: task ui:mac:package:doctor"
 
   ui:config:bake:
-    desc: "Bake the PUBLIC app config into ui/build/app-config.json (bundled at Contents/Resources/app-config.json) so a config-less download self-configures — sign-in is the only setup (PROD.md Phase 6d). ENV=production|staging picks (a) the account-backend lane (prod → api.coldstorage.sh, staging → api-staging.coldstorage.sh; Cognito + vault bucket are shared) and (b) the app INSTALL IDENTITY from ui/identity.json (productName/appId/scheme) — so a staging build installs alongside prod. Both the bundle (electron-builder.cjs) and the runtime read this baked file, so they can't disagree. REQUIRED + explicit: there is no silent default, so a customer build can never accidentally ship staging-wired. Sourced from the SAME infra-outputs handoff as ui:mac:config. Run automatically by ui:mac:release (production) / ui:mac:package (staging)."
+    desc: "Bake the PUBLIC app config into ui/build/app-config.json (bundled at Contents/Resources/app-config.json) so a config-less download self-configures — sign-in is the only setup (PROD.md). ENV=production|staging picks (a) the account-backend lane (prod → api.coldstorage.sh, staging → api-staging.coldstorage.sh; Cognito + vault bucket are shared) and (b) the app INSTALL IDENTITY from ui/identity.json (productName/appId/scheme) — so a staging build installs alongside prod. Both the bundle (electron-builder.cjs) and the runtime read this baked file, so they can't disagree. REQUIRED + explicit: there is no silent default, so a customer build can never accidentally ship staging-wired. Sourced from the SAME infra-outputs handoff as ui:mac:config. Run automatically by ui:mac:release (production) / ui:mac:package (staging)."
     dir: coldstorage
     requires:
       vars: [ENV]
@@ -1278,7 +1278,7 @@ tasks:
       - mkdir -p "{{.ROOT_DIR}}/ui/build"
       - |
         # The account-backend lane is the whole staging-vs-prod distinction for the app (Cognito + the S3
-        # vault bucket are SHARED across lanes — see cognito.tf; PROD.md Phase 4). The key-blob lives in
+        # vault bucket are SHARED across lanes — see cognito.tf; PROD.md). The key-blob lives in
         # whichever lane's DB, so a customer build MUST bake prod: onboarding against staging would strand the
         # user's encrypted master key in the test DB. COLDSTORE_ACCOUNT_API still overrides if explicitly set.
         case "{{.ENV}}" in
@@ -1468,7 +1468,7 @@ tasks:
       - bun run prove
 
   # ------------------------------------------------------------------ account-backend (domain: account-backend/)
-  # Hono on Vercel + Neon/Drizzle — Cognito↔Paddle↔zero-knowledge-key-blob API (PROD.md Phase 4).
+  # Hono on Vercel + Neon/Drizzle — Cognito↔Paddle↔zero-knowledge-key-blob API (PROD.md).
   # Two env files, both gitignored, both in account-backend/: .env.vercel is the pulled
   # baseline (`task pull:account-backend` — staging's real values); .env is optional LOCAL
   # OVERRIDES on top (e.g. point DATABASE_URL at your own local Postgres instead of staging's)
@@ -2129,13 +2129,13 @@ tasks:
         {
           echo "COLDSTORE_BUCKET=$(terragrunt output -raw bucket_name)"
           echo "AWS_REGION=$(terragrunt output -raw aws_region)"
-          # Cognito (PROD.md Phase 2, multi-user) — NOT secrets (public client config), so they ride the
+          # Cognito (multi-user, see PROD.md) — NOT secrets (public client config), so they ride the
           # handoff. Provider name is Cognito's documented
           # `Logins` key shape (cognito-idp.<region>.amazonaws.com/<userPoolId>) — same one cognito.tf notes
           # next to `aws_cognito_user_pool.main.endpoint`.
           echo "COLDSTORE_COGNITO_IDENTITY_POOL_ID=$(terragrunt output -raw cognito_identity_pool_id)"
           echo "COLDSTORE_COGNITO_USER_POOL_PROVIDER=cognito-idp.$(terragrunt output -raw aws_region).amazonaws.com/$(terragrunt output -raw cognito_user_pool_id)"
-          # OAuth sign-in config (PROD.md Phase 5) — also public client config. Domain is empty until a
+          # OAuth sign-in config (see PROD.md) — also public client config. Domain is empty until a
           # federated IdP is enabled in TF; the app treats empty as "sign-in not configured" (dogfood mode).
           echo "COLDSTORE_COGNITO_DOMAIN=$(terragrunt output -raw cognito_domain)"
           echo "COLDSTORE_COGNITO_CLIENT_ID=$(terragrunt output -raw cognito_user_pool_client_id)"
