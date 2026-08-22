@@ -70,6 +70,30 @@ describe("childrenOf", () => {
     expect(folder.type === "folder" && folder.status).toBe("uploading");
   });
 
+  test("the rollup puts NEEDS-YOU ahead of live work, in a fixed order", () => {
+    // The folder is how you find the file to act on, so a folder containing something stuck must not read
+    // as merely busy. Pins the whole documented chain (see `rollupStatus`) rather than one rung — a
+    // precedence nothing asserts is a precedence that can be reordered by accident.
+    const rollupOf = (...statuses: ArchivedFile["status"][]): string => {
+      const rows = childrenOf(statuses.map((s, i) => file(`a/f${i}`, 1, s)), "");
+      const folder = rows[0];
+      return folder.type === "folder" ? folder.status : "not-a-folder";
+    };
+    expect(rollupOf("frozen", "uploading", "stalled", "failed")).toBe("failed");
+    expect(rollupOf("frozen", "uploading", "stalled")).toBe("stalled");
+    expect(rollupOf("frozen", "uploading", "transferring")).toBe("uploading");
+    expect(rollupOf("frozen", "transferring", "pending")).toBe("transferring");
+    expect(rollupOf("frozen", "pending")).toBe("pending");
+  });
+
+  test("a half-downloaded folder is not 'saved on this Mac'", () => {
+    // `here` needs EVERY file to be here — claiming a folder is on the Mac when half of it isn't is the
+    // kind of overstatement that sends someone looking for files that aren't there.
+    const rows = childrenOf([file("a/x", 1, "here"), file("a/y", 1, "frozen")], "");
+    const folder = rows[0];
+    expect(folder.type === "folder" && folder.status).toBe("frozen");
+  });
+
   test("a folder that has bytes moving reads as transferring, not merely pending", () => {
     // `transferring` is the more specific truth: something under here really is arriving. A folder that
     // reported "waiting on deep storage" while a file inside it was downloading would understate it.

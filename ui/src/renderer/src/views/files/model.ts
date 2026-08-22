@@ -12,9 +12,12 @@ import type { ConflictPolicy, ListedFile } from "../../../../shared/ipc.ts";
 /**
  * Per-file state — the journal `FileStatus` folded with the file's live transfer, if it has one.
  * - `frozen` — stored in deep storage (the common at-rest state; shows a quiet ✓).
- * - `uploading` — in the upload pipeline, incl. a transient retry (the daemon/SDK keep trying).
+ * - `uploading` — in the upload pipeline and getting somewhere.
+ * - `stalled` — still queued, but not getting anywhere: retrying against a recorded fault, or untouched for
+ *   longer than the daemon's own window ({@link uploadStall}). Still counts as bytes on their way
+ *   ({@link isUploadOutstanding}).
  * - `failed` — upload couldn't complete and the daemon stopped retrying (permanent/stuck) — needs
- *   attention. Transient blips are NOT this; they stay `uploading` until they self-heal or go permanent.
+ *   attention. A transient blip is NOT this: it stays in the queue as `uploading`/`stalled`.
  * - `pending` / `transferring` / `here` — transfer activity, overlaid from the daemon's restores list.
  *
  * `pending` and `transferring` are two states because they are two different things, and conflating them
@@ -119,7 +122,8 @@ export interface FolderRow {
   size: number;
   /** Descendant file count. */
   count: number;
-  /** Aggregate status (active wins: uploading ▸ transferring ▸ pending ▸ here-if-all ▸ frozen). */
+  /** Aggregate status — see {@link rollupStatus} for the precedence and why (needs-you first, then live
+   * work, then tidy endings). */
   status: FileStatus;
   /** True for a just-created, still-empty folder (virtual path, no files yet). */
   empty: boolean;
@@ -268,29 +272,32 @@ export const moveIsNoop = (targets: readonly RowTarget[], toDir: string): boolea
   targets.every((t) => parentOf(t.path) === toDir);
 
 /**
- * Rollup for a folder's aggregate status. `failed` wins first — a stuck upload inside is the thing that
- * won't resolve itself, so the folder flags it so the user can drill in and find it. Then the active
- * states, then all-here, else `frozen` (stored).
+ * Rollup for a folder's aggregate status, in the order the states stop needing the user:
  *
- * `transferring` outranks `pending`: if anything under this folder is actually moving bytes, that's the
- * more specific truth, and the folder should not read as merely waiting.
+ *   failed ▸ stalled ▸ uploading ▸ transferring ▸ pending ▸ here-if-all ▸ frozen
+ *
+ * **Needs-you first.** `failed` leads — a stuck upload inside is the thing that won't resolve itself, and
+ * the folder is how you find it. `stalled` sits right behind it for the same reason: "some of this folder
+ * is moving" is the less useful truth when part of it has stopped.
+ *
+ * Then live work, most specific first — `transferring` outranks `pending` because bytes actually moving
+ * beats merely waiting. Tidy endings last, and `here` only when EVERY file is (a folder that's half
+ * downloaded isn't "saved on this Mac").
  */
 const rollupStatus = (s: Set<FileStatus>): FileStatus =>
   s.has("failed")
     ? "failed"
-    : // A stalled upload inside outranks a healthy one: "some of this folder is moving" is the less useful
-      // truth when part of it has stopped, and the folder is how the user finds the file to act on.
-      s.has("stalled")
+    : s.has("stalled")
       ? "stalled"
       : s.has("uploading")
-      ? "uploading"
-      : s.has("transferring")
-        ? "transferring"
-        : s.has("pending")
-          ? "pending"
-          : s.size === 1 && s.has("here")
-            ? "here"
-            : "frozen";
+        ? "uploading"
+        : s.has("transferring")
+          ? "transferring"
+          : s.has("pending")
+            ? "pending"
+            : s.size === 1 && s.has("here")
+              ? "here"
+              : "frozen";
 
 /**
  * The rows shown at directory `dir` (root = ""): immediate subfolders (aggregated) then files, each
