@@ -115,8 +115,12 @@ because Resume is free while the window lasts. The confirm dialog says both, up 
 - **daemon** — `RestoreStep.next` (pure, tested: a daemon that cannot thaw NEVER decides to thaw),
   the `.authorizationRequired` outcome, and a `restorePlan` command that maps fileIds → deduped blob
   keys + egress bytes for the quote. Dogfood still self-thaws (its IAM user kept `RestoreObject`).
-- **UI** — `quoteRestore`/`payForRestore`/`getRestoreJob`/`abandonQuote` through manager → IPC →
-  preload; `RequestBackModal` now shows the BACKEND's price (quote → pay → restore).
+- **UI** — `quoteRestore`/`startRestorePayment`/`awaitRestorePayment`/`getRestoreJob`/`abandonQuote`
+  through manager → IPC → preload; `RequestBackModal` shows the BACKEND's price (quote → pay → restore).
+  Paying is SPLIT from waiting on purpose: the charge either hits a saved card or bounces the user to
+  Paddle in their browser, and only the caller that knows which can offer "reopen checkout". The dialog
+  stays open through the wait, with `cancelRestorePayment` (stop waiting + hand the quote back) as the
+  way out — an invisible browser round-trip behind a closed dialog was the bug this replaced.
   (`cancelRestore` was renamed `abandonQuote` on 2026-07-27: it drops an unpaid QUOTE, and the daemon now
   has its own `cancelRestore` that stops an in-flight TRANSFER. Two different acts, two names.)
 

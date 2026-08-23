@@ -108,6 +108,13 @@ export const MyFilesView = ({
    *  computes a restore price — see RequestBackModal's note on why the old local estimate was ~40× wrong. */
   const [quote, setQuote] = useState<RetrievalQuote | null>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);
+  /** A restore payment in flight — keeps the request dialog up (with a way out) instead of letting a
+   *  browser round-trip happen behind a closed dialog. Holds the job it belongs to so "Never mind" can
+   *  hand that exact quote back. */
+  const [paying, setPaying] = useState<{ jobId: string; phase: "starting" | "browser" | "card" } | null>(null);
+  /** Which payment the in-flight async body belongs to. Bumped on every confirm and every cancel, so a
+   *  request the user walked away from can't land later and resurrect its own waiting state. */
+  const payAttempt = useRef(0);
   const [confirmDelete, setConfirmDelete] = useState<RowTarget[] | null>(null);
   // Is anything being deleted still sitting in a watched folder? Asked before the dialog opens so it can
   // state the consequence up front instead of after the fact. `null` = still asking.
@@ -213,50 +220,84 @@ export const MyFilesView = ({
     })();
   };
 
+  /** Hand the restore to the daemon, once it's authorized. The daemon writes a durable row and its run
+   *  loop takes it from here — so the download survives a sign-out, a quit, and the ~48h thaw, which is
+   *  exactly what the dialog promises when it says you can close the app. */
+  const startRestore = (files: ArchivedFile[], base: string, folder: string, jobId: string): void => {
+    for (const f of files) {
+      // Keeps the folder structure the vault already has (see `restoreBase`). The daemon creates the
+      // intermediate directories on its way to writing the file.
+      const out = restoreOutPath(f.relativePath, base, folder);
+      exec(() => api.request("requestRestore", { file: f.id, out, jobId }));
+    }
+    // Say it worked. Until now the app answered a click on "Start download" with nothing at all — the
+    // dialog closed and you had to go find the Downloads page yourself to learn whether anything had
+    // happened. The countdown lives on that page, so the toast points at it rather than restating it.
+    toast.success(
+      files.length === 1
+        ? `Started. ${baseName(files[0]?.relativePath ?? "")} is on its way.`
+        : `Started. ${files.length} files are on their way.`,
+      { label: "See downloads", onClick: onShowDownloads },
+    );
+  };
+
+  /**
+   * A free restore starts at once. A PAID one keeps the dialog open through the payment — the charge may
+   * bounce the user out to Paddle in their browser, and that wait needs to be visible, reopenable and
+   * abandonable rather than happening behind a dialog that already closed (PILLAR5).
+   */
   const confirmRequest = (folder: string): void => {
     const files = requestFiles ?? [];
     const job = quote;
     // Read before the dialog closes — the async body below outlives this render, and the base belongs to
     // the request that was just confirmed, not to whatever gets asked for next.
     const base = requestBase;
-    setRequestFiles(null);
     if (!job) return; // never start a download we couldn't price — the button is disabled, but be certain
 
+    if (job.quoteCents === 0) {
+      setRequestFiles(null);
+      startRestore(files, base, folder, job.jobId);
+      return;
+    }
+
+    // Set BEFORE the await: the charge request takes a round trip, and until this lands the dialog would
+    // still be showing a live "Pay and start" — a second click would create a second transaction.
+    setPaying({ jobId: job.jobId, phase: "starting" });
+    const attempt = ++payAttempt.current;
     void (async () => {
-      // Pay first when there's something to pay. `payForRestore` resolves only once the webhook confirms
-      // the money AND the backend has begun thawing — so by the time we issue `restore`, the daemon will
-      // find the blobs thawing rather than frozen. A free (allowance-covered) job is already authorized at
-      // quote time, so it skips straight through.
-      if (job.quoteCents > 0) {
-        try {
-          await api.payForRestore(job.jobId);
-        } catch (e) {
-          // A toast, not `setQuoteError`: the dialog closed on confirm, so its inline error slot is no
-          // longer on screen and the message went nowhere. A failed payment is the last thing that should
-          // fail silently — the user just agreed to be charged and needs to know they weren't.
-          toast.error(`Couldn't take the payment (${e instanceof Error ? e.message : String(e)}). Nothing was charged, and the download didn't start.`);
-          return; // payment didn't land — don't pretend a restore started
-        }
+      const current = (): boolean => payAttempt.current === attempt;
+      try {
+        // Pay first: `awaitRestorePayment` resolves only once the webhook confirms the money AND the
+        // backend has begun thawing — so by the time we issue `restore`, the daemon will find the blobs
+        // thawing rather than frozen.
+        const { checkoutOpened } = await api.startRestorePayment(job.jobId);
+        if (!current()) return; // cancelled while the charge was starting
+        setPaying({ jobId: job.jobId, phase: checkoutOpened ? "browser" : "card" });
+        const paid = await api.awaitRestorePayment(job.jobId);
+        if (!current()) return; // walked away — `cancelPayment` already closed up and refunded the quote
+        setPaying(null);
+        if (!paid) return;
+        setRequestFiles(null);
+        startRestore(files, base, folder, job.jobId);
+      } catch (e) {
+        // A failed payment is the last thing that should fail silently — the user just agreed to be
+        // charged and needs to know they weren't. The dialog closes with it, so this goes to a toast.
+        if (!current()) return; // they already walked away; don't report a payment they abandoned
+        setPaying(null);
+        setRequestFiles(null);
+        toast.error(`Couldn't take the payment (${e instanceof Error ? e.message : String(e)}). Nothing was charged, and the download didn't start.`);
       }
-      // Record each file against the job that authorized it. The daemon writes a durable row and its
-      // run loop takes it from here — so the download survives a sign-out, a quit, and the ~48h thaw,
-      // which is exactly what the dialog above promises when it says you can close the app.
-      for (const f of files) {
-        // Keeps the folder structure the vault already has (see `restoreBase`). The daemon creates the
-        // intermediate directories on its way to writing the file.
-        const out = restoreOutPath(f.relativePath, base, folder);
-        exec(() => api.request("requestRestore", { file: f.id, out, jobId: job.jobId }));
-      }
-      // Say it worked. Until now the app answered a click on "Start download" with nothing at all — the
-      // dialog closed and you had to go find the Downloads page yourself to learn whether anything had
-      // happened. The countdown lives on that page, so the toast points at it rather than restating it.
-      toast.success(
-        files.length === 1
-          ? `Started. ${baseName(files[0]?.relativePath ?? "")} is on its way.`
-          : `Started. ${files.length} files are on their way.`,
-        { label: "See downloads", onClick: onShowDownloads },
-      );
     })();
+  };
+
+  /** "Never mind" mid-payment: stop waiting, hand the quote back so it costs none of the free monthly
+   *  allowance, and put the user back where they were. */
+  const cancelPayment = (): void => {
+    const jobId = paying?.jobId;
+    payAttempt.current += 1; // orphan the in-flight body (see `payAttempt`)
+    setPaying(null);
+    setRequestFiles(null);
+    if (jobId) void api.cancelRestorePayment(jobId);
   };
 
   // The Downloads page asked to re-open the request dialog for files whose download needs re-buying.
@@ -743,7 +784,14 @@ export const MyFilesView = ({
           quoteError={quoteError}
           chooseFolder={api.chooseFolder}
           getDownloadsDir={api.getDownloadsDir}
+          paying={paying}
           onConfirm={confirmRequest}
+          onCancelPayment={cancelPayment}
+          onReopenCheckout={() => {
+            void api.reopenRestoreCheckout().catch((e: unknown) => {
+              toast.error(`Couldn't reopen the checkout page (${e instanceof Error ? e.message : String(e)}).`);
+            });
+          }}
           onClose={() => {
             // Let go of an unpaid quote so it burns none of the user's free monthly allowance.
             if (quote && quote.quoteCents > 0) void api.abandonQuote(quote.jobId);

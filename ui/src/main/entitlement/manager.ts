@@ -33,6 +33,13 @@ const fetchJson = async (url: string, init: RequestInit): Promise<Response> => {
 export class EntitlementManager {
   private status: EntitlementStatus = { known: false, active: false, checkingOut: false, quotaBytes: null, error: null };
   private polling = false;
+  /** Bumped whenever a poll is superseded or abandoned, so a stale loop can tell it no longer owns the status. */
+  private pollEpoch = 0;
+  /** The in-flight restore payment's checkout URL, and the same epoch trick for abandoning its wait. */
+  private restoreCheckoutUrl: string | null = null;
+  private restorePayEpoch = 0;
+  /** The hosted-checkout URL of the in-flight checkout — so "reopen" costs no round trip and no new transaction. */
+  private checkoutUrl: string | null = null;
   private readonly listeners = new Set<(s: EntitlementStatus) => void>();
 
   constructor(
@@ -72,6 +79,10 @@ export class EntitlementManager {
   /** Reset to signed-out (called on sign-out) so a next user doesn't inherit this one's entitlement. */
   reset(): void {
     this.polling = false;
+    this.pollEpoch += 1;
+    this.restorePayEpoch += 1;
+    this.checkoutUrl = null;
+    this.restoreCheckoutUrl = null;
     this.setStatus({ known: false, active: false, checkingOut: false, quotaBytes: null, error: null });
   }
 
@@ -165,8 +176,31 @@ export class EntitlementManager {
       this.setStatus({ ...this.status, error: e instanceof Error ? e.message : String(e) });
       throw e;
     }
+    this.checkoutUrl = url;
     await shell.openExternal(url);
     void this.pollUntilActive();
+  }
+
+  /**
+   * Reopen the checkout page the user already has open (or closed, or lost behind another window).
+   * Same Paddle transaction — reopening must not create a second one.
+   */
+  async reopenCheckout(): Promise<void> {
+    if (!this.checkoutUrl) throw new Error("no checkout is open");
+    await shell.openExternal(this.checkoutUrl);
+  }
+
+  /**
+   * "I'm not doing this right now." Stops the poll and drops the waiting state immediately, so the UI
+   * goes straight back to the picker instead of sitting on a dead-end message until the poll times out.
+   * Harmless if the checkout later completes anyway — the webhook is the source of truth and the next
+   * refresh picks it up.
+   */
+  cancelCheckout(): void {
+    this.polling = false;
+    this.pollEpoch += 1;
+    this.checkoutUrl = null;
+    this.setStatus({ ...this.status, checkingOut: false, error: null });
   }
 
   /** The `coldstorage://checkout-complete` nudge — check right now instead of waiting for the next poll. */
@@ -176,22 +210,32 @@ export class EntitlementManager {
 
   dispose(): void {
     this.polling = false;
+    this.pollEpoch += 1;
+    this.restorePayEpoch += 1;
     this.listeners.clear();
   }
 
   private async pollUntilActive(): Promise<void> {
     if (this.polling) return; // one poll at a time
     this.polling = true;
+    const epoch = ++this.pollEpoch;
     this.setStatus({ ...this.status, checkingOut: true, error: null });
     const deadline = Date.now() + POLL_TIMEOUT_MS;
-    while (this.polling && Date.now() < deadline) {
+    while (this.pollEpoch === epoch && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-      if (!this.polling) break;
+      if (this.pollEpoch !== epoch) break;
       await this.refresh();
       if (this.status.active) break;
     }
+    // Abandoned or superseded mid-sleep: whoever bumped the epoch owns the status now — don't write over it.
+    if (this.pollEpoch !== epoch) return;
+    // Otherwise we timed out with nothing to show for it: say so rather than silently dropping back to the picker.
     this.polling = false;
-    this.setStatus({ ...this.status, checkingOut: false });
+    this.setStatus({
+      ...this.status,
+      checkingOut: false,
+      error: this.status.active ? null : "We never saw that checkout finish. If you did pay, give it a minute — it'll turn on by itself.",
+    });
   }
 
   /* ── Paid retrieval (root RETRIEVAL.md) ───────────────────────────────────────────────────────────
@@ -218,32 +262,63 @@ export class EntitlementManager {
   }
 
   /**
-   * Pay for a quoted restore, then wait for the money to land.
+   * Charge for a quoted restore. Two paths, and the caller has to know which one it got: a subscriber's
+   * saved card is charged in place (no browser — they confirmed the price already), while someone with no
+   * card on file gets the hosted Paddle checkout in their browser. That's what `checkoutOpened` reports,
+   * and it's why paying is split from waiting: a wait with a browser tab behind it needs a "reopen it"
+   * button, and a wait without one must not offer a button that opens nothing.
    *
-   * Two paths, and the user only notices one of them: a subscriber's saved card is charged in place (no
-   * browser, no checkout — they confirmed the price already), while someone with no card on file gets the
-   * hosted Paddle checkout in their browser. Either way we then POLL until the webhook flips the job to
-   * `paid` — the webhook is the source of truth, exactly as with subscription checkout above. The backend
-   * thaws at that moment; the daemon can't do it, so nothing before that point makes the data reachable.
+   * Either way the money isn't real until the webhook says so — call {@link awaitRestorePayment} next.
    */
-  async payForRestore(jobId: string): Promise<RetrievalQuote> {
+  async startRestorePayment(jobId: string): Promise<{ checkoutOpened: boolean }> {
     const { res, body } = await this.authedJson<{ charged?: boolean; url?: string | null; message?: string }>(
       `/retrieval/jobs/${jobId}/pay`,
       { method: "POST" },
     );
     if (!res.ok) throw new Error(body?.message ?? `couldn't take the payment: http ${res.status}`);
-    if (body?.url) await shell.openExternal(body.url);
+    this.restoreCheckoutUrl = body?.url ?? null;
+    if (this.restoreCheckoutUrl) await shell.openExternal(this.restoreCheckoutUrl);
+    return { checkoutOpened: this.restoreCheckoutUrl !== null };
+  }
 
+  /**
+   * Wait for a started restore payment to clear. POLLS until the webhook flips the job authorized — the
+   * webhook is the source of truth, exactly as with subscription checkout above. The backend thaws at that
+   * moment; the daemon can't do it, so nothing before this resolves makes the data reachable.
+   *
+   * Resolves `null` when the user walked away via {@link cancelRestorePayment} — an abandoned wait is not
+   * an error, and the caller must not report one.
+   */
+  async awaitRestorePayment(jobId: string): Promise<RetrievalQuote | null> {
+    const epoch = ++this.restorePayEpoch;
     const deadline = Date.now() + POLL_TIMEOUT_MS;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      if (this.restorePayEpoch !== epoch) return null; // abandoned mid-sleep
       const job = await this.getRestoreJob(jobId);
+      if (this.restorePayEpoch !== epoch) return null;
       if (job.authorized) return job;
       if (job.status === "canceled") throw new Error("this restore was canceled");
     }
     // Not a failure of the payment — just of our patience. The job stays quoted and payable, and a
     // completed checkout will still flip it; say so rather than implying the money vanished.
     throw new Error("still waiting on the payment to clear — it may complete shortly; check back in a moment");
+  }
+
+  /** Reopen the restore's checkout page — the tab they closed or lost. Same Paddle transaction. */
+  async reopenRestoreCheckout(): Promise<void> {
+    if (!this.restoreCheckoutUrl) throw new Error("no checkout is open");
+    await shell.openExternal(this.restoreCheckoutUrl);
+  }
+
+  /**
+   * "Never mind" on a restore payment: stop waiting, and hand the quote back so it burns none of the free
+   * monthly allowance ({@link abandonQuote}). The in-flight {@link awaitRestorePayment} resolves `null`.
+   */
+  async cancelRestorePayment(jobId: string): Promise<void> {
+    this.restorePayEpoch += 1;
+    this.restoreCheckoutUrl = null;
+    await this.abandonQuote(jobId);
   }
 
   /** Poll one restore job (status + whether the backend has thawed its blobs yet). */

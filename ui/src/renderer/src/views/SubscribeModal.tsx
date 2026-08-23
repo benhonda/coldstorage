@@ -13,10 +13,12 @@
  * The catalog is fetched live from the billing server (annual sizes, exactly what Paddle will sell) —
  * never hardcoded here. The picker itself is the shared {@link PlanPicker} (also used by
  * ChangePlanModal). "Subscribe" opens Paddle checkout in the system browser for the chosen plan;
- * while that's open we poll, and the modal reflects `checkingOut` until the webhook lands.
+ * while that's open we poll, and the modal reflects `checkingOut` until the webhook lands — with a way
+ * out of that wait either way: reopen the checkout page, or abandon it and get the picker straight back.
  */
 import { useEffect, useState } from "react";
 import { Alert, Button, Modal } from "../ui/primitives.tsx";
+import { useToast } from "../ui/toast.tsx";
 import { PlanPicker } from "./PlanPicker.tsx";
 import { formatBytes } from "./files/model.ts";
 import type { CatalogPlan, ColdstoreApi, EntitlementStatus } from "../../../shared/ipc.ts";
@@ -37,6 +39,7 @@ export const SubscribeModal = ({
   onSubscribe: (priceId: string) => void;
   onClose: () => void;
 }): React.JSX.Element => {
+  const toast = useToast();
   const [plans, setPlans] = useState<CatalogPlan[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<CatalogPlan | undefined>(undefined);
@@ -64,7 +67,26 @@ export const SubscribeModal = ({
       icon="workspace_premium"
       onClose={onClose}
       footer={
-        entitlement.checkingOut ? undefined : (
+        entitlement.checkingOut ? (
+          // Waiting is not a dead end: reopen the tab you lost, or back out and get the picker back.
+          <>
+            <Button variant="ghost" onClick={() => void api.cancelCheckout()}>
+              Never mind
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                // Reopening can genuinely fail (nothing in flight any more). Say so — a button that
+                // silently does nothing is the failure this waiting state exists to remove.
+                void api.reopenCheckout().catch((e: unknown) => {
+                  toast.error(`Couldn't reopen the checkout page (${e instanceof Error ? e.message : String(e)}).`);
+                });
+              }}
+            >
+              Reopen checkout
+            </Button>
+          </>
+        ) : (
           <>
             <Button variant="ghost" onClick={onClose}>
               Not now
@@ -79,7 +101,7 @@ export const SubscribeModal = ({
       {entitlement.checkingOut ? (
         <p className="cs-quote-lead">
           Finish checking out in your browser. This updates on its own once you&apos;re done — you can leave
-          this open.
+          this open. Lost the tab, or changed your mind? Either button below.
         </p>
       ) : (
         <>

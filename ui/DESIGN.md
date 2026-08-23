@@ -497,7 +497,10 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   `ChangePlanModal`. The same SubscribeModal opens with `reason: "upgrade"` from Settings when nobody is
   blocked, which is why it takes a `PaywallReason` rather than inferring the moment. It's the multi-plan
   picker (PADDLE.md spec: size cards, fetched live, never hardcoded; the picker itself is the shared
-  `views/PlanPicker.tsx`); Settings shows the state. `coldstorage://checkout-complete` is a check-now nudge. **Manage surface (2026-07-10, PADDLE.md "Managing a subscription"):**
+  `views/PlanPicker.tsx`); Settings shows the state. `coldstorage://checkout-complete` is a check-now nudge.
+  **The wait is never a dead end:** while `checkingOut` is true the modal offers `reopenCheckout()` (the same
+  Paddle transaction reopened — never a second one) and `cancelCheckout()` (stops the poll, clears the wait,
+  picker back at once); an abandoned checkout that times out says so instead of silently reverting. **Manage surface (2026-07-10, PADDLE.md "Managing a subscription"):**
   `getSubscription()/previewPlanChange()/changePlan()/openManage()` → the sidebar's pinned
   `views/AccountCard.tsx` (avatar · email · a Drive-style storage meter fed by the gate's own
   used/quota figures; the plan badge hangs off the AVATAR's bottom edge rather than sitting beside the

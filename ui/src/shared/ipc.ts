@@ -99,6 +99,10 @@ export const IPC = {
   entitlementCatalog: "entitlement:catalog",
   /** invoke: start a subscription checkout for a chosen plan `(priceId)` (opens the system browser + polls). */
   entitlementSubscribe: "entitlement:subscribe",
+  /** invoke: reopen the in-flight checkout page in the browser (same Paddle transaction, no new one). */
+  entitlementReopenCheckout: "entitlement:reopenCheckout",
+  /** invoke: abandon the in-flight checkout — stops polling and drops the waiting state right away. */
+  entitlementCancelCheckout: "entitlement:cancelCheckout",
   /** invoke: the live subscription summary `(→ SubscriptionInfo | null)` — plan badge + manage surface. */
   entitlementSubscription: "entitlement:subscription",
   /** invoke: preview a plan change `(priceId → PlanChangePreview)` — what Paddle charges/credits now. */
@@ -112,9 +116,15 @@ export const IPC = {
   /** invoke: price a restore `({blobKeys, egressBytes} → RetrievalQuote)` — the ONLY honest restore price
    *  (root RETRIEVAL.md); never compute one in the renderer. */
   retrievalQuote: "retrieval:quote",
-  /** invoke: pay for a quoted restore `(jobId → RetrievalQuote)`; resolves once the webhook confirms and
-   *  the backend has thawed. Charges a saved card in place, or opens Paddle checkout in the browser. */
+  /** invoke: charge for a quoted restore `(jobId → {checkoutOpened})` — a saved card in place, or Paddle
+   *  checkout opened in the browser. Doesn't wait; follow it with {@link IPC.retrievalAwaitPay}. */
   retrievalPay: "retrieval:pay",
+  /** invoke: wait for a started restore payment `(jobId → RetrievalQuote | null)`; null = abandoned. */
+  retrievalAwaitPay: "retrieval:awaitPay",
+  /** invoke: reopen the restore's checkout page in the browser (same transaction). */
+  retrievalReopenCheckout: "retrieval:reopenCheckout",
+  /** invoke: abandon a restore payment `(jobId)` — stops the wait and hands the quote back. */
+  retrievalCancelPay: "retrieval:cancelPay",
   /** invoke: poll one restore job `(jobId → RetrievalQuote)`. */
   retrievalJob: "retrieval:job",
   /** invoke: drop an unpaid quote `(jobId → void)` so it burns none of the free allowance. */
@@ -453,6 +463,13 @@ export interface ColdstoreApi {
    * and polls until the webhook marks the subscription active (watch {@link onEntitlement}).
    * Rejects if checkout can't start. */
   subscribe(priceId: string): Promise<void>;
+  /** Reopen the checkout page already in flight (lost tab, closed window) — same transaction, never a new one.
+   * Rejects when no checkout is open. */
+  reopenCheckout(): Promise<void>;
+  /** Abandon the in-flight checkout: stops the poll and clears {@link EntitlementStatus.checkingOut} at once,
+   * so the picker comes back instead of a wait with no way out. Safe if the checkout completes anyway —
+   * the webhook still decides. */
+  cancelCheckout(): Promise<void>;
   /** The live subscription summary — null when this account never subscribed. */
   getSubscription(): Promise<SubscriptionInfo | null>;
   /** Preview what changing to `priceId` charges (or credits) right now, before committing. */
@@ -463,16 +480,25 @@ export interface ColdstoreApi {
   openManage(page: ManagePage): Promise<void>;
 
   /* ── Paid retrieval (root RETRIEVAL.md) ─────────────────────────────────────────────────────────
-   * The daemon reports `authorizationRequired` for a frozen blob it isn't allowed to thaw; these four
-   * are how the app gets that restore authorized. */
+   * The daemon reports `authorizationRequired` for a frozen blob it isn't allowed to thaw; these are how
+   * the app gets that restore authorized. */
 
   /** Price a restore of these blobs. `quoteCents: 0` + `authorized` ⇒ free under the monthly allowance,
    *  already thawing — nothing to confirm. This is the only trustworthy restore price; do not compute one
    *  from the daemon's rate card, which omits egress and understates the real charge by ~40×. */
   quoteRestore(blobKeys: string[], egressBytes: number): Promise<RetrievalQuote>;
-  /** Pay for a quoted restore. Charges a saved card in place, or opens Paddle checkout in the browser;
-   *  resolves once the payment is confirmed and the backend has begun thawing. */
-  payForRestore(jobId: string): Promise<RetrievalQuote>;
+  /** Charge for a quoted restore: a saved card in place, or Paddle checkout opened in the browser —
+   *  which is what `checkoutOpened` reports, so the waiting UI only offers "reopen it" when there IS a
+   *  tab to reopen. Doesn't wait for the money; follow it with {@link ColdstoreApi.awaitRestorePayment}. */
+  startRestorePayment(jobId: string): Promise<{ checkoutOpened: boolean }>;
+  /** Wait for a started restore payment to clear (the webhook decides, not the browser). Resolves null
+   *  when the user abandoned it via {@link ColdstoreApi.cancelRestorePayment} — not an error, don't report one. */
+  awaitRestorePayment(jobId: string): Promise<RetrievalQuote | null>;
+  /** Reopen the restore checkout page the user lost. Same transaction; rejects when none is open. */
+  reopenRestoreCheckout(): Promise<void>;
+  /** Walk away from a restore payment: stops the wait AND hands the quote back, so an abandoned checkout
+   *  burns none of the free monthly allowance. */
+  cancelRestorePayment(jobId: string): Promise<void>;
   /** Poll one restore job. */
   getRestoreJob(jobId: string): Promise<RetrievalQuote>;
   /** Abandon an unpaid QUOTE, so it burns none of the free allowance. Deliberately not called

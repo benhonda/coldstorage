@@ -7,6 +7,8 @@ export const registerEntitlementIpc = (entitlement: EntitlementManager): (() => 
   ipcMain.handle(IPC.entitlementStatus, () => entitlement.entitlementStatus());
   ipcMain.handle(IPC.entitlementCatalog, () => entitlement.getCatalog());
   ipcMain.handle(IPC.entitlementSubscribe, (_e, priceId: string) => entitlement.subscribe(priceId));
+  ipcMain.handle(IPC.entitlementReopenCheckout, () => entitlement.reopenCheckout());
+  ipcMain.handle(IPC.entitlementCancelCheckout, () => entitlement.cancelCheckout());
   ipcMain.handle(IPC.entitlementSubscription, () => entitlement.getSubscription());
   ipcMain.handle(IPC.entitlementPreviewChange, (_e, priceId: string) => entitlement.previewPlanChange(priceId));
   ipcMain.handle(IPC.entitlementChangePlan, (_e, priceId: string) => entitlement.changePlan(priceId));
@@ -17,7 +19,10 @@ export const registerEntitlementIpc = (entitlement: EntitlementManager): (() => 
   ipcMain.handle(IPC.retrievalQuote, (_e, blobKeys: string[], egressBytes: number) =>
     entitlement.quoteRestore(blobKeys, egressBytes),
   );
-  ipcMain.handle(IPC.retrievalPay, (_e, jobId: string) => entitlement.payForRestore(jobId));
+  ipcMain.handle(IPC.retrievalPay, (_e, jobId: string) => entitlement.startRestorePayment(jobId));
+  ipcMain.handle(IPC.retrievalAwaitPay, (_e, jobId: string) => entitlement.awaitRestorePayment(jobId));
+  ipcMain.handle(IPC.retrievalReopenCheckout, () => entitlement.reopenRestoreCheckout());
+  ipcMain.handle(IPC.retrievalCancelPay, (_e, jobId: string) => entitlement.cancelRestorePayment(jobId));
   ipcMain.handle(IPC.retrievalJob, (_e, jobId: string) => entitlement.getRestoreJob(jobId));
   ipcMain.handle(IPC.retrievalCancel, (_e, jobId: string) => entitlement.abandonQuote(jobId));
 
@@ -29,12 +34,17 @@ export const registerEntitlementIpc = (entitlement: EntitlementManager): (() => 
     ipcMain.removeHandler(IPC.entitlementStatus);
     ipcMain.removeHandler(IPC.entitlementCatalog);
     ipcMain.removeHandler(IPC.entitlementSubscribe);
+    ipcMain.removeHandler(IPC.entitlementReopenCheckout);
+    ipcMain.removeHandler(IPC.entitlementCancelCheckout);
     ipcMain.removeHandler(IPC.entitlementSubscription);
     ipcMain.removeHandler(IPC.entitlementPreviewChange);
     ipcMain.removeHandler(IPC.entitlementChangePlan);
     ipcMain.removeHandler(IPC.entitlementOpenManage);
     ipcMain.removeHandler(IPC.retrievalQuote);
     ipcMain.removeHandler(IPC.retrievalPay);
+    ipcMain.removeHandler(IPC.retrievalAwaitPay);
+    ipcMain.removeHandler(IPC.retrievalReopenCheckout);
+    ipcMain.removeHandler(IPC.retrievalCancelPay);
     ipcMain.removeHandler(IPC.retrievalJob);
     ipcMain.removeHandler(IPC.retrievalCancel);
     offStatus();

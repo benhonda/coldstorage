@@ -78,6 +78,130 @@ describe("EntitlementManager.subscribe", () => {
   });
 });
 
+describe("EntitlementManager checkout escape hatches", () => {
+  const checkoutFetch = (): typeof fetch =>
+    mock((url: string) =>
+      url.endsWith("/checkout-session")
+        ? Promise.resolve(jsonResponse(200, { url: "https://pay.paddle.test/abc" }))
+        : Promise.resolve(jsonResponse(200, { active: false })),
+    ) as unknown as typeof fetch;
+
+  test("cancelCheckout drops the waiting state immediately instead of leaving a dead end", async () => {
+    globalThis.fetch = checkoutFetch();
+    const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
+    await m.subscribe("pri_1tb_1yr");
+    expect(m.entitlementStatus().checkingOut).toBe(true);
+
+    m.cancelCheckout();
+    expect(m.entitlementStatus()).toMatchObject({ checkingOut: false, error: null });
+    // …and it stays cancelled: the abandoned poll must not resurrect the wait or write a timeout error.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(m.entitlementStatus()).toMatchObject({ checkingOut: false, error: null });
+  });
+
+  test("reopenCheckout reopens the SAME transaction — no second checkout-session call", async () => {
+    const posts: string[] = [];
+    globalThis.fetch = mock((url: string) => {
+      if (url.endsWith("/checkout-session")) {
+        posts.push(url);
+        return Promise.resolve(jsonResponse(200, { url: "https://pay.paddle.test/abc" }));
+      }
+      return Promise.resolve(jsonResponse(200, { active: false }));
+    }) as unknown as typeof fetch;
+    const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
+    await m.subscribe("pri_1tb_1yr");
+    await m.reopenCheckout();
+    expect(opened).toEqual(["https://pay.paddle.test/abc", "https://pay.paddle.test/abc"]);
+    expect(posts).toHaveLength(1);
+  });
+
+  test("reopenCheckout with nothing in flight rejects rather than opening a stale page", async () => {
+    const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
+    await expect(m.reopenCheckout()).rejects.toThrow(/no checkout is open/);
+    expect(opened).toHaveLength(0);
+  });
+
+  test("a cancelled checkout can be started again", async () => {
+    globalThis.fetch = checkoutFetch();
+    const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
+    await m.subscribe("pri_1tb_1yr");
+    m.cancelCheckout();
+    await m.subscribe("pri_1tb_1yr");
+    expect(m.entitlementStatus().checkingOut).toBe(true);
+    expect(opened).toHaveLength(2);
+  });
+});
+
+describe("EntitlementManager restore payment", () => {
+  // The poll sleeps 4s between checks; fire timers immediately so these stay unit-test fast. Production
+  // timing is untouched — the manager just reads the global.
+  const realSetTimeout = globalThis.setTimeout;
+  const fastTimers = (): void => {
+    globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 0)) as unknown as typeof setTimeout;
+  };
+  afterEach(() => {
+    globalThis.setTimeout = realSetTimeout;
+  });
+
+  const job = (over: Record<string, unknown>): Record<string, unknown> => ({
+    jobId: "job_1", status: "quoted", quoteCents: 420, billableBytes: 1, allowanceBytes: 0, typicalWait: "about 12 hours", authorized: false, ...over,
+  });
+
+  test("no card on file → opens checkout and says so, so the wait can offer to reopen it", async () => {
+    globalThis.fetch = mock(() => Promise.resolve(jsonResponse(200, { url: "https://pay.paddle.test/restore" }))) as unknown as typeof fetch;
+    const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
+    expect(await m.startRestorePayment("job_1")).toEqual({ checkoutOpened: true });
+    expect(opened).toEqual(["https://pay.paddle.test/restore"]);
+  });
+
+  test("saved card charged in place → no browser, and no reopen offered", async () => {
+    globalThis.fetch = mock(() => Promise.resolve(jsonResponse(200, { charged: true, url: null }))) as unknown as typeof fetch;
+    const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
+    expect(await m.startRestorePayment("job_1")).toEqual({ checkoutOpened: false });
+    expect(opened).toHaveLength(0);
+  });
+
+  test("the wait resolves with the job once the webhook authorizes it", async () => {
+    fastTimers();
+    let checks = 0;
+    globalThis.fetch = mock((url: string) => {
+      if (url.endsWith("/pay")) return Promise.resolve(jsonResponse(200, { url: "https://pay.paddle.test/restore" }));
+      checks += 1;
+      return Promise.resolve(jsonResponse(200, job(checks > 1 ? { status: "paid", authorized: true } : {})));
+    }) as unknown as typeof fetch;
+    const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
+    await m.startRestorePayment("job_1");
+    expect(await m.awaitRestorePayment("job_1")).toMatchObject({ authorized: true });
+  });
+
+  test("cancelling ends the wait with null (not an error) and hands the quote back", async () => {
+    fastTimers();
+    const posted: string[] = [];
+    globalThis.fetch = mock((url: string, init?: RequestInit) => {
+      if (init?.method === "POST") posted.push(url);
+      if (url.endsWith("/pay")) return Promise.resolve(jsonResponse(200, { url: "https://pay.paddle.test/restore" }));
+      return Promise.resolve(jsonResponse(200, job({}))); // never authorizes — they never finish checkout
+    }) as unknown as typeof fetch;
+    const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
+    await m.startRestorePayment("job_1");
+    const waiting = m.awaitRestorePayment("job_1");
+    await m.cancelRestorePayment("job_1");
+    expect(await waiting).toBeNull();
+    expect(posted).toContain("https://api.test/retrieval/jobs/job_1/cancel");
+  });
+
+  test("reopen points at the SAME checkout; nothing in flight rejects", async () => {
+    globalThis.fetch = mock(() => Promise.resolve(jsonResponse(200, { url: "https://pay.paddle.test/restore" }))) as unknown as typeof fetch;
+    const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
+    await expect(m.reopenRestoreCheckout()).rejects.toThrow(/no checkout is open/);
+    await m.startRestorePayment("job_1");
+    await m.reopenRestoreCheckout();
+    expect(opened).toEqual(["https://pay.paddle.test/restore", "https://pay.paddle.test/restore"]);
+    await m.cancelRestorePayment("job_1");
+    await expect(m.reopenRestoreCheckout()).rejects.toThrow(/no checkout is open/);
+  });
+});
+
 describe("EntitlementManager subscription surface", () => {
   const sub = { status: "active", plan: { size: "1 TB", years: 1, priceId: "pri_1", amountCents: 1899, perMonthCents: 158, quotaBytes: 1_000_000_000_000 }, nextBilledAt: "2027-07-10T00:00:00Z", cancelsAt: null, cancelUrl: "https://paddle.test/cancel", updatePaymentMethodUrl: "https://paddle.test/pay" };
 
