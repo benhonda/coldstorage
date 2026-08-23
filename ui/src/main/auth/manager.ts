@@ -1,5 +1,5 @@
 /**
- * Main-process sign-in state machine (PROD.md Phase 5). Owns the OAuth flow end-to-end: opens the
+ * Main-process sign-in state machine. Owns the OAuth flow end-to-end: opens the
  * system browser at Cognito managed login (Google — the email-code lane lands with 5b), receives the
  * redirect (packaged: the `coldstorage://` deep link routed in from index.ts; dev: the loopback
  * listener), exchanges the code (PKCE), and keeps the session alive by refreshing ahead of expiry.

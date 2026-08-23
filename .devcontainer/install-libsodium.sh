@@ -1,6 +1,6 @@
 #!/bin/bash
 # Idempotent libsodium install (Linux only) — the C library swift-sodium's Linux systemLibrary target
-# links against for the Swift core's Argon2id (ZeroKnowledgeKeys, PROD.md Phase 3).
+# links against for the Swift core's Argon2id (ZeroKnowledgeKeys; see PROD.md).
 #
 # NOT `apt install libsodium-dev`: Ubuntu 24.04 ships 1.0.18, which predates AEGIS (1.0.19) and the
 # ipcrypt/KEM symbols (1.0.22) that swift-sodium's binding references — the build fails with

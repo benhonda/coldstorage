@@ -187,7 +187,7 @@ build — defer it to the signing milestone. Prioritize the two things that bloc
   the supervisor (`main/daemon.ts`) reads a per-user **`config.json`** in the app's data dir
   (`~/Library/Application Support/ColdStorage/config.json` → `{bucket, region,
   cognitoIdentityPoolId, cognitoUserPoolProvider}` — the last two added 2026-07-01 for the Cognito
-  multi-user seam, PROD.md Phase 2c; empty/absent until `tf:coldstorage:creds-export` has been re-run
+  multi-user seam; empty/absent until `tf:coldstorage:creds-export` has been re-run
   since) and injects `COLDSTORE_BUCKET`/`AWS_REGION`/`COLDSTORE_COGNITO_IDENTITY_POOL_ID`/
   `COLDSTORE_COGNITO_USER_POOL_PROVIDER` into the daemon env — exactly what `daemon:mac:install` bakes into the
   launchd plist. **No secret is in config.json, and no AWS profile**: creds resolve via Cognito → short-lived
@@ -196,7 +196,7 @@ build — defer it to the signing milestone. Prioritize the two things that bloc
   handoff SSOT) or **`task ui:mac:bootstrap`** (the .app analogue of `daemon:mac:bootstrap`). Reading is best-effort — a missing/malformed file
   logs + the daemon still starts (graceful "connected but can't upload" degrade).
 - **Self-configuring customer build (baked public config)** — **BUILT ✅ (2026-07-05), PENDING Ben's Mac
-  verify (PROD.md Phase 6d).** `config.json` above is the *dogfood/dev* seam — a stranger's download has no
+  verify.** `config.json` above is the *dogfood/dev* seam — a stranger's download has no
   such file, so it can't sign in or upload. The fix: `main/config.ts` now resolves config as **baked base ←
   user override**. The baked base is **`Contents/Resources/app-config.json`**, written at package time by
   **`task ui:config:bake ENV=production|staging`** (run automatically inside the packaging tasks) from the

@@ -52,7 +52,7 @@ byte-stable across versions, so comparing rendered bytes would cry wolf on a dep
 
 electron-builder rasterises every Apple size slot from that single 1024px PNG (bundled resvg —
 no `iconutil`, no Xcode), so there is no `.icns` to hand-maintain. On macOS 26 the system wraps
-it in its own grey squircle until we ship an Icon Composer `.icon`; see PROD.md Phase 6a.
+it in its own grey squircle until we ship an Icon Composer `.icon`; see PROD.md.
 
 ## The favicon package
 

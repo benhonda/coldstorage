@@ -3,7 +3,7 @@ import Foundation
 import Crypto   // SymmetricKey — the Phase 5b SwappableKeyProvider tests seed/compare raw keys
 @testable import ColdStorageCore
 
-/// PROD.md Phase 3 gate: password change re-wraps MK without touching DEKs; recovery code unlocks;
+/// The zero-knowledge key hierarchy holds: password change re-wraps MK without touching DEKs; recovery code unlocks;
 /// round-trip still byte-identical; wrong password fails closed. Fast Argon2id tuning (still a real KDF
 /// call, just the lightest libsodium preset) so the suite stays quick — production uses
 /// `ZeroKnowledgeKeys.defaultOpsLimit`/`defaultMemLimit`.

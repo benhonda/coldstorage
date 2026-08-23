@@ -34,7 +34,7 @@ const coldstoredPath = (): string => join(process.resourcesPath, "bin", "coldsto
 /** Absolute path to the BAKED config bundled into the app (Contents/Resources/app-config.json — written
  * at package time by `task ui:config:bake`, see electron-builder.yml extraResources). This carries the
  * public prod defaults (bucket/region/Cognito/sign-in/account-API) so a stranger's download self-configures
- * — sign-in is the only setup left (PROD.md Phase 6d). Only present in a packaged build. */
+ * — sign-in is the only setup left. Only present in a packaged build. */
 const bakedConfigPath = (): string => join(process.resourcesPath, "app-config.json");
 
 /** The build's INSTALL IDENTITY (productName + deep-link scheme), read from the BAKED config ONLY — NOT

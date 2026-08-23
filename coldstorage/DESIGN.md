@@ -276,7 +276,7 @@ failed download leaves nothing behind.
   `ZeroKnowledgeKeys.swift` puts a random per-user MasterKey behind two Argon2id unlock paths
   (password, one-time recovery code); the MK *is* the `userKEK()` the engine already expects, so
   engine/cipher code is untouched. Wiring into `coldstored` lands with the account backend + auth UX —
-  design + status in [`../PROD.md`](../PROD.md) Phase 3.
+  hierarchy diagram in [`../PROD.md`](../PROD.md).
 
 ## 8. Throughput, backpressure, network
 
@@ -334,7 +334,7 @@ Secrets live in Keychain, never in the UI.
   there; only the ids actually re-deposited are revived); `filesChanged` carries
   `{moved,to}` / `{created}` / `{deleted}` — plus `{signedIn}` / `{signedOut}`, the cue that the whole
   tree just changed owner; `authenticate idToken=…` / `deauthenticate` open and close the session
-  (`../PROD.md` Phase 2); per-source pause lives on the source rows (`pauseSource`/`resumeSource` emit
+  (per-user prefix isolation, `../PROD.md`); per-source pause lives on the source rows (`pauseSource`/`resumeSource` emit
   `sourcesChanged` — there are no global pause events).
 
 ## 11. Decisions (as built)

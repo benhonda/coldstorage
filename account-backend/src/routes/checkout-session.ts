@@ -6,7 +6,7 @@ import { requireAuth } from "../middleware/require-auth.js";
 import type { AppEnv } from "../hono-env.js";
 
 /**
- * Start a subscription checkout (PROD.md Phase 5c). Creates the Paddle transaction SERVER-SIDE so we can
+ * Start a subscription checkout. Creates the Paddle transaction SERVER-SIDE so we can
  * attach `customData.cognitoSub` — the only reliable way to carry it (Paddle copies a transaction's
  * custom data onto the subscription it creates, so the `subscription.*` webhooks link back to this user).
  * Returns the hosted-checkout URL for the app to open in the system browser; completion is learned from

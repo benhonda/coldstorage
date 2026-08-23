@@ -135,7 +135,7 @@ export const IPC = {
 export type ConnectionState = "connecting" | "connected" | "disconnected";
 
 /**
- * The renderer's whole view of sign-in (PROD.md Phase 5) — no token ever crosses this seam.
+ * The renderer's whole view of sign-in — no token ever crosses this seam.
  * `configured: false` = single-operator dogfood mode (no Cognito sign-in config present); the UI
  * hides the auth surface entirely and behaves exactly as before Phase 5.
  */
@@ -160,7 +160,7 @@ export interface AuthStatus {
 }
 
 /**
- * The renderer's view of the zero-knowledge vault (PROD.md Phase 5b) — the encryption-key half of being
+ * The renderer's view of the zero-knowledge vault — the encryption-key half of being
  * signed in, distinct from {@link AuthStatus} (the AWS-credentials half). No key material crosses this
  * seam EXCEPT `recoveryCode`, which is shown once at signup and then acknowledged away.
  *   - `locked`         signed out, or not yet provisioned.
@@ -300,7 +300,7 @@ export interface PlanChangePreview {
 export type ManagePage = "cancel" | "payment";
 
 /**
- * Auto-update status (PROD.md Phase 6), pushed from main. The packaged app checks a GitHub Releases feed
+ * Auto-update status, pushed from main. The packaged app checks a GitHub Releases feed
  * on launch + periodically, downloads a newer signed build in the background, and installs it on the next
  * quit/restart. Auto-update only runs in the packaged, signed app — in dev this stays `idle` forever.
  *   - `idle`         no update known (startup, or the last check found nothing newer).

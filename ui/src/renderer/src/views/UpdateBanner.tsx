@@ -1,5 +1,5 @@
 /**
- * Auto-update affordance (PROD.md Phase 6). A quiet top banner shown only when a newer *signed* build has
+ * Auto-update affordance. A quiet top banner shown only when a newer *signed* build has
  * finished downloading in the background (`update.state === "ready"`). It's an offer, not an alarm — the
  * update installs on the next quit regardless; this just lets the user apply it now. Checking/downloading
  * stay invisible (background, non-blocking), matching the calm, no-urgency voice.

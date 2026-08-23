@@ -1,4 +1,4 @@
-/** The auto-update slice of the main↔renderer seam (PROD.md Phase 6). Mirrors entitlement/auth/vault ipc. */
+/** The auto-update slice of the main↔renderer seam. Mirrors entitlement/auth/vault ipc. */
 import { BrowserWindow, ipcMain } from "electron";
 import { IPC } from "../../shared/ipc.ts";
 import type { UpdateManager } from "./manager.ts";

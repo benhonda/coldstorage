@@ -1,7 +1,7 @@
 import Testing
 @testable import ColdStorageCore
 
-/// PROD.md Phase 2b: the credential seam itself. `CognitoAWSCredentialIdentityResolver` makes no network
+/// The credential seam itself. `CognitoAWSCredentialIdentityResolver` makes no network
 /// call until something needs credentials, so construction is offline-testable; the live exchange (a real
 /// ID token → identity id → own-prefix PUT ok / cross-prefix AccessDenied) is Ben's gate once a test user
 /// exists (P5) or via a manually-minted token — not reproducible here without hitting AWS.

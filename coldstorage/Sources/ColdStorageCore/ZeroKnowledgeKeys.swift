@@ -2,7 +2,7 @@ import Foundation
 import Crypto
 import Sodium
 
-/// PROD.md Phase 3 — the zero-knowledge key hierarchy. A random MasterKey (MK) IS the `userKEK()` the
+/// The zero-knowledge key hierarchy (diagram in PROD.md). A random MasterKey (MK) IS the `userKEK()` the
 /// existing wrap/unwrap code already expects, so `EnvelopeCipher`/`UploadEngine`/`RestoreEngine` and the
 /// on-disk envelope format are UNCHANGED — only what *produces* the KEK changes. MK is protected by two
 /// independent unlock paths, a password and a one-time recovery code, each an Argon2id-derived key
@@ -191,7 +191,7 @@ public enum ZeroKnowledgeKeys {
 /// The production `KeyProvider`: an already-unlocked MK, held for this session. Construction IS the
 /// unlock — a wrong password/recovery code throws `.wrongSecret` up front rather than deferring the
 /// failure to the first upload. Not yet wired into `coldstored/main.swift`: that needs somewhere to
-/// fetch the `KeyBlob` from (the account backend, PROD.md Phase 4) and somewhere to capture the
+/// fetch the `KeyBlob` from (the account backend) and somewhere to capture the
 /// password/recovery code (the sign-in UI, Phase 5) — premature before either exists.
 public struct UserMasterKeyProvider: KeyProvider {
     // Raw bytes, not `SymmetricKey` — swift-crypto's `SymmetricKey` isn't `Sendable`, and `KeyProvider`

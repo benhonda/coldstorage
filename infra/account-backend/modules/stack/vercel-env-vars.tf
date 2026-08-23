@@ -36,7 +36,7 @@ locals {
   }, var.paddle_client_token != "" ? { PADDLE_CLIENT_TOKEN = var.paddle_client_token } : {})
 
   # terraform.md env-var-ownership, applied verbatim (not the git_branch approach an earlier
-  # version of this file used — reverted, see PROD.md Phase 4 for why): prod-only ⇒ all 3
+  # version of this file used — reverted, see PROD.md for why): prod-only ⇒ all 3
   # targets (preview/dev need real values too); prod-with-staging ⇒ production only; staging
   # ⇒ preview+development, scoped to ITS custom environment via custom_environment_ids below.
   #

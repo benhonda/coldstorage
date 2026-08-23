@@ -1,4 +1,4 @@
-/** The entitlement slice of the main↔renderer seam (PROD.md Phase 5c). Mirrors auth/vault ipc. */
+/** The entitlement slice of the main↔renderer seam. Mirrors auth/vault ipc. */
 import { BrowserWindow, ipcMain } from "electron";
 import { IPC, type ManagePage } from "../../shared/ipc.ts";
 import type { EntitlementManager } from "./manager.ts";

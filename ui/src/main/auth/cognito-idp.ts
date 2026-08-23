@@ -1,5 +1,5 @@
 /**
- * Cognito user-pool API over plain HTTPS JSON-RPC (PROD.md Phase 5b-3) — the email-OTP passwordless
+ * Cognito user-pool API over plain HTTPS JSON-RPC — the email-OTP passwordless
  * lane, the no-Google path. These are the pool's UNAUTHENTICATED public-client operations (SignUp /
  * ConfirmSignUp / InitiateAuth) plus session-authorized RespondToAuthChallenge, so NO AWS SDK and NO
  * SigV4 are needed: a POST to `cognito-idp.{region}.amazonaws.com` with an `X-Amz-Target` header. Our

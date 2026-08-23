@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import ColdStorageCore
 
-/// Multi-user isolation (PROD.md Phase 2): every blob must land under the caller's per-user S3 prefix
+/// Multi-user isolation: every blob must land under the caller's per-user S3 prefix
 /// (`blobs/<cognito-identity-id>/…`), because the IAM role scopes temp creds to `blobs/${sub}/*`. These
 /// prove the prefix (a) reaches the actual S3 PUT and (b) is persisted as the blob's `s3Key` — which is the
 /// exact value RestoreEngine reads back (SSOT), so upload and restore agree on where the bytes are.

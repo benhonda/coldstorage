@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "ColdStorage account backend — Cognito ↔ Paddle ↔ zero-knowledge key-blob API (PROD.md Phase 4). Hono on Vercel, Neon/Drizzle for storage.",
+  "description": "ColdStorage account backend — Cognito ↔ Paddle ↔ zero-knowledge key-blob API. Hono on Vercel, Neon/Drizzle for storage.",
   "scripts": {
     "dev": "vercel dev",
     "typecheck": "tsc --noEmit",

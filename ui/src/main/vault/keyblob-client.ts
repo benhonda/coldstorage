@@ -1,5 +1,5 @@
 /**
- * The account-backend key-blob HTTP client (PROD.md Phase 5b). Blind ciphertext in/out — this only
+ * The account-backend key-blob HTTP client. Blind ciphertext in/out — this only
  * transports the KeyBlob the daemon minted; it never sees a MasterKey, password, or recovery code.
  *
  * Field-name seam: the daemon/`protocol.ts` use `wrappedMK…` (matching Swift's `KeyBlob`), the backend

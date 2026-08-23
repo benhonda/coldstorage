@@ -43,7 +43,7 @@ task pull                 # picker → account-backend: pulls staging's values i
 `account-backend/.env` is an optional local override layered on top of `.env.vercel`
 (`backend:dev`/`backend:db:push` load both via `bun --env-file`, `.env` wins on conflict).
 Production's manual secrets are `sensitive=true` and **not** pullable by design — see
-`modules/stack/vercel-env-vars.tf` and [`PROD.md`](../../PROD.md) Phase 4.
+`modules/stack/vercel-env-vars.tf`.
 
 ## Status
 > **Migrated to Ben's own AWS account, 2026-07-27** ([`MIGRATION.md`](../../MIGRATION.md)). Applied and
@@ -57,5 +57,4 @@ secrets are set for real** (staging's 3 on 2026-07-02; production's `DATABASE_UR
 2026-07-01 and `PADDLE_API_KEY` + `PADDLE_WEBHOOK_SECRET` on 2026-07-10 — verified via env-var
 `updatedAt` metadata, values never read). Both lanes are deployed and smoke-tested live at
 `api.coldstorage.sh` / `api-staging.coldstorage.sh` — no remaining blockers. See
-[`PROD.md`](../../PROD.md) Phase 4 for the full history and [`PADDLE.md`](../../PADDLE.md)
-for the webhook destinations + runtime key scope.
+[`PADDLE.md`](../../PADDLE.md) for the webhook destinations + runtime key scope.

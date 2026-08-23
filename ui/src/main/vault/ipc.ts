@@ -1,5 +1,5 @@
 /**
- * The vault slice of the main↔renderer seam (PROD.md Phase 5b): status get + push, plus the two user
+ * The vault slice of the main↔renderer seam: status get + push, plus the two user
  * actions (submit a recovery code, acknowledge the one-time code). Mirrors auth/ipc.ts.
  */
 import { BrowserWindow, ipcMain } from "electron";

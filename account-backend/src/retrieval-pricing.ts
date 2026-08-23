@@ -1,5 +1,5 @@
 /**
- * Retrieval pricing SSOT (PROD.md free-tier plan phase A; spec in root `RETRIEVAL.md`, money model in
+ * Retrieval pricing SSOT (spec in root `RETRIEVAL.md`, money model in
  * private `strategy/CANON.md` §7). Pure + dependency-free so it unit-tests without the SDK —
  * the live Paddle calls live in `retrieval.server.ts`, exactly like `catalog.ts` / `catalog.server.ts`.
  *

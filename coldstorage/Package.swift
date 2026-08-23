@@ -10,7 +10,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/awslabs/aws-sdk-swift", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-crypto", from: "3.0.0"),
-        // Argon2id for the ZK key hierarchy (PROD.md Phase 3) — swift-crypto has no Argon2 (verified
+        // Argon2id for the ZK key hierarchy (see PROD.md) — swift-crypto has no Argon2 (verified
         // against our pinned 3.15.1 checkout; Apple's Argon2id PR isn't released yet). Wraps libsodium,
         // which defaults crypto_pwhash to Argon2id; ships a Linux systemLibrary target (apt libsodium-dev)
         // + a macOS/Apple-platform XCFramework, matching our Csqlite3 systemLibrary pattern below.

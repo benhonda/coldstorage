@@ -30,7 +30,7 @@ module.exports = {
   productName: identity.productName,
   copyright: "© 2026 The Adpharm",
 
-  // Deep-link scheme for the OAuth sign-in callback (<scheme>://auth/callback — PROD.md Phase 5).
+  // Deep-link scheme for the OAuth sign-in callback (<scheme>://auth/callback).
   // electron-builder writes this into Info.plist CFBundleURLTypes; macOS delivers matching URLs to the
   // running app as `open-url` events (main/index.ts). Packaged-only — dev sign-in uses a loopback redirect.
   // Per-lane so a staging install doesn't fight prod for the coldstorage:// scheme (whoever macOS picks
@@ -54,7 +54,7 @@ module.exports = {
     { from: "../coldstorage/.build/release/coldstore-photo-picker", to: "bin/coldstore-photo-picker" },
     { from: "../coldstorage/launchd/coldstore-aws-credential-process.sh", to: "bin/coldstore-aws-credential-process.sh" },
     // Baked PUBLIC config (bucket/region/Cognito ids/sign-in domain+client/account-API + the app IDENTITY)
-    // — written at package time by `task ui:config:bake` from the infra-outputs handoff (PROD.md Phase 6d),
+    // — written at package time by `task ui:config:bake` from the infra-outputs handoff,
     // so a config-less customer download self-configures and sign-in is the only setup. NO secret (creds
     // come via Cognito STS). The bake task always writes this file (real values, or identity-only when the
     // handoff is absent for a dogfood build), so electron-builder always finds it here. Read at runtime from
@@ -96,7 +96,7 @@ module.exports = {
     title: identity.productName,
   },
 
-  // Auto-update feed (PROD.md Phase 6). electron-builder uploads the .dmg/.zip + the `latest-mac.yml` metadata
+  // Auto-update feed. electron-builder uploads the .dmg/.zip + the `latest-mac.yml` metadata
   // to a GitHub Release when built with `--publish always` (see `task ui:mac:release`); the packaged app's
   // electron-updater reads that same feed. Repo is public → the release assets are free, CDN-backed downloads.
   // Keep owner/repo in sync with the root Taskfile's GH_REPO var — the release tasks query and publish to

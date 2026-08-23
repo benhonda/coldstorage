@@ -21,7 +21,7 @@
  * Note for macOS 26 (Tahoe): the system wraps any classic icon in its own grey squircle until
  * the app ships an Icon Composer `.icon`. electron-builder supports that (26.2.0+) but it
  * requires Xcode 26 on the build machine plus a separate `.icns` for the DMG volume — a
- * deliberate later pass, tracked in PROD.md Phase 6a.
+ * deliberate later pass, tracked in PROD.md.
  */
 import sharp from 'sharp'
 import { createHash } from 'node:crypto'

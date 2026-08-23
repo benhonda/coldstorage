@@ -2,7 +2,7 @@ import Foundation
 import AWSCognitoIdentity
 import AWSSDKIdentity
 
-/// Bridges Cognito auth into the daemon's AWS credentials — PROD.md Phase 2's credential seam.
+/// Bridges Cognito auth into the daemon's AWS credentials — the multi-user credential seam.
 /// Single-operator dogfooding never constructs this (`coldstored/main.swift` keeps the default credential
 /// chain + the `"blobs"` prefix unless Cognito env vars are present); it exists once the daemon runs for a
 /// real signed-in multi-user session.

@@ -1,5 +1,5 @@
 /**
- * Full-window sign-in gate (PROD.md Phase 5). Two lanes: Google (system browser, handled in main) and
+ * Full-window sign-in gate. Two lanes: Google (system browser, handled in main) and
  * the email one-time-code lane (5b-3, in-app). The email flow is a small local step machine —
  * choose → enter email → enter code — because its transient UI state isn't worth putting on the global
  * auth status; on success the daemon/vault machinery takes over from the emitted ID token exactly like

@@ -406,8 +406,7 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   deauthenticate · mintVault · unlockVault · unlockVaultWithRecoveryCode · lockVault · triggerNow ·
   pauseSource · resumeSource`. (`authenticate`/`deauthenticate` = the **session** opened/closed —
   per-user S3 creds plus the user's journal, staging dir and key holder; the `*Vault*` four = the
-  zero-knowledge encryption key, loaded/cleared over the local socket — all multi-user only, see
-  PROD.md Phase 5.)
+  zero-knowledge encryption key, loaded/cleared over the local socket — all multi-user only.)
 - **Session lifecycle — the daemon serves ONE user, or none.** `authenticate` builds the session
   (`UserSession`), `deauthenticate` destroys it; a different Cognito `sub` tears the old one down first.
   **Signed out, the daemon serves nothing:** `getStatus`/`listFiles`/`listSources`/`listExcludes` return
@@ -448,7 +447,7 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   Badge, Modal, Icon, Skeleton…), `layout.tsx` (Sidebar + Page), `useResizable.ts`, `toast.tsx`
   (the app-wide `ToastProvider`/`useToast` channel — see "Toasts" above), and `duration.ts`
   (`timeLeft` — the one "how much longer" phrase, shared by the deposit banner and the thaw countdown).
-- `ui/src/main/auth/` — sign-in (PROD.md Phase 5), two lanes into ONE token lifecycle: Google via
+- `ui/src/main/auth/` — sign-in, two lanes into ONE token lifecycle: Google via
   Cognito managed-login OAuth (`oauth.ts` — PKCE, system browser, `coldstorage://auth/callback` deep
   link packaged / loopback in dev) and email one-time-code via the Cognito API as plain HTTPS JSON-RPC
   (`cognito-idp.ts` — SignUp/ConfirmSignUp/InitiateAuth/RespondToAuthChallenge, no SDK). `manager.ts`
@@ -459,13 +458,13 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   the code's 5-minute TTL — the `signingIn` card is never a dead end. The renderer sees only
   `AuthStatus` over IPC — never a token. Gate UI:
   `views/SignInView.tsx` (Google + the email step machine) + the account card in Settings.
-- `ui/src/main/vault/` — the zero-knowledge vault (PROD.md Phase 5b): the encryption-key half of being
+- `ui/src/main/vault/` — the zero-knowledge vault: the encryption-key half of being
   signed in. `manager.ts` decides per-device — cached MK → `unlockVault`; new account → `mintVault` +
   store the key-blob + show the recovery code once; new device → prompt + `unlockVaultWithRecoveryCode`.
   `keyblob-client.ts` = blind GET/PUT at the account backend; `storage.ts` = per-account MK escrow in
   safeStorage. Renderer sees only `VaultStatus` (never key material, except the one-time code to show).
   Gate UI: `views/RecoveryCodeView.tsx`. The daemon handoff runs `authenticate` THEN vault `provision`.
-- `ui/src/main/entitlement/` — subscription billing (PROD.md Phase 5c): `manager.ts` fetches
+- `ui/src/main/entitlement/` — subscription billing: `manager.ts` fetches
   `GET /entitlement`, serves the plan catalog (`getCatalog()` → the backend's live `GET /catalog`),
   and drives `subscribe(priceId)` (POST `/checkout-session` with the chosen plan → open Paddle
   checkout in the system browser → poll until the webhook flips active). Renderer sees only

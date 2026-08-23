@@ -1,7 +1,7 @@
 /**
  * Cognito managed-login OAuth wire helpers: authorization-code + PKCE for a PUBLIC client (a desktop
  * app can't keep a secret — `client_id` goes in the token body, no Authorization header). Endpoint
- * shapes verified against the Cognito docs 2026-07-02 (PROD.md Phase 5).
+ * shapes verified against the Cognito docs 2026-07-02.
  *
  * Pure URL/fetch code — no Electron — so building/parsing unit-tests headless (oauth.test.ts).
  * Token VERIFICATION deliberately does not happen here: the daemon (Identity Pool) and the account

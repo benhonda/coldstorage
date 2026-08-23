@@ -1,5 +1,5 @@
 /**
- * Auto-update manager (PROD.md Phase 6) — **packaged app only**. Owns the {@link UpdateStatus} the
+ * Auto-update manager — **packaged app only**. Owns the {@link UpdateStatus} the
  * renderer sees, folded from electron-updater's event stream. The packaged app checks a GitHub Releases
  * feed (electron-builder.yml `publish`), downloads a newer *signed + notarized* build in the background,
  * and installs it on quit — or immediately when the user hits "Restart to update" ({@link restart}).

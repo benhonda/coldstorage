@@ -287,7 +287,7 @@ export interface Auth {
   identityId: string;
 }
 
-/** The zero-knowledge key-blob (PROD.md Phase 5b) — MK wrapped under a recovery-code-derived Argon2id
+/** The zero-knowledge key-blob — MK wrapped under a recovery-code-derived Argon2id
  * key, ciphertexts + salts as base64. Exactly the shape the account backend stores (blind) and the
  * `unlockVaultWithRecoveryCode` command reconstructs. The password slot is filled but unused (passwordless). */
 export interface KeyBlobFields {
@@ -425,7 +425,7 @@ export interface Commands {
   /** Exchange a Cognito User Pool ID token for real per-user AWS credentials — every upload/restore after
    * this signs as the returned identity, whose uploads land under `blobs/<identityId>`. Errors on a daemon
    * with no Cognito identity pool configured (today's single-operator dogfood mode). The sign-in UI itself
-   * is a later phase (PROD.md Phase 5); this is just the wire contract. */
+   * is a later phase; this is just the wire contract. */
   authenticate: { params: { idToken: string }; result: Auth };
   /** Sign-out counterpart to `authenticate` (the credentials half — `lockVault` is the key half): the
    * daemon drops its cached AWS credentials + vault prefix NOW instead of holding them for the remainder
@@ -439,7 +439,7 @@ export interface Commands {
    * empty) to CLEAR enforcement — dogfood mode, or a subscriber whose plan the app couldn't resolve — which
    * fails open, matching the app-side gate. Value is a string on the wire (the daemon re-parses with Int()). */
   setQuota: { params: { quotaBytes?: string }; result: Ack };
-  /** Zero-knowledge vault (PROD.md Phase 5b) — all multi-user only (error on a dogfood daemon), all
+  /** Zero-knowledge vault — all multi-user only (error on a dogfood daemon), all
    * carrying key material over the LOCAL control socket, never the network:
    * - `mintVault` (signup): mint MK + one-time recovery code, load it live, return the blob to store +
    *   the code to show once + the MK to escrow. No params.

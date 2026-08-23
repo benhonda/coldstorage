@@ -3,7 +3,7 @@ import { HTTPException } from "hono/http-exception";
 import { env } from "../env.server.js";
 
 /**
- * The account's DEFAULT PAYMENT LINK target (PROD.md Phase 5c). Paddle Billing has no
+ * The account's DEFAULT PAYMENT LINK target. Paddle Billing has no
  * Paddle-hosted checkout page: `transactions.create` returns `checkout.url` = the default
  * payment link set in the Paddle dashboard with `?_ptxn=<txn_id>` appended, and it's THIS
  * page's Paddle.js that detects `_ptxn` and auto-opens the overlay checkout. So the

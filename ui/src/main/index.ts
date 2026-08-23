@@ -8,7 +8,7 @@
  * boundary here is contextIsolation, and we load only local bundled content (no remote URLs).
  * Hardening to `sandbox: true` (needs a CJS preload build) is a documented follow-up.
  *
- * Sign-in (PROD.md Phase 5): main also owns the {@link AuthManager} — the OAuth flow, tokens, and
+ * Sign-in: main also owns the {@link AuthManager} — the OAuth flow, tokens, and
  * the daemon handoff (each fresh ID token → the daemon's `authenticate` command, which swaps its S3
  * credentials to the signed-in user so uploads land under `blobs/<identityId>/`). The redirect
  * arrives as a `coldstorage://auth/callback` deep link (packaged; scheme registered via
@@ -84,7 +84,7 @@ const disposeEntitlementIpc = registerEntitlementIpc(entitlement);
 const account = new AccountManager(accountApiBaseUrl, () => auth.getFreshIdToken());
 const disposeAccountIpc = registerAccountIpc(account);
 
-// ── Auto-update (PROD.md Phase 6) — packaged app only. electron-updater checks the GitHub Releases feed
+// ── Auto-update — packaged app only. electron-updater checks the GitHub Releases feed
 //    (electron-builder.yml `publish`), background-downloads a newer SIGNED + notarized build, and installs
 //    it on the next quit (or on demand via the "Restart to update" affordance). In dev we hand the manager
 //    an inert no-op port so the IPC + renderer path is identical but does nothing — auto-update can't run

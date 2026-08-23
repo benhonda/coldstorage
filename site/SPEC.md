@@ -506,7 +506,7 @@ case is **skipped**, not neutered.
   a cold visitor. `/download` is the honest target until a web picker exists.
 - **New numbers vs Paddle** — the six tier prices and the retrieval rates are now published on
   a live site. They need reconciling against the actual Paddle catalogue before the paid flow
-  opens (`PROD.md` Phase 4/6).
+  opens (`PROD.md`).
 - **Site prices are hand-mirrored from the code SSOT** — _CLOSED 2026-07-18 by a guard._
   `PRICING.tiers` in `content.ts` mirrors `account-backend/src/plan-sizes.ts` (generator-derived,
   `round(1.8 * bytes/1e9 + 99)` cents). The packages are independent with **no root workspace**,

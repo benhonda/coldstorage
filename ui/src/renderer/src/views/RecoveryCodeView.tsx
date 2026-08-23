@@ -1,5 +1,5 @@
 /**
- * The two recovery-code moments of the zero-knowledge vault (PROD.md Phase 5b), both full-window gates
+ * The two recovery-code moments of the zero-knowledge vault, both full-window gates
  * shown between sign-in and the shell:
  *
  *  - {@link RecoveryCodeShow} — once, right after signup: the one-time code that is the ONLY way back

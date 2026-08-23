@@ -1,5 +1,5 @@
 /**
- * Per-device MasterKey escrow (PROD.md Phase 5b). The MK is cached here, safeStorage-encrypted
+ * Per-device MasterKey escrow. The MK is cached here, safeStorage-encrypted
  * (Keychain-backed on macOS), keyed by the Cognito user-pool `sub` so multiple accounts on one machine
  * never collide — so day-to-day launches unlock the vault with no recovery-code prompt. This is the
  * "per-device escrow" the key hierarchy relies on; the recovery code stays the only way onto a NEW

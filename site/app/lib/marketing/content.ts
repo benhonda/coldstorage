@@ -620,7 +620,7 @@ export const NAV_LINKS: NavLink[] = [
  *
  * Product facts below are drawn from shipped behavior, not invented: the passwordless
  * email-code sign-in and the one-time recovery code as the sole human-held secret come from
- * `PROD.md` (Phase 5b, done 2026-07-02); the "drop anywhere to upload", "Request a copy",
+ * `PROD.md`; the "drop anywhere to upload", "Request a copy",
  * and browse-is-always-instant behaviors come from `ui/DESIGN.md`. If the app changes, these
  * change with it.
  */

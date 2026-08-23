@@ -1,5 +1,5 @@
 /**
- * Subscription entitlement (PROD.md Phase 5c) — the billing half of being able to back up. Fetches
+ * Subscription entitlement — the billing half of being able to back up. Fetches
  * `GET /entitlement` (is the sub active?) and drives checkout: `POST /checkout-session` creates the
  * Paddle transaction server-side (carrying `cognitoSub`), we open its hosted-checkout URL in the system
  * browser, and then POLL `/entitlement` until the webhook flips it active — the webhook is the source of

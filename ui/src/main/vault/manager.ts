@@ -1,5 +1,5 @@
 /**
- * Main-process zero-knowledge vault orchestrator (PROD.md Phase 5b). Sits between sign-in (the ID token)
+ * Main-process zero-knowledge vault orchestrator. Sits between sign-in (the ID token)
  * and the daemon's vault commands, and decides — per account, per device — how the daemon gets its
  * MasterKey:
  *
