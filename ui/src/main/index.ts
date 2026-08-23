@@ -63,11 +63,22 @@ let stopDaemon: () => void = () => {};
 const auth = new AuthManager(resolveOAuthConfig(), { useLoopback: !app.isPackaged });
 const disposeAuthIpc = registerAuthIpc(auth);
 
+// Which lane this build talks to. A packaged build reads it from the BAKED config and refuses to guess
+// (vault/config.ts) — so this can throw, and when it does the only honest move is to say why and stop:
+// an app that doesn't know its own backend would sign people in against the wrong database.
+let accountApiBaseUrl: string;
+try {
+  accountApiBaseUrl = resolveAccountApiBaseUrl();
+} catch (e) {
+  dialog.showErrorBox("ColdStorage can't start", e instanceof Error ? e.message : String(e));
+  app.exit(1);
+  throw e; // app.exit doesn't return, but TS can't know that
+}
+
 // The zero-knowledge vault (encryption-key half of being signed in). Escrows the MasterKey per-account
 // in userData/vault.json (safeStorage), fetches/stores the key-blob at the account backend, and drives
 // the daemon's mint/unlock/lock commands. Only ever exercised in multi-user mode (its provision runs
 // after a successful `authenticate`, which only happens when sign-in is configured).
-const accountApiBaseUrl = resolveAccountApiBaseUrl();
 const vault = new VaultManager(
   client,
   new VaultStore(join(app.getPath("userData"), "vault.json")),

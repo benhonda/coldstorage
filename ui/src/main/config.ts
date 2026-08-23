@@ -3,7 +3,9 @@
  * picks the file *paths* lives in daemon.ts). A customer download self-configures
  * because the public, non-secret config is BAKED into the bundle at package time (from the same
  * infra-outputs handoff `task ui:mac:config` uses), and the user's own `config.json` (dev/dogfood) merely
- * OVERRIDES it. So the resolution is always: baked base ← user override.
+ * OVERRIDES it. So the resolution is always: baked base ← user override — with ONE deliberate exception:
+ * `accountApiBaseUrl` (the backend LANE) is read from the baked file ALONE in a packaged build, never
+ * merged. See `vault/config.ts` for why (a dev lane's config.json used to repoint a customer's app).
  *
  * NO secret ever lives here, and no AWS profile either. ALL AWS creds — customer and dogfood alike —
  * resolve via Cognito → short-lived STS (coldstored/main.swift). The `awsProfile` field was removed
@@ -28,7 +30,8 @@ export type AppConfig = {
   cognitoDomain?: string | undefined;
   cognitoClientId?: string | undefined;
   /** Account-backend base URL (Phase 5b) — where the app fetches/stores the zero-knowledge key-blob and
-   * checks entitlement. Absent everywhere ⇒ vault/config.ts's staging default. */
+   * checks entitlement. NOT read from here by a packaged app — the lane is a property of the BUILD and
+   * comes from the baked file alone (`vault/config.ts`); this field carries it for DEV runs only. */
   accountApiBaseUrl?: string | undefined;
 };
 

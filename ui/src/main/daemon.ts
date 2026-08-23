@@ -37,6 +37,10 @@ const coldstoredPath = (): string => join(process.resourcesPath, "bin", "coldsto
  * — sign-in is the only setup left. Only present in a packaged build. */
 const bakedConfigPath = (): string => join(process.resourcesPath, "app-config.json");
 
+/** The BAKED config alone, unmerged. For the handful of values a user file must never be able to
+ * override — see {@link resolveAccountApiBaseUrl}, where the backend lane is a property of the BUILD. */
+export const readBakedConfig = (): AppConfig => (app.isPackaged ? readConfigFile(bakedConfigPath()) : {});
+
 /** The build's INSTALL IDENTITY (productName + deep-link scheme), read from the BAKED config ONLY — NOT
  * merged with the user's `config.json`, because `productName` selects the userData dir the app is already
  * running on (via {@link app.setName} in index.ts); letting a dogfood override repoint it mid-flight would
@@ -44,11 +48,13 @@ const bakedConfigPath = (): string => join(process.resourcesPath, "app-config.js
  * "ColdStorage" / "coldstorage". SSOT: `ui/identity.json` → `task ui:config:bake` → this baked file. The
  * bundle's Info.plist (electron-builder.cjs) reads the SAME baked file, so name/scheme can't diverge. */
 export const appIdentity = (): { productName: string; scheme: string } => {
-  const baked = app.isPackaged ? readConfigFile(bakedConfigPath()) : {};
+  const baked = readBakedConfig();
   return { productName: baked.productName ?? "ColdStorage", scheme: baked.scheme ?? "coldstorage" };
 };
 
-/** The packaged app's per-user config, resolved as **baked base ← user override**:
+/** The packaged app's per-user config, resolved as **baked base ← user override**. NOTE the exception:
+ * the backend lane (`accountApiBaseUrl`) does NOT come through here in a packaged build — it reads
+ * {@link readBakedConfig} directly, so no user file can repoint it (`vault/config.ts`).
  *   - baked  = `Contents/Resources/app-config.json` (the public prod config, packaged builds only) — the
  *     SSOT that makes a config-less customer download work; NO secret (creds come via Cognito STS).
  *   - user   = `<dataDir>/config.json` (written by `task ui:mac:config`) — dev/dogfood overrides on top, e.g.
@@ -58,7 +64,7 @@ export const appIdentity = (): { productName: string; scheme: string } => {
  * serves its control socket. `cognitoIdentityPoolId`/`cognitoUserPoolProvider` are the daemon's multi-user
  * seam (Phase 2); `cognitoDomain`/`cognitoClientId` are the APP's sign-in config (Phase 5, auth/config.ts). */
 export const readAppConfig = (dir: string): AppConfig => {
-  const baked = app.isPackaged ? readConfigFile(bakedConfigPath()) : {};
+  const baked = readBakedConfig();
   const user = readConfigFile(join(dir, "config.json"));
   return mergeAppConfig(baked, user);
 };

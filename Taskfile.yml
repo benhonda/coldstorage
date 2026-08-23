@@ -1641,6 +1641,41 @@ tasks:
         fi
         echo "── coldstored.err.log (last 25) ──"; tail -n 25 "$dir/coldstored.err.log" 2>/dev/null || echo "(no err log — coldstored likely never spawned)"
 
+  ui:mac:lane:
+    desc: "[macOS] Which account-backend is an INSTALLED app actually talking to? Reads the lane exactly as the runtime does: for a PACKAGED app that is the BAKED Contents/Resources/app-config.json alone (a user config.json can no longer repoint it — vault/config.ts). Reports every ColdStorage install, and flags a config.json that still carries a stale lane so you can see what the DEV lanes (ui:mac:live, which does read it) will use."
+    cmds:
+      - |
+        [ "$(uname -s)" = "Darwin" ] || { echo "✋ macOS only — this reads installed .app bundles (you're on $(uname -s))."; exit 1; }
+        found=0
+        for app in /Applications/ColdStorage*.app; do
+          [ -d "$app" ] || continue
+          found=1
+          baked="$app/Contents/Resources/app-config.json"
+          # Same two fields the runtime reads: productName picks the data dir, accountApiBaseUrl is the lane.
+          product="$(node -p "try{require('$baked').productName||'ColdStorage'}catch(e){'ColdStorage'}")"
+          baked_api="$(node -p "try{require('$baked').accountApiBaseUrl||''}catch(e){''}")"
+          user="$HOME/Library/Application Support/$product/config.json"
+          user_api="$(node -p "try{require('$user').accountApiBaseUrl||''}catch(e){''}")"
+          # Packaged runtime rule: baked wins, full stop. No fallback — a build with no baked lane refuses
+          # to start rather than guess (vault/config.ts UnconfiguredLaneError).
+          if [ -n "$baked_api" ]; then api="$baked_api"; src="$baked (baked at build time — authoritative)";
+          else api=""; src="NOTHING baked ⇒ this build refuses to start"; fi
+          echo "── $app"
+          echo "   lane:   ${api:-<none>}"
+          echo "   from:   $src"
+          case "$api" in
+            https://api.coldstorage.sh*) echo "   ⇒ PRODUCTION: live Paddle, real charges, checkout on coldstorage.sh." ;;
+            "") echo "   ⇒ BROKEN BUILD: repackage with 'task ui:config:bake ENV=production'." ;;
+            *) echo "   ⇒ NOT production: sandbox Paddle, so checkout opens the staging page and no real money moves." ;;
+          esac
+          # The user file no longer steers a packaged app, but ui:mac:live (run-from-source) DOES read it.
+          # An `if`, not an `&&` chain: go-task runs these with errexit, where a false chain aborts the task.
+          if [ -n "$user_api" ] && [ "$user_api" != "$baked_api" ]; then
+            echo "   note: $user is on $user_api — ignored by this packaged app, but that is the lane 'task ui:mac:live' will use."
+          fi
+        done
+        [ "$found" = 1 ] || echo "no ColdStorage app found in /Applications."
+
   dev:stop:
     desc: "Stop the local API left running by `task app:mac:run:local`."
     cmds:
