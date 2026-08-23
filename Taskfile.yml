@@ -12,6 +12,16 @@ output: prefixed
 # `mac` segment right after their domain — `daemon:mac:*`, `ui:mac:*`. Everything else runs in the
 # devcontainer (or anywhere). `[devcontainer]` desc tags mark tasks that must NOT run on the Mac.
 #
+# ── RUNNING THE WHOLE APP ON YOUR MAC — ONE COMMAND, PICK THE LANE ─────────────────────────────────
+#        app:mac:run:staging-local     [SAFE, the default] sandbox Paddle — no real money
+#        app:mac:run:local             [fastest] the API on your machine too
+#        app:mac:run:production-local  [⚠️ LIVE MONEY] real card, confirms first
+#   Each one is the WHOLE lane: deploy-parity gate → rebuild+reinstall the daemon → write the app
+#   config for that lane → launch the hot-reloading UI. Don't assemble it by hand out of the
+#   daemon:mac:* / ui:mac:* tasks below — those are the engines these compose, and running them bare
+#   skips the gates (the classic one: a stale installed daemon, so a new command reads as a broken
+#   feature). If a "how do I run this?" answer has more than one step in it, it's the wrong answer.
+#
 # TWO WAYS TO RUN `coldstored` — pick the one matching what you're doing, not both at once:
 #
 #   (There used to be a third: a local "dev sandbox" against a fake AWS (MinIO), with its own identity
@@ -22,7 +32,8 @@ output: prefixed
 #   staging AWS with `app:mac:run:staging-local`.)
 #
 #   1. YOUR REAL BACKGROUND DAEMON (real AWS/Deep Archive, always-on)
-#        daemon:mac:bootstrap (once) → then it just runs; drive/watch it via daemon:mac:live / ui:mac:live
+#        daemon:mac:bootstrap (once) → then it just runs; poke it directly with daemon:mac:live.
+#        To run the APP against it, use an app:mac:run:* lane above — not ui:mac:live by hand.
 #        A launchd LaunchAgent — starts at login, restarts on crash. This IS your day-to-day backup
 #        service. Leave it running; you don't re-bootstrap it to "start" it.
 #
@@ -716,7 +727,7 @@ tasks:
       - bun run typecheck
 
   ui:mac:live:
-    desc: "Run the UI against the INSTALLED launchd daemon (real prod AWS) — dogfood the real thing. Needs task daemon:mac:bootstrap done."
+    desc: "[engine — you want `task app:mac:run:staging-local` (or :local / :production-local)] Just the UI, hot-reloading, against the INSTALLED launchd daemon and whatever config.json already points at. Assumes the daemon is built, installed and current, and that the lane is already configured — the app:mac:run:* tasks are this plus those guarantees. Bare, it will happily run a stale daemon against the wrong API."
     dir: ui
     deps: [ui:_ensure-electron]
     env:

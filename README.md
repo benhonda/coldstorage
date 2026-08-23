@@ -52,8 +52,12 @@ There is no local S3 sandbox — the MinIO "dev sandbox" mode was retired 2026-0
 test suite doesn't prove deterministically, and carried a second identity path into the daemon). Run the
 real thing against staging AWS instead: `task app:mac:run:staging-local`.
 
-On a Mac: `task daemon:mac:bootstrap` (creds → Keychain + launchd install), `task daemon:mac:doctor`,
-`task ui:mac:live` to dogfood the UI against the installed daemon, `task ui:mac:package` for the `.app`.
+**On a Mac, running the app is ONE command** — pick the lane, not the steps:
+`task app:mac:run:staging-local` (safe, sandbox Paddle) · `:local` (API on your machine too) ·
+`:production-local` (⚠️ live money). Each is the whole lane — deploy-parity gate, daemon rebuild +
+reinstall, per-lane app config, hot-reloading UI. The `daemon:mac:*` / `ui:mac:*` tasks underneath are
+the engines they compose; reach for those only when you want one part in isolation (`daemon:mac:doctor`
+to health-check the installed daemon, `ui:mac:package` for the `.app`).
 
 ## Dev environment & gotchas (read before building — saves hours)
 - **No Docker.** Native toolchain: Swift via `swiftly` (`task daemon:setup` is idempotent).

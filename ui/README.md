@@ -129,11 +129,16 @@ task ui:typecheck   # strict tsc (node + web projects)
 task ui:test        # headless state-layer tests (no Electron/daemon needed)
 task ui:build       # build main/preload/renderer → ui/out
 
-# dogfood against the INSTALLED launchd daemon — real prod AWS (needs task daemon:mac:bootstrap done):
-task ui:mac:live        # the UI with HMR, COLDSTORE_SOCKET → ~/Library/Application Support/ColdStorage/coldstored.sock
+# RUN THE APP ON YOUR MAC — one command, pick the lane. Each does the whole thing: deploy-parity gate,
+# daemon rebuild + reinstall, per-lane app config, then the hot-reloading UI.
+task app:mac:run:staging-local   # [SAFE, the default] deployed staging API, sandbox Paddle
+task app:mac:run:local           # [fastest] the API on your machine too
+task app:mac:run:production-local # [⚠️ LIVE MONEY] real card, confirms first
 
-# the whole app against the DEPLOYED staging API (sandbox Paddle — test cards, no real money):
-task app:mac:run:staging-local
+# ui:mac:live is the last step of those lanes, alone — the UI with HMR against whatever daemon is
+# installed and whatever config.json already says. Fine when you just want the window back; NOT the way
+# to "run the app", since bare it happily drives a stale daemon against the wrong API.
+task ui:mac:live
 
 # prove the layer-1 bridge against a live daemon:
 task ui:prove       # getStatus round-trips + triggerNow streams runStarted→fileArchived→runFinished
