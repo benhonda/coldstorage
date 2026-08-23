@@ -39,7 +39,7 @@ variable "vercel_token_ssm_param" {
 variable "paddle_client_token" {
   type        = string
   default     = ""
-  description = "Paddle CLIENT-SIDE token for the /checkout page's Paddle.js (public by design — 'safe to expose in frontend code', NOT the API key). Per-stack (sandbox test_… vs live live_…), exposed to the app as PUBLIC_PADDLE_CLIENT_TOKEN. Always set — production carries a self-naming placeholder until the live token exists."
+  description = "Paddle CLIENT-SIDE token for the /checkout page's Paddle.js (public by design — 'safe to expose in frontend code', NOT the API key). Per-stack (sandbox test_… vs live live_…), exposed to the app as PUBLIC_PADDLE_CLIENT_TOKEN. Always set."
 }
 
 variable "turnstile_site_key" {

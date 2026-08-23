@@ -136,8 +136,8 @@ breaking the old single-price checkout — which is now gone: `PADDLE_PRICE_ID` 
 backend env schema and retired from TF). Code map: backend `src/catalog.ts` (pure mapping + tests) /
 `src/catalog.server.ts` (TTL cache) / `src/routes/catalog.ts` + the `priceId` validation in
 `src/routes/checkout-session.ts`; app `EntitlementManager.getCatalog()`/`subscribe(priceId)` →
-IPC `entitlement:catalog` → `SubscribeModal`. **Still pending: Ben's on-Mac visual + sandbox
-checkout verify** (against the reshaped 5-tier catalog, once seeded).
+IPC `entitlement:catalog` → `SubscribeModal`. The on-Mac subscribe click-through is one of the gates
+tracked in [`PROD.md`](./PROD.md).
 
 The decided spec, kept for reference (what's built matches it):
 

@@ -18,22 +18,12 @@ values the `/checkout` page needs.
     the sandbox token; production = empty until the live Paddle catalog exists.
 - **DNS** — **deferred** (`modules/shared/main.tf`), see below.
 
-## Status (2026-07-05)
-> **Migrated to Ben's own AWS account, 2026-07-27** ([`MIGRATION.md`](../../MIGRATION.md)). Applied and
-> verified there; the old Adpharm stacks were destroyed the same day. Statuses below describe the
-> CURRENT account.
+## Worth knowing
 
-- **Live** — the site is deployed + serving at `coldstorage.sh`, and both stacks are **applied** to
-  real AWS/Vercel (Ben's own account since 2026-07-27).
-- **Vercel project:** `prj_QkTYTMBTzLCHXCsRncrrAThMSlv7`, slug **`coldstorage-web`**. Note this differs
-  from `project_name` (`coldstorage-site`), which is only this component's TF/state label + IAM role name.
-- `vercel_project_name` is `coldstorage-web` (corrected from `coldstorage-site`; it's baked into the
-  OIDC trust — `oidc.tf`). It landed with the account migration's first apply — see
-  [`MIGRATION.md`](../../MIGRATION.md).
-- **Paddle:** staging carries the real sandbox client token; **production** carries the
-  `TODO_PASTE_LIVE_PADDLE_CLIENT_TOKEN_HERE` placeholder until the live account exists. The default
-  payment link has been **repointed to `coldstorage.sh/checkout`**.
-- **DNS:** `coldstorage.sh` is managed **entirely in Vercel** (not TF/Route53) — nothing to do here.
+- **The Vercel project slug is `coldstorage-web`**, which differs from `project_name`
+  (`coldstorage-site`) — the latter is only this component's TF/state label and IAM role name. The slug
+  is baked into the OIDC trust (`oidc.tf`), so they are not interchangeable.
+- **DNS for `coldstorage.sh` lives entirely in Vercel**, never TF/Route53 — nothing here manages it.
 
 ## Deploy
 

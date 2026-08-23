@@ -45,16 +45,8 @@ task pull                 # picker → account-backend: pulls staging's values i
 Production's manual secrets are `sensitive=true` and **not** pullable by design — see
 `modules/stack/vercel-env-vars.tf`.
 
-## Status
-> **Migrated to Ben's own AWS account, 2026-07-27** ([`MIGRATION.md`](../../MIGRATION.md)). Applied and
-> verified there; the old Adpharm stacks were destroyed the same day. Statuses below describe the
-> CURRENT account.
-
-**Applied — both stacks live** (`terragrunt state list` confirms all 9 production / 10
-staging resources exist for real: the OIDC role, the `staging` custom environment, and every
-TF-managed + manual env var; re-running `plan` shows "No changes" for both). **All 6 manual
-secrets are set for real** (staging's 3 on 2026-07-02; production's `DATABASE_URL` on
-2026-07-01 and `PADDLE_API_KEY` + `PADDLE_WEBHOOK_SECRET` on 2026-07-10 — verified via env-var
-`updatedAt` metadata, values never read). Both lanes are deployed and smoke-tested live at
-`api.coldstorage.sh` / `api-staging.coldstorage.sh` — no remaining blockers. See
-[`PADDLE.md`](../../PADDLE.md) for the webhook destinations + runtime key scope.
+Both lanes serve at `api.coldstorage.sh` / `api-staging.coldstorage.sh`. The six manual secrets are
+Terraform-declared but dashboard-set, so `terragrunt plan` can't tell you whether they hold real values
+— ask the running deployment with `task backend:api:health ENV=production|staging`, which reports the
+identity it's actually wired to. Webhook destinations and runtime key scope:
+[`PADDLE.md`](../../PADDLE.md).

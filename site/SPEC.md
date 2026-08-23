@@ -1,21 +1,8 @@
 # ColdStorage Marketing Site — Build & Design-Import Spec
 
-> **Status:** ✅ LIVE at [coldstorage.sh](https://coldstorage.sh) (2026-07-05) · Phases 1–4 done.
-> **Landing page recomposed from upstream 2026-07-18** — new positioning, new pricing model,
-> six new sections (see *What ships* → *2026-07-18 re-pull*). typecheck + build green, SSR
-> output verified.
-> **Company + support pages added 2026-07-18** — `/about`, `/source`, `/help`, `/contact`,
-> killing the footer's four dead links. `/contact` is the app's first `action` (Turnstile → zod
-> → CD2). typecheck + copy-check + build + `task ssr:check:site` all green.
-> **Real media landed 2026-08-21** — the hero plays a silent looping screen recording of files
-> being dragged into the app; the drag-in section shows the matching still. Assets are encoded by
-> `task media:site` into `public/media/`, and the placeholder frame + the orphaned vault mock are
-> gone.
-> Pending: the privacy/key-escrow claim needs a
-> product call, OIDC-trust re-apply (`coldstorage-web` slug), live Paddle token for prod
-> checkout, **two copy lines await Ben's confirmation** — see **Open decisions** and **Phases** below.
-> (`infra/site` was applied in the 2026-07-27 account migration, carrying the `coldstorage-web`
-> OIDC-slug fix with it — see [`MIGRATION.md`](../MIGRATION.md).)
+> Live at [coldstorage.sh](https://coldstorage.sh). What's unsettled is under **Open decisions**;
+> what shipped when is `git log`.
+>
 > This spec is a living document, not scripture. If the code and this file disagree, the code wins
 > — fix the file.
 
@@ -272,41 +259,9 @@ not a tweak. Tokens (Layer A) were byte-identical, so nothing in `app/styles/ds/
   Paddle secret, the webhook/entitlement flow). Not a page — do not move.
 - Site env: `PUBLIC_PADDLE_CLIENT_TOKEN` + `PUBLIC_PADDLE_ENVIRONMENT` (public client tokens,
   TF-managed per-stack).
-- **Ben's action (Phase 3):** repoint Paddle's dashboard default-payment-link from
-  `api.coldstorage.sh/checkout` → `coldstorage.sh/checkout` (+ staging).
-
-## Phases (hardest / riskiest first)
-
-- **Phase 1 — prove the spine. ✅ DONE.** Scaffolded `site/` (RR7 v7 for Vercel, light-only
-  theming, i18n, generouted); DS tokens pulled verbatim → `app/styles/ds/` + shadcn alias;
-  `HowList` ported end-to-end (SSR-safe motion, typed content, real CSS); typecheck + build green.
-- **Phase 2 — breadth. ✅ DONE.** All 6 sections + `MarketingNav`/`Footer` + DS component library
-  (Button/Badge/Card/CtaPanel/PricingTable/Accordion/KeyValueRow) + the Mac vault mock; full Master
-  composition at `/` + `/fr`; typecheck + build green, section copy server-rendered.
-  _Open: pixel fidelity of the bundle-only reconstructions (nav logo glyph, "Most picked" pricing
-  badge, nav/footer/PricingTable/CtaPanel look) — awaiting Ben's visual pass._
-- **Phase 3 — checkout. ✅ DONE (code).** Branded `/checkout` route (Paddle.js overlay opener,
-  optional-token graceful state), `PUBLIC_PADDLE_CLIENT_TOKEN` + `PUBLIC_PADDLE_ENVIRONMENT` env,
-  and the `window.env` client-env injection (a foundation piece — wired in `root.tsx`). typecheck +
-  build green. _Ben's action:_ repoint Paddle's default-payment-link → `coldstorage.sh/checkout`
-  (+ staging). _After repoint:_ the account-backend `src/routes/checkout.ts` HTML page is redundant
-  and can be removed (leave it until the link is moved — it's still the live target).
-- **Phase 4 — infra / deploy. ✅ APPLIED + LIVE.** `infra/site/` (Terragrunt root + modules/{shared,stack}
-  + live/{shared,production,staging}), `tf:site:*` tasks + pickers, `fmt` clean — applied to real
-  AWS/Vercel. Dormant OIDC role + the two `PUBLIC_PADDLE_*` env vars (no Cognito/DB/secrets). DNS for
-  `coldstorage.sh` is Vercel-managed (not TF/Route53). Vercel project `prj_QkTYTMBTzLCHXCsRncrrAThMSlv7`,
-  slug **`coldstorage-web`** (`project_name`/state label is `coldstorage-site`). Site deployed + serving.
-
-### Still pending (2026-07-05)
-  - **OIDC-trust re-apply** — `vercel_project_name` corrected `coldstorage-site` → `coldstorage-web`
-    (uncommitted in `infra/site/live/*/terragrunt.hcl`); `task tf:site:apply ENV=production` + `ENV=staging`
-    to land it. Dormant (site makes no AWS calls) → low-urgency.
-  - **Live Paddle token** — prod checkout needs it; `TODO_PASTE_LIVE_PADDLE_CLIENT_TOKEN_HERE` placeholder
-    in `infra/site/live/production/terragrunt.hcl` (staging already has the real sandbox token).
-  - **Paddle default-payment-link** → `coldstorage.sh/checkout`: **repointed by Ben.** After it, the old
-    `account-backend/src/routes/checkout.ts` HTML page is redundant → remove.
-  - **Brand polish** — the reconstructed nav logo (snowflake `ac_unit`) + "Most picked" pricing badge
-    (Ben okayed "for now"). Real treatment TBD.
+- The **live** Paddle account's default payment link points here (`coldstorage.sh/checkout`).
+  Sandbox deliberately still points at the account-backend's own `/checkout`, which is why
+  `account-backend/src/routes/checkout.ts` is kept rather than deleted as redundant.
 
 ## Routes · navigation
 
@@ -487,14 +442,6 @@ case is **skipped**, not neutered.
   right place to stop, but it means a bounce shows up as silence rather than as an error. If
   that ever bites, poll `client.get(id)`.
 
-- **Hero + drag-in media** — _RESOLVED, 2026-08-21._ Both `<image-slot>` drop zones now hold
-  real product footage: the hero runs `shared/demo-video.tsx` (a silent, audio-stripped H.264
-  loop that pauses and grows controls under `prefers-reduced-motion`), the drag-in section an
-  intrinsically-sized WebP still. Encoding is a task, not a remembered set of ffmpeg flags —
-  `task media:site SRC=… NAME=…` writes both the MP4 and its first-frame poster into
-  `public/media/`. The placeholder `media-frame.tsx`, and the orphaned `vault-mock.tsx` +
-  `mac-window.tsx` that were being held as hero candidates, are deleted (git history keeps
-  them).
 - **Privacy copy is ahead of the product** — _NEEDS A DECISION._ The new privacy ledger says
   "We never get that key, and there's no copy on our side." The previous copy deliberately
   disclosed key escrow, and `PROD.md` still describes escrow as the live design. Either the
@@ -507,47 +454,7 @@ case is **skipped**, not neutered.
 - **New numbers vs Paddle** — the six tier prices and the retrieval rates are now published on
   a live site. They need reconciling against the actual Paddle catalogue before the paid flow
   opens (`PROD.md`).
-- **Site prices are hand-mirrored from the code SSOT** — _CLOSED 2026-07-18 by a guard._
-  `PRICING.tiers` in `content.ts` mirrors `account-backend/src/plan-sizes.ts` (generator-derived,
-  `round(1.8 * bytes/1e9 + 99)` cents). The packages are independent with **no root workspace**,
-  so the site can't import the list at build time — but `task copy:check:site` imports both and
-  asserts they agree (yearly *and* the derived monthly), so drift fails loudly instead of
-  shipping. A shared package or root workspace would be the purer fix; it would couple two
-  deploy targets to buy what the guard already buys.
-
-- **`MarketingNav` / `MarketingFooter` / `CtaPanel` / `PricingTable`** — _RESOLVED 2026-07-05:_
-  no source in either project (`components/core/` holds only generic primitives); they exist
-  **only compiled in `_ds_bundle.js`**. Decision: **reimplement as fresh stack components** styled
-  with DS tokens (their data already lives in `site-common.jsx` — nav links, `CS_FOOTER`), extracting
-  exact look from the bundle. Cleaner than reverse-engineering minified JS, and they're the
-  "marketing-specific components" the site is meant to own anyway.
-- **"Download for Mac" CTA target** — _RESOLVED 2026-07-05, page added 2026-07-10:_ all three CTAs
-  (nav + hero + closing) link to a single `DOWNLOAD_PATH` (`app/lib/marketing/download.ts`) → now the
-  standalone **`/download` page** (`($lang).download.tsx` — CtaPanel-based: install steps, a manual
-  "Download for Apple Silicon" button — the label is the compatibility statement, Screen Studio
-  style — + an "All releases" link to the on-site **`/releases`** page, `($lang).releases.tsx`: the
-  version archive, fed by the same GitHub Releases API as the `.dmg` resolver, edge-cached hourly,
-  falling back to a plain GitHub link only when the API is down). _Re-settled 2026-07-28
-  (supersedes the
-  2026-07-18 label-decides-auto-start scheme):_ **the page NEVER auto-starts the file** — every CTA
-  goes to `DOWNLOAD_PATH` (`/download`), `DOWNLOAD_START_PATH`/`?start=1` and the
-  `<meta http-equiv="refresh">` are gone, and the visitor's click on the page's button is the only
-  fetch trigger (Screen Studio's model). The page carries the arm64 requirement two ways: the note
-  line states "Apple silicon Macs (M1 or later), macOS 14+" for everyone, and
-  `components/marketing/arch-notice.tsx` shows a warn-only amber banner when the browser
-  *positively* identifies an Intel Mac (Chromium UA-CH `architecture`, else the WebGL renderer
-  string; Safari masks both → stays silent and the note line covers it). The button is never hidden
-  or disabled — detection can be wrong, and the notice says so. The actual file fetch is
-  `DOWNLOAD_DMG_PATH` → the **`/download.dmg` resource route** (`download[.]dmg.tsx`, the former
-  `/download` 302), which resolves the *latest* GitHub Releases build and 302s to its `.dmg`
-  (edge-cached hourly; falls back to the releases page on failure). No version is hardcoded, so
-  release bumps need no site edit. Current build is **arm64-only** (v0.1.0) — the clean cross-arch
-  fix is a **universal `.dmg`** (build-side, `ui/electron-builder.yml`), _not_ an arch-picker
-  downloads page; deferred until Intel matters (all new Macs are Apple Silicon; macOS 27 drops
-  Intel). The resource route already supports a multi-platform future without touching the buttons.
-  The page is stack-assembled from existing DS pieces (CtaPanel/Button/Nav/Footer) — flag it for an
-  upstream design pass whenever the next design session runs.
-- **Fonts loading strategy** — Phase 2 (see Upstream projects → Fonts).
+- **Fonts loading strategy** — see *Upstream projects → Fonts*.
 
 ## Non-goals (for now)
 

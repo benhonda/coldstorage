@@ -5,40 +5,7 @@ archive logic: the Swift daemon owns scan/encrypt/upload/restore/journal; this r
 commands. Full plan + decisions: [`DESIGN.md`](./DESIGN.md). Orientation:
 [`../README.md`](../README.md).
 
-## Status
-
-| Layer | What | State |
-|-------|------|-------|
-| 1 | Node IPC bridge (`node:net` → JSONL control socket) | **DONE ✅** |
-| 2 | electron-vite shell + main↔renderer IPC + event-stream→typed state | **DONE ✅** |
-| 3 | Design system (tokens + primitives) + React views | **DONE ✅ — My Files + Settings, browser on real `listFiles` (visual-verify pending)** |
-
-> ✅ **The reorganizable-filesystem redesign is BUILT (2026-06-24)** — two surfaces, **My Files** (drill-in
-> file browser: drop-to-upload, status icons, row ⋯ dropdown + Get-info modal, reorganize, request-a-copy
-> modal w/ native folder picker) + **Settings** (watched folders, exclude chips, storage). The old 4-tab
-> Vault/Sources/Restore/Browse views are deleted; DS tokens/primitives/fonts + all layer-1/2 plumbing
-> were kept. `task ui:typecheck` + `task ui:test` + `task ui:build` green. **PENDING Ben (macOS): visual
-> verify** (`task ui:mac:live` — Electron can't render in the container). The browser tree is
-> **real journal data** — the daemon's `listFiles` read is built and the fixtures stand-in is deleted
-> (proven over the daemon socket, `task ui:prove`); **drop-to-upload / "Choose files or folders" (native files-and-folders picker) really archive through the daemon**
-> (the `deposit` command); request-a-copy issues the **real `restore` command**;
-> **move/rename/delete are real daemon commands** (`movePath`/`deletePath` — the UI applies an optimistic
-> edit, then reconciles to journal truth on the `filesChanged`-triggered `listFiles` refetch; proven over
-> the daemon socket, 2026-06-25); `createFolder` persists an empty folder as a journal marker, so new
-> folders survive a reload. **Drag-to-move is in (2026-07-15/16)**: drag rows/tiles onto a folder or an
-> ancestor breadcrumb crumb — same `movePath` op as "Move to…", Finder semantics (multi-select drags
-> together, a folder can't drop into its own subtree, internal drags never trigger drop-to-upload) —
-> incl. **spring-loading**: hold over a folder/crumb and it pulses then opens under the drag; the blank
-> area then accepts the drop for the folder you sprang into.
->
-> **Error states (UI side, 2026-06-24):** a failed upload shows ⚠ **couldn't upload** on the row (kept
-> visible), a **light-red error toast**, a persistent sidebar **"N couldn't upload"** → `FailuresPanel`
-> (permanent failures only — transient stays "uploading" and self-heals), and **Retry upload** in the row
-> ⋯ menu (re-issues `deposit` from the row's `srcPath`). A permanent failure is journal truth (the daemon
-> marks the file `failed` → `listFiles` returns it → the ⚠ survives a refresh/restart), and the panel
-> **names** the failed files (via `blobFailed.paths`). Uploading rows show a **determinate** % bar for large
-> solo-blob files (the daemon's `uploadProgress` event), falling back to an indeterminate stripe for small
-> batched files.
+What the surfaces are and how they behave: [`DESIGN.md`](./DESIGN.md). What shipped when: `git log`.
 
 Toolchain: **electron-vite** (Vite, three-process split), **React 19**, secure IPC
 (`contextIsolation: true`, `contextBridge`). Tooling runs on **Bun**; the Electron runtime is its own

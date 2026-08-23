@@ -73,7 +73,8 @@ opaque cents.
   Landed: `infra/coldstorage` (−`RestoreObject`, plan: 0 add / **1 change** / 0 destroy),
   `infra/account-backend` (+S3 thaw policy on the OIDC role, +2 env vars; plan: **3 add** / 0 / 0),
   `aws.server.ts`, `identity.server.ts`, `retrieval.server.ts` (`blobSizes` + `thawBlobs`),
-  quote/webhook wiring. **Both TF applies are pending Ben.**
+  quote/webhook wiring. Both applied — `MIGRATION.md` records `RestoreObject` verified absent from the
+  user role and present only on the backend's OIDC roles in the current account.
 
 ## The flow
 

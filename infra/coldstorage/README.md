@@ -11,10 +11,6 @@ daemon + a private S3 vault, not a Vercel web app.
 > "Terraform / Terragrunt" section). Before `git add infra/`, sanity-check `git status` for
 > stray state — the pre-commit gitleaks hook (`task hooks:install`) is the backstop.
 
-> **Migrated to Ben's own AWS account, 2026-07-27** ([`MIGRATION.md`](../../MIGRATION.md)). Applied and
-> verified there; the old Adpharm stacks were destroyed the same day. Statuses below describe the
-> CURRENT account.
-
 ## What it provisions (production-only for now)
 - **S3 vault** (`coldstorage-production-<acct>`) — private, versioned, SSE-S3, written to
   directly as **Glacier Deep Archive** by the daemon. One lifecycle rule: abort orphaned

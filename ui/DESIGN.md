@@ -508,13 +508,15 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   (headless-tested). Fonts self-hosted (Fontsource + material-symbols) for the locked-down CSP.
 
 ## Remaining UI-lane work (still open)
-2. **Skipped-count reporting** (daemon): the deposit "skipped 1,203" line needs the run to report how
+1. **Skipped-count reporting** (daemon): the deposit "skipped 1,203" line needs the run to report how
    many files the excludes filtered. Also a per-run **filesFailed** count (blobs ≠ files).
-3. **Retry depth:** row Retry re-issues `deposit` from the remembered `srcPath`; a failure *after* the
+2. **Retry depth:** row Retry re-issues `deposit` from the remembered `srcPath`; a failure *after* the
    daemon accepted it (journal row, no `srcPath`) needs daemon support to retry.
-4. **Polish:** macOS notification on restore-ready (`restoreCompleted` is the hook, still unwired);
+3. **Polish:** macOS notification on restore-ready (`restoreCompleted` is the hook, still unwired);
    subset the 5.3 MB Material Symbols woff2 to the ~12 glyphs used.
-5. `newFolder` is local-only until something lands in it (a virtual path — nothing to persist).
+4. `newFolder` is local-only until something lands in it (a virtual path — nothing to persist).
+5. **Background-run UX:** a Tray + `LSUIElement` so the always-running app lives in the menu bar,
+   plus a Settings toggle for `openAtLogin`.
 
 ## Gotchas (save the next agent hours)
 - **Browse is NOT R2-blocked — only photo thumbnails + cross-device index portability are.** Deep

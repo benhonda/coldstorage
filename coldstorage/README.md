@@ -114,26 +114,16 @@ be exercised against real AWS.
   (so S3 stores/validates) + `HeadObject` verify. "Archived" = verified, never "PUT 200".
 - **Newest/most-precious-first** planning so recent + favorites land fast.
 
-## Status
-Builds and tests green on Linux (swiftly); the engine **and** control plane are proven end-to-end by the
-Core suite (archive + resume + round-trip restore; IPC add/remove/trigger + restart persistence + live events).
-The restore path is now **thaw-aware** — Deep Archive thaw logic is unit-tested, the download/decrypt leg is
-round-trip-proven, but the live multi-hour `RestoreObject` retrieval needs real AWS to exercise. The macOS
-adapter (`PhotoKitSource`, `FolderWatcher`) now **compiles + the daemon runs on macOS** (2026-06-21, control
-socket up, Electron UI connected). **PhotoKit mechanics are PROVEN** (2026-06-26, `phase0-photos-spike` on a
-real Mac — durable Photos TCC grant under launchd + full-res iCloud original). **But photos are now
-EXPLICIT-deposit only, never auto-watched** (product decision 2026-06-26): the daemon's old
-`COLDSTORE_PHOTOS=1` enumerate-everything path is **removed** (`platformSources` is empty); the explicit
-photo-deposit path is **built + proven end-to-end on a real Mac (2026-06-26)** — native PHPicker helper →
-`depositPhotos` → daemon archives full-res originals (see CHANGELOG). **`FolderWatcher` FSEvents behavior is now PROVEN on a real Mac (2026-06-26)** — a drop fires a sub-second re-scan under a 600s poll (`task daemon:mac:fsevents-test`). The watcher is now **re-armable** (`FolderWatcher.setPaths` + `main.swift` subscribes to `sourcesChanged`), so `addSource`'d/unpaused folders are watched without a daemon restart (**proven on a real Mac 2026-06-26** — a drop into a folder added post-startup fired a sub-second re-scan, no restart).
-`S3ClientConfiguration`/`*Input` deprecation warnings remain (SDK moved to `S3ClientConfig`); a non-urgent cleanup.
+## Known gaps
 
-## Known stubs / TODO (next build chunks)
-- ~~Live Deep Archive **thaw** leg~~ — **DONE ✅ (2026-06-27): PROVEN END-TO-END on the real prod vault.** First REAL thaw was requested + AWS-confirmed 2026-06-26 (`restore` → `state=thawRequested`; `head-object` `ongoing-request="true"`); after the ~12h Standard clock a single re-run returned `state=restored` with a verified file written (`RestoreEngine` won't write on hash mismatch, so that *is* the byte-identical proof). No longer a stub — the whole pipeline has zero unproven legs vs real AWS. `task daemon:mac:restore-wait` remains the hands-off poller for future thaws. See CHANGELOG.
-- **UI contract gaps** (the Electron panel needs these — see [`../ui/DESIGN.md`](../ui/DESIGN.md) "Remaining UI-lane work"):
-  - **`newFolder`** (a virtual path, still local-only); a per-run **filesFailed** count (blobs ≠ files); **skipped-count reporting** (how many files the excludes filtered). *(`move`/`rename`/`delete` landed as `movePath`/`deletePath`; **exclude get/set**, the **restore fee** estimate, and **bytes/size** all landed too — see below.)*
-- **Explicit photo-deposit path — DONE ✅ + proven on a real Mac (2026-06-26):** native PHPicker helper (`coldstore-photo-picker`) → `depositPhotos` → daemon resolves picked ids via `PhotoKitResolver` + archives full-res originals; `coldstored-Info.plist` embedded (`-sectcreate`) + codesigned `--identifier`-pinned in `task daemon:mac:install`. *Remaining TODO in this area:* real plaintext hashing pre-pass for photos (the `contentHash` metadata still keys on `localIdentifier` — integrity is unaffected, it's computed from real bytes at archive time, but a real hash would dedup re-deposits better). *(FSEvents `FolderWatcher` — incl. live re-arm on `sourcesChanged` — is now PROVEN on a real Mac, 2026-06-26; was listed here as untested.)*
-- Cross-blob concurrency + adaptive throughput (engine is correct sequential today); persistent poison-blob state (skip-list is in-memory).
-- R2 bucket for photo **thumbnails** + cross-device index portability (the browse *tree* is journal-backed and needs no R2).
+- **Photos hash on `localIdentifier`, not plaintext.** Integrity is unaffected — the content hash is
+  computed from real bytes at archive time — but a true pre-pass hash would dedup re-deposits properly.
+- **The engine is correct-but-sequential across blobs.** No cross-blob concurrency or adaptive
+  throughput yet, and the poison-blob skip-list is in-memory, so it doesn't survive a restart.
+- **No R2 bucket** for photo thumbnails or cross-device index portability. The browse *tree* is
+  journal-backed and needs none; thumbnails and a second device do.
+- `S3ClientConfiguration`/`*Input` deprecation warnings (the SDK moved to `S3ClientConfig`) — noise, not
+  a bug.
 
-> **Done since earlier drafts (no longer stubs):** restore **over IPC** (`restore` command + `restore*` events, byte-identical) · **graceful error handling** (`FailureKind` classify + per-blob isolation + skip-list; SDK owns transient retry) · **`listFiles`** (journal-backed browse tree) · ad-hoc **`deposit`** (drop-to-upload, `ExplicitPathsSource`) · **`movePath` / `deletePath`** (reorganize move/rename via a journal `relativePath` prefix-sweep + delete-as-tombstone; `filesChanged` event) · **`uploadProgress` event** (per-file determinate bar for solo-blob large files; `UploadProgress` struct + `onProgress` callback) · **per-file `failed` status** (`Journal.markFilesFailed` on permanent faults + `paths` on `blobFailed` → ⚠ row that's journal truth) · **scan excludes** (`listExcludes`/`addExclude`/`removeExclude` + `excludesChanged`; journal `excludes` table, defaults seeded once; `ExcludeMatcher` applied *inside* the `LocalDirSource` walk so junk like node_modules is pruned before hashing) · **`getPricing`** (storage/retrieval rate-card SSOT — `Pricing` + `RestoreTier.retrievalUsdPerGB` — the UI quotes fee/cost from it; bytes/size stay journal-derived in the renderer, no `Status` field) · bucket **lifecycle** (abort-incomplete-multipart, applied) · the **Electron UI** (My Files + Settings, wired to the daemon).
+UI-lane gaps live in [`../ui/DESIGN.md`](../ui/DESIGN.md); the launch punch list is in
+[`../PROD.md`](../PROD.md).

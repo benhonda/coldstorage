@@ -33,8 +33,8 @@ Target layout (what lives where, how to gate the Mac target): [`README.md`](./RE
 - **`coldstored`** — does all the real work. Runs as a **launchd LaunchAgent** (per-user,
   `RunAtLoad` + `KeepAlive`). LaunchAgent, not LaunchDaemon, because it must run in the user session to
   reach the Photos library (TCC) and Keychain. *(The "can a background daemon hold a durable Photos
-  grant?" risk was proven out 2026-06-26 — signed binary + embedded Info.plist; see the README's
-  Status section and `phase0-photos-spike/`.)*
+  grant?" risk was proven out 2026-06-26 — signed binary + embedded Info.plist; the recipe is in
+  `phase0-photos-spike/`.)*
 - **Electron/React app** — a control panel + observer. Owns no upload state; connects over a local
   Unix-domain socket (JSONL + an event stream). Can be closed/crashed/reopened freely.
 - **Single source of truth = the signed-in user's journal.** The UI renders journal state; it never
