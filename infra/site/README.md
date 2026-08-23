@@ -27,8 +27,9 @@ values the `/checkout` page needs.
   real AWS/Vercel (Ben's own account since 2026-07-27).
 - **Vercel project:** `prj_QkTYTMBTzLCHXCsRncrrAThMSlv7`, slug **`coldstorage-web`**. Note this differs
   from `project_name` (`coldstorage-site`), which is only this component's TF/state label + IAM role name.
-- **Pending re-apply:** `vercel_project_name` was corrected `coldstorage-site` → `coldstorage-web` (it's
-  baked into the OIDC trust — `oidc.tf`); it lands with the account migration's first apply in the new account (MIGRATION.md phase 2), so there is nothing separate to run.
+- `vercel_project_name` is `coldstorage-web` (corrected from `coldstorage-site`; it's baked into the
+  OIDC trust — `oidc.tf`). It landed with the account migration's first apply — see
+  [`MIGRATION.md`](../../MIGRATION.md).
 - **Paddle:** staging carries the real sandbox client token; **production** carries the
   `TODO_PASTE_LIVE_PADDLE_CLIENT_TOKEN_HERE` placeholder until the live account exists. The default
   payment link has been **repointed to `coldstorage.sh/checkout`**.
