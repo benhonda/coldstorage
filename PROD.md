@@ -83,17 +83,18 @@ in Adpharm's Google organisation this isn't fully off Adpharm yet ([`MIGRATION.m
 **One retrieval, all the way through.** The paid path is proven as far as the thaw: on 2026-07-27 a
 restore was quoted, paid through sandbox Paddle, and the thaw reached S3 — conclusive because
 `s3:RestoreObject` exists *only* on the backend's OIDC role, so the thaw existing at all proves
-webhook → Vercel OIDC → AssumeRole → RestoreObject (MIGRATION.md). **What's never been exercised is the
-back half**: thaw completes → daemon downloads → decrypts → the file lands. That's the gate.
+webhook → Vercel OIDC → AssumeRole → RestoreObject (MIGRATION.md). **The gate is the back half**:
+thaw completes → daemon downloads → decrypts → the file lands.
 
-**Free-tier launch** is built and waits on the line above — until one real restore has been billed
-end-to-end, a free account's restores are our cost.
+**Free-tier launch** is gated on the line above — until one real restore has been billed end-to-end,
+a free account's restores are our cost.
 
 **First live Paddle webhook.** Production's webhook secret can only be proven to *match* by the first
 live event returning 200 in Paddle's notification log; a wrong secret 400s exactly like an unsigned
 one, so it isn't checkable from outside.
 
-**Mac gates owed.** Built, tested at every layer, never run on real hardware by a real user:
+**Mac gates owed.** Each of these is exercisable only by a person on a real Mac, doing it the way a
+customer would — the layer no test reaches. A gate closes by being done, and the bullet goes:
 
 - a config-less `.dmg` doing sign-in → subscribe → deposit (the "a stranger can use it" gate);
 - an existing subscriber changing plans — preview → confirm → webhook reflects the new plan;
@@ -101,8 +102,8 @@ one, so it isn't checkable from outside.
 - one-email-one-account, all three cases: email-first then Google, Google-first then email, and a
   legacy unlinked Google account getting the clean "use Google" copy;
 - the self-update *apply* round trip — a running app surfacing "Restart to update" and relaunching on
-  the new version. (The `v0.1.x` series means the feed is real and repeatedly published; whether a
-  running app has actually applied one is unconfirmed.)
+  the new version. Publishing a release exercises the feed; only this exercises Squirrel's swap of a
+  signed bundle for the running one.
 
 ## Known engineering gaps
 
