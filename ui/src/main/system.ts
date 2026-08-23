@@ -10,6 +10,7 @@ import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { IPC, type AppInfo, type PhotoPick } from "../shared/ipc.ts";
+import { codeSignature } from "./updater/signature.ts";
 
 /** Deep-link straight to System Settings ▸ Privacy & Security ▸ Photos (macOS). The recovery path the
  * toast offers when a photo deposit failed for lack of (full) Photos access — `tccutil`/relaunch can't
@@ -53,10 +54,13 @@ export const registerSystemHandlers = (): (() => void) => {
   // Build facts for Settings' footer. `app.getVersion()` IS the SSOT read (packaged package.json /
   // Info.plist) — never a version string typed into the renderer, which would drift the moment a release
   // bumps package.json.
-  ipcMain.handle(IPC.appInfo, (): AppInfo => ({
+  // Async only for the signature, which is a one-shot `codesign` read memoized in signature.ts — the
+  // renderer already awaits this handler at first paint, so nothing waits on it twice.
+  ipcMain.handle(IPC.appInfo, async (): Promise<AppInfo> => ({
     version: app.getVersion(),
     electron: process.versions.electron,
     packaged: app.isPackaged,
+    signature: await codeSignature(),
   }));
   ipcMain.handle(IPC.pickPhotos, () => pickPhotos());
   ipcMain.handle(IPC.openPhotosSettings, () => shell.openExternal(PHOTOS_PRIVACY_PANE));

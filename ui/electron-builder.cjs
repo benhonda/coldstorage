@@ -37,8 +37,10 @@ module.exports = {
   // would get the other's sign-in callback); the matching Cognito callback URL is registered in infra.
   protocols: [{ name: identity.productName, schemes: [identity.scheme] }],
 
-  // electron-vite emits the three processes to out/; that + package.json is the whole JS payload (the
-  // renderer's deps are already bundled by Vite; main/preload use only `electron` + node builtins).
+  // electron-vite emits the three processes to out/; that + package.json is the JS payload we list (the
+  // renderer's deps are bundled by Vite). NOT the whole story: `externalizeDepsPlugin` leaves main's
+  // runtime deps (electron-updater, electron-log) as bare imports, and electron-builder ships production
+  // node_modules for them on its own — which is why they aren't (and must not be) listed here.
   directories: {
     buildResources: "build", // icon.icns + entitlements live here (electron-builder convention)
   },

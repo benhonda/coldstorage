@@ -350,6 +350,12 @@ stamp, a manual check that finds nothing lands back on `idle` and reads as a but
 auto-update is off rather than offering a check that can never succeed. Wording is tested
 (`VersionFooter.test.ts`), not eyeballed.
 
+Two fields, not one, decide whether a check is worth offering: `AppInfo.packaged` **and**
+`AppInfo.signature` (`main/updater/signature.ts` — a memoized `codesign` read). A build that isn't
+Developer ID signed passes every check and download and is then refused at install by Squirrel.Mac, so
+"Up to date" would be the most misleading sentence on the page; the footer names the install instead.
+That case is not hypothetical — it cost a month of silent non-updates before the footer could say it.
+
 ## Onboarding — the first-run wizard (2026-07-16)
 After sign-up, one wizard in the same `.cs-signin` gate-card frame, progress dots on top, one idea
 per screen: **name → tour ×3 → recovery code → 2 skippable questions → done**

@@ -25,11 +25,22 @@ const checkedAt = (at: number, now: number): string =>
 
 /**
  * The update sentence for a given status. Pure (takes `now`) — the wording IS the feature here, so it's
- * tested rather than eyeballed. `packaged` short-circuits everything: auto-update only runs in the signed,
- * packaged app, so a dev build must say so instead of offering a check that can never find anything.
+ * tested rather than eyeballed. Takes the whole {@link AppInfo} because two of its fields, not one,
+ * decide whether a check is even meaningful.
+ *
+ * Both short-circuits exist so the footer never offers a check that cannot succeed:
+ *  - not packaged → a dev build, where the updater is an inert no-op port.
+ *  - packaged but not Developer ID signed → the check and the download WILL work and the install will be
+ *    refused by Squirrel.Mac. Saying "up to date" there would be the most misleading thing on the page,
+ *    so this case is named before any status is consulted.
  */
-export const updateLine = (update: UpdateStatus, packaged: boolean, now: number): UpdateLine => {
-  if (!packaged) return { text: "Auto-update is off in a development build.", tone: "quiet", busy: true };
+export const updateLine = (update: UpdateStatus, app: Pick<AppInfo, "packaged" | "signature">, now: number): UpdateLine => {
+  if (!app.packaged) return { text: "Auto-update is off in a development build.", tone: "quiet", busy: true };
+  if (app.signature === "other") {
+    // Not an error state — nothing has failed yet. It's a property of this install, and the only fix is
+    // a reinstall, so the sentence says that rather than leaving a dead "Check for updates" to press.
+    return { text: "This build isn't signed for distribution, so it can't auto-update. Reinstall from a release to fix it.", tone: "bad", busy: true };
+  }
   switch (update.state) {
     case "checking":
       return { text: "Checking for updates…", tone: "quiet", busy: true };
@@ -70,7 +81,7 @@ interface Props {
 
 export const VersionFooter = ({ appInfo, update, onCheck, onRestart }: Props): React.JSX.Element | null => {
   if (!appInfo) return null;
-  const line = updateLine(update, appInfo.packaged, Date.now());
+  const line = updateLine(update, appInfo, Date.now());
   return (
     <footer className="cs-about">
       <div className="cs-about-id">
@@ -87,7 +98,11 @@ export const VersionFooter = ({ appInfo, update, onCheck, onRestart }: Props): R
             Restart to update
           </Button>
         ) : (
-          appInfo.packaged && (
+          // Two different absences. HIDDEN where a check is meaningless at all — a dev build, or an
+          // install macOS will never update. Merely DISABLED while one is in flight, so the row doesn't
+          // reflow out from under the pointer the moment you press it.
+          appInfo.packaged &&
+          appInfo.signature !== "other" && (
             <Button size="sm" icon="refresh" disabled={line.busy} onClick={onCheck}>
               Check for updates
             </Button>

@@ -338,7 +338,20 @@ export interface AppInfo {
   /** False in `electron-vite dev`. Load-bearing for honesty: auto-update only runs in the packaged,
    * signed app, so an unpackaged build must not offer a "Check for updates" that can never find one. */
   packaged: boolean;
+  /** How this install is signed — see {@link CodeSignature}. `packaged` alone doesn't answer "can this
+   * update itself?": a locally packaged build is packaged AND unable to. */
+  signature: CodeSignature;
 }
+
+/**
+ * Whether this install's signature lets macOS apply an auto-update.
+ *
+ * - `developer-id` — signed for distribution; Squirrel.Mac will accept a release over it.
+ * - `other` — ad-hoc, unsigned, or an Apple Development cert. All three fail the same way: the check and
+ *   the download succeed, and the install is refused. This is what a local `ui:mac:package` build is.
+ * - `unknown` — nothing to inspect (a dev build, or not macOS). Claims neither.
+ */
+export type CodeSignature = "developer-id" | "other" | "unknown";
 
 /** One photo picked in the native picker: the PHAsset localIdentifier (drives the daemon `depositPhotos`)
  * + a suggested name for the instant optimistic row label (the daemon resolves the true filename later). */

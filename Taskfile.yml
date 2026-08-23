@@ -1396,6 +1396,188 @@ tasks:
         fi
         printf '%s' "$json" | bun scripts/verify-release.ts
 
+  ui:mac:install:latest:
+    desc: "Install the latest PUBLISHED release over /Applications/ColdStorage.app — the way out of an ad-hoc/unsigned local build that can never auto-update (see ui:mac:update:doctor). Downloads the notarized .dmg named by the live feed, replaces the app, and verifies the new copy is Developer ID signed. From then on auto-update works on its own."
+    interactive: true
+    prompt: "This REPLACES /Applications/ColdStorage.app with the latest published release. Your data, sign-in and settings are untouched (they live in Application Support), but macOS will re-ask for Photos access once, because the grant is keyed to the signature. Continue?"
+    cmds:
+      - |
+        [ "$(uname -s)" = "Darwin" ] || { echo "macOS only (you're on $(uname -s))."; exit 1; }
+
+        # Read the ASSET NAME out of the feed rather than constructing it — latest-mac.yml is the same SSOT
+        # electron-updater reads, so this can't drift from what was actually published (arch suffix included).
+        feed=$(curl -fsSL "https://github.com/{{.GH_REPO}}/releases/latest/download/latest-mac.yml") \
+          || { echo "Couldn't read the published feed — no release, or you're offline."; exit 1; }
+        ver=$(printf '%s\n' "$feed" | sed -n 's/^version: //p')
+        dmg=$(printf '%s\n' "$feed" | sed -n 's/^  - url: \(.*\.dmg\)$/\1/p' | head -1)
+        [ -n "$ver" ] && [ -n "$dmg" ] || { echo "Feed has no .dmg asset — was the release uploaded fully? (task ui:mac:release:verify)"; exit 1; }
+        echo "latest published: $ver ($dmg)"
+
+        installed=$(defaults read /Applications/ColdStorage.app/Contents/Info.plist CFBundleShortVersionString 2>/dev/null || echo "none")
+        # The bundle id addresses the running app for the quit below — unambiguous where a display name isn't.
+        bid=$(defaults read /Applications/ColdStorage.app/Contents/Info.plist CFBundleIdentifier 2>/dev/null || echo "?")
+        echo "installed:        $installed"
+
+        # Quit first — replacing a running .app leaves the old code resident and the supervised coldstored
+        # child pointing at a bundle that no longer exists.
+        #
+        # Ask by BUNDLE PATH, not by process name. `pgrep -x ColdStorage` was both too narrow and too wide:
+        # it missed the Electron helpers and the bundled coldstored child (all of which hold the bundle
+        # open), while matching any unrelated process that happened to share the name. What actually
+        # matters is "is anything executing out of the directory I am about to delete?" — which is exactly
+        # what an anchored path match asks. The ^ anchor also keeps this script, whose own argv contains
+        # the path, from matching itself.
+        running() { pgrep -f "^/Applications/ColdStorage.app/" 2>/dev/null; }
+        show_running() { ps -o pid=,comm= -p $(running | tr "\n" " ") 2>/dev/null | sed "s/^/     /"; }
+
+        if [ -n "$(running)" ]; then
+          echo "running out of /Applications/ColdStorage.app:"
+          show_running
+          echo "quitting…"
+          # By bundle id, not name — unambiguous, and it works for the staging identity too. Errors are
+          # SHOWN: a quit that silently fails is what turns "the app is still up" into a flat contradiction
+          # of what you can see on screen.
+          if [ -n "$bid" ] && [ "$bid" != "?" ]; then
+            osascript -e "tell application id \"$bid\" to quit" 2>&1 | sed "s/^/     osascript: /"
+          fi
+          for _ in 1 2 3 4 5 6 7 8 9 10; do [ -z "$(running)" ] && break; sleep 1; done
+
+          # A graceful quit can be refused: a modal sheet, a wedged renderer, or an Electron main process
+          # that never reaches its quit path. So escalate through real signals rather than asking twice.
+          #
+          # Every stage REPORTS. pkill exits 1 when nothing matched (normal, not an error) and >1 on a real
+          # failure like EPERM — collapsing those into `|| true` is what made the previous two versions of
+          # this task unable to explain themselves.
+          signal_stage() {
+            out=$(pkill "$1" -f "^/Applications/ColdStorage.app/" 2>&1); rc=$?
+            [ -n "$out" ] && printf "%s\n" "$out" | sed "s/^/     pkill: /"
+            [ "$rc" -gt 1 ] && echo "     pkill($1) exited $rc — the signal did not get through."
+            for _ in 1 2 3 4 5 6 7 8; do [ -z "$(running)" ] && break; sleep 1; done
+          }
+
+          # SIGTERM first: the app's will-quit handler gets its chance to stop coldstored cleanly.
+          if [ -n "$(running)" ]; then
+            echo "     didn't quit on its own — sending TERM:"
+            show_running
+            signal_stage -TERM
+          fi
+
+          # SIGKILL last. Uncatchable, so if anything still stands after this the problem is signal
+          # DELIVERY (permissions or a bad match), not a stubborn app — and that distinction is the whole
+          # diagnosis. Safe for coldstored: it journals every upload to disk and recovers on restart,
+          # which is the same guarantee it gives for a power cut.
+          if [ -n "$(running)" ]; then
+            echo "     still up — sending KILL:"
+            show_running
+            signal_stage -KILL
+          fi
+
+          if [ -n "$(running)" ]; then
+            echo "✋ Survived SIGKILL — that is not a stubborn app, it is a signal that never arrived."
+            show_running
+            echo "   Check for EPERM above. Quit these from Activity Monitor and re-run."
+            exit 1
+          fi
+          echo "     quit."
+        fi
+
+        tmp=$(mktemp -d)
+        # Always clean up the mount + temp dir, including on a failed ditto — a leaked /Volumes mount makes
+        # the next run fail with a confusing "resource busy".
+        mnt=""
+        cleanup() { [ -n "$mnt" ] && hdiutil detach "$mnt" -quiet 2>/dev/null; rm -rf "$tmp"; }
+        trap cleanup EXIT
+
+        echo "downloading…"
+        curl -fL --progress-bar -o "$tmp/$dmg" "https://github.com/{{.GH_REPO}}/releases/latest/download/$dmg" \
+          || { echo "Download failed."; exit 1; }
+
+        mnt=$(hdiutil attach "$tmp/$dmg" -nobrowse -readonly -quiet -mountpoint "$tmp/mnt" >/dev/null 2>&1 && echo "$tmp/mnt")
+        [ -n "$mnt" ] || { echo "Couldn't mount the .dmg."; exit 1; }
+        src=$(find "$mnt" -maxdepth 1 -name '*.app' -type d | head -1)
+        [ -n "$src" ] || { echo "No .app inside the .dmg."; exit 1; }
+
+        # ditto, not cp -R: it preserves the extended attributes and the code signature seal. A cp-copied
+        # bundle can fail its own signature check — the exact class of problem this task exists to end.
+        echo "installing $(basename "$src")…"
+        rm -rf /Applications/ColdStorage.app
+        ditto "$src" /Applications/ColdStorage.app || { echo "Copy failed."; exit 1; }
+
+        # Prove the fix landed rather than claiming it: a Developer ID authority here is precisely what the
+        # ad-hoc build lacked, and it's what makes every future update apply without any of this.
+        auth=$(codesign -dv --verbosity=2 /Applications/ColdStorage.app 2>&1 | sed -n 's/^Authority=//p' | head -1)
+        case "$auth" in
+          "Developer ID Application"*) echo "✓ installed $ver — signed: $auth. Auto-update will work from here on." ;;
+          *) echo "✗ installed, but signature reads '$auth' — auto-update still won't apply. Was this release notarized?"; exit 1 ;;
+        esac
+        open /Applications/ColdStorage.app
+
+  ui:mac:update:doctor:
+    desc: "Diagnose 'the app didn't auto-update': what version is actually INSTALLED, how it's signed (macOS refuses to auto-update an app that isn't Developer ID signed — the #1 silent cause), what the published feed offers, whether an update is already downloaded and waiting, and what the updater itself logged. Read-only. Run it when a release is live but an installed app stays on the old version."
+    cmds:
+      - |
+        [ "$(uname -s)" = "Darwin" ] || { echo "macOS only — the installed .app and its signature only exist there (you're on $(uname -s))."; exit 1; }
+
+        # The INSTALLED app, not ui/dist — auto-update applies to what's in /Applications. Name-agnostic so a
+        # staging install ("ColdStorage Staging.app") is found and reported too; they update independently.
+        found=0
+        for appdir in /Applications ~/Applications; do
+          for app in "$appdir"/*[Cc]old[Ss]torage*.app; do
+            [ -d "$app" ] || continue
+            found=1
+            plist="$app/Contents/Info.plist"
+            ver=$(defaults read "$plist" CFBundleShortVersionString 2>/dev/null || echo "?")
+            bid=$(defaults read "$plist" CFBundleIdentifier 2>/dev/null || echo "?")
+            echo "── installed: $app ──"
+            echo "   version:   $ver"
+            echo "   bundle id: $bid"
+
+            # THE decisive check. electron-updater's mac path hands the download to Squirrel.Mac, which
+            # verifies the new bundle's signature against the running one. An ad-hoc signed app (what
+            # `ui:mac:package:sign-adhoc` produces for local smoke tests) can never accept a Developer ID
+            # signed release — it fails the swap, and before the logger landed it failed SILENTLY.
+            auth=$(codesign -dv --verbosity=2 "$app" 2>&1 | sed -n 's/^Authority=//p' | head -1)
+            case "$auth" in
+              "Developer ID Application"*) echo "   signed:    $auth  ✓ can auto-update" ;;
+              "") echo "   signed:    UNSIGNED or ad-hoc  ✗ THIS IS WHY IT WON'T UPDATE — reinstall from the release .dmg" ;;
+              *)  echo "   signed:    $auth  ✗ not a Developer ID cert — auto-update will refuse; reinstall from the release .dmg" ;;
+            esac
+
+            # A downloaded-but-unapplied update lives here until the app quits. Its presence means the
+            # download half worked and only the INSTALL is stuck (quit the app properly — closing the
+            # window doesn't quit it on macOS).
+            pending="$HOME/Library/Caches/$bid-updater/pending"
+            if [ -d "$pending" ] && [ -n "$(ls -A "$pending" 2>/dev/null)" ]; then
+              echo "   pending:   an update IS downloaded and waiting to install:"
+              ls -la "$pending" | sed "s/^/     /"
+              echo "     → quit the app (Cmd-Q, not the red dot) to apply it."
+            else
+              echo "   pending:   nothing downloaded yet"
+            fi
+          done
+        done
+        [ "$found" = "1" ] || echo "── no ColdStorage.app in /Applications or ~/Applications — nothing installed to update. Install from the release .dmg."
+
+        # What the app WOULD find on its next check: the same latest-mac.yml electron-updater reads.
+        # /releases/latest/download/ needs no auth (public repo) and follows GitHub's own 'latest' pointer,
+        # so this is the feed as an installed app sees it, not as `gh` sees drafts.
+        echo "── published feed ({{.GH_REPO}}) ──"
+        feed=$(curl -fsSL "https://github.com/{{.GH_REPO}}/releases/latest/download/latest-mac.yml" 2>/dev/null) \
+          && printf '%s\n' "$feed" | sed -n 's/^version: /   offers version: /p;s/^  - url: /   asset:          /p' \
+          || echo "   couldn't fetch latest-mac.yml — no published release, or you're offline. Without this feed nothing updates."
+
+        # The updater's own words. Empty/absent on an app built before the logger was wired (<= v0.1.6):
+        # that build logs to a console no Finder-launched app has, which is why it looked like nothing
+        # happened at all. Anything from v0.1.7 on writes here.
+        echo "── updater log (last 20) ──"
+        log=$(ls -t "$HOME/Library/Logs/"*[Cc]old[Ss]torage*/main.log 2>/dev/null | head -1)
+        if [ -n "$log" ]; then
+          echo "   $log"
+          grep -iE "update|version" "$log" | tail -n 20 | sed "s/^/   /"
+        else
+          echo "   none — this build predates the updater logger (it logged to a console a Finder-launched app doesn't have)."
+        fi
+
   ui:icon:check:
     desc: "Fail if ui/build/icon.png is stale — i.e. the brand mark in site/brand/ (or a tile setting) changed without `task ui:icon:build` being re-run. Run by ui:mac:release:upload so a release can never ship a stale icon."
     dir: ui

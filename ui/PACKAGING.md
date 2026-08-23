@@ -62,6 +62,20 @@ macOS refuses to apply an update to an unsigned app.
 - Checks on launch and every 6h, background-downloads a newer signed build, and surfaces a quiet
   "Restart to update" banner. Restart is `quitAndInstall()`, whose app-quit SIGTERMs the supervised
   `coldstored` child via the existing `will-quit`. Ignored → installs on the next quit.
+- **When an installed app stays on the old version: `task ui:mac:update:doctor`.** It reports the
+  installed version, its signing authority, what the live feed offers, whether an update is already
+  downloaded and waiting on a quit, and the updater's own log. The two silent killers it names are an
+  ad-hoc/unsigned install (Squirrel.Mac won't swap in a Developer ID build over one) and "downloaded
+  but never quit" — closing the window doesn't quit the app on macOS. The first is the dogfooding
+  hazard: a local `ui:mac:package` build dragged into /Applications is stuck there forever, silently.
+  `task ui:mac:install:latest` is the way out — it installs the published notarized .dmg over it and
+  verifies the replacement is Developer ID signed, after which auto-update carries itself.
+- The updater logs through `electron-log` to `~/Library/Logs/<productName>/main.log`. This is wired
+  deliberately: electron-updater's default logger is `console`, and a Finder-launched `.app` has no
+  console, so every failure used to vanish.
+- The app also reads its own signature at startup (`main/updater/signature.ts`) and the Settings footer
+  says outright when a build can't auto-update — so the doctor is for diagnosing someone *else's*
+  install, not your own.
 
 ## Two lanes that must never cross
 
@@ -82,6 +96,15 @@ the daemon runs only while the app runs.
 the child it just launched. `app.setName(productName)` pins userData before either resolves a path, so
 they can't diverge — read from the **baked** config only, never the user's `config.json`, since a
 dogfood override must not repoint the data dir the app is already on.
+
+The **backend lane** (`accountApiBaseUrl`) follows the same rule for the same reason, since
+2026-08-23: a packaged app reads it from the baked file alone (`main/vault/config.ts`), and refuses to
+start if none is baked rather than guessing. It has to be immune to `config.json`, because
+`task ui:mac:config` writes EVERY lane's config into the production data dir (Mode 1's daemon and socket
+live there) — so one `task app:mac:run:staging-local` used to leave a file that silently repointed an
+installed production app at staging: sandbox Paddle, and the user's encrypted master key written to the
+test database. Running a packaged app against staging has its own answer with its own identity:
+`task app:mac:package:staging`. `task ui:mac:lane` prints what any installed app resolves.
 
 **Gotcha: the packaged app's data dir is the same as the launchd daemon's** (`~/Library/Application
 Support/ColdStorage`, same socket). Don't run both — `task daemon:mac:uninstall` the launchd one before

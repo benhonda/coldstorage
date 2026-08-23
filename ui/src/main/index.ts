@@ -17,8 +17,9 @@
  * ESM main (package.json `type: module`): use `import.meta.dirname`, not `__dirname`.
  */
 import { join } from "node:path";
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, dialog, shell } from "electron";
 import electronUpdater from "electron-updater";
+import updaterLog from "electron-log/main";
 import { DaemonClient } from "../daemon/client.ts";
 import { registerBridge } from "./bridge.ts";
 import { registerSystemHandlers } from "./system.ts";
@@ -91,6 +92,15 @@ const disposeAccountIpc = registerAccountIpc(account);
 //    on an unpackaged/unsigned app. electron-updater is CommonJS; destructure the default export (the
 //    documented ESM interop). ──
 const { autoUpdater } = electronUpdater;
+// Give the updater somewhere to WRITE. electron-updater's default logger is `console`
+// (AppUpdater: `protected _logger: Logger = console`), and a Finder-launched .app has no console — so
+// every "Checking for update", "Found version X" and, critically, every failure went to a stdout nobody
+// would ever read. A silent updater that has been erroring for weeks is indistinguishable from one with
+// nothing to do (PILLAR5). electron-log's file transport writes to Electron's own logs dir — on macOS
+// ~/Library/Logs/<productName>/main.log — which is exactly where `ui:mac:update:doctor` looks. (v5 wants
+// the `electron-log/main` entry in the main process; the bare specifier is the renderer's.)
+autoUpdater.logger = updaterLog;
+updaterLog.transports.file.level = "info";
 const updaterPort: UpdaterPort = app.isPackaged
   ? {
       get autoDownload(): boolean {
