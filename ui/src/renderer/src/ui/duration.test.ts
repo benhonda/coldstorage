@@ -48,6 +48,13 @@ describe("timeLeft", () => {
     expect(timeLeft(25 * HOUR)).toBe("about 1 day 1 hour left");
     expect(timeLeft(48 * HOUR)).toBe("about 2 days left");
   });
+
+  test("past a few days the hours go, past two weeks the days go — precision we don't have", () => {
+    expect(timeLeft(3 * 24 * HOUR + 7 * HOUR)).toBe("about 3 days left");
+    expect(timeLeft(20 * 24 * HOUR + 7 * HOUR)).toBe("about 3 weeks left");
+    expect(timeLeft(25 * 24 * HOUR)).toBe("about 4 weeks left");
+    expect(timeLeft(14 * 24 * HOUR)).toBe("about 2 weeks left");
+  });
 });
 
 describe("timeLeftSentence", () => {

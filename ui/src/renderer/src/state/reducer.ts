@@ -205,10 +205,36 @@ export const eventAction = <E extends DaemonEventName>(name: E, data: DaemonEven
 
 const RECENT_CAP = 50;
 const FAILURE_CAP = 100;
-/** Recent progress samples kept for the rate/ETA window. Small on purpose: a short window tracks a
- * changing upload speed, a long one lags it. ~20 ticks is a few seconds of dense small-file progress or a
- * couple of minutes of 64 MiB parts — smoothed either way. */
-const SAMPLE_CAP = 20;
+/** How far back the rate/ETA window looks, in ms. A TIME window, deliberately, over the tick-count window
+ * it replaced (2026-08-24): the daemon ticks `runProgress` on every event — each file starting, each
+ * file archived, each 64 MiB part shipped — and only the last kind moves bytes. On a 30 GB folder of tiny
+ * files the last 20 ticks were ten files' worth of zero-byte events spanning a random fraction of a second,
+ * so the "rate" was `one part (or none) ÷ whatever that slice took`, and the ETA lurched 20 → 25 → 22 days
+ * on every file. Two minutes of real transfer covers a few parts even on a slow link, so the average has
+ * something to average; short enough that a speed change shows within a couple of minutes. */
+const SAMPLE_WINDOW_MS = 120_000;
+/** Hard ceiling on samples kept, so a tick stream can't grow the window without bound. Sized so it is
+ * NOT the binding constraint: the chattiest stream is a restore (a tick per 4 MiB frame), which at
+ * 100 MB/s is ~25 ticks/s ≈ 3,000 over the window. Each sample is two numbers, so 5,000 is nothing. */
+const SAMPLE_CAP = 5000;
+
+/** Fold one progress tick into the sample window. Pure. Two rules, both about honesty of the measurement:
+ * only a tick that MOVED bytes is a sample (an item-start or file-archived tick says nothing about speed),
+ * and samples older than `SAMPLE_WINDOW_MS` are dropped — except the newest of them, kept as the anchor so
+ * the rate always spans at least the full window rather than just the ticks that happen to fall inside it. */
+export const foldSample = (
+  samples: RunProgress["samples"],
+  bytes: number,
+  now: number,
+): RunProgress["samples"] => {
+  const last = samples[samples.length - 1];
+  if (last && bytes <= last.bytes) return samples;
+  const next = [...samples, { t: now, bytes }];
+  const cutoff = now - SAMPLE_WINDOW_MS;
+  let firstInside = next.findIndex((x) => x.t >= cutoff);
+  if (firstInside === -1) firstInside = next.length - 1;
+  return next.slice(Math.max(0, firstInside - 1)).slice(-SAMPLE_CAP);
+};
 
 /** A fresh run-progress record — used at `runStarted` and as a defensive fallback if a `fileArchived`
  * arrives before one (counts/total become known as events flow / at `runFinished`). */
@@ -422,11 +448,9 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
           // encrypt/prepare stall too, and anchoring the window on a `bytes: 0` sample turns the "rate"
           // into an average that includes all that dead time — which is how a 2 GB deposit read
           // "2 KB of 2 GB · 3 KB/s · about 8 days 8 hours left" seconds after the drop (2026-08-24).
-          // Until something moves there is nothing true to say about a rate, so we say nothing.
-          samples:
-            bytesUploaded === 0
-              ? []
-              : [...prev.samples, { t: Date.now(), bytes: bytesUploaded }].slice(-SAMPLE_CAP),
+          // Until something moves there is nothing true to say about a rate, so we say nothing. Past the
+          // first byte, `foldSample` keeps only the ticks that moved bytes — see it for why.
+          samples: bytesUploaded === 0 ? [] : foldSample(prev.samples, bytesUploaded, Date.now()),
         },
       };
     }
@@ -482,7 +506,7 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
             bytes: done,
             totalBytes: total > 0 ? total : null,
             // Same first-byte rule as a deposit's window, and for the same reason — see `runProgress`.
-            samples: done === 0 ? [] : [...(prev?.samples ?? []), { t: Date.now(), bytes: done }].slice(-SAMPLE_CAP),
+            samples: done === 0 ? [] : foldSample(prev?.samples ?? [], done, Date.now()),
           },
         },
       };

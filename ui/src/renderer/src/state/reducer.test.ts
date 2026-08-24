@@ -3,7 +3,7 @@
  * real reducer against real wire-shaped (string-valued) event payloads; nothing is mocked away.
  */
 import { describe, expect, test } from "bun:test";
-import { etaSeconds, initialState, reducer, throughput, type AppState } from "./reducer.ts";
+import { etaSeconds, foldSample, initialState, reducer, throughput, type AppState } from "./reducer.ts";
 import type { RestoreRow } from "../../../shared/ipc.ts";
 
 /** Apply a sequence of actions from the initial state. */
@@ -352,6 +352,29 @@ describe("run progress (the deposit bar / throughput / ETA)", () => {
     expect(s.run?.samples).toEqual([]);
     const moved = reducer(s, progress({ filesTotal: "6", bytesTotal: "2000000000", bytesUploaded: "2048" }));
     expect(moved.run?.samples).toHaveLength(1); // the clock starts here, not at the drop
+  });
+
+  test("only ticks that MOVED bytes are samples — the '20 days ↔ 25 days' flicker on a 30 GB folder", () => {
+    // Thousands of small files: the daemon ticks on every file start + archive, and bytes only move when a
+    // 64 MiB part lands. Those zero-byte ticks used to fill the window and make the rate a coin flip.
+    let w = foldSample([], 1000, 0);
+    w = foldSample(w, 1000, 100); // file started — no bytes
+    w = foldSample(w, 1000, 200); // file archived — no bytes
+    w = foldSample(w, 2000, 300); // a part shipped
+    expect(w).toEqual([{ t: 0, bytes: 1000 }, { t: 300, bytes: 2000 }]);
+  });
+
+  test("the window is TIME-bounded — old samples fall off, the newest of them stays as the anchor", () => {
+    const MIN = 60_000;
+    let w = foldSample([], 1, 0);
+    w = foldSample(w, 2, 1 * MIN);
+    w = foldSample(w, 3, 2 * MIN);
+    w = foldSample(w, 4, 5 * MIN); // 0 and 1 min are outside a 2-minute window; 2 min is kept as anchor
+    expect(w.map((x) => x.t)).toEqual([2 * MIN, 5 * MIN]);
+    // Long gap: the previous sample is always kept, so the rate spans the whole gap (an honest slow rate,
+    // not a null that would blank the ETA after every stall).
+    w = foldSample(w, 5, 20 * MIN);
+    expect(w.map((x) => x.t)).toEqual([5 * MIN, 20 * MIN]);
   });
 
   test("etaSeconds divides the remaining bytes by the smoothed rate", () => {

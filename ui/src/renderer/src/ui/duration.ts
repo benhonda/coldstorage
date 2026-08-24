@@ -41,14 +41,23 @@ export const timeLeft = (seconds: number): string => {
     return `about ${whole}${half ? "½" : ""} ${whole === 1 && !half ? "hour" : "hours"} left`;
   }
 
-  // Days: whole days plus whole hours. This is where a thaw spends most of its life, and where the
-  // upload banner used to give up and say "about 74 hours left".
+  // Days: whole days plus whole hours while it's still a wait you might sit through — a thaw spends most
+  // of its life here, and this is where the upload banner used to give up and say "about 74 hours left".
   const totalHours = Math.round(halfHours / 2);
-  const days = Math.floor(totalHours / 24);
-  const rest = totalHours % 24;
-  return rest === 0
-    ? `about ${plural(days, "day")} left`
-    : `about ${plural(days, "day")} ${plural(rest, "hour")} left`;
+  if (totalHours < 3 * 24) {
+    const days = Math.floor(totalHours / 24);
+    const rest = totalHours % 24;
+    return rest === 0
+      ? `about ${plural(days, "day")} left`
+      : `about ${plural(days, "day")} ${plural(rest, "hour")} left`;
+  }
+
+  // Further out, hours are noise: a multi-day upload estimate comes from a two-minute rate window
+  // extrapolated across days, and "about 20 days 7 hours" flickering to "about 21 days 2 hours" on every
+  // part is precision we do not have. Whole days to two weeks, whole weeks past that.
+  const days = Math.round(totalHours / 24);
+  if (days < 14) return `about ${plural(days, "day")} left`;
+  return `about ${plural(Math.round(days / 7), "week")} left`;
 };
 
 /** The same phrase opening a sentence. A standalone line ("About 17 hours left") wants a capital; the
