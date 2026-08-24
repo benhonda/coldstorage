@@ -355,8 +355,10 @@ conditionality is structural, not a card that appears mid-page.
   `--cs-row-h`, so that one token closes the gaps down a long list). Every rule in the app already
   spends those vars and never a hand-picked px, so the whole shell tightens together (PILLAR3). The
   compact values are re-declared in the *consumer* layer, not in `styles/tokens/` — the vendored DS scale
-  stays the SSOT and its comfortable default — and they stay on the 4px grid (a fractional scale factor
-  softens hairlines). `main.tsx` applies the stored value before React's first paint, so the app never
+  stays the SSOT and its comfortable default. They're whole pixels (what actually keeps hairlines crisp;
+  a fractional scale factor is what softens them), which frees the ladder to use half-steps and compress
+  hardest at the top, where the rungs are just air between blocks: 48→28, 32→20, 24→16, while `--space-1`
+  holds at 4px and `--space-3` stops at 8px — the most-used step, and the one carrying row padding. `main.tsx` applies the stored value before React's first paint, so the app never
   renders comfortable and snaps compact a frame later.
 
 ### Account — who's signed in, what they pay for (configured installs only)

@@ -1804,24 +1804,28 @@ button.cs-kv:hover { background: var(--surface-hover); }
    vendored scale is the DS's SSOT (and its comfortable default), so this is the app choosing a tighter
    rendering of it rather than an edit to the source of truth.
 
-   The compact values stay on the 4px grid (no fractional-pixel scale factor, which softens hairlines) and
-   compress the mid scale hardest — the steps that are gaps and padding. The two smallest rungs don't move:
-   4px and 8px are already the tightest gaps we draw, and the compact scale collapses onto them. */
+   Every compact value is a WHOLE pixel — that, not the 4px grid, is what keeps hairlines and text crisp,
+   so the ladder is free to use half-steps (6, 10, 14, 18) and get genuinely tight. It compresses hardest
+   at the top: the big rungs are air between blocks and give it up cheaply, while --space-1 doesn't move
+   at all (4px is the smallest gap we draw) and --space-3 stops at 8px — it's the most-used step in the
+   app, and it's carrying row padding, where the next rung down starts costing legibility. */
 :root[data-density="compact"] {
+  --space-2: 6px;
   --space-3: 8px;
-  --space-4: 12px;
-  --space-5: 16px;
-  --space-6: 20px;
-  --space-8: 24px;
-  --space-12: 36px;
+  --space-4: 10px;
+  --space-5: 14px;
+  --space-6: 16px;
+  --space-8: 20px;
+  --space-12: 28px;
 
   /* controls: the density you actually feel in a long file list — the file row's height IS --control-md
-     (see --cs-row-h above), so this is what closes the gaps between rows. */
-  --control-sm: 32px;
-  --control-md: 40px;
-  --control-lg: 48px;
-  --input-height: 52px;
-  --topbar-height: 64px;
+     (see --cs-row-h above), so this is the token that puts more rows on screen. 34px still clears the
+     22px file icon; below that the row starts pinching its own contents rather than closing dead space. */
+  --control-sm: 30px;
+  --control-md: 34px;
+  --control-lg: 44px;
+  --input-height: 48px;
+  --topbar-height: 56px;
 }
 
 /* Segmented choice — a small set of mutually exclusive options shown at once (a `radiogroup`, not a
