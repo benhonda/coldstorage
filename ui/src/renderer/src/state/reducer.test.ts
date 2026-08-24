@@ -310,6 +310,21 @@ describe("run progress (the deposit bar / throughput / ETA)", () => {
     expect(done.run?.active).toBe(false);
   });
 
+  test("runFinished carries how many files a Stop left behind; absent means none", () => {
+    const mid = run(progress({ bytesTotal: "1000", bytesUploaded: "640", filesTotal: "30" }));
+    expect(mid.run?.filesStopped).toBeNull(); // unknown while active
+    const stopped = reducer(mid, {
+      type: "event", name: "runFinished",
+      data: { filesArchived: "3", filesTotal: "30", blobsFailed: "0", filesStopped: "27" },
+    });
+    expect(stopped.run?.filesStopped).toBe(27);
+    const early = reducer(mid, {
+      type: "event", name: "runFinished",
+      data: { filesArchived: "0", filesTotal: "0", blobsFailed: "0" },
+    });
+    expect(early.run?.filesStopped).toBe(0);
+  });
+
   test("runFinished snaps the bar to 100% (uploaded == the known total)", () => {
     const mid = run(progress({ bytesTotal: "1000", bytesUploaded: "640", filesTotal: "3" }));
     const done = reducer(mid, {

@@ -1684,9 +1684,16 @@ button.cs-kv:hover { background: var(--surface-hover); }
 }
 .cs-deposit-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+}
+/* The right-hand cluster: the percentage and the Stop button, so both sit on one baseline. */
+.cs-deposit-side {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
 }
 .cs-deposit-title {
   font: var(--type-body-strong);

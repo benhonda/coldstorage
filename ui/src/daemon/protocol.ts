@@ -446,6 +446,15 @@ export interface Commands {
    * transfer — stop it first, or the run loop would keep driving something the user thinks is dismissed. */
   forgetRestore: { params: { id: string }; result: RestoreRow[] };
   triggerNow: { params: Record<string, never>; result: Ack };
+  /** Stop the deposit/scan in flight. `ok` = there was one to stop. Cooperative and prompt (the daemon
+   * notices within a frame and cancels its in-flight part uploads); the outcome arrives as `runFinished`
+   * carrying `filesStopped`, never as an `error`. Nothing already landed is undone — completed blobs stay
+   * archived, and a half-uploaded blob keeps its multipart upload on S3 so a later run resumes it
+   * part-for-part. The unfinished files are marked `failed` in the journal with a "stopped" reason, so
+   * their rows are honest until the next pass (watched folder) or re-drop (ad-hoc deposit) picks them up.
+   * Stops the run IN FLIGHT only: a deposit queued behind it (a second drop) is untouched and starts as
+   * soon as this one ends — the banner comes back with its own Stop. */
+  cancelRun: { params: Record<string, never>; result: Ack };
   /** Per-source pause/resume — stop/resume auto-syncing one watched folder (it stays registered).
    * Persisted in the journal; both emit `sourcesChanged` so the UI refetches. (There is no global pause.) */
   pauseSource: { params: { id: string }; result: Ack };
@@ -549,7 +558,10 @@ export interface DaemonEvents {
     bytesUploaded: string;
     currentPath: string;
   };
-  runFinished: { filesArchived: string; filesTotal: string; blobsFailed: string };
+  /** `blobsFailed` counts FAULTS only. `filesStopped` is how many files a `cancelRun` left un-uploaded —
+   * reported apart so the UI says "stopped", not "couldn't upload", about work the user ended on purpose.
+   * Absent on the early-abort path (a run that threw before planning). */
+  runFinished: { filesArchived: string; filesTotal: string; blobsFailed: string; filesStopped?: string };
   /** A blob that failed to archive this pass. `paths` is the newline-joined relativePaths of the files it
    * batched (named in the failures panel + used to flip their rows); permanent failures are also persisted
    * as a per-file `failed` status in the journal, so the ⚠ survives the next `listFiles` read. */

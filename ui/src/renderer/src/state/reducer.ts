@@ -45,6 +45,9 @@ export interface RunProgress {
   samples: { t: number; bytes: number }[];
   /** Blobs that failed this run — known only at `runFinished`. */
   blobsFailed: number | null;
+  /** Files a Stop left un-uploaded — known only at `runFinished`; `null` while active. Non-zero means the
+   * last run ended because the user stopped it, which the banner reports as such (not as a failure). */
+  filesStopped: number | null;
   /** Most-recent-first, capped — for a live "now archiving…" feed. */
   recent: { file: string; blob: string }[];
   /** Live determinate upload progress, keyed by the daemon file id. Each entry carries the file's `path`
@@ -218,12 +221,14 @@ const startedRun = (): RunProgress => ({
   currentPath: null,
   samples: [],
   blobsFailed: null,
+  filesStopped: null,
   recent: [],
   uploadProgress: {},
 });
 
-/** Smoothed throughput (bytes/sec) over the sample window, or `null` when there isn't enough signal yet
- * (fewer than two samples, no elapsed time, or no forward progress). Pure — takes samples, returns a rate. */
+/** Smoothed throughput (bytes/sec) across the sample window — first sample to last, so it's the average
+ * over up to `SAMPLE_WINDOW_MS` of real transfer — or `null` when there isn't enough signal yet (fewer
+ * than two samples, no elapsed time, or no forward progress). Pure — takes samples, returns a rate. */
 export const throughput = (samples: RunProgress["samples"]): number | null => {
   const first = samples[0];
   const last = samples[samples.length - 1];
@@ -441,6 +446,7 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
           currentPath: null,
           samples: [],
           blobsFailed: num(d.blobsFailed),
+          filesStopped: num(d.filesStopped),
           recent: prev?.recent ?? [],
           uploadProgress: {}, // run's over — no live bars
         },

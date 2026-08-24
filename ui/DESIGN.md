@@ -172,7 +172,10 @@ it had worked.
    in node_modules and caches. see what →"*. The skip line is cost-protection made factual — name the
    junk, no salesy "saved you $X," no "safe." *(Needs skipped-count reporting — still open, below.)*
 4. **Edge states reflect the proven daemon honestly:** interrupted → resumes the same `uploadId`; a
-   blob fails → run continues, failure surfaced named (permanent vs transient); offline → queues.
+   blob fails → run continues, failure surfaced named (permanent vs transient); offline → queues;
+   **Stop** (the banner's button → `cancelRun`) → the daemon stops within a frame, what landed stays
+   stored, the unfinished files read "stopped" (journal truth, not a UI guess) and a "Stopped" banner
+   says how many, until a re-drop or the next watched-folder pass picks them up.
 5. **Name collisions are Finder-style, never silent:** dropping into a *new* folder copies (photos are
    path-keyed, `id == relativePath` — same photo in two folders is two copies, not a silent move).
    Existing names PROMPT (`CollisionModal`): per-file **Keep Both** (`name 2.ext`) / **Replace** /
@@ -480,7 +483,7 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   listRestores · cancelRestore · resumeRestore · forgetRestore ·
   deposit · depositPhotos · previewDeposit · movePath · createFolder · deletePath · pathIsWatched · authenticate ·
   deauthenticate · mintVault · unlockVault · unlockVaultWithRecoveryCode · lockVault · triggerNow ·
-  pauseSource · resumeSource`. (`authenticate`/`deauthenticate` = the **session** opened/closed —
+  cancelRun · pauseSource · resumeSource`. (`authenticate`/`deauthenticate` = the **session** opened/closed —
   per-user S3 creds plus the user's journal, staging dir and key holder; the `*Vault*` four = the
   zero-knowledge encryption key, loaded/cleared over the local socket — all multi-user only.)
 - **Session lifecycle — the daemon serves ONE user, or none.** `authenticate` builds the session

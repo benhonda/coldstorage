@@ -814,7 +814,11 @@ export const MyFilesView = ({
           onClick={(e) => e.target === e.currentTarget && clearSelection()}
           onContextMenu={(e) => e.target === e.currentTarget && openMenu(e)}
         >
-          <DepositProgress run={run} preparing={preparing} />
+          <DepositProgress
+            run={run}
+            preparing={preparing}
+            onStop={() => exec(() => api.request("cancelRun"))}
+          />
           {/* FirstRun (the drop-zone hero) is the onboarding state for a genuinely empty vault — root with
               nothing in it. A drilled-into empty folder just shows the empty file list, not the hero. */}
           {rows.length === 0 && dir === "" ? (

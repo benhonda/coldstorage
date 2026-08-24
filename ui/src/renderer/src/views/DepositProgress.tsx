@@ -1,6 +1,8 @@
+import { useEffect, useState } from "react";
 import { etaSeconds, throughput, type RunProgress } from "../state/reducer.ts";
 import { baseName, formatBytes } from "./files/model.ts";
 import { timeLeft } from "../ui/duration.ts";
+import { Button } from "../ui/primitives.tsx";
 
 /**
  * The live deposit banner — the answer to "what's happening and how long will it take".
@@ -17,23 +19,55 @@ import { timeLeft } from "../ui/duration.ts";
  *     different information: a **byte bar** (files — `bytesTotal` known, so a determinate bar + a real
  *     ETA) or a **count bar** (photos — sizes unknown until streamed, so "N of M files" and an
  *     indeterminate shimmer, never a faked byte count or time estimate).
+ *   - {@link StoppedBanner} — the run the user just stopped, and what it left behind. There was no way to
+ *     stop an upload at all until 2026-08-24 ("cancel" meant quitting the app), so this is the whole
+ *     answer to "what did pressing Stop do?": nothing already stored is undone, and here's how many
+ *     files still aren't.
  */
 export function DepositProgress({
   run,
   preparing,
+  onStop,
 }: {
   run: RunProgress | null;
   /** What a just-accepted drop is being read for (“Videos”), while the daemon resolves where it
    *  lands — the window before any run exists. Null when nothing is being read. */
   preparing?: string | null;
+  /** Stop the run in flight (the daemon's `cancelRun`, through the view's `exec`, which owns the error
+   *  toast). Firing it is not the run stopping — that arrives as `runFinished`; "Stopping…" covers the gap. */
+  onStop: () => void;
 }): React.JSX.Element {
   // Two INDEPENDENT facts, so two banners, not a winner: a drop can be read while an earlier one is still
   // uploading, and neither state may hide the other.
   return (
     <>
       {preparing && <PreparingBanner what={preparing} />}
-      <RunBanner run={run} />
+      <RunBanner run={run} onStop={onStop} />
+      <StoppedBanner run={run} />
     </>
+  );
+}
+
+/** What a Stop left behind — shown from `runFinished` until the next run starts or it's dismissed. */
+function StoppedBanner({ run }: { run: RunProgress | null }): React.JSX.Element | null {
+  const stopped = run && !run.active ? (run.filesStopped ?? 0) : 0;
+  const [dismissed, setDismissed] = useState(false);
+  // A NEW stop (a different count, or a fresh run) un-dismisses; an unchanged one stays dismissed.
+  useEffect(() => setDismissed(false), [stopped, run?.active]);
+  if (stopped === 0 || dismissed) return null;
+  return (
+    <div className="cs-deposit" role="status" aria-live="polite">
+      <div className="cs-deposit-head">
+        <span className="cs-deposit-title">Stopped</span>
+        <Button variant="ghost" size="sm" onClick={() => setDismissed(true)}>
+          OK
+        </Button>
+      </div>
+      <div className="cs-bar-meta">
+        {stopped === 1 ? "1 file wasn't" : `${stopped} files weren't`} uploaded. What was already stored is
+        safe. Drop them again, or a watched folder picks them up on its next pass.
+      </div>
+    </div>
   );
 }
 
@@ -53,7 +87,19 @@ function PreparingBanner({ what }: { what: string }): React.JSX.Element {
 }
 
 /** The live run — bytes actually moving. */
-function RunBanner({ run }: { run: RunProgress | null }): React.JSX.Element | null {
+function RunBanner({ run, onStop }: { run: RunProgress | null; onStop: () => void }): React.JSX.Element | null {
+  // Honest pending state for Stop (PILLAR5): the command acks instantly but the daemon stops between
+  // frames, and `runFinished` is what actually ends the banner. "Stopping…" + disabled covers that gap so
+  // a second click can't fire and the button doesn't just sit there looking ignored. Reset when the run
+  // ends (`runStarted` replaces the run record; `active` false returns null below). A rejected command
+  // (daemon gone) is toasted by the view's `exec` — and a gone daemon ends the banner anyway.
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => setStopping(false), [run?.active]);
+  const stop = (): void => {
+    setStopping(true);
+    onStop();
+  };
+
   // Show ONLY while something is actually being uploaded — not merely because a run is `active`. A periodic
   // scan of an already-archived vault runs (active=true) and reports the whole vault as `filesTotal`, but
   // does no work: no file streams, no bytes ship. Gating on real activity (a current file, or bytes moving)
@@ -91,11 +137,16 @@ function RunBanner({ run }: { run: RunProgress | null }): React.JSX.Element | nu
     <div className="cs-deposit" role="status" aria-live="polite">
       <div className="cs-deposit-head">
         <span className="cs-deposit-title">
-          {currentPath ? `Uploading ${baseName(currentPath)}` : "Uploading…"}
+          {stopping ? "Stopping…" : currentPath ? `Uploading ${baseName(currentPath)}` : "Uploading…"}
         </span>
-        {!indeterminate && fraction != null && (
-          <span className="cs-deposit-pct">{Math.round(fraction * 100)}%</span>
-        )}
+        <span className="cs-deposit-side">
+          {!indeterminate && fraction != null && (
+            <span className="cs-deposit-pct">{Math.round(fraction * 100)}%</span>
+          )}
+          <Button variant="ghost" size="sm" onClick={stop} disabled={stopping}>
+            {stopping ? "Stopping…" : "Stop"}
+          </Button>
+        </span>
       </div>
 
       <div
