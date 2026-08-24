@@ -322,6 +322,20 @@ conditionality is structural, not a card that appears mid-page.
 - **This Mac:** the encryption fact ("on this Mac, before upload" — plain, no "safe", no privacy
   over-claim). In **dogfood mode** this card is the original **Storage** card instead — the quota row
   stays here because there's no Account subpage to carry it.
+- **Preferences (2026-08-24):** how the app *looks* on this Mac, last in General — nothing in it can put
+  a file at risk, so it doesn't compete with the cards that can. First entry: **Spacing —
+  Comfortable | Compact** (`Segmented` primitive, a real `radiogroup`; arrows move *and* select). It is a
+  renderer-only, this-Mac choice (localStorage `cs-density`, like the sidebar width) — it describes this
+  screen, not this vault, so it never goes near the account.
+  **One lever, no per-component variants:** the choice is a `data-density` attribute on `<html>`, under
+  which `styles/app.css` re-declares the spacing scale (`--space-3…12`) and control sizes
+  (`--control-*`, `--input-height`, `--topbar-height` — the file row's height *is* `--control-md`, via
+  `--cs-row-h`, so that one token closes the gaps down a long list). Every rule in the app already
+  spends those vars and never a hand-picked px, so the whole shell tightens together (PILLAR3). The
+  compact values are re-declared in the *consumer* layer, not in `styles/tokens/` — the vendored DS scale
+  stays the SSOT and its comfortable default — and they stay on the 4px grid (a fractional scale factor
+  softens hairlines). `main.tsx` applies the stored value before React's first paint, so the app never
+  renders comfortable and snaps compact a frame later.
 
 ### Account — who's signed in, what they pay for (configured installs only)
 - **Account card:** Name (inline edit) + Signed in as, with **Sign out** as the header action.

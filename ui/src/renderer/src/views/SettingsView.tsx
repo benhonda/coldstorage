@@ -4,7 +4,8 @@
  * for — profile, plan + quota, subscription, billing). The split is the ownership line — *"would this
  * setting follow me to a second Mac?"* — so every future setting has an unambiguous home
  * (notification prefs → General; recovery code / devices → a Security tab the day that content
- * exists). Billing is its own panel ({@link BillingPanel}) — a status-first state machine. Dogfood mode
+ * exists). General also carries **Preferences** — how the app looks on this Mac (spacing today), last on
+ * the page because nothing in it can put a file at risk. Billing is its own panel ({@link BillingPanel}) — a status-first state machine. Dogfood mode
  * (unconfigured) has no account: no tab strip, General's content IS the page, and the storage figure
  * stays here (Storage card) because there's no Account subpage to carry it. Fully daemon-backed:
  * sources (each with a destination mount + per-folder pause/resume), catch-up, and excludes
@@ -28,7 +29,8 @@ import type { ArchivedFile } from "./files/model.ts";
 import { baseName, formatBytes } from "./files/model.ts";
 import { AddWatchedFolderModal } from "./files/AddWatchedFolderModal.tsx";
 import { ContextMenu, type MenuEntry } from "./files/ContextMenu.tsx";
-import { Badge, Button, Card, Chip, EmptyState, Field, Icon, IconButton, KeyValueRow, Modal, Skeleton, Tabs } from "../ui/primitives.tsx";
+import { Badge, Button, Card, Chip, EmptyState, Field, Icon, IconButton, KeyValueRow, Modal, Segmented, Skeleton, Tabs } from "../ui/primitives.tsx";
+import { DENSITY_OPTIONS, useDensity } from "../ui/density.ts";
 import { Page } from "../ui/layout.tsx";
 import { VersionFooter } from "./VersionFooter.tsx";
 
@@ -125,6 +127,7 @@ export const SettingsView = ({
   onCheckForUpdate: () => void;
   onRestartToUpdate: () => void;
 }): React.JSX.Element => {
+  const [density, setDensity] = useDensity();
   const [adding, setAdding] = useState(false);
   const [pattern, setPattern] = useState("");
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuEntry[] } | null>(null);
@@ -352,6 +355,19 @@ export const SettingsView = ({
           <KeyValueRow label="Encryption" value="on this Mac, before upload" icon="lock" />
         </Card>
       )}
+
+      {/* Preferences — how the app LOOKS on this Mac, as opposed to what it backs up. It sits last in
+          General deliberately: nothing here can put a file at risk, so it shouldn't compete with the cards
+          that can. No preview or example copy either — switching spacing re-renders the app itself, which
+          is the only demonstration worth showing (PILLAR5). */}
+      <Card title="Preferences" description="How coldstorage looks on this Mac. These stay here — they don't follow your account.">
+        <KeyValueRow
+          label="Spacing"
+          value={
+            <Segmented options={DENSITY_OPTIONS} value={density} onChange={setDensity} label="Spacing" />
+          }
+        />
+      </Card>
     </>
   );
 

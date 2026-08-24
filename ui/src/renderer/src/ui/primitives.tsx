@@ -194,6 +194,65 @@ export const Tabs = <T extends string>({
   );
 };
 
+/**
+ * Segmented choice — 2–3 mutually exclusive options, all visible, for a setting whose options are cheap
+ * to explain in a word (e.g. spacing: Comfortable | Compact). A real `radiogroup`, not a {@link Tabs}
+ * strip: Tabs switch which page you're looking at, this sets a value. Generic over the option id so
+ * `onChange` hands back the caller's union, never a bare string.
+ *
+ * Keyboard follows the radio-group pattern — arrows move AND select (roving tabindex), so the choice is
+ * one keypress, not two.
+ */
+export const Segmented = <T extends string>({
+  options,
+  value,
+  onChange,
+  label,
+}: {
+  options: readonly { id: T; label: string; icon?: string }[];
+  value: T;
+  onChange: (id: T) => void;
+  /** Accessible name for the group (e.g. "Spacing"). */
+  label: string;
+}): React.JSX.Element => {
+  const group = useRef<HTMLDivElement>(null);
+  const move = (dir: 1 | -1): void => {
+    const i = options.findIndex((o) => o.id === value);
+    const next = options[(i + dir + options.length) % options.length];
+    if (!next || next.id === value) return;
+    onChange(next.id);
+    group.current?.querySelector<HTMLButtonElement>(`[data-option="${next.id}"]`)?.focus();
+  };
+  return (
+    <div
+      ref={group}
+      className="cs-segmented"
+      role="radiogroup"
+      aria-label={label}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowRight" || e.key === "ArrowDown") move(1);
+        else if (e.key === "ArrowLeft" || e.key === "ArrowUp") move(-1);
+      }}
+    >
+      {options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          role="radio"
+          data-option={o.id}
+          aria-checked={value === o.id}
+          tabIndex={value === o.id ? 0 : -1}
+          className="cs-segmented-option"
+          onClick={() => onChange(o.id)}
+        >
+          {o.icon && <Icon name={o.icon} size={18} />}
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+};
+
 type BadgeTone = "neutral" | "accent" | "success" | "danger" | "warning";
 
 /** 24px status pill — a state, count or delta. (For a descriptive label, the DS uses a Chip.) */

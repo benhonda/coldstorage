@@ -1752,3 +1752,61 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-about-accent { color: var(--accent); }
 .cs-about-bad { color: var(--negative); }
 .cs-about-build { color: var(--text-tertiary); }
+
+/* ── display density (Settings › Preferences) ──────────────────────
+   ONE lever for the whole app: `<html data-density="compact">` re-declares the DS spacing scale and
+   control sizes, and every rule above — which spends `--space-*` / `--control-*` and never a hand-picked
+   px — tightens with it. Deliberately re-declared HERE, in the consumer layer, and not in ./tokens: the
+   vendored scale is the DS's SSOT (and its comfortable default), so this is the app choosing a tighter
+   rendering of it rather than an edit to the source of truth.
+
+   The compact values stay on the 4px grid (no fractional-pixel scale factor, which softens hairlines) and
+   compress the mid scale hardest — the steps that are gaps and padding. The two smallest rungs don't move:
+   4px and 8px are already the tightest gaps we draw, and the compact scale collapses onto them. */
+:root[data-density="compact"] {
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 20px;
+  --space-8: 24px;
+  --space-12: 36px;
+
+  /* controls: the density you actually feel in a long file list — the file row's height IS --control-md
+     (see --cs-row-h above), so this is what closes the gaps between rows. */
+  --control-sm: 32px;
+  --control-md: 40px;
+  --control-lg: 48px;
+  --input-height: 52px;
+  --topbar-height: 64px;
+}
+
+/* Segmented choice — a small set of mutually exclusive options shown at once (a `radiogroup`, not a
+   tablist: it sets a value rather than switching the page). Same pill-in-a-trough shell as the subnav
+   above, so the two read as one family. */
+.cs-segmented {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: var(--space-1);
+  background: var(--btn-secondary-bg);
+  border-radius: var(--radius-pill);
+}
+.cs-segmented-option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 0;
+  background: transparent;
+  padding: var(--space-2) var(--space-5);
+  border-radius: var(--radius-pill);
+  font: var(--type-label);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.cs-segmented-option:hover { color: var(--text-primary); }
+.cs-segmented-option[aria-checked="true"] {
+  background: var(--surface-card);
+  color: var(--accent-text);
+  font-weight: var(--weight-medium);
+  box-shadow: var(--shadow-card);
+}
+.cs-segmented-option:focus-visible { outline: none; box-shadow: var(--focus-ring); }

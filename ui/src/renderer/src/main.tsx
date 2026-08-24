@@ -19,6 +19,10 @@ import { App } from "./App.tsx";
 import { ToastProvider } from "./ui/toast.tsx";
 import { connectController } from "./state/controller.ts";
 import { createStore } from "./state/store.ts";
+import { applyDensity, readDensity } from "./ui/density.ts";
+
+// Before the first paint, so the app never renders comfortable and snaps compact a frame later.
+applyDensity(readDensity());
 
 const api = window.coldstore;
 const store = createStore();
