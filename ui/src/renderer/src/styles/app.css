@@ -133,7 +133,10 @@
 /* Page title typography — SSOT for both the plain-title (h1) and breadcrumb paths. */
 .cs-topbar-title,
 .cs-crumb { font: var(--type-page-title); letter-spacing: var(--tracking-tight); }
-.cs-topbar-title { margin: 0; } /* kill the UA <h1> margin — only the Settings path uses an h1 (base.css is vendored, no global reset). */
+.cs-topbar-title { margin: 0; }
+/* Second chrome row under the title — outside `.cs-page`, so it never scrolls. Bottom gap matches the
+   page's stack gap so the first card sits where it would have under an in-body strip. */
+.cs-topbar-subnav { flex: 0 0 auto; padding: 0 var(--cs-pad-x) var(--space-6); } /* kill the UA <h1> margin — only the Settings path uses an h1 (base.css is vendored, no global reset). */
 
 .cs-page {
   flex: 1 1 auto;
@@ -1558,17 +1561,6 @@ button.cs-kv:hover { background: var(--surface-hover); }
 }
 
 /* ── settings sub-nav (General | Account) — text-forward segmented tab strip ── */
-/* Sticky row: the strip stays put while the settings page scrolls under it, so switching sections
-   never means scrolling back up. The row spans the page's full width (it's a flex child, so it
-   stretches) and paints the app background so cards don't ghost through around the pill. */
-.cs-subnav-bar {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  background: var(--bg-app);
-  padding-bottom: var(--space-2);
-  margin-bottom: calc(var(--space-2) * -1);
-}
 .cs-subnav {
   display: inline-flex;
   align-self: flex-start;

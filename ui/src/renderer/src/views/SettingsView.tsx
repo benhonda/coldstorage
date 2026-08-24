@@ -462,12 +462,12 @@ export const SettingsView = ({
   );
 
   return (
-    <Page title="Settings">
-      {hasAccount && (
-        <div className="cs-subnav-bar">
-          <Tabs tabs={TABS} active={active} onChange={onTabChange} label="Settings sections" />
-        </div>
-      )}
+    <Page
+      title="Settings"
+      // The tab strip is chrome under the title, not part of the scrolling body — so it stays put for
+      // free: no sticky bar, no backdrop to paint over the glow.
+      subnav={hasAccount && <Tabs tabs={TABS} active={active} onChange={onTabChange} label="Settings sections" />}
+    >
 
       {active === "general" ? general : accountPage}
 
