@@ -323,7 +323,24 @@ conditionality is structural, not a card that appears mid-page.
   makes returning `[]` after a fault a different act from returning `[]` in silence.
 - **Don't back up (excludes):** friendly removable chips over real gitignore-style globs, seeded with
   smart defaults; daemon is the SSOT (journal-persisted, applied *inside* the directory walk so junk
-  is never hashed and node_modules is pruned whole). Per-source extras are a later refinement.
+  is never hashed and node_modules is pruned whole). Matching is case-insensitive, like the filesystem —
+  before that, the seeded `caches` could never fire, because macOS spells it `Library/Caches`.
+  Per-source extras are a later refinement.
+- **Suggested skips (2026-08-24):** the junk that's junk only *in context* — build output, VM disks,
+  installers, photo libraries — can't be seeded, because a developer's `build/` regenerates in seconds and
+  a woodworker's `build/` is photographs of a workbench. So it's **offered**, from one catalogue
+  (`ExcludeSuggestion.all`) reached two ways:
+  1. a **Suggested skips** card under the exclude chips, patterns always visible, with both gestures —
+     turning a pack on, and turning it back off (seventeen patterns is not seventeen chip removals);
+  2. a **drop-time prompt**, which is the one that earns its keep. `previewDeposit` already walks the
+     dropped folder, so it tags each item with the pack that *would* have caught it and the app can say
+     "3.2 GB of this is build output" before a byte uploads — the last moment the answer is free, since
+     Deep Archive bills a 180-day minimum on everything that lands.
+  Three rules hold it honest: a pack's on/off state is **derived** from the excludes list, never stored, so
+  nothing can contradict the chips the user edits; a suggestion **tags but never prunes**, so previewing
+  with them returns the same files as without (`suggestionsTagButNeverFilter`); and skipping is scoped to
+  the one deposit (`excludeExtra`) unless the user ticks **Remember this** — *not this time* and *never
+  again* are different answers, and the prompt has no pre-selected path that quietly performs the second.
 - **This Mac:** the encryption fact ("on this Mac, before upload" — plain, no "safe", no privacy
   over-claim). In **dogfood mode** this card is the original **Storage** card instead — the quota row
   stays here because there's no Account subpage to carry it.

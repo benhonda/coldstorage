@@ -1042,6 +1042,26 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-menu-item--danger .csf-icon { color: var(--negative); }
 .cs-menu-sep { height: 1px; margin: var(--space-1) 0; background: var(--border-subtle); }
 
+/* ── suggested exclude packs (Settings shelf + drop prompt) ─────── */
+/* Rows separated by a rule rather than boxed in cards: they sit INSIDE a card already, and nesting a
+   surface inside a surface at this depth reads as a second, more important thing than the live exclude
+   chips above — which it isn't. These are offers. */
+.cs-suggestions { display: flex; flex-direction: column; gap: var(--space-4); }
+.cs-suggestions > .cs-suggestion + .cs-suggestion {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+}
+.cs-suggestion { display: flex; flex-direction: column; gap: var(--space-3); }
+.cs-suggestion-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+/* The action never shrinks or wraps under a long title — it's the only thing on the row that acts. */
+.cs-suggestion-head > :last-child { flex: none; }
+.cs-stack-tight { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+
 /* ── chips (exclude patterns / tags) ────────────────────────────── */
 .cs-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .cs-chip {
@@ -1113,13 +1133,18 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-quote { display: flex; flex-direction: column; gap: 2px; }
 .cs-quote .cs-kv { min-height: 0; padding: var(--space-1) 0; }
 .cs-quote-lead { font: var(--type-body); color: var(--text-secondary); margin-bottom: var(--space-2); }
-/* Delete confirm: the "also stop backing this up" opt-in, shown only when the target is still inside a
-   watched folder. Deliberately a plain checkbox row, not a callout — it's an option, not an alarm. */
-.cs-delete-watched { display: flex; gap: var(--space-2); align-items: flex-start; margin-top: var(--space-3); cursor: pointer; }
-.cs-delete-watched input { margin-top: 0.2em; flex: none; }
-.cs-delete-watched span { font: var(--type-label); color: var(--text-secondary); }
-.cs-delete-watched strong { color: var(--text-primary); font: var(--type-body-strong); }
+/* The opt-in checkbox row a confirm modal offers alongside its main action — "also stop backing this up"
+   on delete, "remember this" on the suggested-skips prompt. Deliberately a plain checkbox row, not a
+   callout: in both cases it's an option, not an alarm. */
+.cs-optin { display: flex; gap: var(--space-2); align-items: flex-start; margin-top: var(--space-3); cursor: pointer; }
+.cs-optin input { margin-top: 0.2em; flex: none; }
+.cs-optin span { font: var(--type-label); color: var(--text-secondary); }
+.cs-optin strong { color: var(--text-primary); font: var(--type-body-strong); }
 .cs-note { font: var(--type-label); color: var(--text-tertiary); margin-top: var(--space-2); line-height: var(--leading-normal); }
+
+/* Suggested-skips prompt: one opt-in row per pack. `list-style: none` because the checkbox IS the
+   marker — a bullet beside it reads as decoration and steals the row's left edge. */
+.cs-skip-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; }
 
 /* deposit collision prompt — per-file Keep Both / Replace / Skip, with an apply-to-all row */
 .cs-collision-all {

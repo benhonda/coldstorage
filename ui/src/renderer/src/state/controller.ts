@@ -16,7 +16,7 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
    * Run one state-syncing read and swallow its rejection — a refetch that fails must never reject into
    * an unhandled promise, and a transient drop is not a user-facing error.
    *
-   * But swallow LOUDLY. These four reads are the only path by which daemon truth reaches the UI, and a
+   * But swallow LOUDLY. These reads are the only path by which daemon truth reaches the UI, and a
    * failed one leaves its slice stale or empty indefinitely: the recovery is a lifecycle push, so a
    * failure that isn't a disconnect never retries at all. Silent was the expensive part of the 2026-07-18
    * storage-figure bug — the UI showed nothing, forever, with no error, no retry and no log to find. The
@@ -41,6 +41,14 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
 
   const refreshExcludes = (): Promise<void> =>
     syncing("excludes", async () => store.dispatch({ type: "excludesLoaded", excludes: await api.request("listExcludes") }));
+
+  // The opt-in exclude packs. A STATIC catalogue (it has no user state in it — whether a pack is on is
+  // derived from `excludes`), so unlike every other read here it can't go stale: fetched once per
+  // connection, never re-read on an event.
+  const refreshExcludeSuggestions = (): Promise<void> =>
+    syncing("excludeSuggestions", async () =>
+      store.dispatch({ type: "excludeSuggestionsLoaded", suggestions: await api.request("listExcludeSuggestions") }),
+    );
 
   const refreshRestores = (): Promise<void> =>
     syncing("restores", async () => store.dispatch({ type: "restoresLoaded", restores: await api.request("listRestores") }));
@@ -91,6 +99,7 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
       void refreshStatus(); // resync the snapshot after a (re)connect
       void refreshFiles();
       void refreshExcludes();
+      void refreshExcludeSuggestions();
       void refreshRestores();
     }
   });
@@ -126,7 +135,7 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
     // connected refreshes so the right screen paints as soon as the auth answer is in.
     store.dispatch({ type: "initialized" });
     if (state === "connected") {
-      await Promise.all([refreshStatus(), refreshFiles(), refreshExcludes(), refreshRestores()]);
+      await Promise.all([refreshStatus(), refreshFiles(), refreshExcludes(), refreshExcludeSuggestions(), refreshRestores()]);
     }
   })();
 

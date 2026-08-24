@@ -116,6 +116,26 @@ export interface DepositPreviewItem {
   relativePath: string;
   size: number;
   exists: boolean;
+  /** The {@link ExcludeSuggestion} id that WOULD have skipped this item, had the user turned that pack on
+   *  — `null` for everything we'd archive anyway (the normal case). This is what lets the app total up
+   *  "3.2 GB of this drop is build output" and ask BEFORE uploading, the only moment it's still free. */
+  suggestedPack: string | null;
+}
+
+/** `ExcludeSuggestionDTO` — one opt-in exclude pack (`listExcludeSuggestions`). The daemon is the SSOT for
+ *  the catalogue exactly as it is for the seeded defaults; the app never keeps its own copy.
+ *
+ *  A pack is junk only IN CONTEXT — a developer's `build/` regenerates in seconds, a woodworker's `build/`
+ *  is photos of a workbench — which is why these ship off and are offered rather than seeded. Whether a
+ *  pack is "on" is DERIVED (are its patterns in `listExcludes`?), never stored, so there's no second
+ *  source of truth to drift from the list the user actually edits. */
+export interface ExcludeSuggestion {
+  /** Stable wire id (`dev`, `vms`, …). Never shown to a user. */
+  id: string;
+  title: string;
+  /** Why it's usually safe to skip — one sentence, and the whole basis for the user's decision. */
+  detail: string;
+  patterns: string[];
 }
 
 /** `StatusDTO` — the daemon snapshot. `permanentlyFailedBlobs > 0` ⇒ a config/logic fault to fix. */
@@ -330,12 +350,20 @@ export interface Commands {
   /** The gitignore-style exclude patterns the scan/deposit skips (the daemon is the SSOT; defaults seeded
    * on first run). `addExclude`/`removeExclude` mutate the registry and emit `excludesChanged`. */
   listExcludes: { params: Record<string, never>; result: string[] };
+  /** The opt-in exclude packs we OFFER but never seed (see {@link ExcludeSuggestion}). A static catalogue,
+   * so it answers the same signed-in or not. Read by both surfaces that offer them: Settings' suggestion
+   * shelf and the deposit-time prompt. */
+  listExcludeSuggestions: { params: Record<string, never>; result: ExcludeSuggestion[] };
   addExclude: { params: { pattern: string }; result: Ack };
   removeExclude: { params: { pattern: string }; result: Ack };
   /** Ad-hoc drop-to-upload: archive these paths once under `dest` (a vault-relative folder; "" = root),
    * without registering a watched source. `src` is newline-joined absolute paths. Fire-and-forget — the
    * reply just acks; progress/outcome arrive as runStarted/fileArchived/blobFailed/runFinished events. */
-  deposit: { params: { src: string; dest: string; conflicts?: string }; result: Ack };
+  /** `excludeExtra` (newline-joined patterns) is honored for THIS DEPOSIT ONLY — the user's "skip those,
+   * just this once" at the drop-time suggestion prompt. Deliberately not the excludes registry: *not this
+   * time* and *never again* are different answers, and offering the first must never quietly do the
+   * second. "Remember this" is a separate `addExclude` the app issues alongside. */
+  deposit: { params: { src: string; dest: string; conflicts?: string; excludeExtra?: string }; result: Ack };
   /** Explicit photo deposit (the photo analogue of `deposit`): archive these PICKED Photos-library assets
    * once under `dest` (a vault-relative folder; "" = root). `assetIds` is newline-joined Photos
    * localIdentifiers — only the picked assets are read, never the whole library. Mac-only (PhotoKit); off

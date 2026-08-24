@@ -20,7 +20,7 @@
  */
 import type { ReactNode } from "react";
 import { useState } from "react";
-import type { AccountStatus, AppInfo, AuthStatus, EntitlementStatus, Source, SubscriptionInfo, UpdateStatus } from "../../../shared/ipc.ts";
+import type { AccountStatus, AppInfo, AuthStatus, EntitlementStatus, ExcludeSuggestion, Source, SubscriptionInfo, UpdateStatus } from "../../../shared/ipc.ts";
 import { ChangePlanModal } from "./ChangePlanModal.tsx";
 import { BillingPanel } from "./BillingPanel.tsx";
 import { subscriptionOf, type BillingState } from "../state/billing.ts";
@@ -30,6 +30,7 @@ import { baseName, formatBytes } from "./files/model.ts";
 import { AddWatchedFolderModal } from "./files/AddWatchedFolderModal.tsx";
 import { ContextMenu, type MenuEntry } from "./files/ContextMenu.tsx";
 import { Badge, Button, Card, Chip, EmptyState, Field, Icon, IconButton, KeyValueRow, Modal, Segmented, Skeleton, Tabs } from "../ui/primitives.tsx";
+import { missingPatterns, packState, presentPatterns } from "../state/excludeSuggestions.ts";
 import { DENSITY_OPTIONS, useDensity } from "../ui/density.ts";
 import { Page } from "../ui/layout.tsx";
 import { VersionFooter } from "./VersionFooter.tsx";
@@ -62,9 +63,73 @@ const folderBadge: Record<FolderState, { tone: "warning" | "accent" | "success" 
  * defaults + applies the patterns at scan time); the renderer just lists them and issues add/remove. */
 export interface SettingsApi {
   excludes: string[];
+  /** The opt-in packs the daemon offers (`listExcludeSuggestions`) — the "Suggested skips" shelf below.
+   *  Whether one is on is derived from `excludes`, never stored (see `state/excludeSuggestions.ts`). */
+  suggestions: ExcludeSuggestion[];
   addExclude: (pattern: string) => void;
+  /** Turn a whole pack on in one gesture — the patterns land as ordinary, individually-removable chips. */
+  addExcludes: (patterns: string[]) => void;
   removeExclude: (pattern: string) => void;
+  /** Turn a whole pack back off. The reverse gesture has to exist here: a pack is up to seventeen
+   *  patterns, and an add-only shelf would leave "undo that" as seventeen separate chip removals. */
+  removeExcludes: (patterns: string[]) => void;
 }
+
+/** One suggested pack. Its patterns are ALWAYS on screen, never behind a disclosure, for the same reason
+ *  the chips above are: this card's whole subject is files that won't be backed up, and a person can't
+ *  consent to a list they can't see. The button says exactly what it will add, and adding is reversible
+ *  chip-by-chip afterwards — so the honest expensive choice is the visible one. */
+const SuggestionRow = ({
+  pack,
+  excludes,
+  onAdd,
+  onRemove,
+}: {
+  pack: ExcludeSuggestion;
+  excludes: string[];
+  onAdd: (patterns: string[]) => void;
+  onRemove: (patterns: string[]) => void;
+}): React.JSX.Element => {
+  const state = packState(pack, excludes);
+  const missing = missingPatterns(pack, excludes);
+  const present = presentPatterns(pack, excludes);
+  return (
+    <div className="cs-suggestion">
+      <div className="cs-suggestion-head">
+        <div className="cs-stack-tight">
+          <strong>{pack.title}</strong>
+          <p className="cs-muted">{pack.detail}</p>
+        </div>
+        <div className="cs-cluster">
+          {state === "on" && (
+            <Badge tone="success" icon="check">
+              Skipping
+            </Badge>
+          )}
+          {state !== "on" && (
+            <Button size="sm" icon="block" onClick={() => onAdd(missing)}>
+              {/* "Partial" is a real state — the user turned this on and then deleted a chip. Say what's
+                  actually left rather than re-offering the whole pack as though nothing had happened. */}
+              {state === "partial" ? `Add the rest (${missing.length})` : "Skip these"}
+            </Button>
+          )}
+          {state !== "off" && (
+            <Button size="sm" variant="ghost" onClick={() => onRemove(present)}>
+              Stop skipping
+            </Button>
+          )}
+        </div>
+      </div>
+      <div className="cs-chips">
+        {pack.patterns.map((p) => (
+          <Chip key={p} mono>
+            {p}
+          </Chip>
+        ))}
+      </div>
+    </div>
+  );
+};
 
 export const SettingsView = ({
   api,
@@ -338,6 +403,35 @@ export const SettingsView = ({
           </Button>
         </div>
       </Card>
+
+      {/* The opt-in half of the same subject, deliberately a SEPARATE card from the list above: the chips
+          up there are in force right now, these are offers. Collapsing the two would make "we're skipping
+          this" and "we could skip this" look alike, which in a backup product is the difference between a
+          file being safe and not.
+
+          Why these aren't just defaults: each pack is junk only in context. A developer's `build/` folder
+          regenerates from source in seconds; a woodworker's `build/` folder is photographs of a workbench.
+          Guessing wrong means silently not backing up someone's work, so we ask. The daemon owns the
+          catalogue (`listExcludeSuggestions`) — the same list the drop-time prompt offers, so the two can
+          never disagree about what we recommend. */}
+      {settings.suggestions.length > 0 && (
+        <Card
+          title="Suggested skips"
+          description="Big, regenerable stuff most people don't need a copy of. Nothing here is on until you say so."
+        >
+          <div className="cs-suggestions">
+            {settings.suggestions.map((pack) => (
+              <SuggestionRow
+                key={pack.id}
+                pack={pack}
+                excludes={settings.excludes}
+                onAdd={settings.addExcludes}
+                onRemove={settings.removeExcludes}
+              />
+            ))}
+          </div>
+        </Card>
+      )}
 
       {hasAccount ? (
         // Signed-in installs: the quota row lives on Account › Plan & billing (beside its remedy);

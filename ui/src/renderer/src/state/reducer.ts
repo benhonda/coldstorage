@@ -15,6 +15,7 @@ import type {
   DaemonEventName,
   DaemonEvents,
   EntitlementStatus,
+  ExcludeSuggestion,
   ListedFile,
   RestoreRow,
   Source,
@@ -126,6 +127,11 @@ export interface AppState {
   /** Exclude patterns (daemon `listExcludes`) — Settings' "Don't back up" chips. Authoritative; the
    * daemon seeds defaults on first run + applies them at scan time. */
   excludes: string[];
+  /** The opt-in exclude packs the daemon offers (`listExcludeSuggestions`) — Settings' "Suggested skips"
+   * shelf and the drop-time prompt both read this. A static catalogue, fetched once per connection;
+   * whether a given pack is ON is DERIVED from `excludes` (see `state/excludeSuggestions.ts`), never
+   * stored, so there's nothing here that can contradict the chips above it. */
+  excludeSuggestions: ExcludeSuggestion[];
   run: RunProgress | null;
   failures: BlobFailure[];
   /** Every transfer this Mac has requested, newest first — active and history — read from the daemon's
@@ -152,6 +158,7 @@ export const initialState: AppState = {
   status: null,
   files: [],
   excludes: [],
+  excludeSuggestions: [],
   run: null,
   failures: [],
   restores: [],
@@ -179,6 +186,7 @@ export type Action =
   | { type: "sourcesLoaded"; sources: Source[] }
   | { type: "filesLoaded"; files: ListedFile[] }
   | { type: "excludesLoaded"; excludes: string[] }
+  | { type: "excludeSuggestionsLoaded"; suggestions: ExcludeSuggestion[] }
   | { type: "restoresLoaded"; restores: RestoreRow[] }
   | { type: "failuresDismissed" }
   | EventAction;
@@ -316,6 +324,8 @@ export const reducer = (state: AppState, action: Action): AppState => {
 
     case "excludesLoaded":
       return { ...state, excludes: action.excludes };
+    case "excludeSuggestionsLoaded":
+      return { ...state, excludeSuggestions: action.suggestions };
 
     case "restoresLoaded": {
       // The authoritative list is also the progress slice's janitor: an entry whose row is no longer

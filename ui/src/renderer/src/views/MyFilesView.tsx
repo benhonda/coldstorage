@@ -8,7 +8,7 @@
  * daemon then drives — this view starts a download, the Downloads page tracks it.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ColdstoreApi, ConflictPolicy, DepositPreviewItem, RetrievalQuote } from "../../../shared/ipc.ts";
+import type { ColdstoreApi, ConflictPolicy, DepositPreviewItem, ExcludeSuggestion, RetrievalQuote } from "../../../shared/ipc.ts";
 import { RECLAIM } from "../../../shared/reclaim-constants.ts";
 import type { Exec } from "./types.ts";
 import type { FilesApi } from "./files/useFiles.ts";
@@ -43,11 +43,13 @@ import { useToast } from "../ui/toast.tsx";
 import { Breadcrumb } from "./files/Breadcrumb.tsx";
 import { type MoveDrag, isMoveDrag, useMoveDrag } from "./files/useMoveDrag.ts";
 import { CollisionModal } from "./files/CollisionModal.tsx";
+import { SuggestedSkipsModal, type SkipDecision } from "./files/SuggestedSkipsModal.tsx";
+import { type DropMatch, matchesInDrop, worthPrompting } from "../state/excludeSuggestions.ts";
 import { ContextMenu, type MenuEntry } from "./files/ContextMenu.tsx";
 import { FolderTree } from "./files/FolderTree.tsx";
 import { InfoModal, type SelectionSummary } from "./files/InfoModal.tsx";
 import { RequestBackModal } from "./files/RequestBackModal.tsx";
-import { KindIcon, StatusIcon } from "./files/StatusBadge.tsx";
+import { KindIcon, StatusBadges } from "./files/StatusBadge.tsx";
 import { Button, IconButton, Icon, Modal } from "../ui/primitives.tsx";
 import { Page } from "../ui/layout.tsx";
 
@@ -57,6 +59,9 @@ interface Props {
   files: ArchivedFile[];
   virtualFolders: string[];
   filesApi: FilesApi;
+  /** The daemon's opt-in exclude packs — what the drop-time prompt is able to offer. Empty until the
+   *  catalogue loads (or if the daemon is older than the feature), which simply means no prompt. */
+  suggestions: ExcludeSuggestion[];
   /** The whole run, for the aggregate deposit banner at the top of the browser (files done, bytes,
    * throughput, ETA). `null` when no run has happened yet. */
   run: RunProgress | null;
@@ -91,6 +96,7 @@ export const MyFilesView = ({
   files,
   virtualFolders,
   filesApi,
+  suggestions,
   run,
   hasRoomFor,
   onDepositBlocked,
@@ -141,6 +147,13 @@ export const MyFilesView = ({
     folderName: string;
     collisions: string[];
     resolve: (policies: Record<string, ConflictPolicy> | null) => void;
+  } | null>(null);
+  // Suggested-skips prompt, promise-bridged the same way — it resolves before the collision prompt opens,
+  // because what the user skips here decides which names can collide at all.
+  const [skips, setSkips] = useState<{
+    folderName: string;
+    matches: DropMatch[];
+    resolve: (decision: SkipDecision | null) => void;
   } | null>(null);
 
   const dragDepth = useRef(0);
@@ -477,6 +490,11 @@ export const MyFilesView = ({
   const promptCollisions = (folderName: string, collisions: string[]): Promise<Record<string, ConflictPolicy> | null> =>
     new Promise((resolve) => setCollision({ folderName, collisions, resolve }));
 
+  // The suggested-skips prompt, same shape: resolves with the user's decision, or null if they cancelled
+  // the drop outright.
+  const promptSkips = (folderName: string, matches: DropMatch[]): Promise<SkipDecision | null> =>
+    new Promise((resolve) => setSkips({ folderName, matches, resolve }));
+
   // The shared deposit pipeline for BOTH a file drop and a photo pick: preview placement (which target
   // names already exist) → prompt the user on any collisions (Keep Both / Replace / Skip) → add optimistic
   // rows for what will actually land → issue the real deposit with the chosen resolutions. The daemon's
@@ -512,10 +530,54 @@ export const MyFilesView = ({
       // Files: there is no such second source of truth. Fabricating one used to hide the failure AND feed
       // the quota gate a zero — so the drop that most needed the gate was the one that skipped it. Surface it.
       if (opts.kind === "files") throw e;
-      preview = opts.fallback.map((relativePath) => ({ relativePath, size: 0, exists: false }));
+      // `suggestedPack: null` isn't a guess — a photo pick has no filesystem junk in it to suggest,
+      // which is the same reason the prompt below is files-only.
+      preview = opts.fallback.map((relativePath) => ({ relativePath, size: 0, exists: false, suggestedPack: null }));
     } finally {
       setPreparing(null);
     }
+    // ── suggested skips ──
+    // The daemon tagged every previewed file that one of its opt-in packs would have caught. If that adds
+    // up to something worth stopping a person for, ask BEFORE anything uploads — the only moment the
+    // answer is still free (Deep Archive bills a 180-day minimum the instant bytes land).
+    //
+    // This runs BEFORE the collision prompt on purpose: skipping changes which files land, so asking about
+    // collisions first would prompt the user about names that are then dropped anyway.
+    let excludeExtra: string[] = [];
+    /** Did the user's own skip choice empty this drop? Distinguishes "you chose to skip all of it" from
+     *  "we couldn't read any of it" below — the same two-different-reasons split the empty-plan branch
+     *  already makes, and the reason a deliberate choice must never surface as a red failure. */
+    let emptiedBySkips = false;
+    if (opts.kind === "files" && suggestions.length > 0) {
+      const matches = matchesInDrop(preview, suggestions);
+      if (worthPrompting(matches)) {
+        const decision = await promptSkips(opts.dest, matches);
+        if (!decision) return; // cancelled → abort the whole drop, no upload
+        const chosen = new Set(decision.packIds);
+        excludeExtra = matches.filter((m) => chosen.has(m.pack.id)).flatMap((m) => m.pack.patterns);
+        // Drop the skipped files from the preview so every downstream step — collisions, optimistic rows,
+        // the quota gate — is computed over what will ACTUALLY land. The daemon enforces it for real via
+        // `excludeExtra`; this keeps the UI's arithmetic honest rather than merely agreeing by luck.
+        const kept = preview.filter((p) => p.suggestedPack === null || !chosen.has(p.suggestedPack));
+        emptiedBySkips = kept.length === 0 && preview.length > 0;
+        preview = kept;
+        // "Remember this" is the separate, persistent half — the same one-button-fix shape as deleting a
+        // file with `alsoIgnore`. Its failure is reported on its own and does NOT abort the drop: the user
+        // asked to upload files, and saving a preference is the side errand. Letting this reject would
+        // have cancelled the whole deposit over a setting that didn't stick — the wrong consequence, and
+        // one the user never asked for. The skip itself still holds for this run, via `excludeExtra`.
+        if (decision.remember && excludeExtra.length > 0) {
+          try {
+            for (const pattern of excludeExtra) await api.request("addExclude", { pattern });
+          } catch (e) {
+            toast.error(
+              `Skipped them this time, but couldn't save that for next time: ${e instanceof Error ? e.message : String(e)}`,
+            );
+          }
+        }
+      }
+    }
+
     const collisions = preview.filter((p) => p.exists).map((p) => p.relativePath);
     let policies: Record<string, ConflictPolicy> = {};
     if (collisions.length > 0) {
@@ -529,6 +591,10 @@ export const MyFilesView = ({
     // the exact shape of "I dropped a folder and absolutely nothing happened". An empty plan with a
     // non-empty preview means the user chose Skip on every collision, which is a decision, not a failure.
     if (rows.length === 0) {
+      // Dropping a folder that turns out to be nothing BUT skippable junk is a complete, successful answer
+      // to the question we just asked. Reporting it as "nothing in there is readable" would call the
+      // user's own decision a fault.
+      if (emptiedBySkips) return;
       if (preview.length === 0) {
         throw new Error(
           `Nothing to upload from ${label} — nothing in there is readable, or all of it is excluded.`,
@@ -560,9 +626,12 @@ export const MyFilesView = ({
     );
     // Only attach `conflicts` when there's something to resolve (exactOptionalPropertyTypes — omit, don't undefined).
     const extra = Object.keys(conflicts).length > 0 ? { conflicts: JSON.stringify(conflicts) } : {};
+    // The user's "skip those" applied to THIS run — the daemon honors these patterns for this deposit and
+    // then forgets them, whether or not they also chose to remember them.
+    const skipped = excludeExtra.length > 0 ? { excludeExtra: excludeExtra.join("\n") } : {};
     const sent =
       opts.kind === "files"
-        ? api.request("deposit", { src: opts.wire, dest: opts.dest, ...extra })
+        ? api.request("deposit", { src: opts.wire, dest: opts.dest, ...extra, ...skipped })
         : api.request("depositPhotos", { assetIds: opts.wire, dest: opts.dest, ...extra });
     await sent.catch((e: unknown) => {
       // Command rejected → ⚠ on the rows, don't strand them — and carry the daemon's reason onto the row,
@@ -851,7 +920,7 @@ export const MyFilesView = ({
             right away for anything you've had a while.
           </p>
           {deleteIsWatched && (
-            <label className="cs-delete-watched">
+            <label className="cs-optin">
               <input
                 type="checkbox"
                 checked={alsoIgnore}
@@ -875,6 +944,21 @@ export const MyFilesView = ({
           targets={moveTargets}
           onMove={doMove}
           onClose={() => setMoveTargets(null)}
+        />
+      )}
+
+      {skips && (
+        <SuggestedSkipsModal
+          folderName={baseName(skips.folderName)}
+          matches={skips.matches}
+          onConfirm={(decision) => {
+            skips.resolve(decision);
+            setSkips(null);
+          }}
+          onClose={() => {
+            skips.resolve(null); // cancel → abort the deposit
+            setSkips(null);
+          }}
         />
       )}
 

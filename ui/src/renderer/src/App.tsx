@@ -205,8 +205,20 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   // the `excludesChanged` refetch reconciles. No local state to drift.
   const settings: SettingsApi = {
     excludes: state.excludes,
+    suggestions: state.excludeSuggestions,
     addExclude: (pattern) => exec(() => api.request("addExclude", { pattern })),
+    // Turning a whole pack on. Sequential, not `Promise.all`: each `addExclude` is a write to the same
+    // journal table and publishes its own `excludesChanged`, and one rejection has to stop the rest rather
+    // than leave the pack half-applied behind an error toast.
+    addExcludes: (patterns) =>
+      exec(async () => {
+        for (const pattern of patterns) await api.request("addExclude", { pattern });
+      }),
     removeExclude: (pattern) => exec(() => api.request("removeExclude", { pattern })),
+    removeExcludes: (patterns) =>
+      exec(async () => {
+        for (const pattern of patterns) await api.request("removeExclude", { pattern });
+      }),
   };
 
   // Counts REQUESTS, not files — the badge must agree with the rows the page shows, and a folder ask is
@@ -469,6 +481,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           files={filesApi.files}
           virtualFolders={filesApi.virtualFolders}
           filesApi={filesApi}
+          suggestions={state.excludeSuggestions}
           run={state.run}
           hasRoomFor={hasRoomFor}
           onDepositBlocked={(incomingBytes) =>

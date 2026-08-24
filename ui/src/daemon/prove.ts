@@ -6,7 +6,8 @@
  *   1. `getStatus` round-trips (typed reply by id).
  *   2. `listFiles` round-trips (the browser's journal-backed tree read).
  *   3. `triggerNow` produces `runStarted` … `runFinished` on the event stream.
- *   5. `listExcludes`/`addExclude`/`removeExclude` round-trip (defaults seeded; add then remove).
+ *   5. `listExcludes`/`addExclude`/`removeExclude` round-trip (defaults seeded; add then remove), and
+ *      `listExcludeSuggestions` returns the opt-in packs with the shape `protocol.ts` promises.
  *   6. `listRestores` round-trips and every row carries the fields `protocol.ts` promises — the
  *      Transfers page binds straight to these, and `protocol.ts` is a hand-maintained mirror of the
  *      daemon's DTO, so a silent rename is exactly what this catches.
@@ -120,6 +121,23 @@ if (!(await client.request("listExcludes")).includes(probe)) fail(`addExclude di
 await client.request("removeExclude", { pattern: probe });
 if ((await client.request("listExcludes")).includes(probe)) fail(`removeExclude did not drop ${probe}`);
 log(`excludes → ${defaults.length} default(s) seeded; add/remove round-trips clean`);
+
+// 5b — the suggestion catalogue. Both surfaces that offer packs (Settings' shelf, the drop-time prompt)
+// bind straight to these fields, and `protocol.ts` mirrors the Swift DTO by hand — a silent rename here
+// would leave the shelf rendering blank rows with no error anywhere.
+const packs = await client.request("listExcludeSuggestions");
+if (packs.length === 0) fail("listExcludeSuggestions returned no packs");
+for (const pack of packs) {
+  for (const k of ["id", "title", "detail", "patterns"] as const) {
+    if (pack[k] === undefined) fail(`listExcludeSuggestions row missing '${k}': ${JSON.stringify(pack)}`);
+  }
+  if (pack.patterns.length === 0) fail(`suggestion '${pack.id}' has no patterns`);
+  // A suggested pattern that's ALREADY a shipped default can never be offered, and would strand its pack
+  // permanently half-on in the UI with no way for the user to complete it.
+  const seeded = pack.patterns.filter((x) => defaults.includes(x));
+  if (seeded.length > 0) fail(`suggestion '${pack.id}' overlaps the seeded defaults: ${seeded.join(", ")}`);
+}
+log(`exclude suggestions → ${packs.length} pack(s): ${packs.map((p) => p.id).join(", ")}`);
 
 // 6 — transfers: the list reads (usually empty on a fresh daemon, which is a valid answer), and any row
 // present has the whole shape. Checked against the LIVE daemon because `protocol.ts` mirrors the Swift DTO
