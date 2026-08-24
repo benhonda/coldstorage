@@ -504,6 +504,16 @@ button.cs-kv:hover { background: var(--surface-hover); }
   white-space: nowrap;
 }
 .cs-update-action:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+/* Dismiss. Quiet by default — declining an offer shouldn't compete with accepting it (the "Restart to
+   update" action beside it), so no filled disc and a secondary glyph until hover/focus. */
+.cs-update-x {
+  flex: none;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  background: transparent;
+  color: var(--text-secondary);
+}
+.cs-update-x:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text-primary); }
 
 /* ── helpers ────────────────────────────────────────────────────── */
 .cs-mono { font: var(--type-mono); letter-spacing: var(--tracking-mono); font-feature-settings: "tnum" 1; }
