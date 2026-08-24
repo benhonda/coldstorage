@@ -174,6 +174,13 @@ it had worked.
    the real source, so picked-photo names resolve) → modal → `deposit`/`depositPhotos` with a
    `conflicts` map the daemon's `CollisionResolvingSource` applies authoritatively. Copies re-upload
    bytes (content-addressed dedup is a deferred, UX-invisible optimization).
+6. **A drop is never silent, from the instant it lands:** `previewDeposit` recursively stats everything
+   dropped, which on a big folder takes real time — so the drop draws a *Reading "X"…* banner
+   (`DepositProgress`) immediately, and it sits alongside (never replaces) a run already uploading. The
+   two ways that walk can come back with nothing are told apart and both surface: a preview that FAILS
+   is an error, and a preview that returns EMPTY (unreadable path, or everything excluded) is an error
+   naming what was dropped. Neither may pass as a successful no-op — that combination is what made a
+   30 GB folder drop look like the app had ignored it (2026-08-24).
 
 ## Request-a-download flow (available, not advertised)
 1. Trigger from the row `⋯` / Get-info modal; works on one file, a multi-select, or a folder.

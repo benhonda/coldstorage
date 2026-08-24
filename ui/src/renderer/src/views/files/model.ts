@@ -165,6 +165,15 @@ export const segments = (p: string): string[] => p.split("/").filter(Boolean);
 /** The basename (last segment) of a path. */
 export const baseName = (path: string): string => segments(path).at(-1) ?? "";
 
+/** Name a handful of paths for a sentence — "Videos", "Videos and Photos", "Videos, Photos and 2 more".
+ *  What the user calls the things they just dropped, so a message about them can say which ones. */
+export const names = (paths: readonly string[]): string => {
+  const all = paths.map(baseName).filter(Boolean).map((n) => `“${n}”`);
+  if (all.length === 0) return "that";
+  if (all.length <= 2) return all.join(" and ");
+  return `${all[0]}, ${all[1]} and ${all.length - 2} more`;
+};
+
 /** Replace a path's basename: ("a/b/c", "d") → "a/b/d". */
 export const withName = (path: string, name: string): string =>
   joinPath(parentOf(path), name);

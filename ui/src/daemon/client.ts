@@ -32,7 +32,8 @@ export const defaultSocketPath = (): string =>
 export interface DaemonClientOptions {
   /** Unix socket path. Defaults to {@link defaultSocketPath}. */
   socketPath?: string;
-  /** Per-request timeout (ms) — mirrors `ControlClient(readTimeout:)`. Default 10_000. */
+  /** Per-request timeout (ms) — mirrors `ControlClient(readTimeout:)`. Default 10_000. Overridden
+   * per method by {@link METHOD_TIMEOUT_MS}. */
   requestTimeoutMs?: number;
   /** Redial on disconnect (default true). The event tail itself is never timed out. */
   autoReconnect?: boolean;
@@ -43,6 +44,20 @@ export interface DaemonClientOptions {
    * `net.createConnection`. */
   dial?: (socketPath: string) => net.Socket;
 }
+
+/**
+ * Methods whose work is unbounded by nature, with the bound they actually need. The default 10s is right
+ * for a journal read or a config write — it is wrong for anything that walks the user's disk, and getting
+ * that wrong is invisible: a `previewDeposit` of a big folder timed out at 10s, the caller fell back to a
+ * fabricated preview, and a 30 GB drop went in as one size-0 row that told the quota gate nothing.
+ *
+ * The SSOT for "how long may this command legitimately take" — one table, not a timeout argument threaded
+ * through every call site.
+ */
+const METHOD_TIMEOUT_MS: Partial<Record<Method, number>> = {
+  // A stat-only recursive walk of everything dropped. Fast per file, but a deep folder is a lot of files.
+  previewDeposit: 5 * 60_000,
+};
 
 /** Lifecycle events emitted alongside daemon events (distinct namespaces, never collide). */
 interface LifecycleEvents {
@@ -142,13 +157,14 @@ export class DaemonClient {
         return;
       }
       const id = this.nextId++;
+      const timeoutMs = METHOD_TIMEOUT_MS[method] ?? this.requestTimeoutMs;
       // No cast: `ParamsArg` now guarantees every value is a string (see `StringParams` in protocol.ts).
       // The cast that used to live here is what let a boolean param compile and break the wire.
       const params: Record<string, string | undefined> | undefined = args[0];
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`request '${method}' (id ${id}) timed out after ${this.requestTimeoutMs}ms`));
-      }, this.requestTimeoutMs);
+        reject(new Error(`request '${method}' (id ${id}) timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
       this.pending.set(id, {
         resolve: resolve as (r: unknown) => void,
         reject,

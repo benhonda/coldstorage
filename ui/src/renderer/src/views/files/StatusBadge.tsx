@@ -19,9 +19,12 @@ const STATUS: Record<FileStatus, { icon: string; tone: Tone; label: string } | n
   // permanent/stuck only — a transient blip stays `uploading` (it self-heals), never shows this.
   failed: { icon: "error", tone: "danger", label: "Couldn't upload" },
   // Two states, because they are two different things. `pending` is the ~48h Deep Archive thaw, during
-  // which no byte moves — an hourglass, not a down-arrow, because nothing is arriving yet. `transferring`
-  // is the down-arrow it was always drawn as, now reserved for when that's actually true.
-  pending: { icon: "hourglass_top", tone: "warning", label: "Waiting on deep storage" },
+  // which no byte moves; `transferring` is bytes actually landing. Both are drawn from the same circle
+  // family so they read as one journey, and the RING carries the difference: `downloading`'s ring is
+  // broken (headed here, nothing arriving yet), `arrow_circle_down`'s is closed (arriving now). An
+  // hourglass used to hold `pending`, but a bare hourglass reads as generic "loading" — and a spinner
+  // next to an upload queue reads as uploading, which is the one thing it isn't (Ben, 2026-08-24).
+  pending: { icon: "downloading", tone: "warning", label: "Waiting on deep storage" },
   // Still queued, but not getting anywhere — retrying against a snag, or untouched for longer than the
   // daemon's own window. Deliberately NOT the `failed` glyph: nothing has given up, and saying so would
   // send the user hunting for a retry button they don't need. `sync_problem` is the honest middle.
@@ -39,8 +42,14 @@ const KIND_ICON: Record<FileKind, string> = {
   other: "draft",
 };
 
-/** A small colored status icon — ✓ stored, ↑ uploading, ⚠ couldn't upload, ⧗ waiting on deep storage,
- * ↓ downloading, or saved-here.
+/** A small colored status icon — ✓ stored, ↑ uploading, ⚠ couldn't upload, ↓-in-a-broken-ring waiting on
+ * deep storage, ↓ downloading, or saved-here.
+ *
+ * `pending` breathes (see `.cs-pulse`), because a thaw is the one state where something is happening that
+ * the user cannot see any evidence of. `alive` is how a caller turns that off: it means "we still believe
+ * this wait", and the Downloads page clears it when `restoreStall` says we've lost track — a wait nobody
+ * can vouch for must not keep signalling life. The file tree has no stall verdict of its own to pass, so
+ * it takes the default; that seam is the reason this is a prop and not a lookup inside STATUS.
  *
  * `reason` is the daemon's own words for what went wrong (`ArchivedFile.error`), appended to the label so a
  * stuck row can say WHY rather than leaving the user to guess from a glyph. The journal has carried this
@@ -49,16 +58,19 @@ export const StatusIcon = ({
   status,
   reason = null,
   size = 20,
+  alive = true,
 }: {
   status: FileStatus;
   reason?: string | null;
   size?: number;
+  alive?: boolean;
 }): React.JSX.Element | null => {
   const s = STATUS[status];
   if (!s) return null;
   const label = reason ? `${s.label} — ${reason}` : s.label;
+  const pulse = alive && status === "pending" ? " cs-pulse" : "";
   return (
-    <span className={`cs-statusicon cs-statusicon--${s.tone}`} role="img" aria-label={label} title={label}>
+    <span className={`cs-statusicon cs-statusicon--${s.tone}${pulse}`} role="img" aria-label={label} title={label}>
       <Icon name={s.icon} size={size} />
     </span>
   );

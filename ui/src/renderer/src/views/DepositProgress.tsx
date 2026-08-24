@@ -9,12 +9,51 @@ import { timeLeft } from "../ui/duration.ts";
  * daemon only signalled a file as done when its whole blob verified — so the user saw nothing for minutes,
  * then a burst of green (2026-07-14). The daemon now streams `runProgress`; this renders it.
  *
- * Two modes, because two kinds of deposit carry different information:
- *   - **byte bar** (files): `bytesTotal` is known, so we show a determinate bar + a real ETA.
- *   - **count bar** (photos): sizes aren't known until streamed, so `bytesTotal` is null — we fall back to
- *     "N of M files" and an indeterminate shimmer, and DON'T fake a byte count or a time estimate.
+ * A deposit has a life BEFORE it has a byte count, so there are two banners here, not one:
+ *   - {@link PreparingBanner} — accepted, and the daemon is still walking what was dropped. This drew
+ *     nothing at all until 2026-08-24: a 30 GB folder sat silent through its whole recursive stat, which
+ *     reads exactly like the app ignored you.
+ *   - {@link RunBanner} — bytes moving, in one of two modes, because the two kinds of deposit carry
+ *     different information: a **byte bar** (files — `bytesTotal` known, so a determinate bar + a real
+ *     ETA) or a **count bar** (photos — sizes unknown until streamed, so "N of M files" and an
+ *     indeterminate shimmer, never a faked byte count or time estimate).
  */
-export function DepositProgress({ run }: { run: RunProgress | null }): React.JSX.Element | null {
+export function DepositProgress({
+  run,
+  preparing,
+}: {
+  run: RunProgress | null;
+  /** What a just-accepted drop is being read for (“Videos”), while the daemon resolves where it
+   *  lands — the window before any run exists. Null when nothing is being read. */
+  preparing?: string | null;
+}): React.JSX.Element {
+  // Two INDEPENDENT facts, so two banners, not a winner: a drop can be read while an earlier one is still
+  // uploading, and neither state may hide the other.
+  return (
+    <>
+      {preparing && <PreparingBanner what={preparing} />}
+      <RunBanner run={run} />
+    </>
+  );
+}
+
+/** A drop the daemon is still reading — accepted, walking, nothing to count yet. */
+function PreparingBanner({ what }: { what: string }): React.JSX.Element {
+  return (
+    <div className="cs-deposit" role="status" aria-live="polite">
+      <div className="cs-deposit-head">
+        <span className="cs-deposit-title">Reading {what}…</span>
+      </div>
+      <div className="cs-bar-track cs-bar-track--indeterminate" role="progressbar">
+        <div className="cs-bar-fill" />
+      </div>
+      <div className="cs-bar-meta">Working out what to upload</div>
+    </div>
+  );
+}
+
+/** The live run — bytes actually moving. */
+function RunBanner({ run }: { run: RunProgress | null }): React.JSX.Element | null {
   // Show ONLY while something is actually being uploaded — not merely because a run is `active`. A periodic
   // scan of an already-archived vault runs (active=true) and reports the whole vault as `filesTotal`, but
   // does no work: no file streams, no bytes ship. Gating on real activity (a current file, or bytes moving)
@@ -32,12 +71,12 @@ export function DepositProgress({ run }: { run: RunProgress | null }): React.JSX
   // daemon only counts bytes when a whole 64 MiB part lands, so there's a real gap at the start where a
   // determinate "0 B of 4.2 GB · 0%" bar would just sit there looking dead. Show an honest working state
   // instead — an indeterminate shimmer + "Preparing…" — until the first part gives us something true to show.
-  const preparing = bytesUploaded === 0;
-  const indeterminate = preparing || fraction == null;
+  const beforeFirstPart = bytesUploaded === 0;
+  const indeterminate = beforeFirstPart || fraction == null;
 
   // The one-line summary. Only state what we actually know — no invented precision.
   const parts: string[] = [];
-  if (preparing) {
+  if (beforeFirstPart) {
     parts.push("Preparing…");
   } else {
     if (filesTotal != null) parts.push(`${Math.min(filesArchived, filesTotal)} of ${filesTotal} files`);

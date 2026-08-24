@@ -26,6 +26,7 @@ import {
   formatDate,
   isEmptyFolder,
   joinPath,
+  names,
   parentOf,
   planDeposit,
   reparent,
@@ -63,7 +64,9 @@ interface Props {
    * drop can't slip past a stored total that hasn't caught up yet. A blocked deposit calls
    * {@link onDepositBlocked} (→ the paywall) instead of uploading. Fails open on unknown usage/quota. */
   hasRoomFor: (incomingBytes: number) => boolean;
-  onDepositBlocked: () => void;
+  /** Called with the size of the deposit that was refused (0 when the vault was already full before we
+   *  knew the size) — the modal it opens says something different for "full" than for "this one is too big". */
+  onDepositBlocked: (incomingBytes: number) => void;
   /** Files the Downloads page asked us to re-open the request dialog for (a download that needs buying
    * again — the whole list at once for a grouped row). Null most of the time. */
   requestFileIds?: string[] | null;
@@ -127,6 +130,10 @@ export const MyFilesView = ({
   const [moveTargets, setMoveTargets] = useState<RowTarget[] | null>(null);
   const [infoOpen, setInfoOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
+  // What a just-accepted drop is being read for, while the daemon walks it. The gap between releasing a
+  // folder and the first optimistic row is a full recursive stat of everything in it — on a big drop that
+  // is many seconds of an app that looked like it had ignored you (PILLAR5: no invisible work).
+  const [preparing, setPreparing] = useState<string | null>(null);
   // Finder-style deposit collision prompt. Promise-bridged: `promptCollisions` opens the modal and resolves
   // when the user picks (a policy map) or cancels (null), so the deposit flow can `await` the decision.
   const [collision, setCollision] = useState<{
@@ -480,23 +487,33 @@ export const MyFilesView = ({
     wire: string; // newline-joined absolute paths (files) or Photos localIdentifiers (photos)
     dest: string;
     srcByPath: Map<string, string>; // previewed vault path → local srcPath (top-level picks only) so a failed upload can retry
-    fallback: string[]; // target relativePaths to assume if preview is unavailable
+    fallback: string[]; // target relativePaths — names the drop in the UI, and stands in for an unavailable photo preview
   }): Promise<void> => {
     // Quota gate, pass 1 (Phase 5c): if the vault is already full, bail to the paywall before any
     // preview/optimistic rows so a blocked drop leaves the tree untouched. The size-aware pass 2 (below,
     // once we know which files land and how big they are) is what stops a single drop that would overflow.
     if (!hasRoomFor(0)) {
-      onDepositBlocked();
+      onDepositBlocked(0);
       return;
     }
     let preview: DepositPreviewItem[];
+    // The drop is now visibly working. Until this landed, everything between the drop and the first
+    // optimistic row — a full recursive walk of the dropped folder — drew nothing at all.
+    const label = opts.kind === "photos" ? "photos" : names(opts.fallback);
+    setPreparing(label);
     try {
       preview = await api.request(
         "previewDeposit",
         opts.kind === "files" ? { dest: opts.dest, src: opts.wire } : { dest: opts.dest, assetIds: opts.wire },
       );
-    } catch {
+    } catch (e) {
+      // Photos: the picker already told us the names, so a resolver hiccup shouldn't cancel the deposit.
+      // Files: there is no such second source of truth. Fabricating one used to hide the failure AND feed
+      // the quota gate a zero — so the drop that most needed the gate was the one that skipped it. Surface it.
+      if (opts.kind === "files") throw e;
       preview = opts.fallback.map((relativePath) => ({ relativePath, size: 0, exists: false }));
+    } finally {
+      setPreparing(null);
     }
     const collisions = preview.filter((p) => p.exists).map((p) => p.relativePath);
     let policies: Record<string, ConflictPolicy> = {};
@@ -506,17 +523,28 @@ export const MyFilesView = ({
       policies = chosen;
     }
     const { rows, conflicts } = planDeposit(preview, policies, new Set(files.map((f) => f.relativePath)));
+    // Nothing will land. Two very different reasons, and neither may pass as a successful no-op (PILLAR5):
+    // an empty preview means the daemon found nothing it could read or nothing the excludes let through —
+    // the exact shape of "I dropped a folder and absolutely nothing happened". An empty plan with a
+    // non-empty preview means the user chose Skip on every collision, which is a decision, not a failure.
+    if (rows.length === 0) {
+      if (preview.length === 0) {
+        throw new Error(
+          `Nothing to upload from ${label} — nothing in there is readable, or all of it is excluded.`,
+        );
+      }
+      return;
+    }
     // Byte size per landing row, sourced from the daemon's preview (`original` is the previewed path each
     // row keys off). This is the SSOT for "how big is this deposit" — files, whole folders, and photos
-    // alike — so the quota gate below is exact regardless of how the items were chosen. 0 only when the
-    // preview couldn't run (fallback) or a photo's size isn't resolvable yet; the daemon's usage read
-    // reconciles those on the next refresh.
+    // alike — so the quota gate below is exact regardless of how the items were chosen. 0 only for a photo
+    // whose size isn't resolvable yet; the daemon's usage read reconciles those on the next refresh.
     const sizeByOriginal = new Map(preview.map((p) => [p.relativePath, p.size]));
     // Quota gate, pass 2: now we know which files actually land (post-collision-resolution) and how big
     // they are, so refuse the drop if it would overflow the quota.
     const incomingBytes = rows.reduce((sum, r) => sum + (sizeByOriginal.get(r.original) ?? 0), 0);
     if (!hasRoomFor(incomingBytes)) {
-      onDepositBlocked();
+      onDepositBlocked(incomingBytes);
       return;
     }
     // Optimistic "uploading" rows for what will land — names carry their full vault path (so intoDir is "").
@@ -583,7 +611,7 @@ export const MyFilesView = ({
     if (!file.srcPath) return;
     // Re-uploading bytes that never landed (the failed row) — count them as incoming against the quota.
     if (!hasRoomFor(file.size)) {
-      onDepositBlocked();
+      onDepositBlocked(file.size);
       return;
     }
     const srcPath = file.srcPath;
@@ -716,7 +744,7 @@ export const MyFilesView = ({
           onClick={(e) => e.target === e.currentTarget && clearSelection()}
           onContextMenu={(e) => e.target === e.currentTarget && openMenu(e)}
         >
-          <DepositProgress run={run} />
+          <DepositProgress run={run} preparing={preparing} />
           {/* FirstRun (the drop-zone hero) is the onboarding state for a genuinely empty vault — root with
               nothing in it. A drilled-into empty folder just shows the empty file list, not the hero. */}
           {rows.length === 0 && dir === "" ? (

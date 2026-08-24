@@ -24,6 +24,7 @@ import {
   type UploadProgress,
   uploadPercent,
   uniquifyPath,
+  names,
   planDeposit,
   isUploadOutstanding,
   uploadStall,
@@ -421,5 +422,18 @@ describe("isUploadOutstanding", () => {
     for (const s of ["frozen", "failed", "pending", "transferring", "here"] as const) {
       expect(isUploadOutstanding(s)).toBe(false);
     }
+  });
+});
+
+describe("names (what to call the things just dropped)", () => {
+  test("names one and two dropped items outright", () => {
+    expect(names(["Videos"])).toBe("\u201cVideos\u201d");
+    expect(names(["a/Videos", "b/Photos"])).toBe("\u201cVideos\u201d and \u201cPhotos\u201d");
+  });
+  test("stops listing past two — a 40-file drop must not become a 40-name sentence", () => {
+    expect(names(["a", "b", "c", "d"])).toBe("\u201ca\u201d, \u201cb\u201d and 2 more");
+  });
+  test("still says something when there is nothing to name", () => {
+    expect(names([])).toBe("that");
   });
 });

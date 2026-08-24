@@ -29,6 +29,7 @@ import { fileFromJournal, isFolderMarker, isUploadOutstanding } from "./views/fi
 import { FailuresPanel } from "./views/files/FailuresPanel.tsx";
 import { eventAction, type BlobFailure } from "./state/reducer.ts";
 import { bytesAvailable } from "./state/entitlement.ts";
+import { formatBytes } from "./views/files/model.ts";
 import { MyFilesView } from "./views/MyFilesView.tsx";
 import { SettingsView, type SettingsApi, type SettingsTab } from "./views/SettingsView.tsx";
 import { DownloadsView } from "./views/DownloadsView.tsx";
@@ -137,11 +138,18 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   useEffect(() => {
     if (state.entitlement.active) setPaywallReason(null);
   }, [state.entitlement.active]);
-  const [overCapacityOpen, setOverCapacityOpen] = useState(false);
+  // The blocked deposit's own size — because "you can't upload this" has two different truths behind it,
+  // and the old modal only ever told one of them. A vault with 10 GB left refusing a 30 GB folder is NOT
+  // "you've used all of your storage"; saying so sends the user hunting for files to delete when the real
+  // answer is that this one drop doesn't fit. Null = nothing blocked.
+  const [blockedBytes, setBlockedBytes] = useState<number | null>(null);
+  // Which of the two truths this block is. A vault with room left that still refused the drop can only mean
+  // the drop itself was too big; zero room left means full, full stop.
+  const tooBigForRoomLeft = blockedBytes != null && blockedBytes > 0 && roomLeft != null && roomLeft > 0;
   const [changingPlanFromCapacity, setChangingPlanFromCapacity] = useState(false);
   useEffect(() => {
     if (canDeposit) {
-      setOverCapacityOpen(false);
+      setBlockedBytes(null);
       setChangingPlanFromCapacity(false);
     }
   }, [canDeposit]);
@@ -243,7 +251,9 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
     const fresh = state.failures.some((f) => f.kind === "overQuota" && !shownQuotaBlocks.current.has(f.blob));
     if (!fresh) return;
     for (const f of state.failures) if (f.kind === "overQuota") shownQuotaBlocks.current.add(f.blob);
-    if (subscribed) setOverCapacityOpen(true);
+    // A background run hit the quota — no single deposit to blame and no size to quote, so this is the
+    // plain "full" case (0 ⇒ the vault is full, not "this one is too big").
+    if (subscribed) setBlockedBytes(0);
     else setPaywallReason("quotaReached");
   }, [state.failures, subscribed]);
 
@@ -461,7 +471,9 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           filesApi={filesApi}
           run={state.run}
           hasRoomFor={hasRoomFor}
-          onDepositBlocked={() => (subscribed ? setOverCapacityOpen(true) : setPaywallReason("quotaReached"))}
+          onDepositBlocked={(incomingBytes) =>
+            subscribed ? setBlockedBytes(incomingBytes) : setPaywallReason("quotaReached")
+          }
           requestFileIds={requestFileIds}
           onRequestOpened={() => setRequestFileIds(null)}
           onShowDownloads={() => setRoute("downloads")}
@@ -519,14 +531,14 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
 
       {/* Out of room on a PAID plan — the free-tier equivalent is the plan picker above (nothing to resize
           yet). Already a customer, just at their plan's cap. Plain, factual, no alarm; offers the way out. */}
-      {overCapacityOpen && !changingPlanFromCapacity && (
+      {blockedBytes != null && !changingPlanFromCapacity && (
         <Modal
-          title="Storage full"
+          title={tooBigForRoomLeft ? "That's more than you have room for" : "Storage full"}
           icon="database"
-          onClose={() => setOverCapacityOpen(false)}
+          onClose={() => setBlockedBytes(null)}
           footer={
             <>
-              <Button variant="ghost" onClick={() => setOverCapacityOpen(false)}>
+              <Button variant="ghost" onClick={() => setBlockedBytes(null)}>
                 Not now
               </Button>
               {currentSubscription && (
@@ -538,8 +550,9 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           }
         >
           <p>
-            You&apos;ve used all of your plan&apos;s storage. Free up space, or upgrade your plan to keep
-            backing up.
+            {tooBigForRoomLeft
+              ? `This upload is ${formatBytes(blockedBytes)}, and you have ${formatBytes(roomLeft ?? 0)} left on your plan. Upload less of it, free up space, or upgrade your plan.`
+              : "You've used all of your plan's storage. Free up space, or upgrade your plan to keep backing up."}
           </p>
         </Modal>
       )}
@@ -551,7 +564,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           onChanged={(sub) => {
             recordSubscription(sub);
             setChangingPlanFromCapacity(false);
-            setOverCapacityOpen(false);
+            setBlockedBytes(null);
           }}
           onClose={() => setChangingPlanFromCapacity(false)}
         />

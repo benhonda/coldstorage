@@ -70,3 +70,37 @@ describe("DaemonClient first-dial race", () => {
     expect(client.isConnected).toBe(false);
   });
 });
+
+/**
+ * The per-method timeout table. The default 10s is right for a journal read and wrong for anything that
+ * walks the user's disk: `previewDeposit` recursively stats everything dropped, and bounding that at 10s
+ * meant a big folder drop timed out before it could report a single file (2026-08-24).
+ */
+describe("DaemonClient per-method timeouts", () => {
+  /** A connected client whose daemon never answers, so only the timers decide the outcome. */
+  const mute = async () => {
+    const { world, dial } = fakeWorld();
+    world.serverUp = true;
+    const client = new DaemonClient({ socketPath: "/fake.sock", requestTimeoutMs: 20, dial });
+    await client.connect();
+    return client;
+  };
+
+  test("an ordinary command is bound by the default timeout", async () => {
+    const client = await mute();
+    await expect(client.request("listFiles")).rejects.toThrow(/timed out after 20ms/);
+    client.close();
+  });
+
+  test("previewDeposit is NOT bound by it — the walk gets the time it needs", async () => {
+    const client = await mute();
+    const preview = client.request("previewDeposit", { dest: "", src: "/big/folder" });
+    const settled = await Promise.race([
+      preview.then(() => "settled").catch(() => "settled"),
+      new Promise((r) => setTimeout(() => r("still working"), 60)), // 3× the default bound
+    ]);
+    expect(settled).toBe("still working");
+    client.close(); // rejects the in-flight request, so nothing is left dangling
+    await preview.catch(() => {});
+  });
+});

@@ -735,6 +735,26 @@ button.cs-kv:hover { background: var(--surface-hover); }
   .cs-spinner { animation: none; }
 }
 
+/* "This is alive, and I'm not going to pretend to measure it."
+   The deep-storage thaw takes ~48 hours during which not one byte moves, so a progress ring would have to
+   invent a number — and would then have to lie at 100% when a bulk retrieval honestly overruns the
+   estimate. A breath says the only true thing: still working, no ETA claimed. The quantitative answer
+   lives in words next to it ("About 12 hours left"), where it can degrade to "taking longer than usual"
+   without the glyph contradicting it.
+
+   Opacity ONLY, deliberately: it is composited on the GPU, so this triggers no layout and no repaint no
+   matter how many rows carry it, and costs no JS and no timer. Anything transform- or color-based would
+   put real work on the main thread once a restore covers hundreds of rows. */
+.cs-pulse { animation: cs-breathe 2.4s ease-in-out infinite; }
+@keyframes cs-breathe {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Same rule as the spinner above: the state is still legible from the glyph, the color and the text. */
+  .cs-pulse { animation: none; }
+}
+
 /* small colored status icon — colors kept from the badges (accent / amber / green) */
 .cs-statusicon { display: inline-grid; place-items: center; flex: 0 0 auto; }
 .cs-statusicon--accent .csf-icon { color: var(--accent); }

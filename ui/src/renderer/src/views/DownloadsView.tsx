@@ -109,15 +109,34 @@ export const remaining = (r: RestoreRow, now: number, staleAfterSeconds: number)
 
 /** How each state reads to the user — the wire→page translation (see the header). `pending` rather than
  * "downloading" for the thaw, because for those ~48 hours no byte is moving and the label must not claim
- * otherwise; the note beneath says what IS happening (deep storage waking up). */
+ * otherwise; the note beneath says what IS happening (deep storage waking up). The ICONS say the same
+ * thing without words: `pending` and `transferring` share the circle family, and the ring is the tell —
+ * broken on `downloading` (headed here, nothing arriving), closed on `arrow_circle_down` (arriving now).
+ * Not an hourglass: a bare hourglass reads as generic "loading", which says nothing about direction. */
 const STATE: Record<RestoreState, { label: string; tone: Tone; icon: string }> = {
   needsAuthorization: { label: "Needs payment", tone: "warning", icon: "credit_card" },
-  pending: { label: "Pending", tone: "warning", icon: "hourglass_top" },
+  pending: { label: "Pending", tone: "warning", icon: "downloading" },
   transferring: { label: "Downloading", tone: "accent", icon: "arrow_circle_down" },
   saved: { label: "Done", tone: "success", icon: "download_done" },
   canceled: { label: "Stopped", tone: "neutral", icon: "cancel" },
   failed: { label: "Didn't finish", tone: "danger", icon: "error" },
 };
+
+/**
+ * Whether this row's icon should breathe — the class, ready to append, or "".
+ *
+ * A thaw is the only state on this page where something real is happening and the user has no evidence of
+ * it: no bar (nothing to measure), no bytes, just a date. The pulse is that evidence, and it claims only
+ * "still working" — never a fraction, which is why it stays a pulse and not a ring (the estimate is
+ * routinely overrun, and a ring would have to sit at 100% lying about it).
+ *
+ * It stops the moment the wait goes `stalled`. That is the whole point of gating it: `restoreStall` marks
+ * a wait nobody has checked on or one well past its estimate, and a stalled row is already saying "this
+ * looks stuck" in words. An icon still cheerfully breathing next to that sentence would be the same
+ * reassuring lie the countdown was rebuilt to stop telling.
+ */
+const alive = (state: RestoreState, wait: WaitNote | null): string =>
+  state === "pending" && !wait?.stalled ? " cs-pulse" : "";
 
 /** Date + time — a download is a same-week thing, so the hour is the useful part. */
 const when = (unixSeconds: number | null): string => {
@@ -330,7 +349,7 @@ const FileRow = ({
   const wait = remaining(r, now, staleAfter);
   return (
     <div className={`cs-download${child ? " cs-download--child" : ""}`}>
-      <span className={`cs-download-icon cs-download-icon--${s.tone}`}>
+      <span className={`cs-download-icon cs-download-icon--${s.tone}${alive(r.state, wait)}`}>
         <Icon name={s.icon} size={20} />
       </span>
       <div className="cs-download-main">
@@ -392,7 +411,7 @@ const GroupRow = ({
         >
           <Icon name={open ? "expand_more" : "chevron_right"} size={20} />
         </button>
-        <span className={`cs-download-icon cs-download-icon--${s.tone}`}>
+        <span className={`cs-download-icon cs-download-icon--${s.tone}${alive(g.state, wait)}`}>
           <Icon name={s.icon} size={20} />
         </span>
         <div className="cs-download-main">
