@@ -376,22 +376,17 @@ export const SettingsView = ({
           onRemove={settings.removeExcludes}
           onClose={() => setShowSuggestions(false)}
         />
+        />
       )}
 
-      {hasAccount ? (
-        // Signed-in installs: the quota row lives on Account › Plan & billing (beside its remedy);
-        // only the this-Mac fact remains here.
-        <Card title="This Mac">
-          <KeyValueRow label="Encryption" value="on this Mac, before upload" icon="lock" />
-        </Card>
-      ) : (
-        // Dogfood mode has no Account subpage to carry the figure, so the original Storage card stands.
+      {/* Signed-in installs carry the quota row on Account › Plan & billing (beside its remedy). Dogfood
+          mode has no Account subpage to carry the figure, so the original Storage card stands. */}
+      {!hasAccount && (
         <Card title="Storage">
           {/* ONE number, one meaning: `bytesStored` is a live listing of what's actually in the user's own
               vault, so it counts every device they've deposited from and it's the figure the plan's quota is
               enforced against. Never reintroduce a second, journal-summed total beside it. */}
           <KeyValueRow label="In deep storage" value={quotaValue} accent />
-          <KeyValueRow label="Encryption" value="on this Mac, before upload" icon="lock" />
         </Card>
       )}
 

@@ -367,8 +367,6 @@ export interface UpdateStatus {
 export interface AppInfo {
   /** The app's own version, e.g. "0.1.5". */
   version: string;
-  /** The Electron runtime it's on — support detail, shown beside the version. */
-  electron: string;
   /** False in `electron-vite dev`. Load-bearing for honesty: auto-update only runs in the packaged,
    * signed app, so an unpackaged build must not offer a "Check for updates" that can never find one. */
   packaged: boolean;

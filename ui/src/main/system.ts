@@ -58,7 +58,6 @@ export const registerSystemHandlers = (): (() => void) => {
   // renderer already awaits this handler at first paint, so nothing waits on it twice.
   ipcMain.handle(IPC.appInfo, async (): Promise<AppInfo> => ({
     version: app.getVersion(),
-    electron: process.versions.electron,
     packaged: app.isPackaged,
     signature: await codeSignature(),
   }));

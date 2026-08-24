@@ -345,9 +345,10 @@ conditionality is structural, not a card that appears mid-page.
   with them returns the same files as without (`suggestionsTagButNeverFilter`); and skipping is scoped to
   the one deposit (`excludeExtra`) unless the user ticks **Remember this** — *not this time* and *never
   again* are different answers, and the prompt has no pre-selected path that quietly performs the second.
-- **This Mac:** the encryption fact ("on this Mac, before upload" — plain, no "safe", no privacy
-  over-claim). In **dogfood mode** this card is the original **Storage** card instead — the quota row
-  stays here because there's no Account subpage to carry it.
+- **Storage (dogfood mode only):** the quota row stays here because there's no Account subpage to carry
+  it. Signed-in installs have no card in this slot. The encryption fact lives in the page footer instead
+  (lock + check + "encrypted" — plain, no "safe", no privacy over-claim): it never changes and nothing
+  acts on it, so it doesn't earn a card.
 - **Preferences (2026-08-24):** how the app *looks* on this Mac, last in General — nothing in it can put
   a file at risk, so it doesn't compete with the cards that can. First entry: **Spacing —
   Comfortable | Compact** (`Segmented` primitive, a real `radiogroup`; arrows move *and* select). It is a

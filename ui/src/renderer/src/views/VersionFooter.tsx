@@ -88,6 +88,13 @@ export const VersionFooter = ({ appInfo, update, onCheck, onRestart }: Props): R
         <Icon name="ac_unit" size={16} />
         <span>coldstorage</span>
         <span className="cs-mono">{appInfo.version}</span>
+        {/* The zero-knowledge fact, as a footer mark rather than a card: it never changes and nothing acts
+            on it, so it belongs beside the version line, not in a box of its own. Plain — no "safe". */}
+        <span className="cs-about-encrypted">
+          <Icon name="lock" size={14} />
+          <Icon name="check" size={14} />
+          encrypted
+        </span>
       </div>
       <div className="cs-about-line">
         <span className={line.tone === "bad" ? "cs-about-bad" : line.tone === "accent" ? "cs-about-accent" : "cs-muted"}>
@@ -109,13 +116,9 @@ export const VersionFooter = ({ appInfo, update, onCheck, onRestart }: Props): R
           )
         )}
       </div>
-      {/* The support detail — deliberately the quietest thing on the page. Electron's version is what a
-          "which build?" bug report actually needs beyond ours; `dev` marks a build that came from the repo
-          rather than a release, which changes what every other answer here means. */}
-      <div className="cs-about-build">
-        Electron {appInfo.electron}
-        {!appInfo.packaged && " · development build"}
-      </div>
+      {/* Deliberately the quietest thing on the page, and only when it changes what every other answer
+          here means: a build that came from the repo rather than a release. */}
+      {!appInfo.packaged && <div className="cs-about-build">development build</div>}
     </footer>
   );
 };
