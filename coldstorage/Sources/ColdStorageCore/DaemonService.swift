@@ -160,11 +160,16 @@ public actor DaemonService {
     /// over these paths, journaling them under `dir` (the browser folder dropped into) so they appear in
     /// `listFiles`. Non-throwing so the command can fire-and-forget it — any setup error surfaces as an
     /// `error` event; per-blob upload failures surface as `blobFailed` (same as a scheduled run).
-    func deposit(paths: [String], into dir: String, conflicts: [String: ConflictPolicy] = [:]) async {
+    /// `excludeExtra` are patterns to honor for this deposit ALONE — the user's "skip those, just this
+    /// once" at the drop-time suggestion prompt. They're unioned with the registry for the run and then
+    /// forgotten; nothing persists unless the app separately calls `addExclude`.
+    func deposit(paths: [String], into dir: String, conflicts: [String: ConflictPolicy] = [:],
+                 excludeExtra: [String] = []) async {
         do {
             let session = try requireSession("deposit")
             let entries = paths.map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: $0), destDir: dir) }
-            let base = ExplicitPathsSource(entries: entries, exclude: excludeMatcher(session))
+            let exclude = ExcludeMatcher(patterns: excludeMatcher(session).patterns + excludeExtra)
+            let base = ExplicitPathsSource(entries: entries, exclude: exclude)
             // WAIT for any run in flight, then go — a deposit is the user's explicit action and must not be
             // dropped, but it also must not race a concurrent pass over the same journal.
             //
@@ -360,6 +365,14 @@ public actor DaemonService {
     /// hiccup must not abort the run — worst case is one pass without the latest filter.)
     private func excludeMatcher(_ session: UserSession) -> ExcludeMatcher {
         ExcludeMatcher(patterns: (try? session.journal.listExcludes()) ?? [])
+    }
+
+    /// The suggested patterns this user has NOT already excluded — the candidate set a deposit preview tags
+    /// with. Subtracting the active list is what stops the prompt re-offering a pack the user turned on
+    /// (or, just as importantly, one they deliberately turned back OFF, pattern by pattern).
+    private func suggestionMatcher(_ session: UserSession) -> ExcludeMatcher {
+        let active = Set((try? session.journal.listExcludes()) ?? [])
+        return ExcludeMatcher(patterns: ExcludeSuggestion.allPatterns.filter { !active.contains($0) })
     }
 
     /// Live source set = registered folders + platform sources (Photos). Rebuilt each run so
@@ -654,7 +667,11 @@ public actor DaemonService {
     }
     /// One resolved target of a `previewDeposit` dry-run: the vault path the item WOULD land at, and whether
     /// a live row already sits there (a collision the UI prompts on).
-    private struct DepositPreviewItemDTO: Encodable { let relativePath: String; let size: Int; let exists: Bool }
+    /// `suggestedPack` is the `ExcludeSuggestion.id` that WOULD have skipped this item had the user turned
+    /// that pack on — the deposit-time prompt's whole input. nil (the normal case) means we'd archive it.
+    private struct DepositPreviewItemDTO: Encodable {
+        let relativePath: String; let size: Int; let exists: Bool; let suggestedPack: String?
+    }
     /// One idempotent restore step's outcome. `state` ∈ restored | thawRequested | thawInProgress —
     /// re-issue `restore` until it's `restored`. `out` is set only when bytes landed; `tier`/`typicalWait`
     /// only while thawing, so the UI can show the quoted wait.
@@ -925,6 +942,11 @@ public actor DaemonService {
         case "listExcludes":
             guard let session else { return AnyEncodable([String]()) }
             return AnyEncodable(try session.journal.listExcludes())
+        case "listExcludeSuggestions":
+            // The opt-in packs (`ExcludeSuggestion.all`) — junk we know about but only some people have, so
+            // we offer it instead of seeding it. Session-independent: it's a static catalogue, not user
+            // state, and whether a pack is "on" is derived by the caller from `listExcludes`.
+            return AnyEncodable(ExcludeSuggestion.all)
         case "addSource":
             let session = try requireSession("addSource")
             guard let raw = p["path"] else { throw ColdStorageError.invalidRequest("addSource requires params.path") }
@@ -1068,9 +1090,14 @@ public actor DaemonService {
             // Optional collision resolutions from the UI's Keep Both / Replace / Skip prompt (JSON map,
             // keyed by vault relativePath). Absent → no collisions to resolve, deposit as-is.
             let conflicts = parseConflicts(p["conflicts"])
+            // Patterns the user chose to skip for THIS DROP ONLY, at the deposit-time suggestion prompt.
+            // Deliberately separate from the excludes registry: "not this time" and "never again" are
+            // different answers, and the app must be able to offer the first without quietly performing the
+            // second. Choosing "remember this" is a separate `addExclude` the app issues by itself.
+            let extra = (p["excludeExtra"] ?? "").split(separator: "\n").map(String.init).filter { !$0.isEmpty }
             // Fire-and-forget: archiving can be slow, so don't block the reply. Progress + outcome flow as
             // runStarted/fileArchived/blobFailed/runFinished events (exactly like a scheduled run).
-            Task { await self.deposit(paths: paths, into: dest, conflicts: conflicts) }
+            Task { await self.deposit(paths: paths, into: dest, conflicts: conflicts, excludeExtra: extra) }
             return AnyEncodable(AckDTO(ok: true))
         case "depositPhotos":
             _ = try requireSession("depositPhotos")
@@ -1100,7 +1127,8 @@ public actor DaemonService {
             let previews: [DepositPreviewPath]
             if let raw = p["src"], !raw.isEmpty {
                 let entries = raw.split(separator: "\n").map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: String($0)), destDir: dest) }
-                previews = try await ExplicitPathsSource(entries: entries, exclude: excludeMatcher(session)).previewPaths()
+                previews = try await ExplicitPathsSource(entries: entries, exclude: excludeMatcher(session),
+                                                         suggest: suggestionMatcher(session)).previewPaths()
             } else if let raw = p["assetIds"], !raw.isEmpty {
                 guard let resolver = photoResolver else { throw ColdStorageError.invalidRequest("previewDeposit: Photos ingest is unavailable on this platform") }
                 previews = try await PhotoDepositSource(resolver: resolver, assetIds: raw.split(separator: "\n").map(String.init),
@@ -1109,7 +1137,10 @@ public actor DaemonService {
                 throw ColdStorageError.invalidRequest("previewDeposit requires params.src (paths) or params.assetIds")
             }
             let live = try session.journal.livePaths()
-            return AnyEncodable(previews.map { DepositPreviewItemDTO(relativePath: $0.relativePath, size: $0.size, exists: live.contains($0.relativePath)) })
+            return AnyEncodable(previews.map {
+                DepositPreviewItemDTO(relativePath: $0.relativePath, size: $0.size, exists: live.contains($0.relativePath),
+                                      suggestedPack: $0.suggestedBy.flatMap(ExcludeSuggestion.packId(forPattern:)))
+            })
         case "movePath":
             let session = try requireSession("movePath")
             // Reorganize: relocate the subtree at `from` → `to` (a file/folder move OR rename). A cheap

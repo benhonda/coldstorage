@@ -85,8 +85,25 @@ public final class Journal: @unchecked Sendable {
 
     /// Smart default excludes — the junk a non-technical user never means to upload. Seeded into the
     /// `excludes` table the first time a journal is created (the daemon is the SSOT for these; the UI
-    /// fetches them and no longer hardcodes its own copy). Bare names match at any depth; globs use `*`/`?`.
-    public static let defaultExcludes = ["node_modules", ".DS_Store", "*.tmp", ".git", "caches"]
+    /// fetches them and no longer hardcodes its own copy). Bare names match at any depth; globs use `*`/`?`;
+    /// matching is case-insensitive (`ExcludeMatcher`).
+    ///
+    /// The bar for this list is **"nobody's work is ever in here"** — a `.DS_Store` belongs to the Finder,
+    /// not to a person. Everything that's junk only in context (build output, VM disks, installers) is a
+    /// suggestion the user opts into instead: `ExcludeSuggestion.all`.
+    public static let defaultExcludes = [
+        // Version control + package managers: regenerable, and enormous relative to what they represent.
+        "node_modules", ".git",
+        // macOS's own bookkeeping. `._*` is the big one — AppleDouble sidecars breed one-per-file on any
+        // USB stick or NAS a user drags in, so a folder of 10,000 photos silently doubles its file count.
+        ".DS_Store", "._*", ".localized", ".Spotlight-V100", ".fseventsd", ".DocumentRevisions-V100",
+        ".TemporaryItems", ".Trash", ".Trashes",
+        // Caches, by every spelling. `caches` alone was the whole rule until 2026-08-24 and never once
+        // fired: the matcher was case-sensitive and macOS spells the directory `Library/Caches`.
+        "caches", "Cache", ".cache",
+        // Scratch files — half-finished downloads and editor swap files, meaningless the moment they land.
+        "*.tmp", "*.crdownload", "*.part", "*.download", "*.swp", "*~",
+    ]
 
     private func migrate() throws {
         // Seed defaults only on a *fresh* journal, so a user who deletes them doesn't get them back. Detect

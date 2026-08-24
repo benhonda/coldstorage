@@ -10,8 +10,15 @@ public struct LocalDirSource: IngestSource {
     /// excludes exist to avoid spending work on junk, and the walk is where that work (the SHA-256) starts.
     /// Default empty = no filtering, for tests/spikes that don't care.
     let exclude: ExcludeMatcher
-    public init(root: URL, exclude: ExcludeMatcher = ExcludeMatcher(patterns: [])) {
-        self.root = root; self.exclude = exclude
+    /// Patterns we'd *suggest* but that aren't active — the deposit-time prompt's candidate set
+    /// (`ExcludeSuggestion.allPatterns`, minus whatever the user already excludes). Purely OBSERVATIONAL:
+    /// a match here tags the entry and changes nothing about whether it's walked or archived, so a walk
+    /// with suggestions produces exactly the same file set as one without. Default empty — a scheduled
+    /// run has nobody to prompt, and only pays for this when the app is previewing a drop.
+    let suggest: ExcludeMatcher
+    public init(root: URL, exclude: ExcludeMatcher = ExcludeMatcher(patterns: []),
+                suggest: ExcludeMatcher = ExcludeMatcher(patterns: [])) {
+        self.root = root; self.exclude = exclude; self.suggest = suggest
     }
 
     /// One file the walk found — everything about it that costs no more than a `stat`.
@@ -29,6 +36,12 @@ public struct LocalDirSource: IngestSource {
         public let relativePath: String
         public let size: Int
         public let modifiedAt: Date?
+        /// The `suggest` pattern that WOULD have skipped this, if the user turned it on. nil normally.
+        public let suggestedBy: String?
+        init(url: URL, relativePath: String, size: Int, modifiedAt: Date?, suggestedBy: String? = nil) {
+            self.url = url; self.relativePath = relativePath; self.size = size
+            self.modifiedAt = modifiedAt; self.suggestedBy = suggestedBy
+        }
     }
 
     /// Walk the tree, applying excludes, WITHOUT reading a single byte of content.
@@ -66,8 +79,12 @@ public struct LocalDirSource: IngestSource {
                 continue
             }
             guard v.isRegularFile == true else { continue }
+            // A suggested-but-inactive pattern is NOT a prune — we keep walking so the prompt can quote a
+            // real file count and byte total. Name patterns match on any path component, so a file deep
+            // inside a `build/` folder is tagged by the same rule that tagged the folder; no propagation.
             entries.append(Entry(url: url, relativePath: rel, size: v.fileSize ?? 0,
-                                 modifiedAt: v.contentModificationDate))
+                                 modifiedAt: v.contentModificationDate,
+                                 suggestedBy: suggest.isEmpty ? nil : suggest.firstMatch(rel)))
         }
         return entries
     }

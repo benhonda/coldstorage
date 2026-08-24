@@ -7,7 +7,13 @@ import Foundation
 public struct DepositPreviewPath: Sendable {
     public let relativePath: String
     public let size: Int
-    public init(relativePath: String, size: Int) { self.relativePath = relativePath; self.size = size }
+    /// The SUGGESTED (not active) exclude pattern that would have skipped this — see `ExcludeSuggestion`.
+    /// It's what lets the app say "3.2 GB of this drop is build output — skip it?" *before* the upload,
+    /// which is the only moment the user can still act for free. nil for everything we'd archive anyway.
+    public let suggestedBy: String?
+    public init(relativePath: String, size: Int, suggestedBy: String? = nil) {
+        self.relativePath = relativePath; self.size = size; self.suggestedBy = suggestedBy
+    }
 }
 
 /// Ad-hoc ingest of explicitly chosen paths — the UI's drag-drop / "Choose files" **deposit**, NOT a
@@ -28,8 +34,14 @@ public struct ExplicitPathsSource: IngestSource {
     /// Applied only to **dropped directories** (their walk skips junk like node_modules) — NOT to an
     /// explicitly dropped single file, which the user chose by hand and we honor as-is.
     let exclude: ExcludeMatcher
-    public init(entries: [Entry], exclude: ExcludeMatcher = ExcludeMatcher(patterns: [])) {
-        self.entries = entries; self.exclude = exclude
+    /// Suggested-but-inactive patterns, for `previewPaths` to tag with (never to filter by). Applied to
+    /// dropped DIRECTORIES only, for the same reason `exclude` is: an explicitly dropped single file is a
+    /// deliberate choice by hand, and second-guessing that with a prompt would be the app arguing with a
+    /// user about a decision they just made one gesture ago.
+    let suggest: ExcludeMatcher
+    public init(entries: [Entry], exclude: ExcludeMatcher = ExcludeMatcher(patterns: []),
+                suggest: ExcludeMatcher = ExcludeMatcher(patterns: [])) {
+        self.entries = entries; self.exclude = exclude; self.suggest = suggest
     }
 
     public func enumerate() async throws -> [IngestItem] {
@@ -82,8 +94,9 @@ public struct ExplicitPathsSource: IngestSource {
                 // The walk already stats `size` (a byte count, no content read) — carry it through so the
                 // preview can price the deposit, rather than throwing it away and re-statting later.
                 let base = e.url.lastPathComponent
-                for entry in try LocalDirSource(root: e.url, exclude: exclude).walk() {
-                    paths.append(DepositPreviewPath(relativePath: Self.join(e.destDir, "\(base)/\(entry.relativePath)"), size: entry.size))
+                for entry in try LocalDirSource(root: e.url, exclude: exclude, suggest: suggest).walk() {
+                    paths.append(DepositPreviewPath(relativePath: Self.join(e.destDir, "\(base)/\(entry.relativePath)"),
+                                                    size: entry.size, suggestedBy: entry.suggestedBy))
                 }
             } else {
                 let size = (try? e.url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
