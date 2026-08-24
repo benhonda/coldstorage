@@ -239,6 +239,14 @@ public actor UploadEngine {
         // any overshoot to that one blob, still authoritatively, which the client gate can't do at all.
         var used = quota?.usedBytes ?? 0
         for blob in planned {
+            // Stop (`cancelRun`) cancels the Task this runs in. Once that's happened, every blob still ahead of
+            // us is reported `.stopped` — not silently dropped — so its files get journal truth (see
+            // `FailureKind.stopped`) and the run returns promptly instead of streaming on to the end.
+            if Task.isCancelled {
+                let files = blob.items.map { BlobFailure.File(id: $0.id, path: $0.relativePath) }
+                failures.append(BlobFailure(blobId: blob.id, kind: .stopped(FailureKind.stoppedMessage), files: files))
+                continue
+            }
             if let quota, !((try? journal.isBlobVerified(blob.id)) ?? false) {
                 let incoming = blob.items.reduce(0) { $0 + EnvelopeCipher.encryptedSize(ofPlaintext: $1.size) }
                 if used + incoming > quota.limitBytes {
@@ -390,6 +398,10 @@ public actor UploadEngine {
             log("UploadEngine: → uploading item [\(i + 1)/\(blob.items.count)] \(item.relativePath)")
             await reporter?.itemStarted(item.relativePath)   // the "now uploading …" line
             for try await chunk in item.open() {
+                // Stop lands here, between frames: the in-flight parts are cancelled by the catch below and
+                // the blob is reported `.stopped`. The blob's open multipart upload survives on S3, so a
+                // later run resumes it part-for-part (`existingParts`) rather than starting over.
+                try Task.checkCancellation()
                 hasher.update(data: chunk); carry.append(chunk); plaintextBytes += chunk.count
                 while carry.count >= EnvelopeCipher.frameSize {
                     let sealed = try sealFrame(Data(carry.prefix(EnvelopeCipher.frameSize)))
@@ -613,7 +625,15 @@ private actor PartShipper {
     /// toward progress. Order of draining doesn't matter to S3 — this just keeps it deterministic.
     private func drainOne() async throws {
         guard let number = inFlight.keys.min(), let part = inFlight.removeValue(forKey: number) else { return }
-        let r = try await part.task.value
+        // The part PUT is an unstructured `Task`, so cancelling the run does not reach it by itself — and
+        // this await is where the producer sits during backpressure, for as long as a 64 MiB part takes.
+        // Forward the cancellation so Stop is felt within a frame, not after the next part lands.
+        let task = part.task
+        let r = try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
         // Progress was already reported by the task the instant its PUT confirmed — drain only performs the
         // ORDERED journal write (`complete` reads the journal, so records must land lowest-number-first).
         try journal.recordPart(PartRow(blobId: blob.id, partNumber: number,

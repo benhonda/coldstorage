@@ -16,16 +16,29 @@ public enum FailureKind: Sendable, Equatable {
     /// it is NOT permanent. Distinct from `transient` so the daemon can flag it on the wire and the UI can
     /// upsell (show the plan picker) instead of a generic ⚠.
     case overQuota(String)
+    /// The user pressed Stop (`cancelRun`) before this blob landed — either mid-stream or never started.
+    /// Not a fault at all: nothing is wrong with the blob, the bytes, or the link. It exists as a failure
+    /// kind so the SAME path that marks a refused blob's files (`markFilesFailed`) gives these files honest
+    /// journal truth — a row that says "stopped" rather than "uploading" for something nobody is uploading.
+    /// Retryable by re-dropping (ad-hoc deposit) or on the next pass (watched folder), exactly like `overQuota`.
+    case stopped(String)
 
-    public var message: String { switch self { case .transient(let m), .permanent(let m), .overQuota(let m): return m } }
+    public var message: String { switch self { case .transient(let m), .permanent(let m), .overQuota(let m), .stopped(let m): return m } }
     public var isPermanent: Bool { if case .permanent = self { return true }; return false }
     public var isOverQuota: Bool { if case .overQuota = self { return true }; return false }
+    public var isStopped: Bool { if case .stopped = self { return true }; return false }
 
     /// The kind as it travels on the `blobFailed` event, so the UI can tell an out-of-room refusal from a
     /// real fault. One SSOT for the wire spelling.
     public var wireKind: String {
-        switch self { case .permanent: return "permanent"; case .transient: return "transient"; case .overQuota: return "overQuota" }
+        switch self {
+        case .permanent: return "permanent"; case .transient: return "transient"
+        case .overQuota: return "overQuota"; case .stopped: return "stopped"
+        }
     }
+
+    /// The one wording for a user-stopped upload, wherever it surfaces (journal `error`, log, wire).
+    public static let stoppedMessage = "Stopped before it finished uploading."
 
     /// S3/Glacier error codes that won't self-heal — re-attempting just burns cycles. Conservative on
     /// purpose: anything *not* listed defaults to `.transient` (keep trying) rather than silently giving
@@ -47,6 +60,9 @@ public enum FailureKind: Sendable, Equatable {
     /// SDK service errors map by code; anything else is treated as transient (optimistic — retry next pass).
     public static func classify(_ error: Error) -> FailureKind {
         switch error {
+        // The run was cancelled (`cancelRun`) while this blob was streaming. Not a fault — see `.stopped`.
+        case is CancellationError:
+            return .stopped(stoppedMessage)
         // A truncated ranged read is the one ColdStorageError that names a NETWORK fault, not a
         // config/data one — a rerun redownloads and succeeds, so condemning it would strand a paid
         // transfer over a dropped connection (see the case's own doc).

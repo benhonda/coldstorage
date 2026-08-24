@@ -320,7 +320,7 @@ Secrets live in Keychain, never in the UI.
   listRestores · cancelRestore · resumeRestore · forgetRestore ·
   deposit · depositPhotos · previewDeposit · movePath · createFolder · deletePath · authenticate ·
   deauthenticate · setQuota · mintVault · unlockVault · unlockVaultWithRecoveryCode · lockVault ·
-  triggerNow · pauseSource · resumeSource`.
+  triggerNow · cancelRun · pauseSource · resumeSource`.
 - **Events — SSOT is the `DaemonEvent(...)` call sites:** `runStarted · fileArchived · uploadProgress ·
   runProgress · runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged ·
   restoresChanged · restoreProgress · restoreCompleted · error`.

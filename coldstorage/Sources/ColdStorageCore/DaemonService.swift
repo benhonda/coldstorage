@@ -286,14 +286,22 @@ public actor DaemonService {
             quota = nil
         }
         let failures: [BlobFailure]
+        // The engine runs in its own child Task so `cancelRun` has a handle to cancel. Cancellation is
+        // cooperative and lands inside the engine (per frame / per blob), which turns the remaining work
+        // into `.stopped` failures and RETURNS — it never throws out of here for a Stop. Cleared in `defer`
+        // so a stale handle can't cancel a later run.
+        let engine = session.engine
+        let skip = permanentlyFailedBlobs
+        let prefix = session.prefix
+        let task = Task {
+            try await engine.run(source: source, skipBlobIds: skip, prefix: prefix, quota: quota,
+                                 explicitDeposit: explicitDeposit,
+                                 onFileArchived: onFile, onProgress: onProgress, onRunProgress: onRunProgress)
+        }
+        runTask = task
+        defer { runTask = nil }
         do {
-            failures = try await session.engine.run(source: source,
-                                                    skipBlobIds: permanentlyFailedBlobs,
-                                                    prefix: session.prefix,
-                                                    quota: quota,
-                                                    explicitDeposit: explicitDeposit,
-                                                    onFileArchived: onFile, onProgress: onProgress,
-                                                    onRunProgress: onRunProgress)
+            failures = try await task.value
         } catch {
             let s = try? session.journal.summary()
             bus.publish(DaemonEvent("runFinished", ["filesArchived": "\(s?.archived ?? 0)",
@@ -302,7 +310,11 @@ public actor DaemonService {
         }
         for f in failures {
             // Name the affected files by path (newline-joined) so a live watcher flips their rows + lists them
-            // in the failures panel without waiting for the next listFiles read.
+            // in the failures panel without waiting for the next listFiles read. NOT for a Stop: a 30 GB folder
+            // stopped early is hundreds of blobs, and a flood of "failed" events for something the user chose
+            // would bury the real faults in the UI's bounded failure log. The rows reconcile on the
+            // `listFiles` re-read `runFinished` triggers; the count rides on `runFinished` itself.
+            if f.kind.isStopped { continue }
             bus.publish(DaemonEvent("blobFailed", ["blob": f.blobId,
                                                    "kind": f.kind.wireKind,
                                                    "message": f.kind.message,
@@ -312,11 +324,13 @@ public actor DaemonService {
                 // Persist the ⚠ as journal truth (survives refresh + restart). Best-effort: a write hiccup here
                 // must not abort surfacing the remaining failures — the event already reported the fault.
                 try? session.journal.markFilesFailed(f.files.map(\.id), error: f.kind.message)
-            } else if f.kind.isOverQuota {
+            } else if f.kind.isOverQuota || f.kind.isStopped {
                 // Mark the files `failed` too, so their rows leave "uploading" — an over-quota file was upserted
                 // (status `planned` = "uploading" in the UI) but never archived, and would otherwise sit
                 // pending FOREVER after the refusal. But do NOT skip-list the blob: unlike a permanent fault,
                 // this heals the moment there's room — a folder re-scan resets it to `planned` and retries.
+                // A STOPPED blob is the same shape: not a fault, retried on the next pass / re-drop, and its
+                // files would otherwise read "uploading" for an upload the user just ended.
                 try? session.journal.markFilesFailed(f.files.map(\.id), error: f.kind.message)
             } else {
                 // TRANSIENT — and until now the only case that left NOTHING behind. The two above were given
@@ -335,8 +349,26 @@ public actor DaemonService {
         // against, or showing, a pre-deposit number for up to the cache TTL.
         cachedUsage = nil
         let s = try session.journal.summary()
+        // `blobsFailed` counts FAULTS; a Stop is reported separately so the UI can say "stopped" rather than
+        // "N couldn't upload" about work the user ended on purpose.
+        let stopped = failures.filter(\.kind.isStopped)
         bus.publish(DaemonEvent("runFinished", ["filesArchived": "\(s.archived)", "filesTotal": "\(s.total)",
-                                                "blobsFailed": "\(failures.count)"]))
+                                                "blobsFailed": "\(failures.count - stopped.count)",
+                                                "filesStopped": "\(stopped.reduce(0) { $0 + $1.files.count })"]))
+    }
+
+    /// The engine Task of the run in flight, if any — what `cancelRun` cancels. Set/cleared by `performRun`.
+    private var runTask: Task<[BlobFailure], Error>?
+
+    /// Stop the run in flight. Cooperative: the engine notices within a frame, cancels its in-flight part
+    /// PUTs, reports every unfinished blob `.stopped`, and `performRun` closes out with `runFinished` as
+    /// usual — so the UI's run state, the tree, and the counts all reconcile through the one existing path.
+    /// Nothing already landed is undone: completed blobs are archived, and a half-uploaded blob keeps its
+    /// multipart upload on S3 for a later run to resume part-for-part. Returns whether there was a run to stop.
+    public func cancelRun() -> Bool {
+        guard let task = runTask else { return false }
+        task.cancel()
+        return true
     }
 
     public func runForever(intervalSeconds: UInt64) async throws {
@@ -1309,6 +1341,10 @@ public actor DaemonService {
         case "triggerNow":
             trigger()
             return AnyEncodable(AckDTO(ok: true))
+        case "cancelRun":
+            // Stop the deposit/scan in flight (see `cancelRun`). `ok` is whether there was one to stop; the
+            // outcome arrives as `runFinished` (with `filesStopped`), never as an `error`.
+            return AnyEncodable(AckDTO(ok: cancelRun()))
         case "pauseSource":
             let session = try requireSession("pauseSource")
             // Per-folder pause: stop auto-syncing this one source (it stays registered). Persisted, so it
