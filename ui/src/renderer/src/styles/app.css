@@ -216,6 +216,29 @@
 .cs-iconbtn--ghost:hover { background: var(--surface-active); }
 
 /* ── Card (elevation by shadow + hairline, never by lightness alone) ─ */
+
+/* The card's own vertical rhythm, named ONE rung above the raw scale. Everything a card spends
+   vertically goes through these, so the header can be tuned — or tightened harder under compact —
+   without touching `--space-*`, which is also the file table's row padding and column gaps. Tuning a
+   header used to mean moving a scale step that a hundred other rules spend (PILLAR3: the knob should be
+   the thing you actually mean).
+   On :root, not .cs-shell like the layout vars above: a Card can render inside a portaled Modal, which
+   is mounted outside the shell. */
+:root {
+  --card-pad-x: var(--space-6);
+  --card-pad-top: var(--space-3);      /* less than the sides — see below */
+  --card-pad-bottom: var(--space-6);
+  --card-head-gap: var(--space-2);     /* header → content */
+  --card-desc-gap: var(--space-4);     /* description → content */
+  /* Reserve the height an `sm` action button forces, so a bare-title header sits at the same height as
+     one carrying a Sync now / Sign out — cards read on a consistent baseline whether or not they have an
+     action. Compact trades that baseline away (0) and lets each header be as short as its contents. */
+  --card-head-min-h: var(--control-sm);
+  /* One DS rung below --type-card-title (which is display sizing built for the marketing site, and read
+     oversized in a control panel where every card is a settings group, not a headline). */
+  --card-title: var(--type-section-title);
+}
+
 .cs-card {
   background: var(--surface-card);
   border: 1px solid var(--border-card);
@@ -223,7 +246,7 @@
   box-shadow: var(--shadow-card);
   /* Less top inset than sides/bottom — the header carries its own optical weight, so symmetric
      padding leaves the title floating below the card edge. (A) */
-  padding: var(--space-3) var(--space-6) var(--space-6);
+  padding: var(--card-pad-top) var(--card-pad-x) var(--card-pad-bottom);
 }
 .cs-card--raised { background: var(--surface-raised); border-color: var(--border-subtle); box-shadow: none; }
 .cs-card--flush { padding: 0; }
@@ -232,19 +255,17 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
-  /* Reserve the height an `sm` action button forces, so a bare-title header (no action) sits at the
-     same height as one with a Sync now / Sign out button — cards read on a consistent baseline
-     whether or not they carry an action. */
-  min-height: var(--control-sm);
-  margin-bottom: var(--space-2); /* header → content (C) */
+  min-height: var(--card-head-min-h);
+  margin-bottom: var(--card-head-gap);
 }
-.cs-card-title { margin: 0; font: var(--type-card-title); letter-spacing: var(--tracking-tight); }
-/* Card header supporting line — grouped tight under the title, then the standard space-4 down to the
-   body. The negative top pulls back part of the head's space-2 margin so title→desc reads as one
-   group (~4px), without touching that shared margin (which sets header→content on description-less
-   cards). Same typography as an inline help line. */
+.cs-card-title { margin: 0; font: var(--card-title); letter-spacing: var(--tracking-tight); }
+/* Card header supporting line — grouped tight under the title, then --card-desc-gap down to the body.
+   The negative top eats HALF the head's bottom margin (these siblings collapse, so the pair reads as
+   head-gap/2) — title→desc stays one visual group at either density without needing its own token, and
+   without touching the shared margin that sets header→content on description-less cards. Same
+   typography as an inline help line. */
 .cs-card-desc {
-  margin: calc(-1 * var(--space-1)) 0 var(--space-4);
+  margin: calc(-0.5 * var(--card-head-gap)) 0 var(--card-desc-gap);
   font: var(--type-label);
   color: var(--text-secondary);
   line-height: var(--leading-normal);
@@ -1857,6 +1878,17 @@ button.cs-kv:hover { background: var(--surface-hover); }
   --control-lg: 44px;
   --input-height: 48px;
   --topbar-height: 56px;
+
+  /* Card headers, tightened HARDER than the scale they'd otherwise inherit — that's the whole point of
+     giving them their own tokens (see the Card section). A settings page is mostly card headers, so
+     every pixel here repeats down the page, while the file table keeps the row padding it needs to stay
+     readable. --card-head-min-h goes to 0: reserving an action button's height on a header that has no
+     action is a comfortable-mode luxury, and it was the single biggest y-cost in a compact card. */
+  --card-pad-top: var(--space-2);
+  --card-pad-bottom: var(--space-4);
+  --card-head-gap: var(--space-1);
+  --card-desc-gap: var(--space-3);
+  --card-head-min-h: 0px;
 }
 
 /* Segmented choice — a small set of mutually exclusive options shown at once (a `radiogroup`, not a

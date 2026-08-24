@@ -363,8 +363,19 @@ conditionality is structural, not a card that appears mid-page.
   stays the SSOT and its comfortable default. They're whole pixels (what actually keeps hairlines crisp;
   a fractional scale factor is what softens them), which frees the ladder to use half-steps and compress
   hardest at the top, where the rungs are just air between blocks: 48→28, 32→20, 24→16, while `--space-1`
-  holds at 4px and `--space-3` stops at 8px — the most-used step, and the one carrying row padding. `main.tsx` applies the stored value before React's first paint, so the app never
-  renders comfortable and snaps compact a frame later.
+  holds at 4px and `--space-3` stops at 8px — the most-used step, and the one carrying row padding.
+  **Card rhythm has its own tokens** (`--card-pad-*`, `--card-head-gap`, `--card-head-min-h`,
+  `--card-title`, on `:root` since a Card can render inside a portaled Modal): a settings page is mostly
+  card headers, so their vertical cost repeats down the page and wants tightening harder than the file
+  table, which needs its row padding to stay readable. Naming them one rung above the raw scale is what
+  makes that possible — the knob is the thing you actually mean, not a `--space-*` step a hundred other
+  rules also spend. Compact spends that: header→content 8→4, card top/bottom 12/24→6/10, and
+  `--card-head-min-h` → 0 (comfortable reserves an `sm` button's height so a bare-title header lines up
+  with one carrying an action; compact trades that baseline for the ~8px a card). Card titles also came
+  down one DS rung app-wide — `--type-section-title` (17px), not `--type-card-title` (18–20px display
+  sizing built for the marketing site, which read oversized where every card is a settings group).
+  `main.tsx` applies the stored value before React's first paint, so the app never renders comfortable
+  and snaps compact a frame later.
 
 ### Account — who's signed in, what they pay for (configured installs only)
 - **Account card:** Name (inline edit) + Signed in as, with **Sign out** as the header action.
