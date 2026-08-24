@@ -762,6 +762,25 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-statusicon--warning .csf-icon { color: var(--amber-500); }
 .cs-statusicon--success .csf-icon { color: var(--positive); }
 .cs-statusicon--danger .csf-icon { color: var(--negative); }
+/* A folder's two badges, stacked: what it IS in front, what's going on inside it peeking out from behind
+   and to the right. No knockout ring — Material Symbols are FILLED here (see .csf-icon), so the primary is
+   a solid disc that occludes the one behind it on its own. That's deliberate: a ring would have to be
+   painted in the row's colour, and these rows are transparent, zebra-striped, hovered AND selected by
+   turns, so any single colour would be wrong three times out of four.
+   Only rendered WITH a secondary (see StatusBadges), hence the unconditional margin for the peek. */
+.cs-statusbadges {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  /* the offsets below are percentages OF THIS BOX, so it must be the size of the primary icon and nothing
+     more — in the grid view this sits in a stretching column, where a full-width box would fling the peek
+     off the tile's edge and straight into its `overflow: hidden`. */
+  width: max-content;
+  margin-right: var(--space-1);
+}
+.cs-statusbadges > .cs-statusicon { position: relative; z-index: 1; }
+.cs-statusbadges-behind { position: absolute; top: -26%; right: -30%; z-index: 0; display: inline-grid; }
 .cs-fl-head {
   position: sticky;
   top: 0;

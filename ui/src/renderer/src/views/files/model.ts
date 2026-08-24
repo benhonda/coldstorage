@@ -122,9 +122,9 @@ export interface FolderRow {
   size: number;
   /** Descendant file count. */
   count: number;
-  /** Aggregate status — see {@link rollupStatus} for the precedence and why (needs-you first, then live
-   * work, then tidy endings). */
-  status: FileStatus;
+  /** What this folder's badge says — see {@link rollupBadges}. Two facts, because a folder is not one
+   * file: what it IS, and what's happening to PART of it. */
+  badges: RowBadges;
   /** True for a just-created, still-empty folder (virtual path, no files yet). */
   empty: boolean;
 }
@@ -152,8 +152,23 @@ export const targetOf = (row: Row): RowTarget =>
     ? { kind: "folder", path: row.path }
     : { kind: "file", id: row.file.id, path: row.file.relativePath };
 
-/** A row's status — the folder rollup or the file's own — for the always-visible badge. */
-export const rowStatus = (row: Row): FileStatus => (row.type === "folder" ? row.status : row.file.status);
+/** What a row's badge says. A file is only ever one thing, so it only ever fills `primary`. */
+export interface RowBadges {
+  /** What this row IS — the settled truth, or a fault that won't clear on its own. */
+  primary: FileStatus;
+  /** Self-resolving work happening to PART of a folder, drawn tucked behind the primary. Carries its own
+   * count, so "2 of 40 waiting on deep storage" can be said out loud instead of implied by a glyph. */
+  secondary: { status: FileStatus; count: number; total: number } | null;
+}
+
+/** A row's badges — the folder rollup or the file's own. */
+export const rowBadges = (row: Row): RowBadges =>
+  row.type === "folder" ? row.badges : { primary: row.file.status, secondary: null };
+
+/** Is this row's own upload in flight? Drives the little spinner beside the badge — true for a folder
+ * with an upload going on inside it, which is exactly what that spinner is there to mark. */
+export const isUploadingRow = (b: RowBadges): boolean =>
+  b.primary === "uploading" || b.secondary?.status === "uploading";
 
 /** A just-created folder with nothing under it yet — no upload status applies (nothing to store), so the
  * row shows no badge. */
@@ -280,33 +295,38 @@ export const canMoveInto = (targets: readonly RowTarget[], toDir: string): boole
 export const moveIsNoop = (targets: readonly RowTarget[], toDir: string): boolean =>
   targets.every((t) => parentOf(t.path) === toDir);
 
+/** Live work that resolves ITSELF, most specific first: bytes actually moving beats merely waiting, and
+ *  an upload — the one direction that can still fail — leads. This is the secondary badge's precedence. */
+const IN_FLIGHT = ["uploading", "transferring", "pending"] as const satisfies readonly FileStatus[];
+
 /**
- * Rollup for a folder's aggregate status, in the order the states stop needing the user:
+ * A folder's badges: what it IS, and what's happening to part of it.
  *
- *   failed ▸ stalled ▸ uploading ▸ transferring ▸ pending ▸ here-if-all ▸ frozen
+ * One folder is many files, so one badge could only ever be a half-truth — and it picked the wrong half.
+ * A folder of 40 stored photos with one file thawing showed ONLY the amber "waiting on deep storage",
+ * which reads as "this whole folder is coming down" (Ben, 2026-08-24). Both facts now get said:
  *
- * **Needs-you first.** `failed` leads — a stuck upload inside is the thing that won't resolve itself, and
- * the folder is how you find it. `stalled` sits right behind it for the same reason: "some of this folder
- * is moving" is the less useful truth when part of it has stopped.
+ *   **primary — what the folder is.** `failed` ▸ `stalled` ▸ `here`-if-all ▸ `frozen`. Needs-you still
+ *   leads, and deliberately so: a folder holding a stuck upload is NOT stored, so a ✓ there would be the
+ *   same overstatement in the other direction. `here` needs every file (a half-downloaded folder isn't
+ *   "saved on this Mac"). A folder with nothing settled yet — everything still in flight — has no settled
+ *   truth to tell, so its live state IS the primary and there is no secondary.
  *
- * Then live work, most specific first — `transferring` outranks `pending` because bytes actually moving
- * beats merely waiting. Tidy endings last, and `here` only when EVERY file is (a folder that's half
- * downloaded isn't "saved on this Mac").
+ *   **secondary — what's happening to part of it**, and only work that will finish on its own:
+ *   {@link IN_FLIGHT}. It can never repeat the primary — the two sets are disjoint by construction.
  */
-const rollupStatus = (s: Set<FileStatus>): FileStatus =>
-  s.has("failed")
-    ? "failed"
-    : s.has("stalled")
-      ? "stalled"
-      : s.has("uploading")
-        ? "uploading"
-        : s.has("transferring")
-          ? "transferring"
-          : s.has("pending")
-            ? "pending"
-            : s.size === 1 && s.has("here")
-              ? "here"
-              : "frozen";
+const rollupBadges = (counts: ReadonlyMap<FileStatus, number>, total: number): RowBadges => {
+  const n = (s: FileStatus): number => counts.get(s) ?? 0;
+  const live = IN_FLIGHT.find((s) => n(s) > 0) ?? null;
+  const settled =
+    n("failed") > 0 ? "failed" : n("stalled") > 0 ? "stalled" : n("here") === total ? "here" : "frozen";
+  // Nothing has settled and nothing is stuck — the folder has no identity beyond the work going on in it.
+  if (live && n("frozen") === 0 && n("here") === 0 && settled === "frozen") return { primary: live, secondary: null };
+  return {
+    primary: settled,
+    secondary: live ? { status: live, count: n(live), total } : null,
+  };
+};
 
 /**
  * The rows shown at directory `dir` (root = ""): immediate subfolders (aggregated) then files, each
@@ -319,7 +339,7 @@ export const childrenOf = (
   extraFolders: readonly string[] = [],
 ): Row[] => {
   const base = segments(dir);
-  const folders = new Map<string, { size: number; count: number; statuses: Set<FileStatus> }>();
+  const folders = new Map<string, { size: number; count: number; statuses: Map<FileStatus, number> }>();
   const fileRows: FileLeafRow[] = [];
 
   for (const f of files) {
@@ -333,10 +353,10 @@ export const childrenOf = (
     if (rest.length === 1) {
       fileRows.push({ type: "file", name: head, file: f });
     } else {
-      const agg = folders.get(head) ?? { size: 0, count: 0, statuses: new Set<FileStatus>() };
+      const agg = folders.get(head) ?? { size: 0, count: 0, statuses: new Map<FileStatus, number>() };
       agg.size += f.size;
       agg.count += 1;
-      agg.statuses.add(f.status);
+      agg.statuses.set(f.status, (agg.statuses.get(f.status) ?? 0) + 1);
       folders.set(head, agg);
     }
   }
@@ -345,7 +365,7 @@ export const childrenOf = (
   for (const vf of extraFolders) {
     if (parentOf(vf) !== dir) continue;
     const name = segments(vf).at(-1);
-    if (name && !folders.has(name)) folders.set(name, { size: 0, count: 0, statuses: new Set() });
+    if (name && !folders.has(name)) folders.set(name, { size: 0, count: 0, statuses: new Map() });
   }
 
   const folderRows: FolderRow[] = [...folders.entries()]
@@ -355,7 +375,7 @@ export const childrenOf = (
       path: joinPath(dir, name),
       size: agg.size,
       count: agg.count,
-      status: rollupStatus(agg.statuses),
+      badges: rollupBadges(agg.statuses, agg.count),
       empty: agg.count === 0,
     }))
     .sort((a, b) => a.name.localeCompare(b.name));

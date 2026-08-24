@@ -65,46 +65,64 @@ describe("childrenOf", () => {
     expect(rows.map((r) => r.name)).toEqual(["2019", "sunset.jpg"]); // folder before file
   });
 
-  test("status rollup settles on frozen unless something is actively happening", () => {
-    const rows = childrenOf([file("a/x", 1, "frozen"), file("a/y", 1, "uploading")], "");
+  /** A folder's badges, from the statuses of the files under it. */
+  const badgesOf = (...statuses: ArchivedFile["status"][]) => {
+    const rows = childrenOf(statuses.map((st, i) => file(`a/f${i}`, 1, st)), "");
     const folder = rows[0];
-    expect(folder.type === "folder" && folder.status).toBe("uploading");
+    if (folder?.type !== "folder") throw new Error("expected a folder row");
+    return folder.badges;
+  };
+
+  test("a stored folder with something happening inside says BOTH, primary first", () => {
+    // The bug this replaces: one file thawing inside 40 stored photos painted the whole folder amber, so a
+    // folder that was entirely backed up read as "this is all coming down" (Ben, 2026-08-24). The folder is
+    // still stored — that's the headline — and the thaw rides behind it, carrying how much of it is thawing.
+    expect(badgesOf("frozen", "frozen", "pending")).toEqual({
+      primary: "frozen",
+      secondary: { status: "pending", count: 1, total: 3 },
+    });
+    expect(badgesOf("frozen", "uploading")).toEqual({
+      primary: "frozen",
+      secondary: { status: "uploading", count: 1, total: 2 },
+    });
   });
 
-  test("the rollup puts NEEDS-YOU ahead of live work, in a fixed order", () => {
-    // The folder is how you find the file to act on, so a folder containing something stuck must not read
-    // as merely busy. Pins the whole documented chain (see `rollupStatus`) rather than one rung — a
-    // precedence nothing asserts is a precedence that can be reordered by accident.
-    const rollupOf = (...statuses: ArchivedFile["status"][]): string => {
-      const rows = childrenOf(statuses.map((s, i) => file(`a/f${i}`, 1, s)), "");
-      const folder = rows[0];
-      return folder.type === "folder" ? folder.status : "not-a-folder";
-    };
-    expect(rollupOf("frozen", "uploading", "stalled", "failed")).toBe("failed");
-    expect(rollupOf("frozen", "uploading", "stalled")).toBe("stalled");
-    expect(rollupOf("frozen", "uploading", "transferring")).toBe("uploading");
-    expect(rollupOf("frozen", "transferring", "pending")).toBe("transferring");
-    expect(rollupOf("frozen", "pending")).toBe("pending");
+  test("a folder with nothing settled yet has no second fact to tell", () => {
+    // Everything under it is in flight, so there is no "what this folder is" distinct from what's happening
+    // to it. One badge, exactly as before — a fresh drop must not sprout a ✓ for files that aren't stored.
+    expect(badgesOf("uploading", "uploading")).toEqual({ primary: "uploading", secondary: null });
+  });
+
+  test("needs-you stays the PRIMARY — it isn't 'activity', it's the folder not being what it claims", () => {
+    // The one place the old precedence was right and must survive: a folder holding a stuck upload is not
+    // stored, so demoting ⚠ behind a ✓ would be the same overstatement in the other direction.
+    expect(badgesOf("frozen", "uploading", "stalled", "failed").primary).toBe("failed");
+    expect(badgesOf("frozen", "uploading", "stalled").primary).toBe("stalled");
+  });
+
+  test("live work keeps its own order behind the badge — moving beats waiting", () => {
+    // `transferring` is the more specific truth: something under here really is arriving. Pins the whole
+    // chain, not one rung — a precedence nothing asserts is one that gets reordered by accident.
+    expect(badgesOf("frozen", "uploading", "transferring").secondary?.status).toBe("uploading");
+    expect(badgesOf("frozen", "transferring", "pending").secondary?.status).toBe("transferring");
+    expect(badgesOf("frozen", "pending").secondary?.status).toBe("pending");
   });
 
   test("a half-downloaded folder is not 'saved on this Mac'", () => {
     // `here` needs EVERY file to be here — claiming a folder is on the Mac when half of it isn't is the
     // kind of overstatement that sends someone looking for files that aren't there.
-    const rows = childrenOf([file("a/x", 1, "here"), file("a/y", 1, "frozen")], "");
-    const folder = rows[0];
-    expect(folder.type === "folder" && folder.status).toBe("frozen");
+    expect(badgesOf("here", "frozen")).toEqual({ primary: "frozen", secondary: null });
+    expect(badgesOf("here", "here")).toEqual({ primary: "here", secondary: null });
   });
 
-  test("a folder that has bytes moving reads as transferring, not merely pending", () => {
-    // `transferring` is the more specific truth: something under here really is arriving. A folder that
-    // reported "waiting on deep storage" while a file inside it was downloading would understate it.
-    const rows = childrenOf([file("a/x", 1, "pending"), file("a/y", 1, "transferring")], "");
-    expect(rows[0]!.type === "folder" && rows[0]!.status).toBe("transferring");
-  });
-
-  test("a folder waiting on a thaw reads as pending", () => {
-    const rows = childrenOf([file("a/x", 1, "frozen"), file("a/y", 1, "pending")], "");
-    expect(rows[0]!.type === "folder" && rows[0]!.status).toBe("pending");
+  test("one file still going up is enough to cost a folder its saved-here claim", () => {
+    // Deliberately conservative, and the same rule as the half-downloaded case above: "saved on this Mac"
+    // is a promise about EVERY file under here, so anything not yet settled downgrades it to plain Stored.
+    // Erring the other way would send someone to a folder expecting a file that isn't in it.
+    expect(badgesOf("here", "here", "uploading")).toEqual({
+      primary: "frozen",
+      secondary: { status: "uploading", count: 1, total: 3 },
+    });
   });
 
   test("a virtual (empty) folder surfaces only at its own level", () => {

@@ -25,6 +25,7 @@ import {
   formatBytes,
   formatDate,
   isEmptyFolder,
+  isUploadingRow,
   joinPath,
   names,
   parentOf,
@@ -33,7 +34,7 @@ import {
   restoreBase,
   restoreOutPath,
   rowKey,
-  rowStatus,
+  rowBadges,
   targetOf,
   totalBytes,
   withName,
@@ -970,7 +971,7 @@ const FileList = ({
     {rows.map((row, i) => {
       const key = rowKey(row);
       const isFolder = row.type === "folder";
-      const status = rowStatus(row);
+      const badges = rowBadges(row);
       const src = drag.source(row);
       return (
         <div
@@ -1014,14 +1015,14 @@ const FileList = ({
             {/* A quiet spinner rides beside the status icon while this row is in flight — just a "this one's
                 going" cue. The quantitative progress (bytes, %, ETA) lives in the deposit banner up top, so
                 the row doesn't repeat it; it only marks which file is uploading right now. */}
-            {status === "uploading" && <span className="cs-spinner" aria-hidden="true" />}
+            {isUploadingRow(badges) && <span className="cs-spinner" aria-hidden="true" />}
             {/* status icon by the ⋯: ✓ stored · ↑ uploading · ⚠ couldn't upload · ↓ transferring · saved-here.
                 An empty folder has nothing stored, so it shows no badge. */}
             {/* `reason` is the daemon's own words for a fault (journal `files.error`), so a ⚠ or a stalled
                 row can say WHY on hover instead of leaving the user to guess. Folders roll up a status but
                 not a reason — a folder has no single fault to name. */}
             {!isEmptyFolder(row) && (
-              <StatusIcon status={status} reason={row.type === "file" ? row.file.error : null} />
+              <StatusBadges badges={badges} reason={row.type === "file" ? row.file.error : null} />
             )}
             <IconButton
               icon="more_horiz"
@@ -1130,7 +1131,7 @@ const Gallery = ({
           <span className="cs-tile-foot">
             <span className="cs-tile-name" title={row.name}>{row.name}</span>
             {!isEmptyFolder(row) && (
-              <StatusIcon status={rowStatus(row)} reason={row.type === "file" ? row.file.error : null} />
+              <StatusBadges badges={rowBadges(row)} reason={row.type === "file" ? row.file.error : null} />
             )}
           </span>
         </button>

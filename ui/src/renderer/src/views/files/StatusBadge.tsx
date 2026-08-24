@@ -8,7 +8,7 @@
  *   - the ✓ now means STORED, so `here` (a copy saved back on this Mac) is re-glyphed to `download_done`
  *     to stay distinct.
  */
-import type { FileKind, FileStatus } from "./model.ts";
+import type { FileKind, FileStatus, RowBadges } from "./model.ts";
 import { Icon } from "../../ui/primitives.tsx";
 
 type Tone = "accent" | "warning" | "success" | "danger";
@@ -59,19 +59,60 @@ export const StatusIcon = ({
   reason = null,
   size = 20,
   alive = true,
+  label: override = null,
 }: {
   status: FileStatus;
   reason?: string | null;
   size?: number;
   alive?: boolean;
+  /** Replaces the status's own wording — how a folder's secondary badge says "2 of 40" instead of
+   *  restating a state the primary badge is already showing. */
+  label?: string | null;
 }): React.JSX.Element | null => {
   const s = STATUS[status];
   if (!s) return null;
-  const label = reason ? `${s.label} — ${reason}` : s.label;
+  const label = override ?? (reason ? `${s.label} — ${reason}` : s.label);
   const pulse = alive && status === "pending" ? " cs-pulse" : "";
   return (
     <span className={`cs-statusicon cs-statusicon--${s.tone}${pulse}`} role="img" aria-label={label} title={label}>
       <Icon name={s.icon} size={size} />
+    </span>
+  );
+};
+
+/**
+ * A row's badge, which for a folder is TWO badges: what it is, with what's going on inside it tucked in
+ * behind and to the right.
+ *
+ * One badge could only ever tell half the story about a folder, and it told the wrong half — 40 stored
+ * photos with one file thawing showed only the amber "waiting on deep storage", which reads as the whole
+ * folder coming down (Ben, 2026-08-24). Stacking them says both at once: stored ✓, and something is
+ * happening underneath. The secondary is smaller and sits behind, so the row's headline is still the
+ * primary; the count rides in the label, so hovering answers "how much of it?" exactly.
+ */
+export const StatusBadges = ({
+  badges,
+  reason = null,
+  size = 20,
+}: {
+  badges: RowBadges;
+  reason?: string | null;
+  size?: number;
+}): React.JSX.Element | null => {
+  const { primary, secondary } = badges;
+  if (!secondary) return <StatusIcon status={primary} reason={reason} size={size} />;
+  const s = STATUS[secondary.status];
+  return (
+    <span className="cs-statusbadges">
+      {/* first in the DOM but absolutely positioned, so it needs the primary lifted above it — see CSS */}
+      <span className="cs-statusbadges-behind">
+        <StatusIcon
+          status={secondary.status}
+          size={Math.round(size * 0.7)}
+          label={`${secondary.count} of ${secondary.total} ${secondary.total === 1 ? "file" : "files"} — ${(s?.label ?? secondary.status).toLowerCase()}`}
+        />
+      </span>
+      <StatusIcon status={primary} reason={reason} size={size} />
     </span>
   );
 };
