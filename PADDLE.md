@@ -102,6 +102,13 @@ Vercel/redeploy step):
   write — `GET /subscription` + the proration preview worked while the actual plan change 500'd
   with `forbidden: not authorized to read|update subscription`.
 - **Products: read + Prices: read** — the `GET /catalog` route.
+- **Payment methods: read** (`payment_method.read`) — the card/PayPal row on the billing panel
+  (`paymentMethods.list`). War story #3 (2026-08-24): the manage surface widened to render the saved
+  method, `GET /subscription` summarizes all-or-nothing, and the key predating that permission took
+  the WHOLE panel down — the app showed a bare `couldn't load the subscription: http 502`.
+- **Customer portal sessions: write** (`customer_portal_session.write`) — `POST /subscription/portal`
+  (`customerPortalSessions.create`), the invoices/card/cancel destinations. Same 2026-08-24 widening;
+  without it the portal buttons 502 even once the panel loads.
 
 Nothing else (webhook verification is local HMAC — no permission). If the key was created with an
 expiry, note the rotation date here when it's known.
