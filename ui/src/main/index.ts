@@ -249,6 +249,10 @@ const createWindow = (): void => {
   const win = new BrowserWindow({
     width: 980,
     height: 720,
+    // The floor where the layout still works rather than merely renders: the 232px sidebar plus a main
+    // column wide enough for the file list's fixed size/date/actions columns to leave the name readable.
+    minWidth: 820,
+    minHeight: 560,
     show: false,
     title: productName, // staging window reads "ColdStorage Staging" so you can tell the two installs apart
     webPreferences: {
