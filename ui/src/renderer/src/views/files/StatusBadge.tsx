@@ -87,8 +87,11 @@ export const StatusIcon = ({
  * One badge could only ever tell half the story about a folder, and it told the wrong half — 40 stored
  * photos with one file thawing showed only the amber "waiting on deep storage", which reads as the whole
  * folder coming down (Ben, 2026-08-24). Stacking them says both at once: stored ✓, and something is
- * happening underneath. The secondary is smaller and sits behind, so the row's headline is still the
- * primary; the count rides in the label, so hovering answers "how much of it?" exactly.
+ * happening underneath.
+ *
+ * Drawn like the stacked avatars on a multiplayer app: SAME size, overlapping, each cut out of the
+ * background so the edges read. Order carries the meaning that size used to — what the folder is comes
+ * first and sits on top; the count rides in the label, so hovering answers "how much of it?" exactly.
  */
 export const StatusBadges = ({
   badges,
@@ -103,16 +106,14 @@ export const StatusBadges = ({
   if (!secondary) return <StatusIcon status={primary} reason={reason} size={size} />;
   const s = STATUS[secondary.status];
   return (
-    <span className="cs-statusbadges">
-      {/* first in the DOM but absolutely positioned, so it needs the primary lifted above it — see CSS */}
-      <span className="cs-statusbadges-behind">
-        <StatusIcon
-          status={secondary.status}
-          size={Math.round(size * 0.7)}
-          label={`${secondary.count} of ${secondary.total} ${secondary.total === 1 ? "file" : "files"} — ${(s?.label ?? secondary.status).toLowerCase()}`}
-        />
-      </span>
+    // The em-based overlap in CSS measures against this: one place decides how big the stack is.
+    <span className="cs-statusbadges" style={{ fontSize: size }}>
       <StatusIcon status={primary} reason={reason} size={size} />
+      <StatusIcon
+        status={secondary.status}
+        size={size}
+        label={`${secondary.count} of ${secondary.total} ${secondary.total === 1 ? "file" : "files"} — ${(s?.label ?? secondary.status).toLowerCase()}`}
+      />
     </span>
   );
 };

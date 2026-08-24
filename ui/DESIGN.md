@@ -44,8 +44,9 @@ Two jobs are the whole product: **get files up** and **get them back**. The app 
 - **Front door = the file browser itself.** No home dashboard; status is **ambient** (per-file badges
   + a plain storage line), never a separate screen of counts. A **folder** carries *two* badges, because
   it is not one file: what it **is** (✓ stored / saved-here, or a ⚠ that won't clear on its own) in
-  front, and any self-resolving work happening to **part** of it tucked in behind — with the count in
-  its label. One badge could only tell half the story, and it told the wrong half: a single file thawing
+  front, and any self-resolving work happening to **part** of it stacked behind it — same size,
+  overlapping, each cut out of the row's paint, the way avatars stack on a multiplayer app. Order
+  carries the emphasis, and the count rides in the label ("1 of 40 files — waiting on deep storage"). One badge could only tell half the story, and it told the wrong half: a single file thawing
   inside 40 stored photos painted the whole folder amber, which reads as "this is all coming down"
   (2026-08-24). See `rollupBadges` in `views/files/model.ts` for the precedence.
 - **Ad-hoc deposit is the hero**, auto-watch is secondary: drop-to-upload is the front door; watched
