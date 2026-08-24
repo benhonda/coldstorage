@@ -13,23 +13,25 @@
  *
  * There is no Electron API for this and the Security-framework call (`SecCodeCopySigningInformation`)
  * would need a native addon, so we ask `codesign` — once per process, memoized.
+ *
+ * The flag is `--verbose=2`, and that matters: this shipped as `--verbosity=2`, which codesign does not
+ * accept (there is no such option — `codesign(1)` has only `-v`/`--verbose`). It aborted with a usage
+ * error on every launch, and the old classifier read "no Developer ID line in that output" as "not signed
+ * for distribution" — so a NOTARIZED app downloaded from the website told its owner it could never update.
+ * Hence the three-way classify below: "codesign says unsigned" and "codesign never answered" are different
+ * facts, and only the first one is worth alarming a user about (PILLAR5).
  */
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { app } from "electron";
 import type { CodeSignature } from "../../shared/ipc.ts";
+import { classify } from "./signature-classify.ts";
 
 const run = promisify(execFile);
 
 /** The .app bundle root, from the executable macOS launched: <app>.app/Contents/MacOS/<exe> → up three. */
 const bundlePath = (): string => join(app.getPath("exe"), "..", "..", "..");
-
-/** `Authority=` naming a Developer ID cert is the only thing that makes an install auto-updatable. Its
- * absence covers every failing case at once: unsigned, ad-hoc (`Signature=adhoc`, no Authority line), and
- * an Apple Development cert (valid for local runs, never for distribution). */
-const classify = (codesignOutput: string): CodeSignature =>
-  /^Authority=Developer ID Application/m.test(codesignOutput) ? "developer-id" : "other";
 
 const detect = async (): Promise<CodeSignature> => {
   // Unpackaged or non-macOS: there's no install to inspect and no Squirrel to satisfy, so claim nothing
@@ -37,12 +39,12 @@ const detect = async (): Promise<CodeSignature> => {
   if (!app.isPackaged || process.platform !== "darwin") return "unknown";
   try {
     // codesign writes its description to STDERR, including on success.
-    const { stderr } = await run("codesign", ["-dv", "--verbosity=2", bundlePath()]);
+    const { stderr } = await run("codesign", ["-dv", "--verbose=2", bundlePath()]);
     return classify(stderr);
   } catch (e) {
     // An unsigned bundle EXITS NON-ZERO ("code object is not signed at all") — a rejection here is a real
-    // answer, not an error, so read the same stderr off it. Only a genuinely absent/broken codesign
-    // (no stderr to classify) falls through to "unknown".
+    // answer, not an error, so read the same stderr off it. Anything else non-zero (no codesign on PATH,
+    // a usage error) classifies as "unknown" and the UI stays quiet rather than accusing the install.
     const stderr = typeof e === "object" && e !== null ? (e as { stderr?: unknown }).stderr : undefined;
     return typeof stderr === "string" ? classify(stderr) : "unknown";
   }
@@ -52,6 +54,3 @@ let cached: Promise<CodeSignature> | null = null;
 
 /** This install's signature. Static for the life of the process — resolved once, then handed out. */
 export const codeSignature = (): Promise<CodeSignature> => (cached ??= detect());
-
-/** Test seam: `classify` is the whole policy, and it's pure. */
-export const __classifyForTest = classify;

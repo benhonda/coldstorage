@@ -1215,8 +1215,8 @@ tasks:
         echo "app: $app"
         echo "── bundled binaries (expect coldstored + helpers) ──"
         ls -la "$app/Contents/Resources/bin" || { echo "MISSING bin/ — extraResources didn't copy"; exit 1; }
-        echo "── app signature ──";        codesign -dv --verbosity=2 "$app" 2>&1 | grep -Ei 'Identifier|Authority|Runtime' || echo "(unsigned)"
-        echo "── coldstored signature ──"; codesign -dv --verbosity=2 "$app/Contents/Resources/bin/coldstored" 2>&1 | grep -Ei 'Identifier|Authority|Runtime' || echo "(unsigned — nested binary not signed)"
+        echo "── app signature ──";        codesign -dv --verbose=2 "$app" 2>&1 | grep -Ei 'Identifier|Authority|Runtime' || echo "(unsigned)"
+        echo "── coldstored signature ──"; codesign -dv --verbose=2 "$app/Contents/Resources/bin/coldstored" 2>&1 | grep -Ei 'Identifier|Authority|Runtime' || echo "(unsigned — nested binary not signed)"
 
   ui:mac:package:sign-adhoc:
     desc: "[Mode 2: packaged app] Ad-hoc sign the built ColdStorage.app so it (+ its bundled arm64 helpers) will LAUNCH locally on Apple Silicon — a smoke-test stopgap. Ad-hoc is per-build (no stable TCC grant); real Developer/Apple-Development signing lands with the packaged app. NOT for distribution. Run `task daemon:mac:uninstall` first — this collides with the Mode 1 launchd daemon's socket/data dir."
@@ -1505,7 +1505,7 @@ tasks:
 
         # Prove the fix landed rather than claiming it: a Developer ID authority here is precisely what the
         # ad-hoc build lacked, and it's what makes every future update apply without any of this.
-        auth=$(codesign -dv --verbosity=2 /Applications/ColdStorage.app 2>&1 | sed -n 's/^Authority=//p' | head -1)
+        auth=$(codesign -dv --verbose=2 /Applications/ColdStorage.app 2>&1 | sed -n 's/^Authority=//p' | head -1)
         case "$auth" in
           "Developer ID Application"*) echo "✓ installed $ver — signed: $auth. Auto-update will work from here on." ;;
           *) echo "✗ installed, but signature reads '$auth' — auto-update still won't apply. Was this release notarized?"; exit 1 ;;
@@ -1536,10 +1536,17 @@ tasks:
             # verifies the new bundle's signature against the running one. An ad-hoc signed app (what
             # `ui:mac:package:sign-adhoc` produces for local smoke tests) can never accept a Developer ID
             # signed release — it fails the swap, and before the logger landed it failed SILENTLY.
-            auth=$(codesign -dv --verbosity=2 "$app" 2>&1 | sed -n 's/^Authority=//p' | head -1)
+            auth=$(codesign -dv --verbose=2 "$app" 2>&1 | sed -n 's/^Authority=//p' | head -1)
             case "$auth" in
               "Developer ID Application"*) echo "   signed:    $auth  ✓ can auto-update" ;;
-              "") echo "   signed:    UNSIGNED or ad-hoc  ✗ THIS IS WHY IT WON'T UPDATE — reinstall from the release .dmg" ;;
+              "") if codesign -dv --verbose=2 "$app" 2>&1 | grep -qE '^(Executable|Identifier|Format|CodeDirectory|Signature)='; then
+                    echo "   signed:    UNSIGNED or ad-hoc  ✗ THIS IS WHY IT WON'T UPDATE — reinstall from the release .dmg"
+                  else
+                    # codesign described nothing — an error, not a verdict. Say so instead of blaming the app:
+                    # reading its own failure as "unsigned" is precisely the bug that shipped in v0.1.7.
+                    echo "   signed:    couldn't read the signature — codesign said:"
+                    codesign -dv --verbose=2 "$app" 2>&1 | sed "s/^/     /"
+                  fi ;;
               *)  echo "   signed:    $auth  ✗ not a Developer ID cert — auto-update will refuse; reinstall from the release .dmg" ;;
             esac
 
