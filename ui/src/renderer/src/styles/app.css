@@ -1558,6 +1558,17 @@ button.cs-kv:hover { background: var(--surface-hover); }
 }
 
 /* ── settings sub-nav (General | Account) — text-forward segmented tab strip ── */
+/* Sticky row: the strip stays put while the settings page scrolls under it, so switching sections
+   never means scrolling back up. The row spans the page's full width (it's a flex child, so it
+   stretches) and paints the app background so cards don't ghost through around the pill. */
+.cs-subnav-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-app);
+  padding-bottom: var(--space-2);
+  margin-bottom: calc(var(--space-2) * -1);
+}
 .cs-subnav {
   display: inline-flex;
   align-self: flex-start;

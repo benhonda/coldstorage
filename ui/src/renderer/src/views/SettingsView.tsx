@@ -376,7 +376,6 @@ export const SettingsView = ({
           onRemove={settings.removeExcludes}
           onClose={() => setShowSuggestions(false)}
         />
-        />
       )}
 
       {/* Signed-in installs carry the quota row on Account › Plan & billing (beside its remedy). Dogfood
@@ -464,7 +463,11 @@ export const SettingsView = ({
 
   return (
     <Page title="Settings">
-      {hasAccount && <Tabs tabs={TABS} active={active} onChange={onTabChange} label="Settings sections" />}
+      {hasAccount && (
+        <div className="cs-subnav-bar">
+          <Tabs tabs={TABS} active={active} onChange={onTabChange} label="Settings sections" />
+        </div>
+      )}
 
       {active === "general" ? general : accountPage}
 
