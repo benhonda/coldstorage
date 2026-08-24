@@ -25,6 +25,7 @@ import {
   formatBytes,
   formatDate,
   isEmptyFolder,
+  isUnder,
   isUploadingRow,
   joinPath,
   names,
@@ -32,6 +33,7 @@ import {
   planDeposit,
   reparent,
   restoreBase,
+  rewritePrefix,
   restoreOutPath,
   rowKey,
   rowBadges,
@@ -41,6 +43,16 @@ import {
 } from "./files/model.ts";
 import { useToast } from "../ui/toast.tsx";
 import { Breadcrumb } from "./files/Breadcrumb.tsx";
+import {
+  back as historyBack,
+  canGoBack,
+  canGoForward,
+  currentDir,
+  forward as historyForward,
+  initialHistory,
+  push as historyPush,
+  remapHistory,
+} from "./files/history.ts";
 import { type MoveDrag, isMoveDrag, useMoveDrag } from "./files/useMoveDrag.ts";
 import { CollisionModal } from "./files/CollisionModal.tsx";
 import { SuggestedSkipsModal, type SkipDecision } from "./files/SuggestedSkipsModal.tsx";
@@ -105,7 +117,9 @@ export const MyFilesView = ({
   onShowDownloads,
 }: Props): React.JSX.Element => {
   const toast = useToast();
-  const [dir, setDir] = useState("");
+  // Where we are, as a browser-style history so Back / Forward work (see files/history.ts).
+  const [history, setHistory] = useState(initialHistory);
+  const dir = currentDir(history);
   const [view, setView] = useState<ViewMode>("list");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -162,12 +176,26 @@ export const MyFilesView = ({
   const rows = useMemo(() => childrenOf(files, dir, virtualFolders), [files, dir, virtualFolders]);
 
   // ── navigation resets transient state ──
-  const goTo = (next: string): void => {
-    setDir(next);
+  const resetTransient = (): void => {
     setSelected(new Set());
     setRenaming(null);
     lastIndex.current = null;
   };
+  const goTo = (next: string): void => {
+    setHistory((h) => historyPush(h, next));
+    resetTransient();
+  };
+  const goBack = (): void => {
+    setHistory(historyBack);
+    resetTransient();
+  };
+  const goForward = (): void => {
+    setHistory(historyForward);
+    resetTransient();
+  };
+  /** A folder just moved/renamed (`to`) or was deleted (`to: null`): keep history pointing at real paths. */
+  const remapFolder = (from: string, to: string | null): void =>
+    setHistory((h) => remapHistory(h, (d) => (isUnder(d, from) ? (to === null ? null : rewritePrefix(d, from, to)) : d)));
 
   // ── selection ──
   const selectedRows = rows.filter((r) => selected.has(rowKey(r)));
@@ -349,6 +377,7 @@ export const MyFilesView = ({
       const target = targetOf(row);
       const to = withName(target.path, trimmed);
       filesApi.rename(target, trimmed);
+      if (target.kind === "folder") remapFolder(target.path, to);
       exec(() => api.request("movePath", { from: target.path, to }));
     }
     setRenaming(null);
@@ -366,6 +395,7 @@ export const MyFilesView = ({
   // Optimistic drop from the tree, then the REAL daemon `deletePath` per target.
   const doDelete = (targets: RowTarget[]): void => {
     filesApi.remove(targets);
+    targets.forEach((t) => t.kind === "folder" && remapFolder(t.path, null));
     // Send `alsoIgnore` ONLY when the checkbox was actually on screen. It defaults to true, and the daemon
     // evaluates watched-ness itself — so sending it unconditionally would add an exclude in the two windows
     // where the user never saw the choice: while the probe is still in flight, and when the probe failed.
@@ -417,6 +447,7 @@ export const MyFilesView = ({
     const moving = targets.filter((t) => parentOf(t.path) !== toDir);
     if (moving.length > 0) {
       filesApi.move(moving, toDir);
+      moving.forEach((t) => t.kind === "folder" && remapFolder(t.path, reparent(t.path, toDir)));
       exec(() => Promise.all(moving.map((t) => api.request("movePath", { from: t.path, to: reparent(t.path, toDir) }))));
     }
     setSelected(new Set());
@@ -742,7 +773,12 @@ export const MyFilesView = ({
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (document.activeElement instanceof HTMLInputElement) return; // don't hijack rename/typing
-      if (e.key === "Escape") {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "[" || e.key === "]")) {
+        // Finder's ⌘[ / ⌘] — Back / Forward.
+        e.preventDefault();
+        if (e.key === "[") goBack();
+        else goForward();
+      } else if (e.key === "Escape") {
         clearSelection();
         setRenaming(null);
       } else if (e.key === "Delete" || e.key === "Backspace") {
@@ -790,7 +826,7 @@ export const MyFilesView = ({
   );
 
   return (
-    <Page title={<Breadcrumb dir={dir} onNavigate={goTo} drag={drag} />} actions={actions} fill>
+    <Page title="My Files" actions={actions} fill>
       <div
         className="cs-browser"
         onDragEnter={onDragEnter}
@@ -819,6 +855,30 @@ export const MyFilesView = ({
             preparing={preparing}
             onStop={() => exec(() => api.request("cancelRun"))}
           />
+          {/* Where-am-I row: Back / Forward + the breadcrumb, sitting on the table itself (not the page
+              chrome) — the page title stays "My Files" wherever you've drilled to. Hidden on FirstRun,
+              where there is nowhere to navigate. */}
+          {!(rows.length === 0 && dir === "") && (
+            <div className="cs-browser-nav">
+              <IconButton
+                icon="arrow_back"
+                label="Back"
+                title="Back (⌘[)"
+                className="cs-iconbtn--ghost"
+                disabled={!canGoBack(history)}
+                onClick={goBack}
+              />
+              <IconButton
+                icon="arrow_forward"
+                label="Forward"
+                title="Forward (⌘])"
+                className="cs-iconbtn--ghost"
+                disabled={!canGoForward(history)}
+                onClick={goForward}
+              />
+              <Breadcrumb dir={dir} onNavigate={goTo} drag={drag} />
+            </div>
+          )}
           {/* FirstRun (the drop-zone hero) is the onboarding state for a genuinely empty vault — root with
               nothing in it. A drilled-into empty folder just shows the empty file list, not the hero. */}
           {rows.length === 0 && dir === "" ? (

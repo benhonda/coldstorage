@@ -130,10 +130,7 @@
   justify-content: space-between;
   padding: 0 var(--cs-pad-x);
 }
-/* Page title typography — SSOT for both the plain-title (h1) and breadcrumb paths. */
-.cs-topbar-title,
-.cs-crumb { font: var(--type-page-title); letter-spacing: var(--tracking-tight); }
-.cs-topbar-title { margin: 0; }
+.cs-topbar-title { margin: 0; font: var(--type-page-title); letter-spacing: var(--tracking-tight); }
 /* Second chrome row under the title — outside `.cs-page`, so it never scrolls. Bottom gap matches the
    page's stack gap so the first card sits where it would have under an in-body strip. */
 .cs-topbar-subnav { flex: 0 0 auto; padding: 0 var(--cs-pad-x) var(--space-6); } /* kill the UA <h1> margin — only the Settings path uses an h1 (base.css is vendored, no global reset). */
@@ -211,12 +208,14 @@
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out);
 }
-.cs-iconbtn:hover { background: var(--btn-secondary-bg-hover); }
+.cs-iconbtn:hover:not(:disabled) { background: var(--btn-secondary-bg-hover); }
 .cs-iconbtn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 /* Ghost overflow button — no filled disc, just the glyph (matches the file-row ⋯). For chrome that sits
    inline beside content where a solid circle reads too heavy. */
 .cs-iconbtn--ghost { background: transparent; }
-.cs-iconbtn--ghost:hover { background: var(--surface-active); }
+.cs-iconbtn--ghost:hover:not(:disabled) { background: var(--surface-active); }
+/* Nowhere to go (Back at the start of history, Forward at the end): dimmed, inert, no hover. */
+.cs-iconbtn:disabled { color: var(--text-tertiary); background: transparent; cursor: default; }
 
 /* ── Card (elevation by shadow + hairline, never by lightness alone) ─ */
 
@@ -632,12 +631,23 @@ button.cs-kv:hover { background: var(--surface-hover); }
 /* two side-by-side foot actions (the failures popover's Dismiss + Try again) */
 .cs-queue-foot--row { display: flex; gap: var(--space-2); }
 
-/* ── topbar lead (holds the breadcrumb) ─────────────────────────── */
+/* ── topbar lead (the title column) ─────────────────────────────── */
 .cs-topbar-lead { min-width: 0; display: flex; flex-direction: column; }
+
+/* ── browser nav row: Back / Forward + breadcrumb, sitting on the table (the page title stays put) ─ */
+.cs-browser-nav {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 0 0 var(--space-2);
+}
 
 /* ── breadcrumb ─────────────────────────────────────────────────── */
 .cs-crumbs { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
 .cs-crumb {
+  font: var(--type-body-strong);
   border: 0;
   background: transparent;
   cursor: pointer;
@@ -649,8 +659,6 @@ button.cs-kv:hover { background: var(--surface-hover); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Lead crumb sits flush with the page padding so the title aligns with Settings' h1 across tabs. */
-.cs-crumb:first-child { padding-left: 0; }
 .cs-crumb:hover { background: var(--surface-hover); color: var(--text-primary); }
 .cs-crumb--current { color: var(--text-primary); cursor: default; }
 .cs-crumb--current:hover { background: transparent; }

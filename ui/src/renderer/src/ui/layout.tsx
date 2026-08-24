@@ -71,7 +71,7 @@ export const Sidebar = ({
 /**
  * A view's main column: TopBar (title + actions) over the content area. The topbar is a single-line
  * bar on every page — same height, same padding, same title baseline — so the chrome reads identically
- * whether the title is a plain string or a breadcrumb node. Page-level intro copy lives in the body,
+ * whether the title is a plain string or a node. Page-level intro copy lives in the body,
  * not the chrome, so a one-page subtitle can't desync the bar. `subnav` is a second chrome row under
  * the title (Settings' General | Account strip) — part of the header, so it stays put while the body
  * scrolls. `fill` swaps the stacked, max-width content column for a full-height region the view lays

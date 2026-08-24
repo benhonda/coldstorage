@@ -1,6 +1,6 @@
 /**
- * Drill-in breadcrumb — the browser's whole navigation model (like iOS Files / Explorer). Each crumb
- * is a jump target; the last is the current folder. Root is labeled "My Files", not "/".
+ * Drill-in breadcrumb (like iOS Files / Explorer) — sits in the browser's nav row beside Back / Forward
+ * (history.ts). Each crumb is a jump target; the last is the current folder. Root is labeled "My Files".
  *
  * Every ancestor crumb is also a drag-to-move DROP target (Finder parity: dragging a row onto a crumb
  * moves it up/out), and holding over one SPRING-OPENS it mid-drag (useMoveDrag). The current crumb is

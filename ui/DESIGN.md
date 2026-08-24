@@ -117,7 +117,8 @@ it had worked.
 
 ## My Files — the browser
 - **Navigation:** drill-in + breadcrumbs (like iOS Files / Explorer — scales to an 8,000-photo folder
-  where an inline tree would choke). **View:** list by default (name/size/date — no status column),
+  where an inline tree would choke), with Back / Forward buttons (⌘[ / ⌘], browser-style history —
+  `files/history.ts`). The nav row sits on the table; the page title stays "My Files" at any depth. **View:** list by default (name/size/date — no status column),
   grid/gallery toggle (file-type icons today; thumbnails are the only R2-gated piece).
 - **Status is a small colored icon by the row's `⋯`**, not a column or text pill (fixed-width slot):
   quiet green ✓ **stored** (explicit success is what makes silence trustworthy — stored must be
