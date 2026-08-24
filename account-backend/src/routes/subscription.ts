@@ -98,26 +98,44 @@ async function paddleCall<T>(op: string, fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * The method Paddle will charge next. Paddle exposes no "the subscription uses THIS method" link, so
- * this is the most recently saved one — which is what an update-payment-method flow leaves behind,
- * and therefore what the customer just told us to bill.
+ * The card Paddle actually charges — read from the most recent payment it CAPTURED on this
+ * subscription.
  *
- * Ordered by `id`, the ONLY field this endpoint sorts on (`saved_at` is not orderable here, and asking
- * for it is a 400 that would take the whole panel down with it). Paddle ids are time-ordered, so
- * `id[DESC]` is newest-first in practice.
+ * Deliberately NOT `paymentMethods.list`. That endpoint returns methods a customer explicitly saved,
+ * and a subscription bought through our own API-driven checkout never creates one: the card lives on
+ * the subscription as a `stored_payment_method_id` that the list has no row for. Proven on the live
+ * account (2026-08-24): a captured $21.46 charge on a visa ••••8080, `stored_payment_method_id` set,
+ * and an empty saved list — which the panel rendered to a paying customer as "No card saved".
+ *
+ * The last captured attempt cannot lie about what was charged, and `collection_mode: automatic` means
+ * Paddle charges that same stored method again. It goes stale only between a card change and the next
+ * renewal — and the portal button beside it is the SSOT for changing one, so that window costs nothing
+ * that a wrong card wouldn't cost more.
  */
-async function savedPaymentMethod(customerId: string): Promise<PaymentMethodSummary | null> {
+async function chargedPaymentMethod(subscriptionId: string): Promise<PaymentMethodSummary | null> {
   const page = await paddleCall("reading the payment method", () =>
-    paddle.paymentMethods.list(customerId, { orderBy: "id[DESC]", perPage: 1 }).next(),
+    paddle.transactions
+      .list({
+        subscriptionId: [subscriptionId],
+        // Money actually taken. A `billed`/`past_due` transaction has no captured payment to describe.
+        status: ["completed", "paid"],
+        // The RAW API field name: the SDK snake_cases parameter KEYS but passes VALUES through
+        // untouched, so "billedAt[DESC]" would reach Paddle verbatim and 400 the whole panel.
+        orderBy: "billed_at[DESC]",
+        perPage: 1,
+      })
+      .next(),
   );
-  const pm = page[0];
-  if (!pm) return null;
+  // Last captured attempt, not the first: a retry after a decline is the one that paid.
+  const captured = page[0]?.payments.filter((p) => p.status === "captured").at(-1);
+  const details = captured?.methodDetails;
+  if (!details) return null;
   return {
-    type: pm.type,
-    brand: pm.card?.type ?? null,
-    last4: pm.card?.last4 ?? null,
-    expiryMonth: pm.card?.expiryMonth ?? null,
-    expiryYear: pm.card?.expiryYear ?? null,
+    type: details.type,
+    brand: details.card?.type ?? null,
+    last4: details.card?.last4 ?? null,
+    expiryMonth: details.card?.expiryMonth ?? null,
+    expiryYear: details.card?.expiryYear ?? null,
   };
 }
 
@@ -127,13 +145,13 @@ async function savedPaymentMethod(customerId: string): Promise<PaymentMethodSumm
  * exact failure this surface is being rebuilt to make impossible. A throw here becomes the app's
  * "couldn't load your billing details — retry" state.
  */
-async function summarize(subscriptionId: string, customerId: string): Promise<SubscriptionSummary> {
+async function summarize(subscriptionId: string): Promise<SubscriptionSummary> {
   const [s, catalog, paymentMethod] = await Promise.all([
     paddleCall("reading the subscription", () =>
       paddle.subscriptions.get(subscriptionId, { include: ["next_transaction"] }),
     ),
     getCatalog(),
-    savedPaymentMethod(customerId),
+    chargedPaymentMethod(subscriptionId),
   ]);
   const priceId = s.items[0]?.price.id;
   const totals = s.nextTransaction?.details.totals;
@@ -168,8 +186,8 @@ async function portalUrls(customerId: string, subscriptionId: string): Promise<R
 export const subscriptionRoute = new Hono<AppEnv>()
   .use(requireAuth)
   .get("/", async (c) => {
-    const { subscriptionId, customerId } = await billingIdsFor(c.get("sub"));
-    return c.json({ subscription: await summarize(subscriptionId, customerId) });
+    const { subscriptionId } = await billingIdsFor(c.get("sub"));
+    return c.json({ subscription: await summarize(subscriptionId) });
   })
   // Mint a portal session and hand back the link the app should open in the system browser.
   .post("/portal", async (c) => {
@@ -203,7 +221,7 @@ export const subscriptionRoute = new Hono<AppEnv>()
   })
   // Apply the plan change. The `subscription.updated` webhook keeps the DB's activity flag fresh.
   .post("/change", async (c) => {
-    const { subscriptionId, customerId } = await billingIdsFor(c.get("sub"));
+    const { subscriptionId } = await billingIdsFor(c.get("sub"));
     const priceId = await validatedPriceId(await c.req.json().catch(() => null));
     await paddleCall("changing the plan", () =>
       paddle.subscriptions.update(subscriptionId, {
@@ -214,14 +232,14 @@ export const subscriptionRoute = new Hono<AppEnv>()
         onPaymentFailure: "prevent_change",
       }),
     );
-    return c.json({ subscription: await summarize(subscriptionId, customerId) });
+    return c.json({ subscription: await summarize(subscriptionId) });
   })
   // Call off a scheduled cancellation. `scheduled_change: null` is the ONLY permitted write to that
   // field (Paddle rejects anything else), and it's the whole feature: the plan simply renews again.
   .post("/resume", async (c) => {
-    const { subscriptionId, customerId } = await billingIdsFor(c.get("sub"));
+    const { subscriptionId } = await billingIdsFor(c.get("sub"));
     await paddleCall("calling off the cancellation", () =>
       paddle.subscriptions.update(subscriptionId, { scheduledChange: null }),
     );
-    return c.json({ subscription: await summarize(subscriptionId, customerId) });
+    return c.json({ subscription: await summarize(subscriptionId) });
   });

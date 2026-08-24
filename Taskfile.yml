@@ -1795,6 +1795,25 @@ tasks:
         curl -sS --max-time 15 "$api/health" | (command -v jq >/dev/null && jq . || cat)
         echo ""
 
+  backend:billing:inspect:
+    desc: "What Paddle ACTUALLY holds for a subscription — status, saved cards, and what charged — side by side. The view behind the app's Plan & billing card, for when it says something surprising (\"No card saved\" under a live subscription). Read-only. `-- --sub <cognito-sub>` narrows to one account; `-- --subscription sub_… --customer ctm_…` skips the DB entirely so it works on the production lane too (export that lane's PADDLE_API_KEY + PADDLE_ENVIRONMENT first)."
+    dir: account-backend
+    vars:
+      ENV: '{{.ENV | default "staging"}}'
+    cmds:
+      # DATABASE_URL + the RUNTIME Paddle key come from .env.vercel, so this sees what the deployed
+      # API sees (key scope included). ENV picks the LANE rather than making you export the switch by
+      # hand — and because an exported var beats --env-file in Bun, this override lands. The script
+      # then asserts the key's prefix against the lane, so a staging pull aimed at production fails
+      # loudly instead of reading the wrong account's money.
+      - |
+        case "{{.ENV}}" in
+          staging)    export PADDLE_ENVIRONMENT=sandbox ;;
+          production) export PADDLE_ENVIRONMENT=production ;;
+          *) echo "ENV must be staging|production (got: {{.ENV}})"; exit 1 ;;
+        esac
+        bun --env-file=.env.vercel --env-file=.env run scripts/inspect-billing.ts {{.CLI_ARGS}}
+
   backend:retrieval:probe:
     desc: "Is the paid-retrieval API actually deployed? Probes the staging backend's /retrieval routes (unauthenticated). 401 = deployed and guarding correctly; 404 = the deploy hasn't picked up the new routes yet. Read-only, no auth, no money."
     vars:

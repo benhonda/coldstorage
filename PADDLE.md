@@ -96,19 +96,36 @@ environments' keys (edit permissions in the dashboard; the key string doesn't ch
 Vercel/redeploy step):
 
 - **Transactions: read + write** — checkout (`transactions.create`; the 5c war story: a
-  zero-permission key fails here).
+  zero-permission key fails here), and the billing panel's card row (see war story #4 below).
 - **Subscriptions: read + write** — the manage surface (`subscriptions.get`/`previewUpdate` read,
   `subscriptions.update` WRITE). War story #2 (2026-07-10): the staging key had read but not
   write — `GET /subscription` + the proration preview worked while the actual plan change 500'd
   with `forbidden: not authorized to read|update subscription`.
 - **Products: read + Prices: read** — the `GET /catalog` route.
-- **Payment methods: read** (`payment_method.read`) — the card/PayPal row on the billing panel
-  (`paymentMethods.list`). War story #3 (2026-08-24): the manage surface widened to render the saved
-  method, `GET /subscription` summarizes all-or-nothing, and the key predating that permission took
-  the WHOLE panel down — the app showed a bare `couldn't load the subscription: http 502`.
 - **Customer portal sessions: write** (`customer_portal_session.write`) — `POST /subscription/portal`
-  (`customerPortalSessions.create`), the invoices/card/cancel destinations. Same 2026-08-24 widening;
-  without it the portal buttons 502 even once the panel loads.
+  (`customerPortalSessions.create`), the invoices/card/cancel destinations. Same widening.
+
+`GET /subscription` summarizes all-or-nothing (see `summarize()`), so ANY one of these missing takes
+the whole billing panel down, not just its own row.
+
+War story #3 (2026-08-24): the panel died with `reading the subscription failed: not authorized to
+read subscription` — the key had lost even `subscription.read`, which bullet #2 above has required
+since July. Two lessons, both now fixed in code: **(a)** a key's permissions are live
+dashboard state, not something this doc can attest to — re-check them there when Paddle 403s, and
+**(b)** the app showed only `http 502` for the first hours of it, because `HTTPException.getResponse()`
+renders its message as text/plain while every client reads `{ message }` JSON. `app.onError`
+(`account-backend/src/index.ts`) now renders them as JSON, so Paddle's refusal reaches the user
+verbatim.
+
+War story #4 (2026-08-24, same afternoon): with the panel loading again it said **"No card saved"**
+above a live, auto-renewing subscription. `payment_method.read` was NOT the answer — that call
+succeeded and returned an empty list. Paddle's saved-payment-methods list only holds methods a
+customer explicitly saved, and a subscription bought through our API-driven checkout
+(`transactions.create`, `origin=api`) never creates one: the card lives on the subscription as a
+`stored_payment_method_id` that the list has no row for. The panel now reads the card from the last
+CAPTURED payment on the subscription instead (`chargedPaymentMethod` in `routes/subscription.ts`) —
+which is why Transactions: read is load-bearing for the card row, and why `payment_method.read` is
+NOT in the list above. `task backend:billing:inspect` is the view that settled it.
 
 Nothing else (webhook verification is local HMAC — no permission). If the key was created with an
 expiry, note the rotation date here when it's known.
