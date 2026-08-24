@@ -89,14 +89,16 @@ thaw completes → daemon downloads → decrypts → the file lands.
 **Free-tier launch** is gated on the line above — until one real restore has been billed end-to-end,
 a free account's restores are our cost.
 
-**First live Paddle webhook.** Production's webhook secret can only be proven to *match* by the first
-live event returning 200 in Paddle's notification log; a wrong secret 400s exactly like an unsigned
-one, so it isn't checkable from outside.
+**Live money works — 2026-08-24.** A real card, the live Paddle catalog, from a config-less packaged
+`.dmg`: sign in → subscribe → deposit, with the app reflecting the paid entitlement afterwards. That
+one run closes three things that nothing short of it could: production's webhook secret genuinely
+matches (a wrong one 400s exactly like an unsigned event, so it is unprovable from outside), the live
+catalog prices resolve, and a stranger with only the installer can get from nothing to backing up.
+**Treat the subscribe path as proven — do not re-flag it as untested.**
 
 **Mac gates owed.** Each of these is exercisable only by a person on a real Mac, doing it the way a
 customer would — the layer no test reaches. A gate closes by being done, and the bullet goes:
 
-- a config-less `.dmg` doing sign-in → subscribe → deposit (the "a stranger can use it" gate);
 - an existing subscriber changing plans — preview → confirm → webhook reflects the new plan;
 - the quota cap — approach the cap, get the blocked deposit, clear it by upgrading;
 - one-email-one-account, all three cases: email-first then Google, Google-first then email, and a
