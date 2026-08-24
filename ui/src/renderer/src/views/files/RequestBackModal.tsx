@@ -23,10 +23,12 @@ import type { RetrievalQuote } from "../../../../shared/ipc.ts";
 import type { ArchivedFile } from "./model.ts";
 import { formatBytes, totalBytes } from "./model.ts";
 import { Button, KeyValueRow, Modal } from "../../ui/primitives.tsx";
+import { formatMoney } from "../../state/billing.ts";
 
 const fileName = (f: ArchivedFile | undefined): string => f?.relativePath.split("/").at(-1) ?? "this file";
 
-const usd = (cents: number): string => `$${(cents / 100).toFixed(2)}`;
+/** Restore quotes come back in USD cents (root RETRIEVAL.md). */
+const usd = (cents: number): string => formatMoney(cents, "USD");
 
 export const RequestBackModal = ({
   files,

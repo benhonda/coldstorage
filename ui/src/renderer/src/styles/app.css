@@ -1469,24 +1469,89 @@ button.cs-kv:hover { background: var(--surface-hover); }
 }
 .cs-subnav-tab:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
-/* ── inline disclosure (Settings › Account › Billing — rare actions folded, state stays visible) ── */
-.cs-disclose {
+/* ── Plan & billing panel (BillingPanel.tsx) ─────────────────────────────────────────────────────
+   Status strip first, detail columns under it. The strip is tinted by STATE — the same tone tokens
+   the badges use — so "we couldn't take payment" and "we couldn't load this" read as loud as they
+   are, and a healthy plan stays quiet. */
+.cs-billing-head {
   display: flex;
   align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-4);
+}
+.cs-billing-head-text { flex: 1; min-width: 0; }
+.cs-billing-head-line { font: var(--type-body); font-weight: var(--weight-medium); }
+.cs-billing-head-detail { font: var(--type-label); margin-top: var(--space-1); }
+.cs-billing-head--neutral { background: var(--surface-active); color: var(--text-secondary); }
+.cs-billing-head--accent  { background: var(--accent-subtle); color: var(--accent-text); }
+.cs-billing-head--success { background: rgba(31, 157, 107, 0.14); color: var(--positive); }
+.cs-billing-head--danger  { background: rgba(222, 77, 59, 0.14); color: var(--negative); }
+.cs-billing-head--warning { background: rgba(224, 146, 42, 0.16); color: var(--amber-500); }
+/* The detail line stays readable against the tint rather than inheriting the state colour. */
+.cs-billing-head .cs-billing-head-detail { color: var(--text-secondary); }
+
+.cs-billing-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-6);
+}
+.cs-billing-col { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.cs-billing-col-title {
+  font: var(--type-label);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0;
+}
+.cs-billing-plan { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.cs-billing-usage, .cs-billing-next { font: var(--type-body); }
+.cs-billing-pm { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+
+/* Same meter as the sidebar chip's, at panel width. */
+.cs-billing-track {
+  position: relative;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+}
+.cs-billing-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--duration-fast) var(--ease-out);
+}
+.cs-billing-fill--near { background: var(--amber-500); }
+.cs-billing-fill--over { background: var(--negative); }
+
+/* Text links out to Paddle's hosted pages. Underlined and icon-marked because they LEAVE the app —
+   the browser opening is not a surprise we should spring on someone mid-billing. */
+.cs-billing-portal, .cs-billing-cancel {
+  display: inline-flex;
+  align-items: center;
   gap: var(--space-2);
-  width: 100%;
+  align-self: flex-start;
   border: 0;
   background: transparent;
-  padding: var(--space-2) 0;
+  padding: var(--space-1) 0;
   font: var(--type-body);
-  color: var(--text-secondary);
-  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
   cursor: pointer;
 }
-.cs-disclose:hover { color: var(--text-primary); }
-.cs-disclose .csf-icon { transition: transform var(--duration-fast) var(--ease-out); }
-.cs-disclose--open .csf-icon { transform: rotate(90deg); }
-.cs-disclose-body { padding: 0 0 var(--space-2); }
+.cs-billing-portal { color: var(--accent-text); }
+/* Cancel is quiet by default and only asserts itself on hover — destructive, never a one-misclick. */
+.cs-billing-cancel { color: var(--text-secondary); margin-top: var(--space-2); }
+.cs-billing-cancel:hover { color: var(--negative); }
+.cs-billing-portal:focus-visible, .cs-billing-cancel:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
 
 /* ── Deposit progress banner — the live "what's uploading + how long" surface (DepositProgress.tsx). ── */
 .cs-deposit {

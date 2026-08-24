@@ -13,6 +13,7 @@ export const registerEntitlementIpc = (entitlement: EntitlementManager): (() => 
   ipcMain.handle(IPC.entitlementPreviewChange, (_e, priceId: string) => entitlement.previewPlanChange(priceId));
   ipcMain.handle(IPC.entitlementChangePlan, (_e, priceId: string) => entitlement.changePlan(priceId));
   ipcMain.handle(IPC.entitlementOpenManage, (_e, page: ManagePage) => entitlement.openManage(page));
+  ipcMain.handle(IPC.entitlementResume, () => entitlement.resumeSubscription());
 
   // Paid retrieval (root RETRIEVAL.md) — lives on the same manager because it's the same billing server
   // and the same signed-in session; a separate manager would duplicate the token plumbing for nothing.
@@ -40,6 +41,7 @@ export const registerEntitlementIpc = (entitlement: EntitlementManager): (() => 
     ipcMain.removeHandler(IPC.entitlementPreviewChange);
     ipcMain.removeHandler(IPC.entitlementChangePlan);
     ipcMain.removeHandler(IPC.entitlementOpenManage);
+    ipcMain.removeHandler(IPC.entitlementResume);
     ipcMain.removeHandler(IPC.retrievalQuote);
     ipcMain.removeHandler(IPC.retrievalPay);
     ipcMain.removeHandler(IPC.retrievalAwaitPay);

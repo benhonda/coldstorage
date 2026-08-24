@@ -226,14 +226,23 @@ export const throughput = (samples: RunProgress["samples"]): number | null => {
   return dBytes / dtSec;
 };
 
-/** Seconds remaining, or `null` when it can't be estimated (unknown total, already done, or no rate yet).
- * Derived from the smoothed `throughput` — deliberately rough, since real upload speed wobbles. */
+/** How much of a transfer has to be behind us before its measured rate is allowed to speak for the rest
+ * of it. Under this, the sample window covers a sliver — one small file out of six, a connection still
+ * ramping — and extrapolating it across the whole job produces a number that is not merely imprecise but
+ * wrong by orders of magnitude, and alarming with it ("about 8 days 8 hours left" on an upload that took
+ * minutes). An honest blank beats a confident lie (PILLAR5). */
+const ETA_MIN_FRACTION = 0.01;
+
+/** Seconds remaining, or `null` when it can't be estimated (unknown total, already done, no rate yet, or
+ * too little of the job done to extrapolate from). Derived from the smoothed `throughput` — deliberately
+ * rough, since real upload speed wobbles. */
 export const etaSeconds = (
   samples: RunProgress["samples"],
   bytesUploaded: number,
   bytesTotal: number | null,
 ): number | null => {
   if (!bytesTotal || bytesTotal <= bytesUploaded) return null;
+  if (bytesUploaded < bytesTotal * ETA_MIN_FRACTION) return null;
   const rate = throughput(samples);
   if (!rate) return null;
   return (bytesTotal - bytesUploaded) / rate;
@@ -394,7 +403,15 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
           // 0 means "unknown" (a Photos deposit) — keep it null so the UI shows count progress, not a 0-byte bar.
           bytesTotal: bytesTotal > 0 ? bytesTotal : null,
           currentPath: d.currentPath || null,
-          samples: [...prev.samples, { t: Date.now(), bytes: bytesUploaded }].slice(-SAMPLE_CAP),
+          // The rate window starts at the FIRST BYTE, not at the run. Progress ticks arrive during the
+          // encrypt/prepare stall too, and anchoring the window on a `bytes: 0` sample turns the "rate"
+          // into an average that includes all that dead time — which is how a 2 GB deposit read
+          // "2 KB of 2 GB · 3 KB/s · about 8 days 8 hours left" seconds after the drop (2026-08-24).
+          // Until something moves there is nothing true to say about a rate, so we say nothing.
+          samples:
+            bytesUploaded === 0
+              ? []
+              : [...prev.samples, { t: Date.now(), bytes: bytesUploaded }].slice(-SAMPLE_CAP),
         },
       };
     }
@@ -448,7 +465,8 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
           [id]: {
             bytes: done,
             totalBytes: total > 0 ? total : null,
-            samples: [...(prev?.samples ?? []), { t: Date.now(), bytes: done }].slice(-SAMPLE_CAP),
+            // Same first-byte rule as a deposit's window, and for the same reason — see `runProgress`.
+            samples: done === 0 ? [] : [...(prev?.samples ?? []), { t: Date.now(), bytes: done }].slice(-SAMPLE_CAP),
           },
         },
       };

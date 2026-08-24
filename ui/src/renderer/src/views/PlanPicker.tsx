@@ -6,10 +6,12 @@
  */
 import { useEffect, useState } from "react";
 import type { CatalogPlan } from "../../../shared/ipc.ts";
+import { formatMoney } from "../state/billing.ts";
 
 const DEFAULT_SIZE = "1 TB";
 
-export const usd = (cents: number): string => `$${(cents / 100).toFixed(2)}`;
+/** Catalog prices are quoted in USD cents by construction (see {@link CatalogPlan.amountCents}). */
+export const usd = (cents: number): string => formatMoney(cents, "USD");
 
 export const PlanPicker = ({
   plans,

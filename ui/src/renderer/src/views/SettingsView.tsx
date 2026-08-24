@@ -4,7 +4,7 @@
  * for — profile, plan + quota, subscription, billing). The split is the ownership line — *"would this
  * setting follow me to a second Mac?"* — so every future setting has an unambiguous home
  * (notification prefs → General; recovery code / devices → a Security tab the day that content
- * exists). Destructive/rare billing actions fold behind a disclosure, last. Dogfood mode
+ * exists). Billing is its own panel ({@link BillingPanel}) — a status-first state machine. Dogfood mode
  * (unconfigured) has no account: no tab strip, General's content IS the page, and the storage figure
  * stays here (Storage card) because there's no Account subpage to carry it. Fully daemon-backed:
  * sources (each with a destination mount + per-folder pause/resume), catch-up, and excludes
@@ -21,6 +21,8 @@ import type { ReactNode } from "react";
 import { useState } from "react";
 import type { AccountStatus, AppInfo, AuthStatus, EntitlementStatus, Source, SubscriptionInfo, UpdateStatus } from "../../../shared/ipc.ts";
 import { ChangePlanModal } from "./ChangePlanModal.tsx";
+import { BillingPanel } from "./BillingPanel.tsx";
+import { subscriptionOf, type BillingState } from "../state/billing.ts";
 import type { ViewProps } from "./types.ts";
 import type { ArchivedFile } from "./files/model.ts";
 import { baseName, formatBytes } from "./files/model.ts";
@@ -76,8 +78,9 @@ export const SettingsView = ({
   account,
   entitlement,
   onSubscribe,
-  subscription,
+  billing,
   onSubscriptionChanged,
+  onRetryBilling,
   tab,
   onTabChange,
   appInfo,
@@ -93,9 +96,11 @@ export const SettingsView = ({
   /** Subscription status (Phase 5c) + a subscribe entry point (non-deposit path to checkout). */
   entitlement: EntitlementStatus;
   onSubscribe: () => void;
-  /** The live subscription summary (null = never subscribed) + how to record a plan change. */
-  subscription: SubscriptionInfo | null;
+  /** The one shared billing fold (App) — the sidebar chip renders the same value. */
+  billing: BillingState;
   onSubscriptionChanged: (sub: SubscriptionInfo) => void;
+  /** Re-run the subscription read behind the panel's `unavailable` state. */
+  onRetryBilling: () => void;
   sources: Source[];
   /** A scan is in flight — the LIVE run state (`state.run.active`), folded from runStarted/runFinished.
    * NOT `status.running`, which only updates on a getStatus poll and so never flips during a quick run. */
@@ -125,9 +130,6 @@ export const SettingsView = ({
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuEntry[] } | null>(null);
   const [removing, setRemoving] = useState<Source | null>(null);
   const [changingPlan, setChangingPlan] = useState(false);
-  // Billing actions folded (destructive last, GitHub/Linear "danger zone" convention): the STATE
-  // (Active · renews …) stays visible above; only the rare actions live behind the disclosure.
-  const [billingOpen, setBillingOpen] = useState(false);
   // The Name row's inline edit (null = read mode). Also the durable override for a Google user who
   // wants something other than their Google name — our copy is never clobbered by the next sign-in.
   const [editingName, setEditingName] = useState<string | null>(null);
@@ -146,9 +148,8 @@ export const SettingsView = ({
 
   /** Shorten a macOS home path for display: /Users/ben/Downloads/x → ~/Downloads/x (full path on hover). */
   const tildify = (p: string): string => p.replace(/^\/Users\/[^/]+\//, "~/");
-  /** ISO date → "Jan 3, 2027" for the renews/ends lines. */
-  const shortDate = (iso: string): string =>
-    new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  /** The subscription behind the billing state, where there is one — what Change plan acts on. */
+  const currentSubscription = subscriptionOf(billing);
   /** Destination as breadcrumb text: "Backups/Photos" → "My Files / Backups / Photos". */
   const dest = (m: string): string => ["My Files", ...m.split("/").filter(Boolean)].join(" / ");
 
@@ -396,76 +397,18 @@ export const SettingsView = ({
         <KeyValueRow label="Signed in as" value={auth.email ?? "—"} />
       </Card>
 
-      <Card title="Plan & billing">
-        {subscription && (
-          <KeyValueRow
-            label="Plan"
-            value={
-              <span className="cs-plan-row">
-                {subscription.plan ? (
-                  <Badge tone="accent">
-                    {subscription.plan.size} · {subscription.plan.years} yr{subscription.plan.years > 1 ? "s" : ""}
-                  </Badge>
-                ) : (
-                  // A price that predates the current plan lineup (e.g. sold before a catalog
-                  // reshape) — still fully changeable; the picker just starts from the default.
-                  <Badge tone="neutral">Earlier plan</Badge>
-                )}
-                <Button size="sm" icon="swap_horiz" onClick={() => setChangingPlan(true)}>
-                  Change plan
-                </Button>
-              </span>
-            }
-          />
-        )}
-        <KeyValueRow label="In deep storage" value={quotaValue} accent />
-        <KeyValueRow
-          label="Subscription"
-          value={
-            subscription?.cancelsAt ? (
-              <Badge tone="warning" icon="event">Ends {shortDate(subscription.cancelsAt)}</Badge>
-            ) : entitlement.active ? (
-              <Badge tone="success" icon="check">
-                {subscription?.nextBilledAt ? `Active · renews ${shortDate(subscription.nextBilledAt)}` : "Active"}
-              </Badge>
-            ) : (
-              // No subscription = the free tier, not a dead account. Name the plan they're on before
-              // offering the one they aren't; the quota row above already shows it filling up.
-              <span className="cs-plan-row">
-                <Badge tone="neutral">Free</Badge>
-                <Button size="sm" onClick={onSubscribe}>
-                  {entitlement.checkingOut ? "Finishing…" : "Upgrade"}
-                </Button>
-              </span>
-            )
-          }
-        />
-        {subscription && (
-          <>
-            <button
-              type="button"
-              className={billingOpen ? "cs-disclose cs-disclose--open" : "cs-disclose"}
-              aria-expanded={billingOpen}
-              onClick={() => setBillingOpen((v) => !v)}
-            >
-              <Icon name="chevron_right" size={18} />
-              Billing
-            </button>
-            {billingOpen && (
-              <div className="cs-plan-row cs-disclose-body">
-                <Button size="sm" icon="credit_card" onClick={() => exec(() => api.openManage("payment"))}>
-                  Update payment method
-                </Button>
-                {!subscription.cancelsAt && (
-                  <Button size="sm" icon="cancel" onClick={() => exec(() => api.openManage("cancel"))}>
-                    Cancel subscription
-                  </Button>
-                )}
-              </div>
-            )}
-          </>
-        )}
-      </Card>
+      <BillingPanel
+        api={api}
+        exec={exec}
+        billing={billing}
+        bytesStored={bytesStored}
+        bytesStoredPending={bytesStoredPending}
+        quotaBytes={entitlement.quotaBytes}
+        onSubscribe={onSubscribe}
+        onChangePlan={() => setChangingPlan(true)}
+        onSubscriptionChanged={onSubscriptionChanged}
+        onRetry={onRetryBilling}
+      />
     </>
   );
 
@@ -514,10 +457,10 @@ export const SettingsView = ({
         </Modal>
       )}
 
-      {changingPlan && subscription && (
+      {changingPlan && currentSubscription && (
         <ChangePlanModal
           api={api}
-          current={subscription}
+          current={currentSubscription}
           bytesStored={bytesStored}
           onChanged={onSubscriptionChanged}
           onClose={() => setChangingPlan(false)}

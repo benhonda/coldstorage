@@ -105,28 +105,37 @@ Vercel/redeploy step):
 
 Nothing else (webhook verification is local HMAC — no permission). If the key was created with an
 expiry, note the rotation date here when it's known.
-## Managing a subscription — BUILT ✅ (2026-07-10)
+## Managing a subscription — BUILT ✅ (2026-07-10, widened 2026-08-24)
 
 The account card's manage surface (sidebar bottom-left → Settings ▸ Account). Split of
-responsibilities, decided 2026-07-10:
+responsibilities:
 
-- **Cancel + update payment method → Paddle-HOSTED pages.** The subscription entity's
-  `managementUrls` (verified in the installed SDK types, `SubscriptionManagement`), fetched fresh
-  per click and opened in the system browser. Paddle is the MoR — its pages own the
-  confirm/effective-date/refund UX; we build none of it.
+- **Invoices, receipts, card, billing address, tax id, cancel → Paddle's CUSTOMER PORTAL.** One
+  session minted per click (`customerPortalSessions.create(customerId, [subscriptionId])`, verified
+  in the installed SDK types) and opened in the system browser; its `urls.general.overview` is the
+  ledger, `urls.subscriptions[].{cancelSubscription,updateSubscriptionPaymentMethod}` the two deep
+  links. Portal URLs are single-use and short-lived — **never** cached or stored on a summary.
+  Paddle is the MoR and the SSOT for the money ledger; we re-render none of it.
 - **Plan change (size) → in-app.** The same `PlanPicker` as checkout, seeded with the current
   plan → `POST /subscription/change/preview` (Paddle `previewUpdate`) puts the money on the table
   ("charged $X now" / "$X credit toward future bills") → `POST /subscription/change` applies with
   `prorationBillingMode: "prorated_immediately"` + `onPaymentFailure: "prevent_change"` (Paddle's
   default, pinned explicitly): an upgrade whose prorated charge fails does NOT apply — no
   upgrade-without-paying. Price ids are catalog-validated like checkout.
-- **Current plan** → `GET /subscription`: live `subscriptions.get` summarized against the catalog
-  (status, plan, nextBilledAt, cancelsAt, management URLs). Nothing plan-shaped is duplicated into
-  the DB — the row only supplies the subscription id; `subscriptionActive` stays webhook-fed.
+- **Un-cancel → in-app** (`POST /subscription/resume` → `subscriptions.update(id, {scheduledChange:
+  null})`, the only write Paddle permits to that field). A scheduled cancellation is the one state
+  where sending someone to a hosted page to change their mind loses them.
+- **Current plan** → `GET /subscription`: live `subscriptions.get(..., {include: ['next_transaction']})`
+  summarized against the catalog (status, plan, nextBilledAt, cancelsAt, next charge amount +
+  currency) plus the saved method from `paymentMethods.list`. All-or-nothing on purpose: a partial
+  summary would let the panel draw a confident header above a silently missing row. Nothing
+  plan-shaped is duplicated into the DB — the row only supplies the subscription + customer ids;
+  `subscriptionActive` stays webhook-fed.
 
 Code map: backend `src/routes/subscription.ts`; app `EntitlementManager.{getSubscription,
-previewPlanChange,changePlan,openManage}` → IPC `entitlement:{subscription,previewChange,
-changePlan,openManage}` → `AccountCard` (sidebar) + Settings ▸ Account rows + `ChangePlanModal`.
+previewPlanChange,changePlan,openManage,resumeSubscription}` → IPC `entitlement:{subscription,
+previewChange,changePlan,openManage,resume}` → the shared fold in `renderer/src/state/billing.ts`,
+rendered by `AccountCard` (sidebar) + `views/BillingPanel.tsx` + `ChangePlanModal`.
 
 ## Multi-plan picker — BUILT ✅ (2026-07-10, per this spec; term selector removed 2026-07-12)
 
@@ -136,8 +145,8 @@ breaking the old single-price checkout — which is now gone: `PADDLE_PRICE_ID` 
 backend env schema and retired from TF). Code map: backend `src/catalog.ts` (pure mapping + tests) /
 `src/catalog.server.ts` (TTL cache) / `src/routes/catalog.ts` + the `priceId` validation in
 `src/routes/checkout-session.ts`; app `EntitlementManager.getCatalog()`/`subscribe(priceId)` →
-IPC `entitlement:catalog` → `SubscribeModal`. The on-Mac subscribe click-through is one of the gates
-tracked in [`PROD.md`](./PROD.md).
+IPC `entitlement:catalog` → `SubscribeModal`. The on-Mac subscribe click-through was exercised for
+real on 2026-08-24 — live card, live catalog, packaged `.dmg` ([`PROD.md`](./PROD.md)).
 
 The decided spec, kept for reference (what's built matches it):
 

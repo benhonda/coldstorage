@@ -19,7 +19,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Badge, Icon, Skeleton } from "../ui/primitives.tsx";
 import { formatBytes } from "./files/model.ts";
-import type { SubscriptionInfo } from "../../../shared/ipc.ts";
+import { badgeIsRedundant, planBadge, type BillingState } from "../state/billing.ts";
 
 const shortDate = (iso: string): string =>
   new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -27,8 +27,7 @@ const shortDate = (iso: string): string =>
 export const AccountCard = ({
   email,
   displayName,
-  subscription,
-  active,
+  billing,
   usedBytes,
   usagePending,
   quotaBytes,
@@ -41,9 +40,9 @@ export const AccountCard = ({
   /** The user-owned display name (onboarding) — the primary line + avatar initial when present;
    * the card degrades to the email alone while it's still null. */
   displayName: string | null;
-  subscription: SubscriptionInfo | null;
-  /** The entitlement flag (webhook-fed) — the badge's fallback when the plan is unknown. */
-  active: boolean;
+  /** The one shared billing fold (App). The chip RENDERS this badge; it no longer decides it —
+   * deriving the answer here as well is how the chip and Settings drifted apart. */
+  billing: BillingState;
   /** Stored + in-flight — the same figure the deposit gate measures against. Null until the daemon reports. */
   usedBytes: number | null;
   /** The usage figure is still on its way (daemon socket dialing), as opposed to genuinely unknown.
@@ -53,9 +52,9 @@ export const AccountCard = ({
   quotaBytes: number | null;
   /** The popover's "Settings…" — routes to Settings › Account. */
   onOpenSettings: () => void;
-  /** Whether to offer the upgrade item at all. Decided by App, not re-derived from {@link active} here:
-   * the sidebar's upgrade button asks the same question, and two copies of the rule drifted (`!active`
-   * alone is true for a subscriber whose entitlement hasn't loaded yet). */
+  /** Whether to offer the upgrade item at all. Decided by App, not re-derived here: the sidebar's
+   * upgrade button asks the same question, and two copies of the rule drifted (`!active` alone is true
+   * for a subscriber whose entitlement hasn't loaded yet). */
   canUpgrade: boolean;
   /** Open the plan picker. A subscriber changes plan from Settings › Account instead, where the
    * proration preview lives. */
@@ -106,21 +105,10 @@ export const AccountCard = ({
       ? Math.min(1, usedBytes / quotaBytes)
       : null;
 
-  // The plan, in two lengths from one decision. Not "No plan" — since the free tier landed, no
-  // subscription IS a plan: 25 GB, forever, and it backs up like any other. Naming it "Free" is the honest
-  // label AND the one that makes the usage line read as a plan filling up, not a locked account.
-  //
-  // `short` is what fits on the avatar; `long` is what the popover has room to say. Only the cancelling
-  // case actually differs, and it's the case where the difference matters most — "Ends" alone is a warning
-  // with no information in it, so the date gets said the moment there's space for it.
-  const plan: { tone: "neutral" | "accent" | "success" | "warning"; short: string; long: string } =
-    subscription?.cancelsAt
-      ? { tone: "warning", short: "Ends", long: `Ends ${shortDate(subscription.cancelsAt)}` }
-      : subscription?.plan
-        ? { tone: "accent", short: subscription.plan.size, long: subscription.plan.size }
-        : active
-          ? { tone: "success", short: "Active", long: "Active" }
-          : { tone: "neutral", short: "Free", long: "Free" };
+  // `short` is what fits on the avatar; `long` is what the popover has room to say (only the dated
+  // states actually differ, and those are the ones where the difference matters most — "Ends" alone is
+  // a warning with no information in it).
+  const plan = planBadge(billing, shortDate);
 
   return (
     <>
@@ -139,9 +127,12 @@ export const AccountCard = ({
           <span className="cs-account-avatar" aria-hidden="true">
             {(displayName ?? email).charAt(0).toUpperCase()}
           </span>
-          {/* The size badge only when the meter can't show it — "6 GB of 25 GB used" already names
-              the plan size, and a "25 GB" badge under the avatar would say the same thing twice. */}
-          {subscription?.plan && !subscription.cancelsAt && fraction != null ? null : (
+          {/* The badge is suppressed ONLY when it would be the redundant plan-size one — "6 GB of 25 GB
+              used" already names the size, and a "25 GB" badge under the avatar says it twice. Keyed on
+              the state, not on `plan != null`: every other state's badge is the only warning the chip
+              carries (Ends / Payment failed / Billing unavailable) and must never be hidden by a meter
+              that happens to be rendering. */}
+          {badgeIsRedundant(billing, fraction != null) ? null : (
             <span className={`cs-account-mark-badge cs-account-mark-badge--${plan.tone}`}>{plan.short}</span>
           )}
         </span>

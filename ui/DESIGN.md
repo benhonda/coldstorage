@@ -318,10 +318,19 @@ conditionality is structural, not a card that appears mid-page.
 
 ### Account — who's signed in, what they pay for (configured installs only)
 - **Account card:** Name (inline edit) + Signed in as, with **Sign out** as the header action.
-- **Plan & billing card:** Plan row (badge + Change plan → `ChangePlanModal`), the quota row (below),
-  Subscription state (Active · renews / Free + Upgrade / Ends date), then **Billing folded behind an
-  inline disclosure** (Update payment method · Cancel subscription) — destructive last, state always
-  visible, actions two clicks, never staring at you.
+- **Plan & billing panel** (`views/BillingPanel.tsx`) — **a state, not a list of fields.** A tinted
+  status strip on top with ONE sentence and ONE primary action, switched exhaustively over
+  `BillingState` (`renderer/src/state/billing.ts`): Active · renews · amount → Change plan · Ends
+  *date* → **Keep my plan** (un-cancel) · Payment failed → Update card · Paused → Resume · Free →
+  Upgrade · Finishing checkout · **Couldn't load your billing details → Try again**. Under it two
+  columns — *Your plan* (badge, quota meter, the row below) and *Payments* (card on file, next
+  charge amount + date, one link into Paddle's portal for invoices/receipts/tax details, and a quiet
+  Cancel).
+  **Why a state machine:** the old card was rows each gated on `subscription != null`, and the
+  renderer caught fetch failures into `null` — so a failed read rendered as a free account: green
+  "Active" badge (from the separate cached entitlement flag) above a card with no plan, no price and
+  no way to cancel. A field that fails to load vanishes; a state always has a branch. Failure is now
+  a first-class state carrying the server's own message (PILLAR5).
 - **The quota row — ONE row, one number:** *"In deep storage — 12 GB of 25 GB"* (the `of Y` appears
   once the plan's quota is known, from the backend's entitlement). The bytes are
   `getStatus.bytesStored`: a **live S3 listing** under the user's own prefix, so it counts every
@@ -500,16 +509,18 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   `views/PlanPicker.tsx`); Settings shows the state. `coldstorage://checkout-complete` is a check-now nudge.
   **The wait is never a dead end:** while `checkingOut` is true the modal offers `reopenCheckout()` (the same
   Paddle transaction reopened — never a second one) and `cancelCheckout()` (stops the poll, clears the wait,
-  picker back at once); an abandoned checkout that times out says so instead of silently reverting. **Manage surface (2026-07-10, PADDLE.md "Managing a subscription"):**
-  `getSubscription()/previewPlanChange()/changePlan()/openManage()` → the sidebar's pinned
+  picker back at once); an abandoned checkout that times out says so instead of silently reverting. **Manage surface (2026-07-10, widened 2026-08-24 — PADDLE.md "Managing a subscription"):**
+  `getSubscription()/previewPlanChange()/changePlan()/openManage()/resumeSubscription()` → folded
+  ONCE into `BillingState` (`renderer/src/state/billing.ts`), rendered by both the sidebar's pinned
   `views/AccountCard.tsx` (avatar · email · a Drive-style storage meter fed by the gate's own
   used/quota figures; the plan badge hangs off the AVATAR's bottom edge rather than sitting beside the
   name — see "Sidebar account chip" below — and only when the meter can't name the quota; click → a
   popover: identity summary + **Upgrade** on a free account + "Settings…" deep-linking to
   Settings › Account + Sign out)
   + Settings › Account
-  (plan row + `views/ChangePlanModal.tsx` with a proration preview; cancel/payment-method open
-  Paddle-hosted pages in the browser).
+  (`views/BillingPanel.tsx` + `views/ChangePlanModal.tsx` with a proration preview; invoices, card,
+  tax details and cancel open Paddle's customer portal in the browser, one session per click).
+  The chip no longer derives its own badge — two copies of that rule had already drifted.
 - `src/renderer/src/styles/tokens/` — the 5 DS token CSS files **vendored verbatim** (SSOT — re-sync,
   don't hand-edit) from the coldstorage Design System (Claude Design `41ebafc1`), ported to native
   React 19 TSX (the DS's UMD/CDN runtime isn't consumable in electron-vite). Primitives in

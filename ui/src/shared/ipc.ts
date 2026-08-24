@@ -109,8 +109,10 @@ export const IPC = {
   entitlementPreviewChange: "entitlement:previewChange",
   /** invoke: apply a plan change `(priceId → SubscriptionInfo)` — prorated immediately. */
   entitlementChangePlan: "entitlement:changePlan",
-  /** invoke: open a Paddle-HOSTED management page `("cancel" | "payment")` in the system browser. */
+  /** invoke: open Paddle's customer portal `(ManagePage)` in the system browser. */
   entitlementOpenManage: "entitlement:openManage",
+  /** invoke: call off a scheduled cancellation `(→ SubscriptionInfo)` — the plan renews again. */
+  entitlementResume: "entitlement:resume",
   /** push: the entitlement status changed, `(status)`. */
   entitlementStatusChanged: "entitlement:statusChanged",
   /** invoke: price a restore `({blobKeys, egressBytes} → RetrievalQuote)` — the ONLY honest restore price
@@ -287,14 +289,31 @@ export interface CatalogPlan {
  * what the sidebar plan badge and the Settings manage surface render. Null = never subscribed.
  */
 export interface SubscriptionInfo {
-  /** Paddle subscription status ("active", "paused", "past_due", …) — display only; the
-   * deposit gate stays {@link EntitlementStatus} (the webhook-fed source of truth). */
+  /** Paddle subscription status ("active", "paused", "past_due", …) — this DRIVES the billing
+   * panel's header ({@link BillingState}); the deposit gate stays {@link EntitlementStatus} (the
+   * webhook-fed source of truth). */
   status: string;
   /** The catalog plan this subscription is on — null for an off-catalog (legacy) price. */
   plan: CatalogPlan | null;
   nextBilledAt: string | null;
   /** Set when a cancellation is scheduled — the ISO date the subscription ends. */
   cancelsAt: string | null;
+  /** What the next renewal charges, tax included — null when nothing is scheduled (cancelling,
+   * paused). A renewal date with no amount beside it is half an answer. */
+  nextCharge: { amountCents: number; currency: string } | null;
+  /** The method Paddle would charge. Null when nothing is saved. */
+  paymentMethod: PaymentMethodInfo | null;
+}
+
+/** The card (or PayPal, …) on file, as the Payments column renders it. */
+export interface PaymentMethodInfo {
+  /** Paddle's saved-method type: "card", "paypal", "alipay", … */
+  type: string;
+  /** Card network ("visa", "mastercard", …) — null for non-card methods. */
+  brand: string | null;
+  last4: string | null;
+  expiryMonth: number | null;
+  expiryYear: number | null;
 }
 
 /** What a plan change does to money RIGHT NOW (Paddle previewUpdate, prorated immediately). */
@@ -306,8 +325,12 @@ export interface PlanChangePreview {
   nextBilledAt: string | null;
 }
 
-/** The Paddle-hosted management pages the app can open (in the system browser). */
-export type ManagePage = "cancel" | "payment";
+/**
+ * Where in Paddle's customer portal to land. One session is minted per click (the URLs are
+ * single-use and short-lived — never cached), and the portal is the SSOT for the money ledger:
+ * `overview` is invoices, receipts, billing address and tax id; the other two are deep links.
+ */
+export type ManagePage = "overview" | "cancel" | "payment";
 
 /**
  * Auto-update status, pushed from main. The packaged app checks a GitHub Releases feed
@@ -476,8 +499,11 @@ export interface ColdstoreApi {
   previewPlanChange(priceId: string): Promise<PlanChangePreview>;
   /** Change the subscription to `priceId` (prorated immediately). Resolves to the new summary. */
   changePlan(priceId: string): Promise<SubscriptionInfo>;
-  /** Open a Paddle-hosted management page (cancel / update payment method) in the system browser. */
+  /** Open Paddle's customer portal in the system browser — invoices/receipts/tax details
+   * (`overview`), or a deep link straight to cancelling or changing the card. */
   openManage(page: ManagePage): Promise<void>;
+  /** Call off a scheduled cancellation. Resolves to the subscription that renews again. */
+  resumeSubscription(): Promise<SubscriptionInfo>;
 
   /* ── Paid retrieval (root RETRIEVAL.md) ─────────────────────────────────────────────────────────
    * The daemon reports `authorizationRequired` for a frozen blob it isn't allowed to thaw; these are how

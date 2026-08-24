@@ -19,6 +19,7 @@ import { Sidebar, type NavItem } from "./ui/layout.tsx";
 import { useToast } from "./ui/toast.tsx";
 import type { Store } from "./state/store.ts";
 import type { ColdstoreApi, ConnectionState, SubscriptionInfo } from "../../shared/ipc.ts";
+import { billingState, subscriptionOf, type Loadable } from "./state/billing.ts";
 import { isActiveRestore } from "../../shared/ipc.ts";
 import type { Exec } from "./views/types.ts";
 import { useAppState } from "./useStore.ts";
@@ -145,10 +146,17 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
     }
   }, [canDeposit]);
 
-  // The live subscription summary (plan badge + Settings manage surface). Refetched on sign-in and
-  // whenever the entitlement flips (a checkout just landed / a cancellation took effect). Best-effort:
-  // a fetch failure just leaves the badge on its entitlement fallback — never an error surface here.
-  const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
+  // The live subscription summary (plan badge + Settings billing panel). Refetched on sign-in and
+  // whenever the entitlement flips (a checkout just landed / a cancellation took effect).
+  //
+  // A LOADABLE, not `SubscriptionInfo | null`. This used to be best-effort — a fetch failure was caught
+  // into `null`, which the UI could not tell apart from "never subscribed", so a paying customer whose
+  // read failed got a free-tier card: no plan, no price, no way to cancel, under a green Active badge
+  // fed by the separate (cached) entitlement flag. Keeping the failure representable is the fix; every
+  // consumer goes through `billingState` and renders the `unavailable` branch (PILLAR5).
+  const [subscription, setSubscription] = useState<Loadable<SubscriptionInfo | null>>({ status: "loading" });
+  // Bumped by the panel's Retry — re-runs the effect below without a page reload.
+  const [subscriptionAttempt, setSubscriptionAttempt] = useState(0);
 
   // Session-local "the wizard's final Continue was clicked" — the fail-open half of onboarding: the
   // server facts are what really end it (onboardingPending), but if the final write failed we still
@@ -157,18 +165,29 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   useEffect(() => setOnboardingDone(false), [state.auth.email]);
   useEffect(() => {
     if (!signedIn) {
-      setSubscription(null);
+      setSubscription({ status: "ready", value: null });
       return;
     }
     let alive = true;
+    setSubscription({ status: "loading" });
     api
       .getSubscription()
-      .then((s) => alive && setSubscription(s))
-      .catch(() => alive && setSubscription(null));
+      .then((value) => alive && setSubscription({ status: "ready", value }))
+      .catch((e: unknown) =>
+        alive && setSubscription({ status: "error", message: e instanceof Error ? e.message : String(e) }),
+      );
     return () => {
       alive = false;
     };
-  }, [api, signedIn, state.entitlement.active]);
+  }, [api, signedIn, state.entitlement.active, subscriptionAttempt]);
+
+  // The one derivation of "what billing state is this account in", shared by the sidebar chip and the
+  // Settings panel so the two can never disagree (they used to, each deriving their own).
+  const billing = billingState(subscription, state.entitlement);
+  /** The subscription behind that state, where there is one — what the change-plan surfaces act on. */
+  const currentSubscription = subscriptionOf(billing);
+  // Both surfaces record a plan change the same way — straight into the loadable as a fresh answer.
+  const recordSubscription = (value: SubscriptionInfo): void => setSubscription({ status: "ready", value });
 
   const exec: Exec = (fn) => {
     void fn().catch((e: unknown) => toast.error(e instanceof Error ? e.message : String(e)));
@@ -400,8 +419,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
             <AccountCard
               email={state.auth.email}
               displayName={state.account.displayName}
-              subscription={subscription}
-              active={state.entitlement.active}
+              billing={billing}
               usedBytes={usedBytes}
               usagePending={storageFigurePending}
               quotaBytes={state.entitlement.quotaBytes}
@@ -477,8 +495,9 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           account={state.account}
           entitlement={state.entitlement}
           onSubscribe={() => setPaywallReason("upgrade")}
-          subscription={subscription}
-          onSubscriptionChanged={setSubscription}
+          billing={billing}
+          onSubscriptionChanged={recordSubscription}
+          onRetryBilling={() => setSubscriptionAttempt((n) => n + 1)}
           tab={settingsTab}
           onTabChange={setSettingsTab}
           appInfo={state.appInfo}
@@ -510,7 +529,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
               <Button variant="ghost" onClick={() => setOverCapacityOpen(false)}>
                 Not now
               </Button>
-              {subscription && (
+              {currentSubscription && (
                 <Button variant="primary" onClick={() => setChangingPlanFromCapacity(true)}>
                   Change plan
                 </Button>
@@ -524,13 +543,13 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           </p>
         </Modal>
       )}
-      {changingPlanFromCapacity && subscription && (
+      {changingPlanFromCapacity && currentSubscription && (
         <ChangePlanModal
           api={api}
-          current={subscription}
+          current={currentSubscription}
           bytesStored={state.status?.bytesStored ?? null}
           onChanged={(sub) => {
-            setSubscription(sub);
+            recordSubscription(sub);
             setChangingPlanFromCapacity(false);
             setOverCapacityOpen(false);
           }}

@@ -329,11 +329,30 @@ describe("run progress (the deposit bar / throughput / ETA)", () => {
     expect(throughput([{ t: 1000, bytes: 5 }, { t: 2000, bytes: 5 }])).toBeNull();
   });
 
+  test("the rate window starts at the first byte — prepare-stall ticks don't average into it", () => {
+    const s = run(
+      progress({ filesTotal: "6", bytesTotal: "2000000000", bytesUploaded: "0" }),
+      progress({ filesTotal: "6", bytesTotal: "2000000000", bytesUploaded: "0", currentPath: "/a/big.wav" }),
+    );
+    expect(s.run?.samples).toEqual([]);
+    const moved = reducer(s, progress({ filesTotal: "6", bytesTotal: "2000000000", bytesUploaded: "2048" }));
+    expect(moved.run?.samples).toHaveLength(1); // the clock starts here, not at the drop
+  });
+
   test("etaSeconds divides the remaining bytes by the smoothed rate", () => {
     const samples = [{ t: 0, bytes: 0 }, { t: 1000, bytes: 1_000_000 }]; // 1 MB/s
     expect(etaSeconds(samples, 1_000_000, 5_000_000)).toBe(4); // 4 MB left ÷ 1 MB/s
     expect(etaSeconds(samples, 5_000_000, 5_000_000)).toBeNull(); // already done
     expect(etaSeconds(samples, 0, null)).toBeNull(); // unknown total (photos)
+  });
+
+  test("no ETA from a sliver of the job — the '8 days left' banner on a 2 GB drop", () => {
+    // What the user saw: 2 KB of a 2 GB deposit had landed, measured at ~3 KB/s. Extrapolated, that is
+    // over eight days; the same upload actually finished in minutes. Say nothing until 1% is behind us.
+    const crawl = [{ t: 0, bytes: 0 }, { t: 1000, bytes: 3000 }]; // 3 KB/s
+    expect(etaSeconds(crawl, 2048, 2_000_000_000)).toBeNull();
+    // Past the threshold the same rate IS the answer, however grim — that's a measurement, not a blip.
+    expect(etaSeconds(crawl, 20_000_000, 2_000_000_000)).toBeCloseTo((2_000_000_000 - 20_000_000) / 3000);
   });
 });
 

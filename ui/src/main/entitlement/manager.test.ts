@@ -203,7 +203,7 @@ describe("EntitlementManager restore payment", () => {
 });
 
 describe("EntitlementManager subscription surface", () => {
-  const sub = { status: "active", plan: { size: "1 TB", years: 1, priceId: "pri_1", amountCents: 1899, perMonthCents: 158, quotaBytes: 1_000_000_000_000 }, nextBilledAt: "2027-07-10T00:00:00Z", cancelsAt: null, cancelUrl: "https://paddle.test/cancel", updatePaymentMethodUrl: "https://paddle.test/pay" };
+  const sub = { status: "active", plan: { size: "1 TB", years: 1, priceId: "pri_1", amountCents: 1899, perMonthCents: 158, quotaBytes: 1_000_000_000_000 }, nextBilledAt: "2027-07-10T00:00:00Z", cancelsAt: null, nextCharge: { amountCents: 1899, currency: "USD" }, paymentMethod: { type: "card", brand: "visa", last4: "4242", expiryMonth: 9, expiryYear: 2028 } };
 
   test("getSubscription returns the summary; 404 means never subscribed (null)", async () => {
     globalThis.fetch = mock(() => Promise.resolve(jsonResponse(200, { subscription: sub }))) as unknown as typeof fetch;
@@ -227,11 +227,30 @@ describe("EntitlementManager subscription surface", () => {
     expect(changed.plan?.size).toBe("2 TB");
   });
 
-  test("openManage fetches fresh and opens the right hosted page", async () => {
-    globalThis.fetch = mock(() => Promise.resolve(jsonResponse(200, { subscription: sub }))) as unknown as typeof fetch;
+  test("openManage mints a portal session per click and opens what it returns", async () => {
+    // Never cached: Paddle's portal links are single-use and short-lived, so every click is a POST.
+    const calls: { url: string; body: string | undefined }[] = [];
+    globalThis.fetch = mock((url: string, init?: RequestInit) => {
+      calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
+      return Promise.resolve(jsonResponse(200, { url: "https://paddle.test/portal/cancel" }));
+    }) as unknown as typeof fetch;
     const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
     await m.openManage("cancel");
-    expect(opened).toEqual(["https://paddle.test/cancel"]);
+    expect(calls).toEqual([{ url: "https://api.test/subscription/portal", body: JSON.stringify({ page: "cancel" }) }]);
+    expect(opened).toEqual(["https://paddle.test/portal/cancel"]);
+  });
+
+  test("resumeSubscription calls off a scheduled cancellation and returns the renewing plan", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = mock((url: string) => {
+      calls.push(url);
+      if (url.endsWith("/subscription/resume")) return Promise.resolve(jsonResponse(200, { subscription: sub }));
+      return Promise.resolve(jsonResponse(200, { active: true })); // the post-resume refresh
+    }) as unknown as typeof fetch;
+    const m = new EntitlementManager("https://api.test", () => Promise.resolve("idtok"));
+    const resumed = await m.resumeSubscription();
+    expect(calls[0]).toBe("https://api.test/subscription/resume");
+    expect(resumed.cancelsAt).toBeNull();
   });
 });
 

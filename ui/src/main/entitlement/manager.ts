@@ -141,17 +141,27 @@ export class EntitlementManager {
     return body.subscription;
   }
 
-  /** Open a Paddle-HOSTED management page in the system browser. Fetched fresh — the URLs are
-   * session-ish links off the live subscription entity, not stable enough to cache. */
+  /** Open Paddle's customer portal in the system browser. The session is minted per click and never
+   * cached — Paddle's portal links are single-use and short-lived by design. */
   async openManage(page: ManagePage): Promise<void> {
-    const { res, body } = await this.authedJson<{
-      subscription?: { cancelUrl: string | null; updatePaymentMethodUrl: string | null };
-      message?: string;
-    }>("/subscription");
-    if (!res.ok || !body?.subscription) throw new Error(body?.message ?? `couldn't load the subscription: http ${res.status}`);
-    const url = page === "cancel" ? body.subscription.cancelUrl : body.subscription.updatePaymentMethodUrl;
-    if (!url) throw new Error(page === "cancel" ? "no cancel page available" : "no payment page available");
-    await shell.openExternal(url);
+    const { res, body } = await this.authedJson<{ url?: string; message?: string }>("/subscription/portal", {
+      method: "POST",
+      body: JSON.stringify({ page }),
+    });
+    if (!res.ok || !body?.url) throw new Error(body?.message ?? `couldn't open the billing portal: http ${res.status}`);
+    await shell.openExternal(body.url);
+  }
+
+  /** Call off a scheduled cancellation, then re-check entitlement — the plan renews as normal again. */
+  async resumeSubscription(): Promise<SubscriptionInfo> {
+    const { res, body } = await this.authedJson<{ subscription?: SubscriptionInfo; message?: string }>(
+      "/subscription/resume",
+      { method: "POST" },
+    );
+    if (!res.ok || !body?.subscription)
+      throw new Error(body?.message ?? `couldn't call off the cancellation: http ${res.status}`);
+    void this.refresh();
+    return body.subscription;
   }
 
   /** Open Paddle checkout for the chosen plan in the system browser, then poll until the webhook marks the sub active. */
