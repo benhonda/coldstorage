@@ -23,6 +23,7 @@ import { useState } from "react";
 import type { AccountStatus, AppInfo, AuthStatus, EntitlementStatus, ExcludeSuggestion, Source, SubscriptionInfo, UpdateStatus } from "../../../shared/ipc.ts";
 import { ChangePlanModal } from "./ChangePlanModal.tsx";
 import { BillingPanel } from "./BillingPanel.tsx";
+import { ExcludeSuggestionsModal } from "./ExcludeSuggestionsModal.tsx";
 import { subscriptionOf, type BillingState } from "../state/billing.ts";
 import type { ViewProps } from "./types.ts";
 import type { ArchivedFile } from "./files/model.ts";
@@ -30,7 +31,7 @@ import { baseName, formatBytes } from "./files/model.ts";
 import { AddWatchedFolderModal } from "./files/AddWatchedFolderModal.tsx";
 import { ContextMenu, type MenuEntry } from "./files/ContextMenu.tsx";
 import { Badge, Button, Card, Chip, EmptyState, Field, Icon, IconButton, KeyValueRow, Modal, Segmented, Skeleton, Tabs } from "../ui/primitives.tsx";
-import { missingPatterns, packState, presentPatterns } from "../state/excludeSuggestions.ts";
+import { packState } from "../state/excludeSuggestions.ts";
 import { DENSITY_OPTIONS, useDensity } from "../ui/density.ts";
 import { Page } from "../ui/layout.tsx";
 import { VersionFooter } from "./VersionFooter.tsx";
@@ -63,8 +64,9 @@ const folderBadge: Record<FolderState, { tone: "warning" | "accent" | "success" 
  * defaults + applies the patterns at scan time); the renderer just lists them and issues add/remove. */
 export interface SettingsApi {
   excludes: string[];
-  /** The opt-in packs the daemon offers (`listExcludeSuggestions`) — the "Suggested skips" shelf below.
-   *  Whether one is on is derived from `excludes`, never stored (see `state/excludeSuggestions.ts`). */
+  /** The opt-in packs the daemon offers (`listExcludeSuggestions`), browsed from this card's header in
+   *  {@link ExcludeSuggestionsModal}. Whether one is on is derived from `excludes`, never stored
+   *  (see `state/excludeSuggestions.ts`). */
   suggestions: ExcludeSuggestion[];
   addExclude: (pattern: string) => void;
   /** Turn a whole pack on in one gesture — the patterns land as ordinary, individually-removable chips. */
@@ -74,62 +76,6 @@ export interface SettingsApi {
    *  patterns, and an add-only shelf would leave "undo that" as seventeen separate chip removals. */
   removeExcludes: (patterns: string[]) => void;
 }
-
-/** One suggested pack. Its patterns are ALWAYS on screen, never behind a disclosure, for the same reason
- *  the chips above are: this card's whole subject is files that won't be backed up, and a person can't
- *  consent to a list they can't see. The button says exactly what it will add, and adding is reversible
- *  chip-by-chip afterwards — so the honest expensive choice is the visible one. */
-const SuggestionRow = ({
-  pack,
-  excludes,
-  onAdd,
-  onRemove,
-}: {
-  pack: ExcludeSuggestion;
-  excludes: string[];
-  onAdd: (patterns: string[]) => void;
-  onRemove: (patterns: string[]) => void;
-}): React.JSX.Element => {
-  const state = packState(pack, excludes);
-  const missing = missingPatterns(pack, excludes);
-  const present = presentPatterns(pack, excludes);
-  return (
-    <div className="cs-suggestion">
-      <div className="cs-suggestion-head">
-        <div className="cs-stack-tight">
-          <strong>{pack.title}</strong>
-          <p className="cs-muted">{pack.detail}</p>
-        </div>
-        <div className="cs-cluster">
-          {state === "on" && (
-            <Badge tone="success" icon="check">
-              Skipping
-            </Badge>
-          )}
-          {state !== "on" && (
-            <Button size="sm" icon="block" onClick={() => onAdd(missing)}>
-              {/* "Partial" is a real state — the user turned this on and then deleted a chip. Say what's
-                  actually left rather than re-offering the whole pack as though nothing had happened. */}
-              {state === "partial" ? `Add the rest (${missing.length})` : "Skip these"}
-            </Button>
-          )}
-          {state !== "off" && (
-            <Button size="sm" variant="ghost" onClick={() => onRemove(present)}>
-              Stop skipping
-            </Button>
-          )}
-        </div>
-      </div>
-      <div className="cs-chips">
-        {pack.patterns.map((p) => (
-          <Chip key={p} mono>
-            {p}
-          </Chip>
-        ))}
-      </div>
-    </div>
-  );
-};
 
 export const SettingsView = ({
   api,
@@ -198,6 +144,11 @@ export const SettingsView = ({
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuEntry[] } | null>(null);
   const [removing, setRemoving] = useState<Source | null>(null);
   const [changingPlan, setChangingPlan] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  // How many suggested packs are doing something right now — `partial` counts, because a pack with some of
+  // its patterns live IS affecting what gets backed up, and rounding that down to "off" would understate
+  // what the app is skipping. Derived, like every other pack fact (see `state/excludeSuggestions.ts`).
+  const packsOn = settings.suggestions.filter((p) => packState(p, settings.excludes) !== "off").length;
   // The Name row's inline edit (null = read mode). Also the durable override for a Google user who
   // wants something other than their Google name — our copy is never clobbered by the next sign-in.
   const [editingName, setEditingName] = useState<string | null>(null);
@@ -374,7 +325,20 @@ export const SettingsView = ({
 
       {/* Always-visible chips, deliberately NOT folded behind a disclosure: in a backup product, what's
           NOT being uploaded is the most dangerous setting in the app — it stays in plain sight. */}
-      <Card title="Don't back up" description="coldstorage skips these everywhere — caches and junk you never mean to keep.">
+      {/* The suggestions open from THIS card's header rather than a second card below it: same subject,
+          and it keeps the page showing the one list that's actually in force. The count is the visible
+          part — without it, "is anything on in there?" would take a click to answer (PILLAR5). */}
+      <Card
+        title="Don't back up"
+        description="coldstorage skips these everywhere — caches and junk you never mean to keep."
+        action={
+          settings.suggestions.length > 0 && (
+            <Button size="sm" icon="filter_alt" onClick={() => setShowSuggestions(true)}>
+              {packsOn > 0 ? `Suggested skips · ${packsOn} on` : "Suggested skips"}
+            </Button>
+          )
+        }
+      >
         {settings.excludes.length === 0 ? (
           // An empty list is a real, reachable state (remove all five defaults and they don't come back —
           // seeding is one-shot per journal). Say so plainly rather than rendering a blank card, which
@@ -404,33 +368,14 @@ export const SettingsView = ({
         </div>
       </Card>
 
-      {/* The opt-in half of the same subject, deliberately a SEPARATE card from the list above: the chips
-          up there are in force right now, these are offers. Collapsing the two would make "we're skipping
-          this" and "we could skip this" look alike, which in a backup product is the difference between a
-          file being safe and not.
-
-          Why these aren't just defaults: each pack is junk only in context. A developer's `build/` folder
-          regenerates from source in seconds; a woodworker's `build/` folder is photographs of a workbench.
-          Guessing wrong means silently not backing up someone's work, so we ask. The daemon owns the
-          catalogue (`listExcludeSuggestions`) — the same list the drop-time prompt offers, so the two can
-          never disagree about what we recommend. */}
-      {settings.suggestions.length > 0 && (
-        <Card
-          title="Suggested skips"
-          description="Big, regenerable stuff most people don't need a copy of. Nothing here is on until you say so."
-        >
-          <div className="cs-suggestions">
-            {settings.suggestions.map((pack) => (
-              <SuggestionRow
-                key={pack.id}
-                pack={pack}
-                excludes={settings.excludes}
-                onAdd={settings.addExcludes}
-                onRemove={settings.removeExcludes}
-              />
-            ))}
-          </div>
-        </Card>
+      {showSuggestions && (
+        <ExcludeSuggestionsModal
+          suggestions={settings.suggestions}
+          excludes={settings.excludes}
+          onAdd={settings.addExcludes}
+          onRemove={settings.removeExcludes}
+          onClose={() => setShowSuggestions(false)}
+        />
       )}
 
       {hasAccount ? (

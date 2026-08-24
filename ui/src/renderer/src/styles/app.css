@@ -1042,10 +1042,10 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-menu-item--danger .csf-icon { color: var(--negative); }
 .cs-menu-sep { height: 1px; margin: var(--space-1) 0; background: var(--border-subtle); }
 
-/* ── suggested exclude packs (Settings shelf + drop prompt) ─────── */
-/* Rows separated by a rule rather than boxed in cards: they sit INSIDE a card already, and nesting a
-   surface inside a surface at this depth reads as a second, more important thing than the live exclude
-   chips above — which it isn't. These are offers. */
+/* ── suggested exclude packs (Settings dialog + drop prompt) ────── */
+/* Rows separated by a rule rather than boxed: they sit inside the suggestions dialog already, and nesting
+   a surface inside a surface at that depth reads as a second, more important thing than the live exclude
+   chips on the page behind it — which it isn't. These are offers. */
 .cs-suggestions { display: flex; flex-direction: column; gap: var(--space-4); }
 .cs-suggestions > .cs-suggestion + .cs-suggestion {
   padding-top: var(--space-4);

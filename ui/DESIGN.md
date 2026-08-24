@@ -330,8 +330,11 @@ conditionality is structural, not a card that appears mid-page.
   installers, photo libraries — can't be seeded, because a developer's `build/` regenerates in seconds and
   a woodworker's `build/` is photographs of a workbench. So it's **offered**, from one catalogue
   (`ExcludeSuggestion.all`) reached two ways:
-  1. a **Suggested skips** card under the exclude chips, patterns always visible, with both gestures —
-     turning a pack on, and turning it back off (seventeen patterns is not seventeen chip removals);
+  1. a **Suggested skips** dialog off the "Don't back up" card header (its trigger carries the count of
+     packs currently on), with every pattern visible inside and both gestures — turning a pack on, and
+     turning it back off, since "undo" can't mean seventeen chip removals. It's behind a dialog for its
+     LENGTH, not to hide it: the chips that are actually in force stay on the page, which is the rule that
+     matters — what isn't being backed up is never folded away, what we merely recommend can be;
   2. a **drop-time prompt**, which is the one that earns its keep. `previewDeposit` already walks the
      dropped folder, so it tags each item with the pack that *would* have caught it and the app can say
      "3.2 GB of this is build output" before a byte uploads — the last moment the answer is free, since
