@@ -3,6 +3,7 @@
  * (TopBar + scrolling content column) every view composes. Presentational — route state lives in App.
  */
 import type { ReactNode } from "react";
+import { BrandMark } from "./brand-mark.tsx";
 import { Icon } from "./primitives.tsx";
 
 export interface NavItem {
@@ -19,9 +20,8 @@ export interface NavItem {
   badge?: number;
 }
 
-/** Navigation rail. The mark is a stand-in (Material snowflake on the iceberg tile) for the real
- * six-point frost crystal — swap in the brand SVG when it's exported from the DS. The `footer` slot
- * holds whatever the app pins to the foot (storage line, status, getting-back). */
+/** Navigation rail. The `footer` slot holds whatever the app pins to the foot (storage line,
+ * status, getting-back). */
 export const Sidebar = ({
   items,
   active,
@@ -38,9 +38,7 @@ export const Sidebar = ({
 }): React.JSX.Element => (
   <aside className="cs-sidebar">
     <div className="cs-brand">
-      <span className="cs-brand-mark">
-        <Icon name="ac_unit" size={18} />
-      </span>
+      <BrandMark />
       <span className="cs-brand-word">coldstorage</span>
     </div>
     <nav className="cs-nav">

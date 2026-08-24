@@ -51,13 +51,14 @@
   gap: var(--space-3);
   padding: var(--space-2) var(--space-3);
 }
-.cs-brand-mark {
-  width: 28px; height: 28px;
-  display: grid; place-items: center;
-  color: var(--accent-on);
-  background: var(--accent);
-  border-radius: 9px;
-  box-shadow: var(--shadow-card);
+/* Height-driven; width follows the mark's 98:106 artboard. `flex: none` keeps the flex row
+   from squashing it. */
+.cs-brandmark {
+  height: 28px;
+  width: auto;
+  aspect-ratio: 98 / 106;
+  flex: none;
+  display: block;
 }
 .cs-brand-word {
   font: var(--type-card-title);
