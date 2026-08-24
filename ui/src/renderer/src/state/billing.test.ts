@@ -11,6 +11,7 @@ import { describe, expect, test } from "bun:test";
 import {
   badgeIsRedundant,
   billingState,
+  confirmedFree,
   describeExpiry,
   describePaymentMethod,
   formatMoney,
@@ -60,6 +61,20 @@ describe("a failed read is never a free account", () => {
   test("an unfetched entitlement waits instead of guessing Free at a subscriber", () => {
     const state = billingState({ status: "ready", value: null }, entitlement({ known: false }));
     expect(state.kind).toBe("loading");
+  });
+
+  test("the columns only claim Free where the server confirmed it", () => {
+    // The header got this right while the columns drew "Free · 1 TB" and "the free tier doesn't need
+    // a card" directly beneath the error banner. `confirmedFree` is what the columns branch on now.
+    expect(confirmedFree(billingState({ status: "ready", value: null }, entitlement()))).toBe(true);
+    for (const state of [
+      billingState({ status: "error", message: "not authorized to read subscription" }, entitlement()),
+      billingState({ status: "loading" }, entitlement()),
+      billingState({ status: "loading" }, entitlement({ checkingOut: true })),
+      billingState({ status: "ready", value: sub() }, entitlement({ active: true })),
+    ]) {
+      expect(confirmedFree(state)).toBe(false);
+    }
   });
 
   test("the chip shows the failure too — a silent chip is how the broken card hid", () => {

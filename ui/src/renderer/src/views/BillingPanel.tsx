@@ -24,6 +24,7 @@ import {
   describeExpiry,
   describePaymentMethod,
   formatMoney,
+  confirmedFree,
   subscriptionOf,
   type BillingState,
 } from "../state/billing.ts";
@@ -218,8 +219,12 @@ export const BillingPanel = ({
               // A price that predates the current plan lineup (e.g. sold before a catalog reshape) —
               // still fully changeable; the picker just starts from the default.
               <Badge tone="neutral">Earlier plan</Badge>
-            ) : (
+            ) : confirmedFree(billing) ? (
               <Badge tone="neutral">{quotaBytes != null ? `Free · ${formatBytes(quotaBytes)}` : "Free"}</Badge>
+            ) : (
+              // Loading, errored, or mid-checkout: the plan is genuinely unknown. A "Free" badge here
+              // would be a confident answer sitting directly under a banner that says we have none.
+              <Badge tone="neutral">—</Badge>
             )}
           </div>
           {/* The meter lives beside its remedy. No bar unless both halves are known — a made-up fill lies. */}
@@ -301,8 +306,12 @@ export const BillingPanel = ({
                 </button>
               )}
             </>
-          ) : (
+          ) : confirmedFree(billing) ? (
             <div className="cs-muted">Nothing to bill — the free tier doesn&apos;t need a card.</div>
+          ) : (
+            // Never assert "no card needed" off a read that failed — that's the paying customer being
+            // told their card doesn't matter. The banner above owns the explanation and the retry.
+            <div className="cs-muted">—</div>
           )}
         </section>
       </div>

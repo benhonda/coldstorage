@@ -86,6 +86,14 @@ export const billingState = (
   return { kind: "active", sub };
 };
 
+/**
+ * True ONLY where the server actually confirmed this account has no subscription. Loading, an error,
+ * and a checkout still in flight are all "we don't know yet" — and the panel's columns must not draw
+ * a "Free" badge or a "no card needed" line under any of them. `subscriptionOf` returning null is
+ * not evidence of a free account; this is. Same rule the guards above enforce for the header.
+ */
+export const confirmedFree = (state: BillingState): boolean => state.kind === "free";
+
 /** The subscription behind a state, for the panel's columns. Null wherever there isn't one. */
 export const subscriptionOf = (state: BillingState): SubscriptionInfo | null =>
   state.kind === "active" || state.kind === "ending" || state.kind === "pastDue" || state.kind === "paused"
