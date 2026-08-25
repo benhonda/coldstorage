@@ -363,12 +363,52 @@ tasks:
       - swift run coldstorectl {{.SOCK}} deposit src={{.SRC}} dest={{.DEST | default ""}} {{if .CONFLICTS}}'conflicts={{.CONFLICTS}}'{{end}}
 
   daemon:mac:logs:
-    desc: "Tail the installed daemon's stdout+stderr logs (live). Shows PhotoKitResolver auth/resolve diagnostics, deposit errors, etc."
+    desc: "Tail the daemon logs (live) — BOTH daemons' pairs: Mode 1's `coldstored.{out,err}.log` and the packaged app's own `coldstored.app.{out,err}.log` (separate files since 2026-08-25, so two daemons can't interleave into one unreadable log). Shows PhotoKitResolver auth/resolve diagnostics, deposit errors, etc."
     dir: coldstorage
     vars:
       DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
     cmds:
-      - tail -n 40 -f "{{.DATA_DIR}}/coldstored.out.log" "{{.DATA_DIR}}/coldstored.err.log"
+      - |
+        cd "{{.DATA_DIR}}" && tail -n 40 -f $(ls coldstored.out.log coldstored.err.log coldstored.app.out.log coldstored.app.err.log 2>/dev/null)
+
+  daemon:mac:stacks:
+    desc: "Dump the FULL thread stacks from the most recent daemon sample file (coldstored-sample-*.txt) — the call graph, not just leaf frames. Use when daemon:mac:sample says the daemon is idle in syscalls but commands still time out: it names which call the threads are parked INSIDE (S3/CRT network, a file scan, a lock)."
+    dir: coldstorage
+    vars:
+      DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
+    cmds:
+      - |
+        f=$(ls -t "{{.DATA_DIR}}"/coldstored-sample-*.txt 2>/dev/null | head -1)
+        [ -n "$f" ] || { echo "no sample files — run task daemon:mac:sample first"; exit 1; }
+        echo "-- $f --"
+        awk '/^Call graph:/,/^Total number/' "$f" \
+          | grep -E "Thread_|coldstored|CoreFoundation|Foundation|libsqlite|AwsCommonRuntimeKit|Smithy|URLSession|specialized|DaemonService|Journal|UploadEngine|RestoreEngine|LocalDirSource|ExplicitPaths|SHA|usageBytes|listObjects|nw_|nwio" \
+          | sed -E 's/ \(in .*//' | head -140
+
+  daemon:mac:sample:
+    desc: "Where is the daemon STUCK right now? Takes three back-to-back 8 s CPU/wait samples of every running coldstored (Mode 1 and/or the packaged app's) with macOS `sample` and prints the hottest frames — start it as the app launches so a sample lands inside the ~40 s post-sign-in window. The decisive readout when commands time out (`request 'getStatus' timed out after 10000ms`) and the log is quiet. Full samples land in the data dir as coldstored-sample-<pid>-<round>.txt."
+    dir: coldstorage
+    vars:
+      DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
+    cmds:
+      - |
+        pids=$(pgrep -x coldstored)
+        [ -n "$pids" ] || { echo "no coldstored process is running"; exit 1; }
+        # Three back-to-back 8 s samples: the stall this exists for lasts ~40 s after sign-in, so start this
+        # the moment the app launches and at least one sample lands inside it.
+        for round in 1 2 3; do for pid in $pids; do
+          out="{{.DATA_DIR}}/coldstored-sample-$pid-$round.txt"
+          echo "── round $round: sampling coldstored pid $pid for 8s → $out ──"
+          sample "$pid" 8 -file "$out" >/dev/null 2>&1 || { echo "sample failed for $pid (needs the same user; try again)"; continue; }
+          echo "   OUR frames in the sample, by weight (which Journal/engine call the daemon is inside):"
+          # The leaf frames are libsqlite3/kernel and say only "a query on disk". The line that names the
+          # QUERY is the Swift frame above them — so pull every ColdStorageCore frame out of the call tree
+          # with its sample count, heaviest first. `sample` prints "    <count> <frame>  (in coldstored) …".
+          grep -E "^ +[0-9]+ .*(Journal|DaemonService|UploadEngine|RestoreEngine|BlobPlanner|ControlServer)" "$out" \
+            | sed -E 's/^ +([0-9]+) +([^(]*).*/\1 \2/' | sort -rn | awk '!seen[$0]++' | head -25 | sed 's/^/   /'
+          echo "   leaf frames (sorted by top of stack):"
+          awk '/^Sort by top of stack/,0' "$out" | sed -n 2,8p | sed 's/^/   /'
+        done; done
 
   daemon:mac:memory:
     desc: "Watch the installed daemon's memory while it uploads — the SHAPE is the diagnosis. It should stay FLAT (~100-200 MB) no matter how many files or how big; the engine holds one 64 MiB part at a time and writes nothing to disk. A 1000-file deposit peaked at 1.7 GB on 2026-07-14, which is what this exists to explain. Reads the RSS the daemon logs after the scan and after every part, so you never have to squint at Activity Monitor. Ctrl-C to stop."
@@ -518,7 +558,7 @@ tasks:
         head -n 40 "{{.OUT}}"
 
   daemon:mac:install:
-    desc: "Build release + install the coldstored LaunchAgent (RunAtLoad/KeepAlive)."
+    desc: "[Mode 1: dev daemon] Build release + install + START the coldstored LaunchAgent. It does NOT auto-start at login (no RunAtLoad/KeepAlive) — re-run this to bring it back after a reboot. It shares the packaged app's data dir + journal (it IS your real vault, run from source) but has its own socket + logs, so the two can't split-brain; still, don't run both at once — `task daemon:mac:uninstall` before using the packaged app."
     dir: coldstorage
     vars:
       DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
@@ -606,7 +646,10 @@ tasks:
       # questions that actually distinguish the causes, right here, while the context is in hand.
       - |
         if launchctl bootstrap "gui/$(id -u)" "{{.PLIST}}"; then
-          echo "installed → {{.PLIST}}  (socket: {{.DATA_DIR}}/coldstored.sock; logs reset)"
+          # No RunAtLoad in the plist, so bootstrap only REGISTERS it — kickstart is what starts it.
+          launchctl kickstart "gui/$(id -u)/com.theadpharm.coldstored"
+          echo "installed + started → {{.PLIST}}  (socket: {{.DATA_DIR}}/coldstored.sock; logs reset)"
+          echo "  it will NOT come back after a reboot by itself — re-run this task when you want it."
           exit 0
         fi
         bin="$(swift build -c release --show-bin-path)/coldstored"
@@ -639,7 +682,7 @@ tasks:
         exit 1
 
   daemon:mac:bootstrap:
-    desc: "[Mode 1: your real daemon] One-shot daemon setup: build + install the LaunchAgent. Run once, after `task tf:coldstorage:creds-export` in the devcontainer. After this, launchd keeps the daemon running (RunAtLoad/KeepAlive) — you don't re-run it to start it. (No credential step: the daemon gets short-lived Cognito STS creds as the signed-in user, so there is nothing to seed.)"
+    desc: "[Mode 1: your real daemon, from source] Build + install + start the LaunchAgent. Run after `task tf:coldstorage:creds-export` in the devcontainer — and again after any reboot: it deliberately does not auto-start at login (a self-reviving dev daemon split-brained the packaged app on 2026-08-25). (No credential step: the daemon gets short-lived Cognito STS creds as the signed-in user, so there is nothing to seed.)"
     cmds:
       - task: daemon:mac:install
 
@@ -650,8 +693,16 @@ tasks:
       SOCK: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
       ERRLOG: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.err.log"
     cmds:
-      - 'echo "── launchd ──"'
+      - 'echo "── launchd (Mode 1, the dev daemon) ──"'
       - launchctl print "gui/$(id -u)/com.theadpharm.coldstored" 2>/dev/null | grep -iE "state =|pid =|last exit" || echo "not loaded — run task daemon:mac:bootstrap"
+      # Two daemons on one vault is the 2026-08-25 split brain. The packaged app's daemon has its own socket
+      # now, so they can't cross wires — but they DO share the journal, so say it loudly when both are up.
+      - |
+        if launchctl print "gui/$(id -u)/com.theadpharm.coldstored" 2>/dev/null | grep -q "state = running" \
+           && pgrep -f "ColdStorage.app/Contents/Resources/bin/coldstored" >/dev/null 2>&1; then
+          echo "⚠ BOTH daemons are running — Mode 1 (launchd) AND the packaged ColdStorage.app's own."
+          echo "  They share one journal. Pick one: task daemon:mac:uninstall, or quit ColdStorage.app."
+        fi
       - 'echo "── daemon status (control socket) ──"'
       # An `if`, not an && || && chain: the old one parsed as ((A && B) || C) && D, so the error-log tail
       # ran even when getStatus had answered perfectly — a wall of log lines under a healthy result reads
@@ -667,7 +718,7 @@ tasks:
         fi
 
   daemon:mac:uninstall:
-    desc: "Stop + remove the coldstored LaunchAgent. Needed before testing Mode 2 (ui:mac:package) — it and Mode 1 share the same socket/data dir; `task daemon:mac:bootstrap` brings Mode 1 back afterward."
+    desc: "Stop + remove the coldstored LaunchAgent (Mode 1). Do this before running the packaged app for real: the two share one journal, and while they no longer fight over a socket, two daemons scanning one vault is still two daemons. `task daemon:mac:bootstrap` brings Mode 1 back."
     vars:
       PLIST: "{{.HOME}}/Library/LaunchAgents/com.theadpharm.coldstored.plist"
     cmds:
@@ -982,18 +1033,18 @@ tasks:
       - task: ui:mac:live
 
   app:mac:package:staging:
-    desc: "[Mode 2 · SAFE] Build + launch-ready the PACKAGED ColdStorage.app wired to STAGING (sandbox Paddle). Uninstalls the Mode 1 launchd daemon first — Mode 1 and Mode 2 fight over the same socket/data dir, and the packaged app silently hangs on 'Connecting…' if you skip it. Bring Mode 1 back with `task daemon:mac:bootstrap`. GATED against origin/staging (the bundled app calls the DEPLOYED API)."
+    desc: "[Mode 2 · SAFE] Build + launch-ready the PACKAGED ColdStorage.app wired to STAGING (sandbox Paddle). Uninstalls the Mode 1 launchd daemon first — the packaged app has its own socket now, but the two would still share one journal and both scan it. Bring Mode 1 back with `task daemon:mac:bootstrap`. GATED against origin/staging (the bundled app calls the DEPLOYED API)."
     cmds:
       - task: app:mac:_require-api-deployed
         vars: { BRANCH: staging, API: "https://api-staging.coldstorage.sh" }
-      # Not optional: the packaged app bundles its OWN daemon, which can't bind a socket Mode 1 still holds.
+      # The packaged app bundles its OWN daemon (own socket + logs); two daemons on one journal is still two.
       - task: daemon:mac:uninstall
       # Bundles a freshly-built daemon from current source, and bakes ENV=staging itself.
       - task: ui:mac:package
       - echo "→ ui/dist/'ColdStorage Staging.app' (staging-wired, own bundle id + data dir — installs alongside prod ColdStorage.app). Mode 1 is uninstalled; 'task daemon:mac:bootstrap' restores it."
 
   app:mac:package:production:
-    desc: "[Mode 2 · ⚠️ LIVE MONEY, not published] Build the PRODUCTION-wired ColdStorage.app — signed + notarized, but NOT published to GitHub (that's ui:mac:release). Live Paddle: anything you buy in it is a real charge. Uninstalls the Mode 1 daemon first (socket collision). Needs the Developer ID cert + notary creds. GATED against origin/main."
+    desc: "[Mode 2 · ⚠️ LIVE MONEY, not published] Build the PRODUCTION-wired ColdStorage.app — signed + notarized, but NOT published to GitHub (that's ui:mac:release). Live Paddle: anything you buy in it is a real charge. Uninstalls the Mode 1 daemon first (two daemons, one journal). Needs the Developer ID cert + notary creds. GATED against origin/main."
     interactive: true
     prompt: "This builds a PRODUCTION-wired app — LIVE Paddle. Anything purchased in it charges a REAL card. (It will NOT be published — that's ui:mac:release.) Continue?"
     cmds:

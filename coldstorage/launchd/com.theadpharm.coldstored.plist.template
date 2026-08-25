@@ -3,8 +3,11 @@
 <!--
   coldstored LaunchAgent (per-user). A LaunchAgent, NOT a LaunchDaemon, because it must run in the
   user's GUI session to reach the Photos library (TCC) and the login Keychain (design §1).
-  RunAtLoad + KeepAlive ⇒ starts at login and auto-restarts after a crash/logout — the resume
-  protocol (journal + ListParts) makes restart-after-anything safe.
+  NO RunAtLoad, NO KeepAlive (since 2026-08-25): this is the DEV daemon ("Mode 1"), and it used to
+  revive itself at every login for the rest of time — alongside the packaged ColdStorage.app, which
+  bundles its own. Two prod-wired daemons on one data dir was a split brain (see ui/src/main/daemon.ts).
+  It now runs only when `task daemon:mac:install` starts it, and stays down after a logout/reboot until
+  asked again. The resume protocol (journal + ListParts) makes that safe.
 
   Placeholders are substituted by `task daemon:mac:install` (which writes the rendered copy to
   ~/Library/LaunchAgents/): __BINARY__, __DATA_DIR__, __SOCKET__, __BUCKET__, __REGION__,
@@ -45,9 +48,9 @@
         <key>COLDSTORE_COGNITO_USER_POOL_PROVIDER</key> <string>__COGNITO_USER_POOL_PROVIDER__</string>
     </dict>
 
-    <!-- Run in-session at login; restart after a crash. -->
-    <key>RunAtLoad</key>      <true/>
-    <key>KeepAlive</key>      <true/>
+    <!-- Started explicitly by `task daemon:mac:install`; never auto-started at login (see header). -->
+    <key>RunAtLoad</key>      <false/>
+    <key>KeepAlive</key>      <false/>
 
     <!-- Working dir + logs under the per-user data dir. -->
     <key>WorkingDirectory</key>  <string>__DATA_DIR__</string>

@@ -25,8 +25,27 @@ export type { AppConfig } from "./config.ts";
 export const dataDir = (): string => app.getPath("userData");
 
 /** The control-socket path the daemon creates AND the client dials — one value, both sides agree on it
- * (passed to `new DaemonClient({ socketPath })` in index.ts). */
-export const daemonSocketPath = (): string => join(dataDir(), "coldstored.sock");
+ * (passed to `new DaemonClient({ socketPath })` in index.ts).
+ *
+ * **Packaged: a socket only this app knows.** `coldstored.sock` is the rendezvous the dev launchd daemon
+ * (`task daemon:mac:install`, "Mode 1") and every `task daemon:mac:*` tool use. The packaged app used to
+ * share it — and a Mode 1 leftover, which launchd revived at every login, then fought the app's own child
+ * daemon for the path. Each daemon unlinks + rebinds on start, so whichever started last owned the PATH
+ * while the app's already-open connection stayed on the OTHER one: a split brain where the app read one
+ * daemon (signed out after a network blip, serving empty lists) and the CLI read the other (signed in, all
+ * 140k files). The user saw a "your vault is empty" hero over a full vault (2026-08-25). A private path
+ * makes that structurally impossible: the app can only ever reach the daemon it spawned. Dev (unpackaged)
+ * keeps the shared path on purpose — there the UI is MEANT to dial the launchd daemon. */
+export const daemonSocketPath = (): string =>
+  join(dataDir(), app.isPackaged ? "coldstored.app.sock" : "coldstored.sock");
+
+/** The packaged daemon's log files — its own pair, not Mode 1's `coldstored.{out,err}.log`, for the same
+ * reason as the socket: two daemons appending to one file interleave into a log that reads as one process
+ * with impossible memory swings. `task daemon:mac:logs` tails both pairs. */
+export const daemonLogPaths = (): { out: string; err: string } => ({
+  out: join(dataDir(), "coldstored.app.out.log"),
+  err: join(dataDir(), "coldstored.app.err.log"),
+});
 
 /** Absolute path to the bundled daemon binary (Contents/Resources/bin — see electron-builder.yml). */
 const coldstoredPath = (): string => join(process.resourcesPath, "bin", "coldstored");
@@ -86,7 +105,7 @@ const daemonEnv = (dir: string): NodeJS.ProcessEnv => {
   return {
     ...process.env,
     COLDSTORE_DATA_DIR: dir,
-    COLDSTORE_SOCKET: join(dir, "coldstored.sock"),
+    COLDSTORE_SOCKET: daemonSocketPath(),
     ...(cfg.bucket ? { COLDSTORE_BUCKET: cfg.bucket } : {}),
     ...(cfg.region ? { AWS_REGION: cfg.region } : {}),
     ...(cfg.cognitoIdentityPoolId ? { COLDSTORE_COGNITO_IDENTITY_POOL_ID: cfg.cognitoIdentityPoolId } : {}),
@@ -97,14 +116,15 @@ const daemonEnv = (dir: string): NodeJS.ProcessEnv => {
 /**
  * Spawn + supervise `coldstored`. Returns a disposer that stops the supervisor and terminates the child.
  * Restarts on unexpected exit after a short backoff (so a crash-loop can't peg the CPU); a disposer call
- * suppresses further restarts. stdout/stderr → `coldstored.{out,err}.log` in the data dir (what
+ * suppresses further restarts. stdout/stderr → {@link daemonLogPaths} in the data dir (what
  * `task daemon:mac:logs` tails — incl. the PhotoKitResolver auth diagnostics).
  */
 export const startDaemon = (): (() => void) => {
   const dir = dataDir();
   mkdirSync(dir, { recursive: true });
-  const out = openSync(join(dir, "coldstored.out.log"), "a");
-  const err = openSync(join(dir, "coldstored.err.log"), "a");
+  const logs = daemonLogPaths();
+  const out = openSync(logs.out, "a");
+  const err = openSync(logs.err, "a");
 
   let child: ChildProcess | null = null;
   let stopped = false;

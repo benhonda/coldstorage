@@ -608,7 +608,9 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   Archive freezes object *bytes*, never *metadata*, and the tree comes from the journal (not
   `ListObjectsV2` — blobs are opaque `blobs/<hash>` objects). Don't block browse work on R2.
 - **Socket perms:** `0600`, same user — fine. Dev socket `coldstorage/coldstored.sock`; installed
-  `~/Library/Application Support/ColdStorage/coldstored.sock` (`COLDSTORE_SOCKET`).
+  (Mode 1) `~/Library/Application Support/ColdStorage/coldstored.sock`; the **packaged app's own daemon
+  uses `coldstored.app.sock`** in the same dir (`COLDSTORE_SOCKET`) — a path only the app dials, so it can
+  never be connected to a daemon it didn't spawn (the 2026-08-25 split brain; `ui/src/main/daemon.ts`).
 - **A download is a durable journal row, not a request/response** (a `restore`, on the wire).
   `requestRestore` records it and returns the whole list; the DAEMON's run loop then steps it
   (`restorePass`) until it lands, so it keeps going with the app closed. Read `listRestores` for state;
