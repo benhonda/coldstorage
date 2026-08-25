@@ -84,6 +84,7 @@ const vault = new VaultManager(
   new VaultStore(join(app.getPath("userData"), "vault.json")),
   new KeyBlobClient(accountApiBaseUrl),
   () => auth.getFreshIdToken(),
+  updaterLog, // every handoff step + failure → main.log
 );
 const disposeVaultIpc = registerVaultIpc(vault);
 
@@ -196,6 +197,7 @@ const pushQuota = (): void => {
 };
 
 const provisionDaemon = async (idToken: string): Promise<void> => {
+  vault.setStep("Signing the background service in…");
   await client.request("authenticate", { idToken });
   await vault.provision(idToken);
   // `authenticate` resets the daemon's quota (a quota belongs to one user), so re-push it after every
@@ -207,11 +209,47 @@ const provisionDaemon = async (idToken: string): Promise<void> => {
 // error instead of hanging on "Setting up…" forever.
 const onProvisionFailure = (e: unknown): void => {
   const msg = e instanceof Error ? e.message : String(e);
-  console.error("daemon provision failed:", e);
+  updaterLog.error("daemon provision failed:", msg);
   if (!msg.includes("not connected")) vault.markProvisionError(msg);
 };
+// **Provision until it sticks.** `authenticate` is the daemon's own sign-in — a Cognito round trip — and
+// it fails for the most ordinary reason there is: no network for a few seconds right after launch or
+// wake. It used to be fired once per fresh token and then left alone until the NEXT token, an hour
+// later. For that hour the daemon held no session and answered every read with an empty-but-successful
+// nothing — which the app showed as an empty vault (2026-08-25). So: retry with backoff (2 s → 60 s
+// cap) until it succeeds, a newer token supersedes it, or the socket drops (the reconnect handler
+// starts a fresh attempt). The first failure is still surfaced (`onProvisionFailure`) so the UI shows
+// what is being retried rather than a silent spinner.
+let provisionAttempt = 0;
+let provisionTimer: ReturnType<typeof setTimeout> | null = null;
+const cancelProvisionRetry = (): void => {
+  provisionAttempt++;
+  if (provisionTimer) clearTimeout(provisionTimer);
+  provisionTimer = null;
+};
+const provisionWithRetry = (idToken: string): void => {
+  cancelProvisionRetry();
+  const attempt = provisionAttempt;
+  let delayMs = 2_000;
+  const tryOnce = (): void => {
+    provisionDaemon(idToken).catch((e: unknown) => {
+      if (attempt !== provisionAttempt) return; // superseded by a newer token / disconnect
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("not connected")) return; // the reconnect handler owns this case
+      // A retryable failure is NOT terminal: keep the gate in its narrated "Setting up…" state (the step
+      // line + the >20s "taking too long, see main.log" escalation carry the honest pending signal), rather
+      // than flashing "Couldn't set up encryption" while a retry is already scheduled 2s out (PILLAR5 —
+      // don't show a terminal error for work that's still in flight). The failure is still logged.
+      updaterLog.error(`daemon provision failed (retrying in ${delayMs / 1000}s): ${msg}`);
+      vault.setStep("Reconnecting to set up encryption…");
+      provisionTimer = setTimeout(tryOnce, delayMs);
+      delayMs = Math.min(delayMs * 2, 60_000);
+    });
+  };
+  tryOnce();
+};
 const offIdToken = auth.onIdToken((idToken) => {
-  void provisionDaemon(idToken).catch(onProvisionFailure);
+  provisionWithRetry(idToken);
   // Re-check the subscription + account profile on every fresh token (sign-in + refresh) —
   // independent of the daemon. The account refresh also records terms acceptance (sign-in-wrap).
   void entitlement.refresh();
@@ -221,10 +259,23 @@ const offIdToken = auth.onIdToken((idToken) => {
 // resolves), re-push the quota so the daemon's ceiling tracks the plan the user is actually on.
 const offEntitlementQuota = entitlement.onStatus(() => pushQuota());
 const offClientConnect = client.on("connect", () => {
+  updaterLog.info(`daemon socket connected: ${client.socketPath}`);
   void auth
     .getFreshIdToken()
-    .then((idToken) => (idToken ? provisionDaemon(idToken) : null))
+    .then((idToken) => {
+      if (idToken) return provisionWithRetry(idToken);
+      // Not an error — a signed-out install connects too — but it IS the reason the handoff isn't
+      // happening, and it used to be silent. The next fresh token (`onIdToken`) picks it up.
+      updaterLog.info("daemon connected, but there is no sign-in token yet — the handoff waits for one");
+      vault.setStep("Waiting for your sign-in…");
+    })
     .catch(onProvisionFailure);
+});
+// A dropped socket makes any pending retry moot — the (re)connect above starts over.
+const offClientDisconnect = client.on("disconnect", (err) => {
+  updaterLog.error(`daemon socket disconnected (${err?.message ?? "no reason"}) — reconnecting every ${client.reconnectDelayMs / 1000}s: ${client.socketPath}`);
+  vault.setStep("Connecting to the background service…");
+  cancelProvisionRetry();
 });
 
 // Bring the window back when a sign-in completes — the user is off in the browser; the deep link
@@ -265,6 +316,14 @@ const createWindow = (): void => {
 
   win.once("ready-to-show", () => win.show());
 
+  // Renderer errors land in `main.log` — the file `ui:mac:update:doctor` already reads — instead of a
+  // devtools console no packaged build ever opens. "[coldstore] files refresh failed" had been printing
+  // there, unread, through an entire "my vault is empty" incident (2026-08-25, PILLAR5). Errors only:
+  // the renderer's console.log is chatter, its console.error is a fault.
+  win.webContents.on("console-message", (details) => {
+    if (details.level === "error") updaterLog.error(`[renderer] ${details.message}`);
+  });
+
   // Open external links in the OS browser, never in-app.
   win.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
@@ -293,8 +352,10 @@ app.whenReady().then(() => {
 
   // Dial the daemon. If it's not up yet (the child is still binding its socket), autoReconnect keeps
   // retrying; the renderer shows "connecting" until a 'connect' lifecycle push arrives. Non-fatal.
-  client.connect().catch(() => {
-    /* lifecycle/reconnect handles it */
+  vault.setStep("Connecting to the background service…");
+  client.connect().catch((e: unknown) => {
+    // The reconnect loop owns recovery; this is the one line that says the FIRST dial lost the race.
+    updaterLog.info(`daemon socket: first dial failed (${e instanceof Error ? e.message : String(e)}) — retrying`);
   });
 
   // Silent session restore (safeStorage needs `ready` for the Keychain), then any deep link that
@@ -330,6 +391,8 @@ app.on("will-quit", () => {
   offIdToken();
   offEntitlementQuota();
   offClientConnect();
+  offClientDisconnect();
+  cancelProvisionRetry();
   offAuthFocus();
   auth.dispose();
   vault.dispose();

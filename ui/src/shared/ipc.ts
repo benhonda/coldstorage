@@ -188,6 +188,13 @@ export interface VaultStatus {
    * Never persisted, never re-derivable. Cleared as soon as the user acknowledges saving it. */
   recoveryCode: string | null;
   error: string | null;
+  /** What the handoff is doing RIGHT NOW, in words a user can read ("Signing the background service
+   * in…", "Unlocking your encryption key…"), with when it started. The gate shows it and `main.log`
+   * gets every transition — because "Setting up…" sat on screen for an unbounded time with nothing
+   * logged anywhere, and nobody could say which of five steps it was stuck on (2026-08-25, PILLAR5).
+   * `null` when nothing is in progress (unlocked, or nothing has started). */
+  step: string | null;
+  stepSince: number | null;
 }
 
 /**

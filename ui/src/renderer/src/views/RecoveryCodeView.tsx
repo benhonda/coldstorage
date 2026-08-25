@@ -9,7 +9,8 @@
  *
  * Voice: plain and factual (no "safe", no fear-mongering) — it's a code you keep, like any other.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { ConnectionState } from "../../../shared/ipc.ts";
 import { Button, Field } from "../ui/primitives.tsx";
 
 /** Which account these vault screens are acting as — so a wrong-account sign-in is caught BEFORE the
@@ -75,15 +76,71 @@ export const RecoveryCodeShow = ({
 
 /** The in-between vault states while signed in: provisioning (a brief loading moment) or an error
  * (retried automatically on the next daemon reconnect / token refresh; sign-out is the escape hatch). */
+/** Which step the handoff is on, and for how long. "Setting up…" used to be the whole story for an
+ * unbounded wait across five distinct steps (2026-08-25); now the step is named, the daemon connection is
+ * shown when that's what it's waiting on, and past 20 s it says so and points at `main.log`. */
+const HandoffStep = ({
+  connection,
+  step,
+  stepSince,
+}: {
+  connection: ConnectionState;
+  step: string | null;
+  stepSince: number | null;
+}): React.JSX.Element | null => {
+  const label = connection !== "connected" ? "Connecting to the background service…" : step;
+  const [now, setNow] = useState(() => Date.now());
+  // Only tick while a step is actually on screen — no 1/sec re-render of the gate when nothing is shown.
+  useEffect(() => {
+    if (label == null) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [label]);
+  if (!label) return null;
+  const secs = stepSince ? Math.max(0, Math.floor((now - stepSince) / 1000)) : 0;
+  const slow = secs >= 20;
+  return (
+    <p className={slow ? "cs-signin-step cs-signin-step--slow" : "cs-signin-step"}>
+      {label}
+      {secs >= 5 && ` (${secs}s)`}
+      {slow && (
+        <>
+          <br />
+          This is taking longer than it should. It keeps retrying on its own; the log at
+          {" "}~/Library/Logs/ColdStorage/main.log says why.
+        </>
+      )}
+    </p>
+  );
+};
+
+/** What the wait IS, by state. `locked` is every ordinary launch / refresh / reconnect — this computer
+ * most likely already has the key and is unlocking it from the Keychain, so "setting up" would be a lie
+ * (2026-08-25). Only `provisioning` (nothing cached, consulting the account) can genuinely set anything
+ * up — and even that may resolve to "enter your recovery code" instead. */
+const GATE_COPY: Record<"locked" | "provisioning", { title: string; body: string }> = {
+  locked: { title: "Unlocking…", body: "One moment while your encryption is unlocked on this computer." },
+  provisioning: {
+    title: "Setting up…",
+    body: "One moment while your encryption is set up on this computer.",
+  },
+};
+
 export const VaultGate = ({
   state,
   error,
   email,
+  connection,
+  step,
+  stepSince,
   onSignOut,
 }: {
   state: "locked" | "provisioning" | "error";
   error: string | null;
   email: string | null;
+  connection: ConnectionState;
+  step: string | null;
+  stepSince: number | null;
   onSignOut: () => void;
 }): React.JSX.Element => (
   <div className="cs-signin">
@@ -91,7 +148,7 @@ export const VaultGate = ({
       <AccountLine email={email} onSignOut={onSignOut} />
       {state === "error" ? (
         <>
-          <h1 className="cs-signin-title">Couldn&apos;t set up encryption</h1>
+          <h1 className="cs-signin-title">Couldn&apos;t unlock your encryption</h1>
           <p className="cs-signin-text">
             {error ?? "Something went wrong."} It&apos;ll try again on its own — check your connection.
           </p>
@@ -101,8 +158,9 @@ export const VaultGate = ({
         </>
       ) : (
         <>
-          <h1 className="cs-signin-title">Setting up…</h1>
-          <p className="cs-signin-text">One moment while your encryption is set up on this computer.</p>
+          <h1 className="cs-signin-title">{GATE_COPY[state].title}</h1>
+          <p className="cs-signin-text">{GATE_COPY[state].body}</p>
+          <HandoffStep connection={connection} step={step} stepSince={stepSince} />
         </>
       )}
     </div>

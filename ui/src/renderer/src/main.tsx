@@ -26,7 +26,7 @@ applyDensity(readDensity());
 
 const api = window.coldstore;
 const store = createStore();
-connectController(api, store);
+const controller = connectController(api, store);
 
 const root = document.getElementById("root");
 if (!root) throw new Error("missing #root");
@@ -35,7 +35,7 @@ createRoot(root).render(
     {/* Outside App, not inside it: App returns early for the sign-in, vault and onboarding gates, and a
         toast raised on the way through one of those still has to be able to render. */}
     <ToastProvider>
-      <App api={api} store={store} />
+      <App api={api} store={store} retryFiles={controller.refreshFiles} />
     </ToastProvider>
   </StrictMode>,
 );

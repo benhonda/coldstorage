@@ -326,7 +326,17 @@ export const OnboardingWizard = ({ api, auth, vault, account, quotaBytes, subscr
       }
       // The mint (fresh signup) or reissue is still working underneath — the same quiet gate the
       // vault flow already uses. Errors surface through the vault status exactly as before.
-      return <VaultGate state={vault.state === "error" ? "error" : "provisioning"} error={vault.error} email={auth.email} onSignOut={onSignOut} />;
+      return (
+        <VaultGate
+          state={vault.state === "error" ? "error" : "provisioning"}
+          error={vault.error}
+          email={auth.email}
+          connection="connected" // the wizard only runs once the daemon handoff has reached the vault
+          step={vault.step}
+          stepSince={vault.stepSince}
+          onSignOut={onSignOut}
+        />
+      );
     }
 
     case "q1":

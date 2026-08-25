@@ -20,7 +20,7 @@ import type { KeyBlobClient } from "./keyblob-client.ts";
 import type { VaultStore } from "./storage.ts";
 
 export class VaultManager {
-  private status: VaultStatus = { state: "locked", recoveryCode: null, error: null };
+  private status: VaultStatus = { state: "locked", recoveryCode: null, error: null, step: null, stepSince: null };
   /** The account whose vault we're currently managing (the ID token's `sub`). */
   private sub: string | null = null;
   /** Set while state is `needsRecoveryCode`: the blob fetched from the backend, awaiting the user's code. */
@@ -35,10 +35,20 @@ export class VaultManager {
     private readonly keyBlob: KeyBlobClient,
     /** A fresh ID token for backend writes outside `provision` (the reissue's key-blob PUT). */
     private readonly getIdToken: () => Promise<string | null> = () => Promise.resolve(null),
+    /** Where step transitions + errors go — `main.log` in the app, a no-op in tests. */
+    private readonly log: { info: (m: string) => void; error: (m: string) => void } = { info: () => {}, error: () => {} },
   ) {}
 
   vaultStatus(): VaultStatus {
     return this.status;
+  }
+
+  /** Name the step the handoff is on (see `VaultStatus.step`). Keeps every other field; logs it. Callers
+   * outside this class (index.ts's connect/authenticate stages) use it too, so the gate narrates the
+   * WHOLE chain, not just the part that lives here. `null` = nothing in progress. */
+  setStep(step: string | null): void {
+    if (step) this.log.info(`vault handoff: ${step}`);
+    this.setStatus({ ...this.status, step, stepSince: step ? Date.now() : null });
   }
 
   onStatus(listener: (s: VaultStatus) => void): () => void {
@@ -68,10 +78,13 @@ export class VaultManager {
     this.sub = sub;
     try {
       // 1. This device already unlocked before → silent re-unlock from the Keychain cache.
+      this.setStep("Reading your encryption key from the Keychain…");
       const cached = await this.store.getMasterKey(sub);
       if (cached) {
+        this.setStep("Unlocking your encryption key…");
         await this.client.request("unlockVault", { masterKey: cached });
         this.setStatus({ state: "unlocked", recoveryCode: null, error: null });
+        this.log.info("vault handoff: unlocked (cached key)");
         return;
       }
 
@@ -80,13 +93,16 @@ export class VaultManager {
       if (this.status.state !== "unlocked") {
         this.setStatus({ state: "provisioning", recoveryCode: null, error: null });
       }
+      this.setStep("Checking your account for an encryption key…");
       const blob = await this.keyBlob.get(idToken);
       if (blob === null) {
         // New account → mint. The daemon loads the MK live and returns it + the one-time code.
+        this.setStep("Creating your encryption key…");
         const minted = await this.client.request("mintVault");
         await this.keyBlob.put(idToken, minted);
         await this.store.setMasterKey(sub, minted.masterKey);
         this.setStatus({ state: "unlocked", recoveryCode: minted.recoveryCode, error: null });
+        this.log.info("vault handoff: unlocked (fresh mint)");
       } else {
         // Existing account, new device → the user must enter their recovery code.
         this.pendingBlob = blob;
@@ -164,8 +180,12 @@ export class VaultManager {
     this.listeners.clear();
   }
 
-  private setStatus(s: VaultStatus): void {
-    this.status = s;
-    for (const l of this.listeners) l(s);
+  /** A terminal state clears the step (nothing is in progress any more); an error is also logged, so a
+   * gate that reads "Couldn't unlock your encryption" has a matching line in `main.log`. */
+  private setStatus(s: Omit<VaultStatus, "step" | "stepSince"> & Partial<Pick<VaultStatus, "step" | "stepSince">>): void {
+    const next: VaultStatus = { step: null, stepSince: null, ...s };
+    if (next.state === "error") this.log.error(`vault handoff failed: ${next.error ?? "unknown error"}`);
+    this.status = next;
+    for (const l of this.listeners) l(next);
   }
 }

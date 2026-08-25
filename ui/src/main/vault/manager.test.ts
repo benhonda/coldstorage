@@ -73,6 +73,42 @@ describe("VaultManager.provision", () => {
     expect(t.last().state).toBe("unlocked");
   });
 
+  test("every step of the handoff is NAMED and logged, and a terminal state clears it", async () => {
+    // "Setting up…" sat on screen indefinitely with nothing in any log (2026-08-25). The status now
+    // carries the step it's on, the logger sees each transition, and reaching a terminal state clears it.
+    const calls: Array<[string, unknown]> = [];
+    const client = makeClient({ unlockVault: { ok: true } }, calls);
+    const logged: string[] = [];
+    const vault = new VaultManager(client, makeStore({ "user-1": "CACHEDMK" }), makeKeyBlob(null, []), undefined, {
+      info: (m) => logged.push(m),
+      error: (m) => logged.push(`ERROR ${m}`),
+    });
+    const t = track(vault);
+    vault.setStep("Signing the background service in…");
+    expect(t.last().step).toBe("Signing the background service in…");
+    expect(typeof t.last().stepSince).toBe("number");
+
+    await vault.provision(tokenFor("user-1"));
+
+    expect(logged).toEqual([
+      "vault handoff: Signing the background service in…",
+      "vault handoff: Reading your encryption key from the Keychain…",
+      "vault handoff: Unlocking your encryption key…",
+      "vault handoff: unlocked (cached key)",
+    ]);
+    expect(t.last()).toMatchObject({ state: "unlocked", step: null, stepSince: null });
+  });
+
+  test("a failed handoff is logged as an error, not just shown", async () => {
+    const client = makeClient({}, []);
+    const logged: string[] = [];
+    const failing = { get: () => Promise.reject(new Error("account server unreachable")), put: () => Promise.resolve() } as unknown as KeyBlobClient;
+    const vault = new VaultManager(client, makeStore(), failing, undefined, { info: () => {}, error: (m) => logged.push(m) });
+    await vault.provision(tokenFor("user-1"));
+    expect(vault.vaultStatus().state).toBe("error");
+    expect(logged).toEqual(["vault handoff failed: account server unreachable"]);
+  });
+
   test("no cache + no key-blob (new account) → mint, PUT the blob, escrow the MK, show the code once", async () => {
     const calls: Array<[string, unknown]> = [];
     const client = makeClient(
