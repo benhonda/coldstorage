@@ -74,10 +74,11 @@ type PendingResolver = {
 };
 
 export class DaemonClient {
-  private readonly socketPath: string;
+  /** Public so the app can NAME the socket in its logs — "connected" means nothing without which. */
+  readonly socketPath: string;
   private readonly requestTimeoutMs: number;
   private readonly autoReconnect: boolean;
-  private readonly reconnectDelayMs: number;
+  readonly reconnectDelayMs: number;
   private readonly dial: (socketPath: string) => net.Socket;
 
   private socket: net.Socket | null = null;
@@ -85,7 +86,9 @@ export class DaemonClient {
   private closing = false;
   private nextId = 1;
   private readonly pending = new Map<number, PendingResolver>();
-  private buf = Buffer.alloc(0);
+  /** Inbound byte chunks awaiting a newline — joined once per line, never concat-per-chunk (see onData). */
+  private chunks: Buffer[] = [];
+  private pendingBytes = 0;
   private readonly emitter = new EventEmitter();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -198,13 +201,24 @@ export class DaemonClient {
 
   // ── internals ──────────────────────────────────────────────────────────────
 
-  /** Frame inbound bytes into newline-delimited JSON lines and dispatch each. */
+  /** Frame inbound bytes into newline-delimited JSON lines and dispatch each.
+   *
+   * Chunks are held in a LIST and joined once per newline, not `Buffer.concat`'d on every arrival — a
+   * `listFiles` reply for a 140k-file vault is ~25 MB and arrives as hundreds of ~64 KB chunks, so the old
+   * concat-per-chunk was O(n²): it re-copied the whole growing buffer each time and pegged the main thread
+   * for seconds, long enough to blow the 10 s request deadline on OTHER in-flight commands (2026-08-25).
+   * Now each chunk is O(chunk); the single join happens only when a full line is in hand. */
   private onData(chunk: Buffer): void {
-    this.buf = Buffer.concat([this.buf, chunk]);
+    this.chunks.push(chunk);
+    this.pendingBytes += chunk.length;
+    // Fast path: no newline in what just arrived means no complete line yet — keep buffering.
+    if (chunk.indexOf(0x0a) === -1) return;
+    const buf = this.chunks.length === 1 ? this.chunks[0]! : Buffer.concat(this.chunks, this.pendingBytes);
+    let start = 0;
     let nl: number;
-    while ((nl = this.buf.indexOf(0x0a)) !== -1) {
-      const line = this.buf.subarray(0, nl);
-      this.buf = this.buf.subarray(nl + 1);
+    while ((nl = buf.indexOf(0x0a, start)) !== -1) {
+      const line = buf.subarray(start, nl);
+      start = nl + 1;
       if (line.length === 0) continue;
       let parsed: ControlLine;
       try {
@@ -214,6 +228,10 @@ export class DaemonClient {
       }
       this.dispatch(parsed);
     }
+    // Carry the unconsumed tail (a partial line) forward as the sole buffered chunk.
+    const tail = buf.subarray(start);
+    this.chunks = tail.length ? [tail] : [];
+    this.pendingBytes = tail.length;
   }
 
   private dispatch(line: ControlLine): void {
@@ -233,6 +251,8 @@ export class DaemonClient {
 
   private onClose(): void {
     this.connected = false;
+    this.chunks = []; // drop any partial line — a reconnect reframes from scratch
+    this.pendingBytes = 0;
     this.socket = null;
     const err = new Error("control connection closed");
     for (const [, p] of this.pending) {
