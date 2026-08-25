@@ -33,7 +33,7 @@ output: prefixed
 #
 #   1. YOUR REAL BACKGROUND DAEMON (real AWS/Deep Archive, always-on)
 #        daemon:mac:bootstrap (once) → then it just runs; poke it directly with daemon:mac:live.
-#        To run the APP against it, use an app:mac:run:* lane above — not ui:mac:live by hand.
+#        To run the APP against it, use an app:mac:run:* lane above.
 #        A launchd LaunchAgent — starts at login, restarts on crash. This IS your day-to-day backup
 #        service. Leave it running; you don't re-bootstrap it to "start" it.
 #
@@ -759,7 +759,7 @@ tasks:
 
   ui:_ensure-electron:
     # Bun skips postinstall scripts by default, so Electron's binary download (its postinstall) never
-    # runs → `task ui:mac:live` dies with "Electron uninstall". This runs the downloader directly, and is
+    # runs → the UI launch dies with "Electron uninstall". This runs the downloader directly, and is
     # idempotent: the `status` check skips it once the binary is present. A dep of ui:mac:live so launching
     # self-heals. (We also list electron in package.json trustedDependencies for fresh installs.)
     internal: true
@@ -778,28 +778,35 @@ tasks:
       - bun run typecheck
 
   ui:mac:live:
-    desc: "[engine — you want `task app:mac:run:staging-local` (or :local / :production-local)] Just the UI, hot-reloading, against the INSTALLED launchd daemon and whatever config.json already points at. Assumes the daemon is built, installed and current, and that the lane is already configured — the app:mac:run:* tasks are this plus those guarantees. Bare, it will happily run a stale daemon against the wrong API."
+    # The UI half of app:mac:run:<lane> — hot-reloading, against the INSTALLED launchd daemon, on the lane
+    # it's handed. Internal on purpose: alone it only saves the daemon rebuild, and a stale daemon is its
+    # own footgun (a new command fails as unknown-method and the feature looks broken).
+    internal: true
     dir: ui
     deps: [ui:_ensure-electron]
+    vars:
+      # The lane, per launch. Never persisted — why: ui/src/main/vault/config.ts.
+      ACCOUNT_API: '{{.ACCOUNT_API | default ""}}'
+    preconditions:
+      - sh: test -n "{{.ACCOUNT_API}}"
+        msg: "ACCOUNT_API is required — pick a lane: task app:mac:run:staging-local | :local | :production-local"
     env:
       # The launchd daemon's socket (daemon:mac:install path).
       COLDSTORE_SOCKET: "{{.HOME}}/Library/Application Support/ColdStorage/coldstored.sock"
       COLDSTORE_PHOTO_PICKER: "{{.ROOT_DIR}}/coldstorage/.build/release/coldstore-photo-picker"
+      # The only way a dev build learns its lane; the app shows it in Settings' footer.
+      COLDSTORE_ACCOUNT_API: "{{.ACCOUNT_API}}"
     cmds:
-      # This talks to whatever accountApiBaseUrl config.json names, and used to do so with NO
-      # verification — the app:mac:run:* gates never covered this path. That is exactly the hole the
-      # 2026-07-27 migration fell through (staging never redeployed ⇒ bare 401s), so it gets CHECK 3 too.
-      # A `task:` reference, NOT `task <name>` in a shell — internal tasks are unreachable from the CLI
-      # (exit 202). The URL comes from config.json via a dynamic `sh:` var; empty (no config yet) is a
-      # legitimate state the gate handles rather than an error.
+      # CHECK 3 (Cognito-pool parity) on the lane this launch was given. A `task:` reference, NOT
+      # `task <name>` in a shell — internal tasks are unreachable from the CLI (exit 202).
       - task: app:mac:_require-api-identity
         vars:
-          API:
-            sh: sed -n 's/.*"accountApiBaseUrl"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$HOME/Library/Application Support/ColdStorage/config.json" 2>/dev/null || true
+          API: "{{.ACCOUNT_API}}"
       - |
         # Sign-in config sourced from the local handoff file (bucket/region/Cognito ids; no secrets).
         CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
         if [ -f "$CREDS" ]; then set -a; . "$CREDS"; set +a; fi   # config only — the handoff carries no secrets
+        echo "→ account backend: {{.ACCOUNT_API}}"
         bun run dev
 
 
@@ -833,7 +840,7 @@ tasks:
     # The symptom is maximally unhelpful: a valid ID token from the new pool gets a bare 401 from a
     # deployment still verifying against the old one, surfacing in the app as "Couldn't set up
     # encryption". Happened for real on 2026-07-27 — the AWS account migration applied a new Cognito pool
-    # and redeployed production, but not staging, and `ui:mac:live` defaults to staging.
+    # and redeployed production, but not staging, and the UI launcher then defaulted to staging.
     #
     # Nothing local can answer this, so we ask the running service (the same principle GET /health was
     # built on) and compare against the infra handoff, which is the SSOT for what this Mac is pointed at.
@@ -841,7 +848,7 @@ tasks:
       - |
         if [ "${SKIP_DEPLOY_CHECK:-0}" = "1" ]; then exit 0; fi
         if [ -z "{{.API}}" ]; then
-          echo "⚠ no account-backend URL to check (config.json missing an accountApiBaseUrl?) — run 'task ui:mac:config'."
+          echo "⚠ no account-backend URL to check."
           exit 0
         fi
         CREDS="{{.ROOT_DIR}}/coldstorage/.local/daemon-creds.env"
@@ -983,20 +990,18 @@ tasks:
       # Stale-binary footgun: the launchd daemon keeps running whatever was installed last, so a new daemon
       # command (e.g. `restorePlan`) would fail as unknown-method and the feature would look broken.
       - task: daemon:mac:install
-      # The lane goes as a VAR, not `env:` — go-task does not propagate a caller's env into a called task
-      # (verified), so an `env:` here would silently fall through to ui:mac:config's default.
       - task: ui:mac:config
+      # The lane goes as a VAR, not `env:` — go-task does not propagate a caller's env into a called task
+      # (verified). ui:mac:live refuses to run without it.
+      - task: ui:mac:live
         vars:
           ACCOUNT_API: "https://api-staging.coldstorage.sh"
-      - task: ui:mac:live
 
   app:mac:run:local:
     desc: "[SAFE · fastest loop] Everything local: the API runs on your machine (vercel dev, reading account-backend/.env — so YOUR DATABASE_URL is the one in play) and the app points at localhost. Backend edits are live with no deploy. NOTE: Paddle webhooks cannot reach localhost, so the PAID restore path can't complete here — free/allowance restores can. Needs the Vercel CLI (`npm i -g vercel`)."
     cmds:
       - task: daemon:mac:install
       - task: ui:mac:config
-        vars:
-          ACCOUNT_API: "http://localhost:3000"
       - |
         # Background the API so the UI can run in the foreground; `task dev:stop` kills it.
         cd account-backend
@@ -1016,6 +1021,8 @@ tasks:
         echo "✓ local API up — it is reading account-backend/.env, so DATABASE_URL there is the DB in play."
         echo "  log: /tmp/coldstorage-local-api.log · stop it later with: task dev:stop"
       - task: ui:mac:live
+        vars:
+          ACCOUNT_API: "http://localhost:3000"
 
   app:mac:run:production-local:
     desc: "[⚠️ LIVE MONEY] Local app + daemon against the DEPLOYED PRODUCTION API (live Paddle): a restore or subscribe charges a REAL card. Confirms first. GATED against origin/main."
@@ -1025,12 +1032,12 @@ tasks:
       - task: app:mac:_require-api-deployed
         vars: { BRANCH: main, API: "https://api.coldstorage.sh" }
       - task: daemon:mac:install
+      - task: ui:mac:config
       # Passed as a var for the reason above. If this ever silently became staging, a "production" test would
       # quietly prove nothing — which is precisely the failure the var (not env) exists to prevent.
-      - task: ui:mac:config
+      - task: ui:mac:live
         vars:
           ACCOUNT_API: "https://api.coldstorage.sh"
-      - task: ui:mac:live
 
   app:mac:package:staging:
     desc: "[Mode 2 · SAFE] Build + launch-ready the PACKAGED ColdStorage.app wired to STAGING (sandbox Paddle). Uninstalls the Mode 1 launchd daemon first — the packaged app has its own socket now, but the two would still share one journal and both scan it. Bring Mode 1 back with `task daemon:mac:bootstrap`. GATED against origin/staging (the bundled app calls the DEPLOYED API)."
@@ -1288,15 +1295,10 @@ tasks:
         open "$app"
 
   ui:mac:config:
-    desc: "Write the packaged app's config (~/Library/Application Support/ColdStorage/config.json: bucket/region + the Cognito identity pool id/provider + the sign-in domain/client id, when the handoff has them) from the infra-outputs handoff, so a Finder-launched ColdStorage.app — which inherits no shell env — can upload and sign users in. NO secret is written here, and no AWS profile: the daemon gets short-lived Cognito STS creds as the signed-in user. Mirrors the env daemon:mac:install bakes into the launchd plist."
+    desc: "Write the app's LANE-INDEPENDENT config (~/Library/Application Support/ColdStorage/config.json: bucket/region + the Cognito identity pool id/provider + the sign-in domain/client id, when the handoff has them) from the infra-outputs handoff, so a Finder-launched ColdStorage.app — which inherits no shell env — can upload and sign users in. NO secret is written here, and no AWS profile: the daemon gets short-lived Cognito STS creds as the signed-in user. Mirrors the env daemon:mac:install bakes into the launchd plist. The account-backend lane is deliberately NOT here — it's a per-launch input (app:mac:run:<lane>) or a per-build one (ui:config:bake ENV), never a file that drifts."
     dir: coldstorage
     vars:
       DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
-      # Which account-backend lane the app talks to. A task VAR (not just the env var below) because
-      # go-task does NOT propagate a caller's `env:` into a called task — only `vars:` — so `app:mac:run:*`
-      # must pass the lane this way or it would silently fall through to the staging default. That is a
-      # dangerous default to fall through to in the PRODUCTION direction, so it's passed explicitly.
-      ACCOUNT_API: '{{.ACCOUNT_API | default ""}}'
     cmds:
       - mkdir -p "{{.DATA_DIR}}"
       - |
@@ -1306,7 +1308,6 @@ tasks:
         [ -f "$CREDS" ] && { set -a; . "$CREDS"; set +a; }
         bucket="${COLDSTORE_BUCKET:-coldstorage}"
         region="${AWS_REGION:-us-east-1}"
-        profile="${COLDSTORE_AWS_PROFILE:-coldstorage}"
         # Cognito (multi-user prod) is opt-in — empty when the handoff predates Phase 2c, which the app's
         # daemon supervisor (main/daemon.ts) treats the same as "not configured" (dogfood mode, unchanged).
         cognito_pool_id="${COLDSTORE_COGNITO_IDENTITY_POOL_ID:-}"
@@ -1315,16 +1316,8 @@ tasks:
         # Empty when the handoff predates Phase 5 → the app hides sign-in entirely (dogfood mode).
         cognito_domain="${COLDSTORE_COGNITO_DOMAIN:-}"
         cognito_client_id="${COLDSTORE_COGNITO_CLIENT_ID:-}"
-        # Account-backend base URL (Phase 5b, key-blob + entitlement). Defaults to the staging lane, which
-        # accepts production Cognito tokens; the production lane overrides via COLDSTORE_ACCOUNT_API.
-        # Precedence: the ACCOUNT_API task var (how app:mac:run:* passes the lane — see the var's note) →
-        # COLDSTORE_ACCOUNT_API from the shell/handoff → the staging default. Staging is the safe fallback:
-        # sandbox Paddle, so a misconfigured run can't charge a real card.
-        account_api='{{.ACCOUNT_API}}'
-        account_api="${account_api:-${COLDSTORE_ACCOUNT_API:-https://api-staging.coldstorage.sh}}"
-        echo "→ account backend: $account_api"
-        printf '{\n  "bucket": "%s",\n  "region": "%s",\n  "cognitoIdentityPoolId": "%s",\n  "cognitoUserPoolProvider": "%s",\n  "cognitoDomain": "%s",\n  "cognitoClientId": "%s",\n  "accountApiBaseUrl": "%s"\n}\n' \
-          "$bucket" "$region" "$cognito_pool_id" "$cognito_provider" "$cognito_domain" "$cognito_client_id" "$account_api" > "{{.DATA_DIR}}/config.json"
+        printf '{\n  "bucket": "%s",\n  "region": "%s",\n  "cognitoIdentityPoolId": "%s",\n  "cognitoUserPoolProvider": "%s",\n  "cognitoDomain": "%s",\n  "cognitoClientId": "%s"\n}\n' \
+          "$bucket" "$region" "$cognito_pool_id" "$cognito_provider" "$cognito_domain" "$cognito_client_id" > "{{.DATA_DIR}}/config.json"
         echo "wrote {{.DATA_DIR}}/config.json  (bucket=$bucket region=$region cognito=${cognito_pool_id:+configured}${cognito_pool_id:-not configured} sign-in=${cognito_domain:+configured}${cognito_domain:-not configured})"
         echo "creds: nothing to wire — the daemon gets Cognito STS creds when you sign in. Verify: task ui:mac:package:doctor"
 
@@ -1342,12 +1335,12 @@ tasks:
         # The account-backend lane is the whole staging-vs-prod distinction for the app (Cognito + the S3
         # vault bucket are SHARED across lanes — see cognito.tf; PROD.md). The key-blob lives in
         # whichever lane's DB, so a customer build MUST bake prod: onboarding against staging would strand the
-        # user's encrypted master key in the test DB. COLDSTORE_ACCOUNT_API still overrides if explicitly set.
+        # user's encrypted master key in the test DB. ENV is the ONLY input — a shell COLDSTORE_ACCOUNT_API used
+        # to override it, which is a second, unannounced way for a build to end up on the wrong lane.
         case "{{.ENV}}" in
-          production) default_api="https://api.coldstorage.sh" ;;
-          staging)    default_api="https://api-staging.coldstorage.sh" ;;
+          production) account_api="https://api.coldstorage.sh" ;;
+          staging)    account_api="https://api-staging.coldstorage.sh" ;;
         esac
-        account_api="${COLDSTORE_ACCOUNT_API:-$default_api}"
 
         # App INSTALL IDENTITY for this lane, from the SSOT (ui/identity.json). Baked into app-config.json so
         # BOTH the bundle (electron-builder.cjs) and the runtime (main app.setName + deep-link scheme,
@@ -1563,6 +1556,15 @@ tasks:
         esac
         open /Applications/ColdStorage.app
 
+  ui:mac:logs:
+    desc: "Follow the app's main.log (~/Library/Logs/<productName>/main.log — electron-log): the lane it resolved at startup (`account backend: …`), entitlement/billing failures with the URL they hit, updater activity. Newest install's log if several. The DAEMON's log is separate: task ui:mac:package:doctor (coldstored.err.log)."
+    cmds:
+      - |
+        log=$(ls -t "$HOME/Library/Logs/"*[Cc]old[Ss]torage*/main.log 2>/dev/null | head -1)
+        [ -n "$log" ] || { echo "no main.log yet — the app writes it on first launch."; exit 1; }
+        echo "→ $log"
+        tail -n 100 -f "$log"
+
   ui:mac:update:doctor:
     desc: "Diagnose 'the app didn't auto-update': what version is actually INSTALLED, how it's signed (macOS refuses to auto-update an app that isn't Developer ID signed — the #1 silent cause), what the published feed offers, whether an update is already downloaded and waiting, and what the updater itself logged. Read-only. Run it when a release is live but an installed app stays on the old version."
     cmds:
@@ -1648,11 +1650,6 @@ tasks:
     cmds:
       - bun scripts/gen-icon.ts
 
-  ui:mac:bootstrap:
-    desc: "One-shot setup so the packaged ColdStorage.app can upload: write the app's config.json. Run once after `task tf:coldstorage:creds-export` (devcontainer). The .app analogue of daemon:mac:bootstrap. (No credential step since 2026-07-27 — the daemon authenticates as the signed-in user via Cognito STS.)"
-    cmds:
-      - task: ui:mac:config
-
   ui:mac:auth:doctor:
     desc: "Diagnose a hanging/broken sign-in (Phase 5a). Run in a SECOND terminal while the browser is stuck. Checks: who owns loopback port 53682 (an Electron process = healthy pending sign-in; Code/Docker/OrbStack = a devcontainer port-forward stole it), whether the app's one-shot listener answers, and whether the sign-in config resolves."
     cmds:
@@ -1695,12 +1692,12 @@ tasks:
           # No AWS-auth probe: the app holds no standing credentials. It gets Cognito STS creds on
           # sign-in, so the sign-in state below (and coldstored.err.log) is where auth failures surface.
         else
-          echo "MISSING — a Finder-launched app can't upload without it. Run 'task ui:mac:config' (or 'task ui:mac:bootstrap')."
+          echo "MISSING — a Finder-launched app can't upload without it. Run 'task ui:mac:config'."
         fi
         echo "── coldstored.err.log (last 25) ──"; tail -n 25 "$dir/coldstored.err.log" 2>/dev/null || echo "(no err log — coldstored likely never spawned)"
 
   ui:mac:lane:
-    desc: "[macOS] Which account-backend is an INSTALLED app actually talking to? Reads the lane exactly as the runtime does: for a PACKAGED app that is the BAKED Contents/Resources/app-config.json alone (a user config.json can no longer repoint it — vault/config.ts). Reports every ColdStorage install, and flags a config.json that still carries a stale lane so you can see what the DEV lanes (ui:mac:live, which does read it) will use."
+    desc: "[macOS] Which account-backend is an INSTALLED app actually talking to? Reads the lane exactly as the runtime does: for a PACKAGED app that is the BAKED Contents/Resources/app-config.json alone (a user config.json can no longer repoint it — vault/config.ts). Reports every ColdStorage install. (A dev run's lane is not a file at all — it's the ACCOUNT_API the launching task passes, echoed at launch and shown in Settings' footer.)"
     cmds:
       - |
         [ "$(uname -s)" = "Darwin" ] || { echo "✋ macOS only — this reads installed .app bundles (you're on $(uname -s))."; exit 1; }
@@ -1709,11 +1706,8 @@ tasks:
           [ -d "$app" ] || continue
           found=1
           baked="$app/Contents/Resources/app-config.json"
-          # Same two fields the runtime reads: productName picks the data dir, accountApiBaseUrl is the lane.
-          product="$(node -p "try{require('$baked').productName||'ColdStorage'}catch(e){'ColdStorage'}")"
+          # The one field the runtime reads for the lane. (productName picks the data dir — not needed here.)
           baked_api="$(node -p "try{require('$baked').accountApiBaseUrl||''}catch(e){''}")"
-          user="$HOME/Library/Application Support/$product/config.json"
-          user_api="$(node -p "try{require('$user').accountApiBaseUrl||''}catch(e){''}")"
           # Packaged runtime rule: baked wins, full stop. No fallback — a build with no baked lane refuses
           # to start rather than guess (vault/config.ts UnconfiguredLaneError).
           if [ -n "$baked_api" ]; then api="$baked_api"; src="$baked (baked at build time — authoritative)";
@@ -1726,11 +1720,6 @@ tasks:
             "") echo "   ⇒ BROKEN BUILD: repackage with 'task ui:config:bake ENV=production'." ;;
             *) echo "   ⇒ NOT production: sandbox Paddle, so checkout opens the staging page and no real money moves." ;;
           esac
-          # The user file no longer steers a packaged app, but ui:mac:live (run-from-source) DOES read it.
-          # An `if`, not an `&&` chain: go-task runs these with errexit, where a false chain aborts the task.
-          if [ -n "$user_api" ] && [ "$user_api" != "$baked_api" ]; then
-            echo "   note: $user is on $user_api — ignored by this packaged app, but that is the lane 'task ui:mac:live' will use."
-          fi
         done
         [ "$found" = 1 ] || echo "no ColdStorage app found in /Applications."
 
@@ -1830,6 +1819,12 @@ tasks:
       # DATABASE_URL only — deliberately does NOT need the app's full env (which is what you're missing
       # when you're debugging a half-configured environment in the first place).
       - bun --env-file=.env.vercel --env-file=.env run scripts/db-doctor.ts
+
+  backend:accounts:inspect:
+    desc: "What the accounts table holds — the row behind the app's plan badge (sub → subscription_active + Paddle ids). For \"I paid but it says Free\": the badge keys on the signed-in Cognito sub, never the email, so a Google vs email-code sign-in mismatch shows up here as a paid row under one sub and a bare row under the other. READ-ONLY; targets the DATABASE_URL in .env (db-target names the lane). `-- --sub <cognito-sub>` narrows to one account."
+    dir: account-backend
+    cmds:
+      - bun --env-file=.env.vercel --env-file=.env run scripts/inspect-accounts.ts {{.CLI_ARGS}}
 
   backend:api:health:
     desc: "Ask a DEPLOYED backend whether the database IT reads is migrated to the schema ITS code expects — the one question you cannot answer from your laptop (the API's DATABASE_URL lives on Vercel, not in your .env). ENV=staging|production (default staging)."

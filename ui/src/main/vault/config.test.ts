@@ -63,6 +63,7 @@ describe("resolveAccountApiBaseUrl — packaged", () => {
   test("no baked lane throws rather than guessing — a wrong guess strands the key blob in the test DB", () => {
     merged = { accountApiBaseUrl: STAGING };
     expect(() => resolveAccountApiBaseUrl()).toThrow(UnconfiguredLaneError);
+    expect(() => resolveAccountApiBaseUrl()).toThrow(/download ColdStorage again/);
   });
 
   test("an empty baked lane counts as absent", () => {
@@ -81,18 +82,22 @@ describe("resolveAccountApiBaseUrl — dev", () => {
     packaged = false;
   });
 
-  test("the env var wins", () => {
+  test("the environment IS the lane — what the launching task passed for this process", () => {
     process.env.COLDSTORE_ACCOUNT_API = "http://localhost:3000";
-    merged = { accountApiBaseUrl: STAGING };
     expect(resolveAccountApiBaseUrl()).toBe("http://localhost:3000");
   });
 
-  test("falls back to the config.json the app:mac:run:* lanes write — so production-local really is production", () => {
-    merged = { accountApiBaseUrl: PROD };
-    expect(resolveAccountApiBaseUrl()).toBe(PROD);
+  test("a config.json CANNOT supply the lane (the file that drifted a prod-pointed run back to staging)", () => {
+    merged = { accountApiBaseUrl: STAGING };
+    expect(() => resolveAccountApiBaseUrl()).toThrow(UnconfiguredLaneError);
   });
 
-  test("nothing configured ⇒ staging, so a bare dev run cannot charge a real card", () => {
-    expect(resolveAccountApiBaseUrl()).toBe(STAGING);
+  test("nothing configured ⇒ refuse to start with the lane tasks named, never a silent default", () => {
+    expect(() => resolveAccountApiBaseUrl()).toThrow(/app:mac:run:staging-local/);
+  });
+
+  test("an empty env var counts as absent", () => {
+    process.env.COLDSTORE_ACCOUNT_API = "";
+    expect(() => resolveAccountApiBaseUrl()).toThrow(UnconfiguredLaneError);
   });
 });

@@ -54,15 +54,6 @@ app.setName(productName);
 // per-user socket it creates. Dev: the daemon runs standalone (`task daemon:run`); use the env/default path.
 const client = new DaemonClient(app.isPackaged ? { socketPath: daemonSocketPath() } : undefined);
 const disposeBridge = registerBridge(client);
-const disposeSystem = registerSystemHandlers();
-let stopDaemon: () => void = () => {};
-
-// Sign-in state machine. Null config = dogfood mode: status reports unconfigured, the renderer hides
-// auth entirely, and none of the wiring below ever fires. Dev uses the loopback redirect (an unpackaged
-// Electron can't receive custom-scheme deep links on macOS).
-const auth = new AuthManager(resolveOAuthConfig(), { useLoopback: !app.isPackaged });
-const disposeAuthIpc = registerAuthIpc(auth);
-
 // Which lane this build talks to. A packaged build reads it from the BAKED config and refuses to guess
 // (vault/config.ts) — so this can throw, and when it does the only honest move is to say why and stop:
 // an app that doesn't know its own backend would sign people in against the wrong database.
@@ -74,6 +65,18 @@ try {
   app.exit(1);
   throw e; // app.exit doesn't return, but TS can't know that
 }
+// Said out loud, once, where a support thread starts (main.log) — the lane was invisible everywhere until
+// 2026-08-25, and "the app is on staging" took an hour of DB-side forensics to establish (PILLAR5).
+updaterLog.info(`account backend: ${accountApiBaseUrl}`);
+
+const disposeSystem = registerSystemHandlers(accountApiBaseUrl);
+let stopDaemon: () => void = () => {};
+
+// Sign-in state machine. Null config = dogfood mode: status reports unconfigured, the renderer hides
+// auth entirely, and none of the wiring below ever fires. Dev uses the loopback redirect (an unpackaged
+// Electron can't receive custom-scheme deep links on macOS).
+const auth = new AuthManager(resolveOAuthConfig(), { useLoopback: !app.isPackaged });
+const disposeAuthIpc = registerAuthIpc(auth);
 
 // The zero-knowledge vault (encryption-key half of being signed in). Escrows the MasterKey per-account
 // in userData/vault.json (safeStorage), fetches/stores the key-blob at the account backend, and drives

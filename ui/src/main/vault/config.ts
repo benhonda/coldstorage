@@ -15,42 +15,36 @@
  * There is NO fallback: a packaged build with no baked lane is a broken build, and it says so instead of
  * quietly picking one (the wrong guess strands a customer's key in the wrong database).
  *
- * **Dev (unpackaged): `COLDSTORE_ACCOUNT_API`, then the `config.json` the `app:mac:run:*` lanes write.**
- * That file is how those lanes communicate the lane they gated on — reading only the env var meant
- * `app:mac:run:production-local` ran the app against the staging default while announcing LIVE MONEY.
- * Nothing configured at all ⇒ staging: sandbox Paddle, so a bare `task ui:mac:live` cannot charge a card.
+ * **Dev (unpackaged): `COLDSTORE_ACCOUNT_API` from the environment, and nothing else.** The launching task
+ * (`app:mac:run:<lane>`) sets it for THIS process; it is written to no file. It used to
+ * be persisted in `config.json`, which four tasks wrote (one with a silent staging default) — so a
+ * production-pointed install drifted back to staging between runs, the app said "Free" about a paid
+ * account, and the daemon refused deposits over the free-tier quota (2026-08-25). A lane is a property
+ * of a launch, not of the machine. Nothing configured ⇒ refuse to start, exactly like a packaged build
+ * with no baked lane: there is no safe guess, only an honest one.
  */
 import { app } from "electron";
-import { dataDir, readAppConfig, readBakedConfig } from "../daemon.ts";
-
-/** Dev-only. A packaged build never falls back — see above. */
-const DEV_DEFAULT_ACCOUNT_API = "https://api-staging.coldstorage.sh";
+import { readBakedConfig } from "../daemon.ts";
 
 const nonEmpty = (v: string | undefined): string | undefined => (v && v.length > 0 ? v : undefined);
 
 /** Thrown when a packaged build has no baked lane. Caught at startup, which shows it and quits — an app
  * that doesn't know its own backend cannot honestly do anything (PILLAR5: no silent wrong lane). */
 export class UnconfiguredLaneError extends Error {
-  constructor() {
+  constructor(packaged: boolean) {
     super(
-      "This build has no account backend configured (Contents/Resources/app-config.json is missing or has no accountApiBaseUrl). " +
-        "It was packaged without `task ui:config:bake ENV=production`. Please download ColdStorage again.",
+      packaged
+        ? "This build has no account backend configured (Contents/Resources/app-config.json is missing or has no accountApiBaseUrl). " +
+            "It was packaged without `task ui:config:bake ENV=production`. Please download ColdStorage again."
+        : "No account backend for this dev run (COLDSTORE_ACCOUNT_API is unset). " +
+            "Launch through a lane: `task app:mac:run:staging-local` / `:local` / `:production-local`.",
     );
     this.name = "UnconfiguredLaneError";
   }
 }
 
 export const resolveAccountApiBaseUrl = (): string => {
-  if (app.isPackaged) {
-    const baked = nonEmpty(readBakedConfig().accountApiBaseUrl);
-    if (!baked) throw new UnconfiguredLaneError();
-    return baked.replace(/\/$/, "");
-  }
-  const configured = nonEmpty(process.env.COLDSTORE_ACCOUNT_API) ?? nonEmpty(readAppConfig(dataDir()).accountApiBaseUrl);
-  if (!configured) {
-    console.warn(
-      `no account backend configured (COLDSTORE_ACCOUNT_API, or accountApiBaseUrl in ${dataDir()}/config.json) — using ${DEV_DEFAULT_ACCOUNT_API}. Pick a lane with \`task app:mac:run:staging-local\` / \`:local\` / \`:production-local\`.`,
-    );
-  }
-  return (configured ?? DEV_DEFAULT_ACCOUNT_API).replace(/\/$/, "");
+  const lane = app.isPackaged ? nonEmpty(readBakedConfig().accountApiBaseUrl) : nonEmpty(process.env.COLDSTORE_ACCOUNT_API);
+  if (!lane) throw new UnconfiguredLaneError(app.isPackaged);
+  return lane.replace(/\/$/, "");
 };

@@ -380,6 +380,11 @@ export interface AppInfo {
   /** How this install is signed — see {@link CodeSignature}. `packaged` alone doesn't answer "can this
    * update itself?": a locally packaged build is packaged AND unable to. */
   signature: CodeSignature;
+  /** The account-backend lane this process resolved (`vault/config.ts`) — staging, production, or a
+   * local API. Shown in Settings' footer for a dev build (a packaged build's lane is baked and can't
+   * drift) because "which backend am I on?" was unanswerable from inside the app, and a wrong lane
+   * looks exactly like a billing bug. */
+  accountApiBaseUrl: string;
 }
 
 /**

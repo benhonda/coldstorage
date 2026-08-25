@@ -71,6 +71,10 @@ export const updateLine = (update: UpdateStatus, app: Pick<AppInfo, "packaged" |
   }
 };
 
+/** `api-staging.coldstorage.sh` from `https://api-staging.coldstorage.sh`. The lane is a task-supplied URL
+ * every fetch has already gone through; if it didn't parse, nothing else in the app would be working. */
+const laneHost = (url: string): string => new URL(url).host;
+
 interface Props {
   /** Null until main's first-paint answer lands — a beat, during which we say nothing rather than guess. */
   appInfo: AppInfo | null;
@@ -117,8 +121,16 @@ export const VersionFooter = ({ appInfo, update, onCheck, onRestart }: Props): R
         )}
       </div>
       {/* Deliberately the quietest thing on the page, and only when it changes what every other answer
-          here means: a build that came from the repo rather than a release. */}
-      {!appInfo.packaged && <div className="cs-about-build">development build</div>}
+          here means: a build that came from the repo rather than a release — and, for one, WHICH backend
+          this launch was given. A dev run's lane is a per-launch input, and a run on the wrong one is
+          indistinguishable from a billing bug ("Free" on a paid account) unless the app says so. A
+          packaged build's lane is baked and can't drift, so it says nothing. Host only — the scheme and
+          path add nothing a person reads. */}
+      {!appInfo.packaged && (
+        <div className="cs-about-build">
+          development build · <span className="cs-mono" title={appInfo.accountApiBaseUrl}>{laneHost(appInfo.accountApiBaseUrl)}</span>
+        </div>
+      )}
     </footer>
   );
 };

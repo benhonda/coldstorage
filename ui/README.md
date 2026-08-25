@@ -9,7 +9,7 @@ What the surfaces are and how they behave: [`DESIGN.md`](./DESIGN.md). What ship
 
 Toolchain: **electron-vite** (Vite, three-process split), **React 19**, secure IPC
 (`contextIsolation: true`, `contextBridge`). Tooling runs on **Bun**; the Electron runtime is its own
-bundled Node. The DS port (tokens + primitives) is verified live on macOS (`task ui:mac:live`); see
+bundled Node. The DS port (tokens + primitives) is verified live on macOS (`task app:mac:run:staging-local`); see
 [Design system](#design-system).
 
 ## Layout
@@ -85,7 +85,8 @@ src/renderer/     The web app (React). No Node, no socket — talks to window.co
       Breadcrumb, StatusBadge (StatusIcon: ✓ stored · ↑ uploading · ⚠ couldn't upload · ↓ transferring ·
                       saved-here), ContextMenu (incl. Retry upload on failed rows), InfoModal (Get info),
                       RequestBackModal (request-a-copy + native folder picker), GettingBackPanel (transfer
-                      queue), FailuresPanel (the sidebar "N couldn't upload" popover + Try again).
+                      queue), FailuresPanel (the sidebar "N couldn't upload" popover — the journal's failed
+                      rows grouped by cause; Try again / Locate… / Remove per file when a cause is small).
 ```
 
 ## Commands (run from repo root)
@@ -102,10 +103,8 @@ task app:mac:run:staging-local   # [SAFE, the default] deployed staging API, san
 task app:mac:run:local           # [fastest] the API on your machine too
 task app:mac:run:production-local # [⚠️ LIVE MONEY] real card, confirms first
 
-# ui:mac:live is the last step of those lanes, alone — the UI with HMR against whatever daemon is
-# installed and whatever config.json already says. Fine when you just want the window back; NOT the way
-# to "run the app", since bare it happily drives a stale daemon against the wrong API.
-task ui:mac:live
+# (Those are the only way to launch — the lane is a per-launch input with no default and no file it falls
+# back to, and the app shows the lane it got in Settings' footer.)
 
 # prove the layer-1 bridge against a live daemon:
 task ui:prove       # getStatus round-trips + triggerNow streams runStarted→fileArchived→runFinished
@@ -164,7 +163,7 @@ the *tokens*, not the bundle.
   `task ui:typecheck` + `task ui:build` (all three processes compile) + `task ui:test` (real reducer +
   controller, headless) — *not* the look. **Visual verify is a macOS step.** Layers 1–3 are verified on
   macOS: the GUI runs, connects (`connection: connected`), and renders the skinned views live against the
-  installed daemon (`task ui:mac:live`, 2026-06-23).
+  installed daemon (`task app:mac:run:<lane>`, 2026-06-23).
 - **`node_modules` can't be shared between the container and the Mac.** This is an Electron app, so
   `node_modules` contains platform-native binaries (electron, rolldown/vite, esbuild). The repo is
   bind-mounted into the Linux devcontainer, so a `bun install` run in the container leaves Linux
@@ -174,8 +173,8 @@ the *tokens*, not the bundle.
   Bun-on-tooling, Electron-on-its-own-Node split only holds *within one OS*.
 - **Bun blocks postinstall scripts → Electron's binary isn't downloaded.** Electron fetches its app
   binary in a `postinstall`, which Bun skips by default (so a bare `bun install` leaves it missing and
-  `electron-vite dev` dies with `Error: Electron uninstall`). **Handled by the Taskfile:** `task ui:mac:live`
-  depends on `ui:_ensure-electron`, which downloads the binary if absent (idempotent — skipped once
+  `electron-vite dev` dies with `Error: Electron uninstall`). **Handled by the Taskfile:** the app:mac:run:* lanes
+  depend on `ui:_ensure-electron`, which downloads the binary if absent (idempotent — skipped once
   present); `task ui:setup` does it too. No manual step. (`electron` is also in package.json
   `trustedDependencies` for fresh installs.) `build`/`typecheck`/`test` don't need the binary.
 - **Socket path:** `$COLDSTORE_SOCKET`, else `coldstorage/coldstored.sock` (dev). Installed path is

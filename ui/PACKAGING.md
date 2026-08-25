@@ -97,14 +97,16 @@ the child it just launched. `app.setName(productName)` pins userData before eith
 they can't diverge — read from the **baked** config only, never the user's `config.json`, since a
 dogfood override must not repoint the data dir the app is already on.
 
-The **backend lane** (`accountApiBaseUrl`) follows the same rule for the same reason, since
-2026-08-23: a packaged app reads it from the baked file alone (`main/vault/config.ts`), and refuses to
-start if none is baked rather than guessing. It has to be immune to `config.json`, because
-`task ui:mac:config` writes EVERY lane's config into the production data dir (Mode 1's daemon and socket
-live there) — so one `task app:mac:run:staging-local` used to leave a file that silently repointed an
-installed production app at staging: sandbox Paddle, and the user's encrypted master key written to the
-test database. Running a packaged app against staging has its own answer with its own identity:
-`task app:mac:package:staging`. `task ui:mac:lane` prints what any installed app resolves.
+The **backend lane** (`accountApiBaseUrl`) is never a file a user can drift: a packaged app reads it
+from the baked file alone (`main/vault/config.ts`) and refuses to start if none is baked; a dev run
+reads it from `COLDSTORE_ACCOUNT_API`, which only the launching task sets (`task app:mac:run:<lane>`;
+there is no lane-less launcher). `config.json` carries no lane at all since
+2026-08-25 — it used to, four tasks wrote it (one with a silent staging default), and a
+production-pointed run drifted back to staging between launches: "Free" on a paid account, deposits
+refused over the free-tier quota. The app logs the lane it resolved (main.log), and a dev build shows it
+in Settings' footer. Running a packaged app against staging has its own
+answer with its own identity: `task app:mac:package:staging`. `task ui:mac:lane` prints what any
+installed app resolves.
 
 **Gotcha: the packaged app's data dir is the same as the launchd daemon's** (`~/Library/Application
 Support/ColdStorage`, same socket). Don't run both — `task daemon:mac:uninstall` the launchd one before
