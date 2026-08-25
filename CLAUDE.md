@@ -5,6 +5,7 @@
 ### Project-specific holy-commandments additions
 
 - This is a PUBLIC REPO - no sensitive stuff please!
+- **Copy: write it properly and move on.** Ben reviews every user-facing string when he sees it in the app. Never mark copy as placeholder / "Ben to finalize" in code, docs, or reports — write the best wording you can and don't mention it.
 
 ### Monorepo structure
 
