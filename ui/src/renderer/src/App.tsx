@@ -30,7 +30,7 @@ import { FailuresPanel } from "./views/files/FailuresPanel.tsx";
 import { eventAction, type BlobFailure } from "./state/reducer.ts";
 import { bytesAvailable } from "./state/entitlement.ts";
 import { formatBytes } from "./views/files/model.ts";
-import { MyFilesView } from "./views/MyFilesView.tsx";
+import { MyFilesView, type TreeState } from "./views/MyFilesView.tsx";
 import { SettingsView, type SettingsApi, type SettingsTab } from "./views/SettingsView.tsx";
 import { DownloadsView } from "./views/DownloadsView.tsx";
 import { groupDownloads } from "./views/downloads/model.ts";
@@ -57,9 +57,11 @@ const isRoute = (id: string): id is Route => (ROUTES as readonly string[]).inclu
 interface Props {
   api: ColdstoreApi;
   store: Store;
+  /** Re-read the tree by hand — the file browser's Retry when a `listFiles` read failed. */
+  retryFiles: () => Promise<void>;
 }
 
-export const App = ({ api, store }: Props): React.JSX.Element => {
+export const App = ({ api, store, retryFiles }: Props): React.JSX.Element => {
   const state = useAppState(store);
   const [route, setRoute] = useState<Route>("files");
   // Settings' active subpage, owned here (not in SettingsView) for two reasons: the sidebar chip's
@@ -108,16 +110,41 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   const signedIn = state.auth.configured && state.auth.state === "signedIn";
   const bytesStored = state.status?.bytesStored ?? null;
   const usedBytes = bytesStored == null ? null : bytesStored + inFlightBytes;
-  // Is the vault total merely *late*, or genuinely unavailable? A null `bytesStored` alone can't say, and
-  // the answer differs entirely for the user: one is a wait, the other is a fact. Two ways it's a wait:
-  //   1. the socket hasn't connected yet (getStatus can't land until it does), and
-  //   2. it HAS connected, but the daemon's snapshot still says `signedIn: false` — i.e. we read it before
-  //      `authenticate` established the session, so its nulls describe a daemon that didn't know us yet.
-  // (2) is the common one and used to persist for minutes; the controller now re-reads on the daemon's
-  // session-established push, so this covers the seconds in between rather than a stuck state. Guarded on
-  // the app's own sign-in so a genuinely signed-out install shows an absence, not a spinner that never ends.
-  const storageFigurePending =
-    bytesStored == null && signedIn && (state.connection !== "connected" || state.status?.signedIn !== true);
+  // Is the vault total merely *late*, or genuinely unavailable? A null `bytesStored` means "not arrived
+  // yet", and while signed in it is ALWAYS a wait — `getStatus` now answers instantly from the journal and
+  // fills `bytesStored` from a BACKGROUND S3 listing (it used to block the whole status call on that
+  // listing, which hung the app on a flaky network — 2026-08-25). So a null here after sign-in is the gap
+  // between the first getStatus and the background refresh landing, not an absence. Treating it as absent
+  // is what made the storage bar VANISH instead of showing a loading state (the same PILLAR5 error, one
+  // regression later). Pending whenever we're signed in and don't have the number yet.
+  const storageFigurePending = bytesStored == null && signedIn;
+  // Is the file tree a fact yet? Same discipline as the storage figure, applied to the thing that matters
+  // most: the browser must never paint "your vault is empty — drop something" unless the vault IS empty.
+  // Three honest states short of that: the socket isn't connected; it is, but the daemon hasn't opened
+  // our session yet (`status.signedIn` false — its reads are empty-but-successful until `authenticate`
+  // lands); or the read itself failed. And one cross-check against the daemon's own count: if `getStatus`
+  // says the vault holds files and the list came back empty, something is wrong and we say so rather than
+  // show a hero over 140k files (2026-08-25).
+  const treeState: TreeState = (() => {
+    // Not connected to the daemon yet → genuinely still connecting.
+    if (state.connection !== "connected") return { state: "connecting" };
+    // A FAILED read is checked BEFORE "session not ready" — because when the daemon is wedged, getStatus
+    // (which sets `status.signedIn`) times out too, so `signedIn` never flips true and the old order left
+    // the user on an eternal "Connecting to your vault…" with no recourse (2026-08-25). A rejected read is
+    // the honest signal that something's wrong; surface it with its reason and a Retry.
+    if (state.filesLoad.state === "failed") return { state: "failed", reason: state.filesLoad.error };
+    // Connected, reads haven't failed, but the daemon hasn't reported our session yet (or the tree is still
+    // loading) → a bounded "connecting". The gate escalates this to a Retry on its own after a while, so it
+    // can't become the dead end it was.
+    if (state.status?.signedIn !== true || state.filesLoad.state === "pending") return { state: "connecting" };
+    if (state.files.length === 0 && state.status.filesTotal > 0) {
+      return {
+        state: "failed",
+        reason: `the vault reports ${state.status.filesTotal.toLocaleString()} files but the list came back empty`,
+      };
+    }
+    return { state: "ready" };
+  })();
   const roomLeft = bytesAvailable(state.entitlement, usedBytes);
   // Coarse "is there ANY room left" — drives the paywall-reset effect + the retry guard. A specific deposit
   // is checked against its real size via `hasRoomFor` (handed to the browser), which is what stops the one
@@ -232,7 +259,7 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
   const NAV: NavItem[] = [
     { id: "files", label: "My Files", icon: "folder" },
     // Above Settings, and carrying the in-flight count: the badge belongs on the page that can explain it.
-    { id: "downloads", label: "Downloads", icon: "download", badge: activeDownloads },
+    { id: "downloads", label: "Download Requests", icon: "download", badge: activeDownloads },
     { id: "settings", label: "Settings", icon: "settings" },
   ];
 
@@ -425,7 +452,17 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
       );
     }
     if (v.state !== "unlocked") {
-      return <VaultGate state={v.state} error={v.error} email={email} onSignOut={signOut} />;
+      return (
+        <VaultGate
+          state={v.state}
+          error={v.error}
+          email={email}
+          connection={state.connection}
+          step={v.step}
+          stepSince={v.stepSince}
+          onSignOut={signOut}
+        />
+      );
     }
   }
 
@@ -483,6 +520,8 @@ export const App = ({ api, store }: Props): React.JSX.Element => {
           filesApi={filesApi}
           suggestions={state.excludeSuggestions}
           run={state.run}
+          tree={treeState}
+          onRetryTree={() => exec(retryFiles)}
           hasRoomFor={hasRoomFor}
           onDepositBlocked={(incomingBytes) =>
             subscribed ? setBlockedBytes(incomingBytes) : setPaywallReason("quotaReached")

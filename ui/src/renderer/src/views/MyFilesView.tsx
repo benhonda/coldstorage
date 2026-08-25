@@ -62,13 +62,20 @@ import { FolderTree } from "./files/FolderTree.tsx";
 import { InfoModal, type SelectionSummary } from "./files/InfoModal.tsx";
 import { RequestBackModal } from "./files/RequestBackModal.tsx";
 import { KindIcon, StatusBadges } from "./files/StatusBadge.tsx";
-import { Button, IconButton, Icon, Modal } from "../ui/primitives.tsx";
+import { Button, EmptyState, IconButton, Icon, Modal } from "../ui/primitives.tsx";
 import { Page } from "../ui/layout.tsx";
+
+/** Whether `files` is a fact yet (derived in App from connection + daemon session + the read's own
+ * state). Only `ready` may render the empty-vault hero; the others render what they are. */
+export type TreeState = { state: "connecting" } | { state: "failed"; reason: string } | { state: "ready" };
 
 interface Props {
   api: ColdstoreApi;
   exec: Exec;
   files: ArchivedFile[];
+  tree: TreeState;
+  /** Re-read the tree after a failed load. */
+  onRetryTree: () => void;
   virtualFolders: string[];
   filesApi: FilesApi;
   /** The daemon's opt-in exclude packs — what the drop-time prompt is able to offer. Empty until the
@@ -106,6 +113,8 @@ export const MyFilesView = ({
   api,
   exec,
   files,
+  tree,
+  onRetryTree,
   virtualFolders,
   filesApi,
   suggestions,
@@ -1311,6 +1320,50 @@ const FirstRun = ({
     </span>
   </button>
 );
+
+/** The tree is not a fact yet: say so, in the daemon's own words when it failed. Never the hero. */
+const TreeStatus = ({ tree, onRetry }: { tree: TreeState; onRetry: () => void }): React.JSX.Element | null => {
+  // "Connecting…" offers a Retry once it's clearly taking too long, so it can never be the dead-end spinner
+  // with no recourse it was (2026-08-25, PILLAR5). Resets whenever the state changes.
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    setSlow(false);
+    const t = setTimeout(() => setSlow(true), 15_000);
+    return () => clearTimeout(t);
+  }, [tree.state]);
+
+  if (tree.state === "connecting") {
+    return slow ? (
+      <EmptyState
+        icon="cloud_sync"
+        title="Connecting to your vault…"
+        description="This is taking longer than usual. Your files are safe on our end."
+        action={
+          <Button variant="secondary" onClick={onRetry}>
+            Try again
+          </Button>
+        }
+      />
+    ) : (
+      <EmptyState icon="cloud_sync" title="Connecting to your vault…" />
+    );
+  }
+  if (tree.state === "failed") {
+    return (
+      <EmptyState
+        icon="cloud_off"
+        title="Couldn't load your files"
+        description={`Your files are safe — this is the list that failed to load: ${tree.reason}.`}
+        action={
+          <Button variant="primary" onClick={onRetry}>
+            Try again
+          </Button>
+        }
+      />
+    );
+  }
+  return null;
+};
 
 // ── move-to folder picker ──────────────────────────────────────────
 

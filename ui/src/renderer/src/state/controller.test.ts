@@ -153,6 +153,30 @@ describe("controller sync policy", () => {
     expect(store.getState().connection).toBe("connected");
   });
 
+  test("a failed listFiles is STATE, not just a console line — the browser can say so", async () => {
+    // A signed-out daemon answers `[]` successfully and a dropped socket rejects; both used to leave the
+    // slice `[]` and the UI painted "your vault is empty" (2026-08-25). The reducer now carries the load.
+    const f = makeApi("connected");
+    const failing = { ...f.api, request: ((m: string) => (m === "listFiles" ? Promise.reject(new Error("request 'listFiles' timed out")) : f.api.request(m as never))) as ColdstoreApi["request"] };
+    const store = createStore();
+    expect(store.getState().filesLoad).toEqual({ state: "pending" });
+    connectController(failing, store);
+    await tick();
+    expect(store.getState().filesLoad).toEqual({ state: "failed", error: "request 'listFiles' timed out" });
+    expect(store.getState().files).toEqual([]); // untouched, not fabricated
+  });
+
+  test("a successful listFiles marks the tree loaded, and Retry re-reads it", async () => {
+    const f = makeApi("connected");
+    const store = createStore();
+    const c = connectController(f.api, store);
+    await tick();
+    expect(store.getState().filesLoad).toEqual({ state: "loaded" });
+    const before = f.calls.filter((m) => m === "listFiles").length;
+    await c.refreshFiles();
+    expect(f.calls.filter((m) => m === "listFiles").length).toBe(before + 1);
+  });
+
   test("loads the file tree (listFiles) on initial connect", async () => {
     const f = makeApi("connected");
     const store = createStore();

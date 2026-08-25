@@ -127,6 +127,12 @@ export interface AppState {
   /** The browsable tree, straight from the daemon's `listFiles` (journal-backed). Raw wire shape —
    * the file-browser maps it to its own model. Empty until the first read lands. */
   files: ListedFile[];
+  /** Whether `files` is a real answer. `[]` alone cannot say: the slice STARTS empty, a signed-out daemon
+   * answers `[]` successfully, and a failed read leaves whatever was there. All three rendered as "your
+   * vault is empty, drop something" over a 140k-file vault (2026-08-25). So the load carries its own state
+   * — `pending` until a read lands, `failed` with the daemon's/socket's own words when it rejects — and
+   * the browser shows THAT rather than the empty-vault hero. Reset to `pending` by the account wipe. */
+  filesLoad: { state: "pending" } | { state: "loaded" } | { state: "failed"; error: string };
   /** Exclude patterns (daemon `listExcludes`) — Settings' "Don't back up" chips. Authoritative; the
    * daemon seeds defaults on first run + applies them at scan time. */
   excludes: string[];
@@ -153,13 +159,14 @@ export const initialState: AppState = {
   initializing: true,
   connection: "connecting",
   auth: { configured: false, state: "signedOut", email: null, name: null, error: null, emailAvailable: false },
-  vault: { state: "locked", recoveryCode: null, error: null },
+  vault: { state: "locked", recoveryCode: null, error: null, step: null, stepSince: null },
   account: { known: false, displayName: null, onboarded: false, recoveryCodeConfirmed: false, error: null },
   entitlement: { known: false, active: false, checkingOut: false, quotaBytes: null, error: null },
   update: { state: "idle", version: null, percent: null, error: null, lastCheckedAt: null },
   appInfo: null,
   status: null,
   files: [],
+  filesLoad: { state: "pending" },
   excludes: [],
   excludeSuggestions: [],
   run: null,
@@ -188,6 +195,7 @@ export type Action =
   | { type: "statusLoaded"; status: Status }
   | { type: "sourcesLoaded"; sources: Source[] }
   | { type: "filesLoaded"; files: ListedFile[] }
+  | { type: "filesLoadFailed"; error: string }
   | { type: "excludesLoaded"; excludes: string[] }
   | { type: "excludeSuggestionsLoaded"; suggestions: ExcludeSuggestion[] }
   | { type: "restoresLoaded"; restores: RestoreRow[] }
@@ -318,6 +326,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
         auth: action.auth,
         status: null,
         files: [],
+        filesLoad: { state: "pending" },
         excludes: [],
         run: null,
         failures: [],
@@ -351,7 +360,10 @@ export const reducer = (state: AppState, action: Action): AppState => {
       return state.status ? { ...state, status: { ...state.status, sources: action.sources } } : state;
 
     case "filesLoaded":
-      return { ...state, files: action.files };
+      return { ...state, files: action.files, filesLoad: { state: "loaded" } };
+    case "filesLoadFailed":
+      // Keep the last good tree (stale beats blank); only the load state says it couldn't be refreshed.
+      return { ...state, filesLoad: { state: "failed", error: action.error } };
 
     case "excludesLoaded":
       return { ...state, excludes: action.excludes };

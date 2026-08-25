@@ -11,7 +11,14 @@ import { eventAction } from "./reducer.ts";
 import type { Store } from "./store.ts";
 
 /** Wire an api to a store. Returns a disposer that detaches all subscriptions. */
-export const connectController = (api: ColdstoreApi, store: Store): (() => void) => {
+/** What `connectController` hands back: the teardown, plus the one refetch a view may ask for by hand
+ * (the file browser's "Retry" when a tree read failed). Everything else stays event-driven. */
+export interface Controller {
+  dispose: () => void;
+  refreshFiles: () => Promise<void>;
+}
+
+export const connectController = (api: ColdstoreApi, store: Store): Controller => {
   /**
    * Run one state-syncing read and swallow its rejection — a refetch that fails must never reject into
    * an unhandled promise, and a transient drop is not a user-facing error.
@@ -36,8 +43,17 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
   const refreshSources = (): Promise<void> =>
     syncing("sources", async () => store.dispatch({ type: "sourcesLoaded", sources: await api.request("listSources") }));
 
+  // The one read whose failure is ALSO state: the browser has to be able to say "couldn't load your files"
+  // instead of rendering the empty-vault hero over a stale or empty slice (see `AppState.filesLoad`).
   const refreshFiles = (): Promise<void> =>
-    syncing("files", async () => store.dispatch({ type: "filesLoaded", files: await api.request("listFiles") }));
+    syncing("files", async () => {
+      try {
+        store.dispatch({ type: "filesLoaded", files: await api.request("listFiles") });
+      } catch (e) {
+        store.dispatch({ type: "filesLoadFailed", error: e instanceof Error ? e.message : String(e) });
+        throw e; // `syncing` still logs it
+      }
+    });
 
   const refreshExcludes = (): Promise<void> =>
     syncing("excludes", async () => store.dispatch({ type: "excludesLoaded", excludes: await api.request("listExcludes") }));
@@ -139,13 +155,16 @@ export const connectController = (api: ColdstoreApi, store: Store): (() => void)
     }
   })();
 
-  return () => {
-    offEvent();
-    offLifecycle();
-    offAuth();
-    offVault();
-    offAccount();
-    offEntitlement();
-    offUpdate();
+  return {
+    dispose: () => {
+      offEvent();
+      offLifecycle();
+      offAuth();
+      offVault();
+      offAccount();
+      offEntitlement();
+      offUpdate();
+    },
+    refreshFiles,
   };
 };
