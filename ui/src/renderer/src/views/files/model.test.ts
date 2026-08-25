@@ -10,6 +10,8 @@ import {
   type RowTarget,
   allFolderPaths,
   canMoveInto,
+  crumbsFor,
+  ROOT_CRUMB,
   childrenOf,
   moveIsNoop,
   fileFromJournal,
@@ -453,5 +455,27 @@ describe("names (what to call the things just dropped)", () => {
   });
   test("still says something when there is nothing to name", () => {
     expect(names([])).toBe("that");
+  });
+});
+
+describe("crumbsFor", () => {
+  test("root and shallow paths show every crumb", () => {
+    expect(crumbsFor("")).toEqual({ shown: [ROOT_CRUMB], folded: [] });
+    expect(crumbsFor("a/b")).toEqual({
+      shown: [ROOT_CRUMB, { name: "a", path: "a" }, { name: "b", path: "a/b" }],
+      folded: [],
+    });
+  });
+
+  test("deeper than CRUMB_FOLD_ABOVE folds the middle: root › … › current", () => {
+    expect(crumbsFor("a/b/c").folded).toEqual([]);
+    expect(crumbsFor("a/b/c/d")).toEqual({
+      shown: [ROOT_CRUMB, { name: "d", path: "a/b/c/d" }],
+      folded: [
+        { name: "a", path: "a" },
+        { name: "b", path: "a/b" },
+        { name: "c", path: "a/b/c" },
+      ],
+    });
   });
 });

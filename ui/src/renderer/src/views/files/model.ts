@@ -177,6 +177,28 @@ export const isEmptyFolder = (row: Row): boolean => row.type === "folder" && row
 /** Split a path into its non-empty segments. "" → []. */
 export const segments = (p: string): string[] => p.split("/").filter(Boolean);
 
+export interface Crumb {
+  name: string;
+  path: string;
+}
+
+/** Breadcrumb shape for a folder path: `root › … › current` past this many folders. Root + three folders
+ *  still read at a glance; deeper than that the middle folds into one `…` menu so the row can't run off
+ *  the card, and the current folder always stays visible at the end. */
+export const CRUMB_FOLD_ABOVE = 3;
+export const ROOT_CRUMB: Crumb = { name: "My Files", path: "" };
+
+/** The crumbs for `dir`, folded: `{ shown, folded }` where `folded` are the ancestors hidden behind the
+ *  `…` (shallowest first; empty when nothing is folded). `shown` is root, then the unfolded rest — the
+ *  `…` slot sits between `shown[0]` and `shown[1]` whenever `folded` is non-empty. */
+export const crumbsFor = (dir: string): { shown: Crumb[]; folded: Crumb[] } => {
+  const segs = segments(dir);
+  const all: Crumb[] = segs.map((name, i) => ({ name, path: segs.slice(0, i + 1).join("/") }));
+  if (all.length <= CRUMB_FOLD_ABOVE) return { shown: [ROOT_CRUMB, ...all], folded: [] };
+  const current = all[all.length - 1]!;
+  return { shown: [ROOT_CRUMB, current], folded: all.slice(0, -1) };
+};
+
 /** The basename (last segment) of a path. */
 export const baseName = (path: string): string => segments(path).at(-1) ?? "";
 

@@ -106,7 +106,7 @@ it had worked.
 │ ❄ coldstor.│  My Files › Photos › 2019              ⊞ ⊟    ⊕ Add      │
 │            │  Name                          Size      Date            │
 │  My Files  │  📁 January                    1.2 GB    12 items        │
-│ Downloads 1│  📄 beach.jpg                  4.1 MB    Jul 12 2019  ✓ ⋯ │
+│ Requests 1 │  📄 beach.jpg                  4.1 MB    Jul 12 2019  ✓ ⋯ │
 │  Settings  │  📄 sunset.jpg                 3.8 MB    Jul 12 2019  ⧗ ⋯ │
 │            │  📄 hike.mov                   2.3 GB    Aug 3 2019      │
 │ 12 GB      │                                                          │
@@ -118,7 +118,7 @@ it had worked.
 ## My Files — the browser
 - **Navigation:** drill-in + breadcrumbs (like iOS Files / Explorer — scales to an 8,000-photo folder
   where an inline tree would choke), with Back / Forward buttons (⌘[ / ⌘], browser-style history —
-  `files/history.ts`). The nav row sits on the table; the page title stays "My Files" at any depth. **View:** list by default (name/size/date — no status column),
+  `files/history.ts`). Deeper than three folders the crumbs fold to `My Files › … › current`, the `…` a menu of the hidden ancestors (`model.ts` `crumbsFor`). The nav row is the top band of the files card itself — on the white, above the column headers; the page title stays "My Files" at any depth. **View:** list by default (name/size/date — no status column),
   grid/gallery toggle (file-type icons today; thumbnails are the only R2-gated piece).
 - **Status is a small colored icon by the row's `⋯`**, not a column or text pill (fixed-width slot):
   quiet green ✓ **stored** (explicit success is what makes silence trustworthy — stored must be
@@ -149,7 +149,10 @@ it had worked.
   deleted (daemon tags the object; a lifecycle rule expires it) — invisible here.
 
 ## Deposit flow (the hero)
-1. **Drop** anywhere (or ⊕ Add) → *"Drop to upload"*; items land in the currently-viewed folder. The ⊕ Add
+1. **Drop** anywhere (or ⊕ Add) → items land in the currently-viewed folder — or drop **onto a folder
+   row / tile / breadcrumb crumb** and they land in *that* folder (it lights up under the drag and
+   spring-opens on hold, same as drag-to-move). The drop frame is a see-through border + caption, never a
+   sheet over the list, so the folders stay aimable. The ⊕ Add
    button opens a **native open panel that selects any mix of files AND folders, multi-select** (`openFile`
    + `openDirectory` + `multiSelections` — a web `<input>` can't offer folders at all, which is why the
    deposit picker is native, not an `<input>`). A chosen folder is walked by the daemon and its tree is

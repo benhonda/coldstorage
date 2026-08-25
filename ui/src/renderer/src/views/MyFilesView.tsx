@@ -53,7 +53,7 @@ import {
   push as historyPush,
   remapHistory,
 } from "./files/history.ts";
-import { type MoveDrag, isMoveDrag, useMoveDrag } from "./files/useMoveDrag.ts";
+import { type MoveDrag, isFileDrag, isMoveDrag, useMoveDrag } from "./files/useMoveDrag.ts";
 import { CollisionModal } from "./files/CollisionModal.tsx";
 import { SuggestedSkipsModal, type SkipDecision } from "./files/SuggestedSkipsModal.tsx";
 import { type DropMatch, matchesInDrop, worthPrompting } from "../state/excludeSuggestions.ts";
@@ -180,6 +180,11 @@ export const MyFilesView = ({
   } | null>(null);
 
   const dragDepth = useRef(0);
+  /** The OS drag is over, however it ended — take the drop frame down. */
+  const settleFileDrag = (): void => {
+    dragDepth.current = 0;
+    setDropActive(false);
+  };
   const lastIndex = useRef<number | null>(null);
 
   const rows = useMemo(() => childrenOf(files, dir, virtualFolders), [files, dir, virtualFolders]);
@@ -477,6 +482,9 @@ export const MyFilesView = ({
     },
     onMove: moveTo,
     onOpen: goTo, // spring-load: holding over a folder/crumb drills in mid-drag
+    // An OS drop released ON a folder row/tile/crumb uploads into THAT folder — no need to open it first.
+    onDropFiles: (files, dest) => depositFiles(files, dest), // declared below; only ever called on a drop
+    onDragEnded: settleFileDrag, // the frame comes down on ANY end — drop, Esc, off-window — not just a drop here
   });
 
   // ── context menu ──
@@ -688,32 +696,34 @@ export const MyFilesView = ({
   // → its source, so a failed loose-file upload can retry; a folder's inner files aren't individually
   // retryable (re-add the folder). Keyed by the vault path (`dir`/basename) the row will report as
   // `original`, matching how the size map is keyed — one lookup key for both.
-  const depositPaths = (paths: string[]): void => {
+  // `dest` is the vault folder they land in — the open one for the picker and a blank-area drop, or the
+  // folder a drop was released ON (row / tile / crumb).
+  const depositPaths = (paths: string[], dest: string): void => {
     if (paths.length === 0) return;
-    const srcByPath = new Map(paths.map((p) => [joinPath(dir, baseName(p)), p]));
+    const srcByPath = new Map(paths.map((p) => [joinPath(dest, baseName(p)), p]));
     exec(() =>
       runDeposit({
         kind: "files",
         wire: paths.join("\n"),
-        dest: dir,
+        dest,
         srcByPath,
-        fallback: paths.map((p) => joinPath(dir, baseName(p))), // coarse rows if the preview can't run
+        fallback: paths.map((p) => joinPath(dest, baseName(p))), // coarse rows if the preview can't run
       }),
     );
   };
   // Drag-drop → resolve each dropped File to its absolute path (in the preload; Electron 32+ dropped
   // `File.path`), then deposit exactly like a picker selection. A dropped folder yields its directory path,
   // which the daemon walks.
-  const depositFiles = (dropped: File[]): void => {
+  const depositFiles = (dropped: File[], dest: string): void => {
     if (dropped.length === 0) return;
     const paths = dropped.map((f) => api.pathForFile(f)).filter(Boolean);
     if (paths.length === 0) {
       // Couldn't resolve any local paths → show ⚠ rows rather than vanishing.
-      const ids = filesApi.deposit(dropped.map((f) => ({ name: f.name })), dir);
+      const ids = filesApi.deposit(dropped.map((f) => ({ name: f.name })), dest);
       filesApi.setDepositStatus(ids, "failed", "couldn't find these on disk to upload them");
       return;
     }
-    depositPaths(paths);
+    depositPaths(paths, dest);
   };
   // Retry a failed upload: flip the row back to uploading and re-issue its deposit (we kept its srcPath).
   // No preview/prompt — a retry targets the same path it already owns (overwrite-self is a no-op upsert).
@@ -756,17 +766,19 @@ export const MyFilesView = ({
   // folders at all). Whatever's picked flows through the same deposit path as a drag-drop; the daemon walks
   // any chosen directory and preserves its structure. Cancel / pick-nothing is a no-op (resolves []).
   const addUploads = (): void => {
-    exec(async () => depositPaths(await api.chooseUploads()));
+    exec(async () => depositPaths(await api.chooseUploads(), dir));
   };
+  // A drop on the blank area / a file row / anywhere not a folder = "into the OPEN folder". A drop ON a
+  // folder row/tile/crumb never reaches here — the folder target consumes it (useMoveDrag.onDropFiles).
+  // The frame comes down via `onDragEnded` (the hook's document-level drop hook fires `reset`).
   const onDrop = (e: React.DragEvent): void => {
     if (isMoveDrag(e)) return; // an internal row drag is never an upload (folder targets consume it)
     e.preventDefault();
-    dragDepth.current = 0;
-    setDropActive(false);
-    depositFiles([...e.dataTransfer.files]);
+    depositFiles([...e.dataTransfer.files], dir);
   };
   const onDragEnter = (e: React.DragEvent): void => {
-    if (![...e.dataTransfer.types].includes("Files")) return;
+    if (!isFileDrag(e)) return;
+    drag.track();
     dragDepth.current += 1;
     setDropActive(true);
   };
@@ -844,6 +856,7 @@ export const MyFilesView = ({
           // An internal row drag is only accepted by folder rows/tiles and crumbs (their own handlers);
           // leaving default here shows the no-drop cursor over everything else — Finder-style.
           if (isMoveDrag(e)) return;
+          drag.track();
           e.preventDefault();
           e.dataTransfer.dropEffect = "copy";
         }}
@@ -854,7 +867,7 @@ export const MyFilesView = ({
             spring-opened folder land the drop: spring in, release anywhere. A drop into the dir the
             items already live in is refused (no-op), so nothing lights up before any spring. */}
         <div
-          className={drag.isDropTarget(dir) ? "cs-browser-main cs-browser-main--drop" : "cs-browser-main"}
+          className={dropActive || drag.isDropTarget(dir) ? "cs-browser-main cs-browser-main--drop" : "cs-browser-main"}
           {...drag.background(dir)}
           onClick={(e) => e.target === e.currentTarget && clearSelection()}
           onContextMenu={(e) => e.target === e.currentTarget && openMenu(e)}
@@ -864,72 +877,81 @@ export const MyFilesView = ({
             preparing={preparing}
             onStop={() => exec(() => api.request("cancelRun"))}
           />
-          {/* Where-am-I row: Back / Forward + the breadcrumb, sitting on the table itself (not the page
-              chrome) — the page title stays "My Files" wherever you've drilled to. Hidden on FirstRun,
-              where there is nowhere to navigate. */}
-          {!(rows.length === 0 && dir === "") && (
-            <div className="cs-browser-nav">
-              <IconButton
-                icon="arrow_back"
-                label="Back"
-                title="Back (⌘[)"
-                className="cs-iconbtn--ghost"
-                disabled={!canGoBack(history)}
-                onClick={goBack}
-              />
-              <IconButton
-                icon="arrow_forward"
-                label="Forward"
-                title="Forward (⌘])"
-                className="cs-iconbtn--ghost"
-                disabled={!canGoForward(history)}
-                onClick={goForward}
-              />
-              <Breadcrumb dir={dir} onNavigate={goTo} drag={drag} />
-            </div>
-          )}
           {/* FirstRun (the drop-zone hero) is the onboarding state for a genuinely empty vault — root with
-              nothing in it. A drilled-into empty folder just shows the empty file list, not the hero. */}
-          {rows.length === 0 && dir === "" ? (
+              nothing in it. A drilled-into empty folder just shows the empty file list, not the hero. And
+              "nothing in it" has to be a FACT: while the tree is still loading, or its read failed, the
+              same empty `rows` mean nothing at all, and the hero would be a lie (see `TreeState`). */}
+          {rows.length === 0 && dir === "" && tree.state !== "ready" ? (
+            <TreeStatus tree={tree} onRetry={onRetryTree} />
+          ) : rows.length === 0 && dir === "" ? (
             <FirstRun onChoose={addUploads} onContextMenu={openMenu} />
-          ) : view === "list" ? (
-            <FileList
-              rows={rows}
-              selected={selected}
-              renaming={renaming}
-              drag={drag}
-              onRowClick={onRowClick}
-              onRowOpen={openRow}
-              onRowContext={openMenu}
-              onStartRename={(row) => startRename(rowKey(row))}
-              onCommitRename={commitRename}
-              onCancelRename={() => setRenaming(null)}
-              onClearSelection={clearSelection}
-            />
           ) : (
-            <Gallery
-              rows={rows}
-              selected={selected}
-              drag={drag}
-              onRowClick={onRowClick}
-              onRowOpen={openRow}
-              onRowContext={openMenu}
-              onClearSelection={clearSelection}
-            />
-          )}
-          {!(rows.length === 0 && dir === "") && (
-            <p className="cs-hint">drop anywhere to upload · right-click for more</p>
+            <>
+              {/* ONE card surface: the where-am-I row (Back / Forward + breadcrumb) sits on the white of the
+                  table itself, above the column headers — not on the page chrome, so the page title stays
+                  "My Files" wherever you've drilled to. The list/gallery scrolls inside it. */}
+              <div className="cs-files-card">
+                <div className="cs-browser-nav">
+                  <IconButton
+                    icon="arrow_back"
+                    label="Back"
+                    title="Back (⌘[)"
+                    className={drag.isHolding("back") ? "cs-iconbtn--ghost cs-iconbtn--hold" : "cs-iconbtn--ghost"}
+                    disabled={!canGoBack(history)}
+                    onClick={goBack}
+                    {...drag.hold("back", goBack)}
+                  />
+                  <IconButton
+                    icon="arrow_forward"
+                    label="Forward"
+                    title="Forward (⌘])"
+                    className={drag.isHolding("forward") ? "cs-iconbtn--ghost cs-iconbtn--hold" : "cs-iconbtn--ghost"}
+                    disabled={!canGoForward(history)}
+                    onClick={goForward}
+                    {...drag.hold("forward", goForward)}
+                  />
+                  <Breadcrumb dir={dir} onNavigate={goTo} drag={drag} />
+                </div>
+                {/* The OS-drag frame is the card's own dashed outline (`cs-browser-main--drop`) plus this
+                    caption — NOT a sheet over the list: the rows stay visible and hoverable so the drag
+                    can be aimed at a folder row / crumb, or held over Back / Forward. */}
+                {dropActive && (
+                  <div className="cs-drop-caption">
+                    <Icon name="cloud_upload" />
+                    <span>Drop to upload here, or onto a folder</span>
+                  </div>
+                )}
+                {view === "list" ? (
+                  <FileList
+                    rows={rows}
+                    selected={selected}
+                    renaming={renaming}
+                    drag={drag}
+                    onRowClick={onRowClick}
+                    onRowOpen={openRow}
+                    onRowContext={openMenu}
+                    onStartRename={(row) => startRename(rowKey(row))}
+                    onCommitRename={commitRename}
+                    onCancelRename={() => setRenaming(null)}
+                    onClearSelection={clearSelection}
+                  />
+                ) : (
+                  <Gallery
+                    rows={rows}
+                    selected={selected}
+                    drag={drag}
+                    onRowClick={onRowClick}
+                    onRowOpen={openRow}
+                    onRowContext={openMenu}
+                    onClearSelection={clearSelection}
+                  />
+                )}
+              </div>
+              <p className="cs-hint">drop anywhere to upload · right-click for more</p>
+            </>
           )}
         </div>
 
-        {dropActive && (
-          <div className="cs-drop">
-            <div className="cs-drop-inner">
-              <Icon name="cloud_upload" />
-              <span className="cs-drop-title">Drop to upload</span>
-            </div>
-          </div>
-        )}
       </div>
 
       {infoOpen && sel && (

@@ -41,7 +41,7 @@
 .cs-sidebar {
   display: flex;
   flex-direction: column;
-  padding: var(--space-5) var(--space-3);
+  padding: var(--space-5) var(--cs-sidebar-pad-x);
   gap: var(--space-5);
   min-width: 0;
 }
@@ -232,6 +232,9 @@
   --card-pad-bottom: var(--space-6);
   --card-head-gap: var(--space-2);     /* header → content */
   --card-desc-gap: var(--space-4);     /* description → content */
+  /* title → description. 0 in comfortable ON PURPOSE: the head's min-height centres the title, and the
+     slack under it (~4px) already IS the gap — any margin on top of that reads as a paragraph break. */
+  --card-title-desc-gap: 0px;
   /* Reserve the height an `sm` action button forces, so a bare-title header sits at the same height as
      one carrying a Sync now / Sign out — cards read on a consistent baseline whether or not they have an
      action. Compact trades that baseline away (0) and lets each header be as short as its contents. */
@@ -239,6 +242,11 @@
   /* One DS rung below --type-card-title (which is display sizing built for the marketing site, and read
      oversized in a control panel where every card is a settings group, not a headline). */
   --card-title: var(--type-section-title);
+  /* A download request row (Downloads page). Text-height, not control-height, so — unlike a file row,
+     which tightens through --control-md — its padding is the ONLY thing density can take from it, and
+     --space-3 is the rung the compact scale barely moves. Own knob, same reasoning as the card's. */
+  --dl-row-pad-y: var(--space-3);
+  --dl-row-gap: var(--space-2);
 }
 
 .cs-card {
@@ -262,12 +270,11 @@
 }
 .cs-card-title { margin: 0; font: var(--card-title); letter-spacing: var(--tracking-tight); }
 /* Card header supporting line — grouped tight under the title, then --card-desc-gap down to the body.
-   The negative top eats HALF the head's bottom margin (these siblings collapse, so the pair reads as
-   head-gap/2) — title→desc stays one visual group at either density without needing its own token, and
-   without touching the shared margin that sets header→content on description-less cards. Same
-   typography as an inline help line. */
+   The negative top cancels the head's bottom margin (these siblings collapse) and puts the pair at
+   --card-title-desc-gap instead, without touching the shared margin that sets header→content on
+   description-less cards. Same typography as an inline help line. */
 .cs-card-desc {
-  margin: calc(-0.5 * var(--card-head-gap)) 0 var(--card-desc-gap);
+  margin: calc(var(--card-title-desc-gap) - var(--card-head-gap)) 0 var(--card-desc-gap);
   font: var(--type-label);
   color: var(--text-secondary);
   line-height: var(--leading-normal);
@@ -552,7 +559,12 @@ button.cs-kv:hover { background: var(--surface-hover); }
    one place, so component rules never hand-pick a value). Everything else is
    a DS token var. */
 .cs-shell {
-  --cs-pad-x: var(--space-5); /* content L/R inset — tighter than the fluid page gutter */
+  /* Window-edge insets, in whole px on purpose — NOT `--space-*`. Density (see the bottom of this file)
+     compresses the spacing scale to trade air between blocks for rows on screen; the gap between the
+     chrome and the window edge isn't air between blocks, and compact shrank it to where the nav and the
+     content card hugged the frame. These match --space-5 / --space-3 comfortable and stay put. */
+  --cs-pad-x: 20px; /* content L/R inset — tighter than the fluid page gutter */
+  --cs-sidebar-pad-x: 12px;
   --cs-col-size: 92px;
   --cs-col-date: 128px;
   --cs-col-actions: 64px; /* status icon + ⋯, fixed so rows align with or without an icon */
@@ -634,15 +646,21 @@ button.cs-kv:hover { background: var(--surface-hover); }
 /* ── topbar lead (the title column) ─────────────────────────────── */
 .cs-topbar-lead { min-width: 0; display: flex; flex-direction: column; }
 
-/* ── browser nav row: Back / Forward + breadcrumb, sitting on the table (the page title stays put) ─ */
+/* ── browser nav row: Back / Forward + breadcrumb — the top band of the files card, on the card's own
+   white above the column headers (the page title stays put). A hairline separates it from the list. ─ */
 .cs-browser-nav {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: var(--space-1);
   min-width: 0;
-  padding: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
 }
+/* Back / Forward: a tight pair — smaller discs, no gap between them, one step before the crumbs */
+.cs-browser-nav > .cs-iconbtn { width: var(--control-sm); height: var(--control-sm); }
+.cs-browser-nav > .cs-iconbtn + .cs-iconbtn { margin-left: calc(-1 * var(--space-1)); }
+.cs-browser-nav > .cs-crumbs { margin-left: var(--space-1); }
 
 /* ── breadcrumb ─────────────────────────────────────────────────── */
 .cs-crumbs { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
@@ -670,6 +688,9 @@ button.cs-kv:hover { background: var(--surface-hover); }
   color: var(--text-primary);
 }
 .cs-crumb-sep { color: var(--text-tertiary); flex: 0 0 auto; }
+/* the folded-ancestors `…` — a crumb-shaped menu button */
+.cs-crumb--fold { letter-spacing: 0.1em; }
+.cs-crumb--fold[aria-expanded="true"] { background: var(--surface-active); color: var(--text-primary); }
 
 /* ── segmented list/grid toggle ─────────────────────────────────── */
 .cs-seg { display: inline-flex; gap: 2px; padding: 3px; background: var(--btn-secondary-bg); border-radius: var(--radius-pill); }
@@ -698,7 +719,22 @@ button.cs-kv:hover { background: var(--surface-hover); }
   padding: var(--space-2) var(--cs-pad-x) var(--space-4);
 }
 
-/* ── file list (table) — a rounded card surface, on brand (no square white bar) ─ */
+/* ── files card — ONE rounded card surface (on brand, no square white bar) holding the nav row on top and
+   the scrolling list/gallery below it. Clips its children to the radius, so the scroller needs none. ─ */
+.cs-files-card {
+  position: relative; /* anchors the drop caption */
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+}
+
+/* ── file list (table) — the card's scroller ─ */
 .cs-filelist {
   /* single SSOT row height — shared by the rows AND the filler stripe bands so the zebra stays aligned */
   --cs-row-h: var(--control-md);
@@ -708,10 +744,6 @@ button.cs-kv:hover { background: var(--surface-hover); }
   /* flex column so the filler can grow to fill the empty space below the last row */
   display: flex;
   flex-direction: column;
-  background: var(--surface-card);
-  border: 1px solid var(--border-card);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-card);
 }
 /* keeps the zebra reading continuous: stripes the empty space below the last row (or the whole body of an
    empty folder) with the same row-height bands. --fill-shift carries the parity of the row count so the
@@ -822,7 +854,6 @@ button.cs-kv:hover { background: var(--surface-hover); }
   /* same surface as the card so it reads as one piece; a hairline separates it from the rows */
   background: var(--surface-card);
   border-bottom: 1px solid var(--border-subtle);
-  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   padding: var(--space-3) var(--space-4);
   font: var(--type-label);
   color: var(--text-tertiary);
@@ -865,7 +896,7 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-fl-row:hover { --row-tint: var(--surface-hover); }
 .cs-fl-row[aria-selected="true"] { --row-tint: var(--accent-subtle); }
 /* drag-to-move: this folder row is the hovered, legal destination. Dashed accent = "drops in here",
-   the same visual language as the .cs-drop upload overlay. Inset outline so the full-bleed row doesn't
+   the same visual language as the drop-to-upload frame. Inset outline so the full-bleed row doesn't
    shift layout. Declared after hover/selected so the drop state wins while dragging over it. */
 .cs-fl-row--drop {
   --row-tint: var(--accent-subtle);
@@ -960,23 +991,31 @@ button.cs-kv:hover { background: var(--surface-hover); }
   text-align: center;
 }
 
-/* ── drop-to-archive overlay ────────────────────────────────────── */
-.cs-drop {
+/* ── drop-to-upload caption ─────────────────────────────────────
+   The OS-drag frame is the files card's own dashed outline (`.cs-browser-main--drop .cs-files-card`,
+   below) — the same one a spring-open uses — so it hugs the card exactly. This is only the caption,
+   pinned to the card's bottom edge; pointer-events: none so it never sits between the drag and a row. */
+.cs-drop-caption {
   position: absolute;
-  inset: var(--space-3);
+  left: 50%;
+  bottom: var(--space-4);
+  transform: translateX(-50%);
   z-index: 5;
-  display: grid;
-  place-items: center;
-  border: 2px dashed var(--accent);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-xl);
-  /* opaque (mix of two opaque colors — no transparent) so the list/dashed-empty-state underneath
-     doesn't bleed through and clash with the overlay's own text */
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface-card));
+  /* opaque pill (mix of two opaque colors) so it reads cleanly over whatever row is under it */
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-raised));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border-subtle));
+  box-shadow: var(--shadow-toast);
+  color: var(--accent-text);
+  font: var(--type-body);
+  white-space: nowrap;
   pointer-events: none;
 }
-.cs-drop-inner { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); color: var(--accent-text); }
-.cs-drop-inner .csf-icon { font-size: 40px; }
-.cs-drop-title { font: var(--type-card-title); }
+.cs-drop-caption .csf-icon { font-size: 22px; }
 
 /* ── drag-to-move: spring-load pulse + background (current-dir) drop ─
    While a drag HOLDS over a folder row/tile/crumb, its dashed outline breathes — the Finder cue that
@@ -989,11 +1028,13 @@ button.cs-kv:hover { background: var(--surface-hover); }
 }
 .cs-fl-row--drop,
 .cs-tile--drop,
-.cs-crumb--drop { animation: cs-spring-pulse 0.45s ease-in-out 0.5s infinite; }
-/* the whole list/gallery card is the drop target when the blank area = "into this folder" is legal
+.cs-crumb--drop,
+.cs-iconbtn--hold { animation: cs-spring-pulse 0.45s ease-in-out 0.5s infinite; }
+/* Back / Forward under a held drag: same outline + pulse as a folder about to spring open */
+.cs-iconbtn--hold { outline: 2px dashed var(--accent); outline-offset: -2px; }
+/* the whole files card is the drop target when the blank area = "into this folder" is legal
    (i.e. after a spring-open) — Finder's window highlight, drawn on the card, not the padded shell */
-.cs-browser-main--drop .cs-filelist,
-.cs-browser-main--drop .cs-gallery {
+.cs-browser-main--drop .cs-files-card {
   outline: 2px dashed var(--accent);
   outline-offset: -2px;
 }
@@ -1304,6 +1345,9 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-signin-title { font: var(--type-title); color: var(--text-primary); margin: 0; }
 .cs-signin-text { font: var(--type-body); color: var(--text-secondary); margin: 0; }
 .cs-signin-error { font: var(--type-label); color: var(--negative); margin: 0; max-width: 360px; overflow-wrap: anywhere; }
+/* The handoff's current step under the gate title ("Unlocking…" / "Setting up…") — quiet until it's been too long, then it says so. */
+.cs-signin-step { font: var(--type-label); color: var(--text-tertiary, var(--text-secondary)); margin: 0; max-width: 360px; }
+.cs-signin-step--slow { color: var(--negative); }
 
 /* ── Recovery-code screens (Phase 5b) — reuse the .cs-signin gate frame. ── */
 .cs-recovery-code {
@@ -1768,12 +1812,12 @@ button.cs-kv:hover { background: var(--surface-hover); }
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
-  padding: var(--space-3);
+  padding: var(--dl-row-pad-y) var(--space-3);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--surface-card);
 }
-.cs-download + .cs-download { margin-top: var(--space-2); }
+.cs-download + .cs-download { margin-top: var(--dl-row-gap); }
 .cs-download-icon { flex: 0 0 auto; display: flex; padding-top: 2px; }
 .cs-download-icon--accent  { color: var(--accent-text); }
 .cs-download-icon--warning { color: var(--amber-500); }
@@ -1872,7 +1916,8 @@ button.cs-kv:hover { background: var(--surface-hover); }
    control sizes, and every rule above — which spends `--space-*` / `--control-*` and never a hand-picked
    px — tightens with it. Deliberately re-declared HERE, in the consumer layer, and not in ./tokens: the
    vendored scale is the DS's SSOT (and its comfortable default), so this is the app choosing a tighter
-   rendering of it rather than an edit to the source of truth.
+   rendering of it rather than an edit to the source of truth. The one deliberate exemption: the
+   window-edge insets (`--cs-pad-x` / `--cs-sidebar-pad-x` on .cs-shell) are fixed px and don't tighten.
 
    Every compact value is a WHOLE pixel — that, not the 4px grid, is what keeps hairlines and text crisp,
    so the ladder is free to use half-steps (6, 10, 14, 18) and get genuinely tight. It compresses hardest
@@ -1901,12 +1946,19 @@ button.cs-kv:hover { background: var(--surface-hover); }
      giving them their own tokens (see the Card section). A settings page is mostly card headers, so
      every pixel here repeats down the page, while the file table keeps the row padding it needs to stay
      readable. --card-head-min-h goes to 0: reserving an action button's height on a header that has no
-     action is a comfortable-mode luxury, and it was the single biggest y-cost in a compact card. */
-  --card-pad-top: var(--space-2);
+     action is a comfortable-mode luxury, and it was the single biggest y-cost in a compact card. And
+     because it goes to 0, the top pad can't lean on it the way comfortable's does (where the header's
+     reserved height is what really sets the title's distance from the edge) — so top and bottom pads
+     are EQUAL here. Anything less on top and the title reads pinned to the card edge (2026-08-25). */
+  --card-pad-top: var(--space-4);
   --card-pad-bottom: var(--space-4);
   --card-head-gap: var(--space-1);
   --card-desc-gap: var(--space-3);
   --card-head-min-h: 0px;
+  /* no min-height → no centring slack under the title, so the gap has to be real here */
+  --card-title-desc-gap: var(--space-1);
+  --dl-row-pad-y: var(--space-2);
+  --dl-row-gap: var(--space-1);
 }
 
 /* Segmented choice — a small set of mutually exclusive options shown at once (a `radiogroup`, not a
