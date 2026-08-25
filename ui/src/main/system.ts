@@ -18,7 +18,7 @@ import { codeSignature } from "./updater/signature.ts";
 const PHOTOS_PRIVACY_PANE = "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos";
 
 /** Resolve the native Photos-picker helper binary. Precedence: explicit `$COLDSTORE_PHOTO_PICKER` (set by
- * the Taskfile for ui:mac:dev/ui:mac:live) → the bundled copy under `Contents/Resources/bin` in a packaged app
+ * the Taskfile's app:mac:run:* lanes) → the bundled copy under `Contents/Resources/bin` in a packaged app
  * (see electron-builder.yml extraResources) → the dev `.build/release` path. */
 const photoPickerPath = (): string =>
   process.env.COLDSTORE_PHOTO_PICKER ??
@@ -49,7 +49,7 @@ const pickPhotos = (): Promise<PhotoPick[]> =>
   });
 
 /** Register the dialog/path handlers. Returns a disposer that removes them. */
-export const registerSystemHandlers = (): (() => void) => {
+export const registerSystemHandlers = (accountApiBaseUrl: string): (() => void) => {
   ipcMain.handle(IPC.downloadsDir, () => app.getPath("downloads"));
   // Build facts for Settings' footer. `app.getVersion()` IS the SSOT read (packaged package.json /
   // Info.plist) — never a version string typed into the renderer, which would drift the moment a release
@@ -60,6 +60,7 @@ export const registerSystemHandlers = (): (() => void) => {
     version: app.getVersion(),
     packaged: app.isPackaged,
     signature: await codeSignature(),
+    accountApiBaseUrl,
   }));
   ipcMain.handle(IPC.pickPhotos, () => pickPhotos());
   ipcMain.handle(IPC.openPhotosSettings, () => shell.openExternal(PHOTOS_PRIVACY_PANE));
@@ -91,12 +92,18 @@ export const registerSystemHandlers = (): (() => void) => {
   ipcMain.handle(IPC.chooseUploads, (_e, defaultPath?: string) =>
     openPanel(defaultPath, "Choose files or folders to upload", ["openFile", "openDirectory", "multiSelections"]),
   );
+  // "Locate…" on a failed upload: one file, and the sheet names which one so the user isn't guessing.
+  ipcMain.handle(IPC.chooseFile, async (_e, name: string) => {
+    const paths = await openPanel(undefined, `Find “${name}”`, ["openFile"]);
+    return paths[0] ?? null;
+  });
 
   return () => {
     ipcMain.removeHandler(IPC.downloadsDir);
     ipcMain.removeHandler(IPC.appInfo);
     ipcMain.removeHandler(IPC.chooseFolder);
     ipcMain.removeHandler(IPC.chooseUploads);
+    ipcMain.removeHandler(IPC.chooseFile);
     ipcMain.removeHandler(IPC.pickPhotos);
     ipcMain.removeHandler(IPC.openPhotosSettings);
     ipcMain.removeHandler(IPC.revealInFinder);

@@ -123,9 +123,20 @@ it had worked.
 - **Status is a small colored icon by the row's `⋯`**, not a column or text pill (fixed-width slot):
   quiet green ✓ **stored** (explicit success is what makes silence trustworthy — stored must be
   distinguishable from stuck) · blue ↑ **uploading** (a transient retry stays here; it self-heals) ·
-  muted-red ⚠ **couldn't upload** (permanent/stuck — also persistent in the sidebar → failures panel
-  + Try again / Dismiss, because a one-shot toast gets missed; the pill clears itself when a retry
-  lands, Dismiss is acknowledge-only — rows keep their ⚠, and a re-hit fault re-surfaces it) ·
+  muted-red ⚠ **couldn't upload** (permanent/stuck — and every ⚠ carries an action, on the row's
+  context menu AND in the sidebar's "N couldn't upload" pill → `FailuresPanel`: **Try again** (the daemon
+  re-ingests that exact row from its recorded `sourcePath` via `retryFiles`, as a durable deposit),
+  **Locate…** (no source known — a pre-`sourcePath` row, or a drive that's gone: the user points at the
+  file, same command with `sourcePath`; a Photos row retries by re-resolving its `photos:<id>` source, so
+  it never needs Locate; a retry that can't find the source writes that verdict onto the
+  row, so the reason is journal truth, not app memory), **Remove**. The pill counts the journal's `failed`
+  rows — the SAME list the tree marks, so it can't disagree with the rows or go blank on restart the way
+  the old `blobFailed`-event log did — and clears itself when the last one is retried or removed; no
+  Dismiss, because a list that IS the rows has nothing separate to acknowledge. The panel is **grouped by
+  cause** (the row's `error`), never a flat list: a mass failure is one cause across a whole drop, so 56k
+  rows read as one line with a count and the folders it hit; per-file rows only when a cause is small
+  enough to act on one at a time; "Try again for all" retries with `all: "true"` — the scope is the
+  daemon's, the client never ships an id list) ·
   amber ⧗ **waiting on deep storage** (the thaw — nothing is moving yet) · blue ↓ **Downloading**
   (bytes actually moving) · green `download_done`
   **saved on this Mac**. No icon = nothing in flight.
@@ -251,8 +262,8 @@ warning tone, deliberately *not* the `failed` ⚠, because nothing has given up.
 kind: `retrying` (a fault is recorded) or `unattended` (silence past the daemon's window).
 
 `files.error` had been sitting in the journal **unread since failures were first persisted** — even a
-permanently failed file showed a bare ⚠ that couldn't say why. It's now on the row icon's label and in
-Get info.
+permanently failed file showed a bare ⚠ that couldn't say why. It's now on the row icon's label, in
+Get info, and under the file's name in the failures panel — next to the action that answers it.
 
 One asymmetry is deliberate: a null `lastAttemptAt` is **not** a stall, where a null `lastStepAt` is. A
 restore row is created by an explicit user request and handed to the loop, so never-stepped means the loop
@@ -485,7 +496,7 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
 - **Commands (SSOT = `DaemonService.handle`):** `ping · getStatus · listSources · listFiles ·
   listExcludes · addSource · removeSource · addExclude · removeExclude · restorePlan · requestRestore ·
   listRestores · cancelRestore · resumeRestore · forgetRestore ·
-  deposit · depositPhotos · previewDeposit · movePath · createFolder · deletePath · pathIsWatched · authenticate ·
+  deposit · depositPhotos · previewDeposit · retryFiles · movePath · createFolder · deletePath · pathIsWatched · authenticate ·
   deauthenticate · mintVault · unlockVault · unlockVaultWithRecoveryCode · lockVault · triggerNow ·
   cancelRun · pauseSource · resumeSource`. (`authenticate`/`deauthenticate` = the **session** opened/closed —
   per-user S3 creds plus the user's journal, staging dir and key holder; the `*Vault*` four = the
@@ -504,7 +515,7 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   publishes `filesChanged`, and the controller re-reads status/files/excludes/**restores** on it.
 - **Events (SSOT = the `DaemonEvent(...)` call sites):** `runStarted · fileArchived · uploadProgress ·
   runProgress · runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged ·
-  restoresChanged · restoreProgress · restoreCompleted · error`.
+  restoresChanged · restoreProgress · restoreCompleted · usageChanged · error`.
   `restoreProgress` carries `{id, file, bytes, totalBytes}` — plaintext bytes landed for ONE transferring
   row, per ~4 MiB frame; folded into the store's ephemeral per-row slice for the Downloads page's bar,
   never a source of row state.
@@ -514,7 +525,7 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   lands per 64 MiB part). `uploadProgress` carries `{file, path, bytes, totalBytes}` — a determinate
   per-file signal for large solo-blob files, still emitted and folded into the store but no longer rendered
   (uploading rows now show a plain spinner); retained as a latent capability; `blobFailed` carries `{blob, kind, message, paths}` (newline-joined
-  relativePaths); `filesChanged` carries `{moved, to}` / `{created}` / `{deleted}` — the cue to re-read
+  relativePaths); `filesChanged` carries `{moved, to}` / `{created}` / `{deleted}` / `{retried}` / `{missingSource}` / `{interruptedUploads}` — the cue to re-read
   `listFiles` — plus `{signedIn}` / `{signedOut}`, the cue that the tree just changed owner entirely.
 - **Connection model:** one long-lived socket for the event tail (blocks indefinitely by design) +
   bounded request/response for commands (a `readTimeout` so a stalled daemon fails fast); match

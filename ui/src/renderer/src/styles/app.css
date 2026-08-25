@@ -640,6 +640,9 @@ button.cs-kv:hover { background: var(--surface-hover); }
 /* the same popover, in the failure key — red icon + a foot action */
 .cs-queue--fail .cs-queue-row .csf-icon { color: var(--negative); }
 .cs-queue-foot { padding: var(--space-2) var(--space-2) 0; }
+.cs-queue-actions { display: flex; gap: var(--space-1); flex: 0 0 auto; margin-left: auto; }
+.cs-queue-cause + .cs-queue-cause { border-top: 1px solid var(--border-subtle); margin-top: var(--space-1); padding-top: var(--space-1); }
+.cs-queue-row--file { padding-left: calc(var(--space-2) + 18px + var(--space-3)); }
 /* two side-by-side foot actions (the failures popover's Dismiss + Try again) */
 .cs-queue-foot--row { display: flex; gap: var(--space-2); }
 
@@ -1521,10 +1524,13 @@ button.cs-kv:hover { background: var(--surface-hover); }
   letter-spacing: var(--tracking-tight);
   white-space: nowrap;
 }
-.cs-account-mark-badge--neutral { background: var(--btn-secondary-bg); color: var(--text-secondary); }
+/* Every tone is a SOLID fill: the pill overlaps the avatar, so a translucent wash would let the circle
+   bleed through and the label would sit on two colors at once. */
+.cs-account-mark-badge--neutral { background: var(--surface-input); color: var(--text-secondary); }
 .cs-account-mark-badge--accent  { background: var(--accent); color: var(--accent-on); }
 .cs-account-mark-badge--success { background: var(--positive); color: var(--accent-on); }
 .cs-account-mark-badge--warning { background: var(--amber-500); color: var(--accent-on); }
+.cs-account-mark-badge--danger  { background: var(--negative); color: var(--accent-on); }
 .cs-account-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; align-items: stretch; }
 .cs-account-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
 .cs-account-email {

@@ -211,25 +211,94 @@ public actor DaemonService {
     private func depositExplicit(kind: PendingDeposit.Kind, src: [String], into dir: String,
                                  conflicts: [String: ConflictPolicy], excludeExtra: [String]) async {
         do {
-            let session = try requireSession(kind == .files ? "deposit" : "depositPhotos")
-            let pending = PendingDeposit(id: UUID().uuidString, kind: kind, src: src, dest: dir,
-                                         conflicts: conflicts.mapValues(\.rawValue), excludeExtra: excludeExtra,
-                                         createdAt: Int(Date().timeIntervalSince1970))
+            let session = try requireSession(Self.commandName(for: kind))
+            let pending = Self.newPendingDeposit(kind: kind, src: src, into: dir, conflicts: conflicts, excludeExtra: excludeExtra)
             try session.journal.addPendingDeposit(pending)
+            await runRecordedDeposit(pending, session: session)
+        } catch { publishDepositError(error, kind: kind) }
+    }
+
+    /// One surface for a deposit that could not be set up or run. Photo-access / nothing-resolved are
+    /// user-recoverable: surface the bare message (already a clean sentence) plus a `code` the UI keys an
+    /// action off (e.g. `photosAccessDenied` → "Open Photos settings"). Anything else names the command.
+    private func publishDepositError(_ error: Error, kind: PendingDeposit.Kind) {
+        if let e = error as? ColdStorageError { bus.publish(DaemonEvent("error", Self.errorEventData(e))) }
+        else { bus.publish(DaemonEvent("error", ["message": "\(Self.commandName(for: kind)): \(error)"])) }
+    }
+
+    private static func newPendingDeposit(kind: PendingDeposit.Kind, src: [String], into dir: String,
+                                          conflicts: [String: ConflictPolicy], excludeExtra: [String]) -> PendingDeposit {
+        PendingDeposit(id: UUID().uuidString, kind: kind, src: src, dest: dir,
+                       conflicts: conflicts.mapValues(\.rawValue), excludeExtra: excludeExtra,
+                       createdAt: Int(Date().timeIntervalSince1970))
+    }
+
+    /// Run a deposit that is ALREADY in the journal. Split from `depositExplicit` so `retryFiles` can record
+    /// its row synchronously (before it replies, and before any pass can see requeued files with no deposit
+    /// owning them) and only defer the run.
+    private func runRecordedDeposit(_ pending: PendingDeposit, session: UserSession) async {
+        do {
             try await withRunLock(skipIfBusy: false) {
                 // `explicitDeposit: true` is what lets a drop un-delete: dropping a file IS the ask, and a
                 // re-scan's "I can still see it on disk" is not. The revive is scoped to the items this source
                 // actually enumerates (`Journal.upsert`), NOT to the dropped path's whole former subtree.
                 try await runPendingDeposit(pending, session: session, explicit: true)
             }
+        } catch { publishDepositError(error, kind: pending.kind) }
+    }
+
+    private static func commandName(for kind: PendingDeposit.Kind) -> String {
+        switch kind {
+        case .files: return "deposit"
+        case .photos: return "depositPhotos"
+        case .retry: return "retryFiles"
         }
-        catch let e as ColdStorageError {
-            // Photo-access / nothing-resolved are user-recoverable: surface the bare message (already a clean
-            // sentence) plus a `code` the UI keys an action off (e.g. `photosAccessDenied` → "Open Photos
-            // settings"). Other ColdStorageErrors fall through to the generic surface below.
-            bus.publish(DaemonEvent("error", Self.errorEventData(e)))
+    }
+
+    /// The wording for a retry we could not make — written to the ROW, so the tree, Get info and the
+    /// failures panel all say it from one place. Placeholder, gatekept by Ben.
+    static let missingSourceReason = "Couldn\u{2019}t find this file on disk. Reconnect the drive it\u{2019}s on and try again, or use Locate\u{2026} to point at it."
+
+    /// The user's **Try again** (and **Locate…**, when `sourcePath` is given) on failed uploads — a handful
+    /// of rows by id, or `all` of them (the scope comes from the journal, never a client-sent list: a mass
+    /// failure is one cause across a whole drop, and 56k ids is neither a sane request nor under SQLite's
+    /// bind limit). Splits them into the ones we can actually retry — a recorded source that is on disk
+    /// right now — and the ones we can't (no source, or it's gone). The latter get that verdict WRITTEN TO
+    /// THEIR ROW (`missingSourceReason`), so the reason reaches the tree and the panel as journal truth on
+    /// the next read rather than as something the app has to remember; the reply carries only counts.
+    /// The retryable ones are requeued AND their `.retry` deposit is recorded before this replies — in
+    /// that order, and both before the run — so no pass can ever see them as planned-with-nobody-owning-
+    /// them (the orphan sweep would flip them straight back to failed), and a crash still owes them.
+    func retryFiles(ids: [String]?, sourcePath: String?) throws -> RetryFilesResultDTO {
+        let session = try requireSession("retryFiles")
+        if let sourcePath {
+            guard let ids, ids.count == 1, let id = ids.first else {
+                throw ColdStorageError.invalidRequest("retryFiles: sourcePath applies to exactly one file")
+            }
+            try session.journal.setSourcePath(id: id, sourcePath)
         }
-        catch { bus.publish(DaemonEvent("error", ["message": "\(kind == .files ? "deposit" : "depositPhotos"): \(error)"])) }
+        let rows = try ids.map { try session.journal.files(ids: $0).filter { $0.status == .failed } }
+            ?? session.journal.failedFiles()
+        let retryable = rows.filter { r in
+            guard let p = r.sourcePath else { return false }
+            // A Photos asset can't be stat'd; it's retryable wherever a resolver exists (a stale id is
+            // dropped at resolve time and the orphan sweep reports it). A path must be a file, here, now.
+            if IngestItem.photoAssetId(fromSource: p) != nil { return photoResolver != nil }
+            var isDir: ObjCBool = false
+            return FileManager.default.fileExists(atPath: p, isDirectory: &isDir) && !isDir.boolValue
+        }
+        let queued = try session.journal.requeueFailedFiles(ids: retryable.map(\.id))
+        let queuedSet = Set(queued)
+        let missing = rows.map(\.id).filter { !queuedSet.contains($0) }
+        try session.journal.markFilesFailed(missing, error: Self.missingSourceReason)
+        if !missing.isEmpty { bus.publish(DaemonEvent("filesChanged", ["missingSource": "\(missing.count)"])) }
+        if !queued.isEmpty {
+            let pending = Self.newPendingDeposit(kind: .retry, src: queued, into: "", conflicts: [:], excludeExtra: [])
+            try session.journal.addPendingDeposit(pending)
+            bus.publish(DaemonEvent("filesChanged", ["retried": "\(queued.count)"]))
+            Task { await self.runRecordedDeposit(pending, session: session) }
+        }
+        return RetryFilesResultDTO(queued: queued.count, missing: missing.count)
     }
 
     /// Run one recorded deposit and settle its row. **Must be called under `withRunLock`.** The row is
@@ -251,6 +320,9 @@ public actor DaemonService {
             // a daemon that can — never drop a pick because THIS process couldn't read the library.
             guard let resolver = photoResolver else { return }
             base = PhotoDepositSource(resolver: resolver, assetIds: d.src, destDir: d.dest, scratchDir: session.scratchDir)
+        case .retry:
+            base = RetryFilesSource(rows: try session.journal.files(ids: d.src),
+                                    photos: photoResolver.map { (resolver: $0, scratchDir: session.scratchDir) })
         }
         let failures = try await performRun(session: session, source: resolveCollisions(session, base, conflicts),
                                             explicitDeposit: explicit)
@@ -259,7 +331,16 @@ public actor DaemonService {
         // produced is "nothing to do right now", not "done". Retry next pass. A photos deposit has no path
         // to check. Otherwise: remove once nothing retryable remains (all-permanent or, the common case,
         // no failures at all — the files archived).
-        let sourceReachable = d.kind == .photos || d.src.contains { FileManager.default.fileExists(atPath: $0) }
+        let sourceReachable: Bool
+        switch d.kind {
+        case .photos: sourceReachable = true
+        case .files: sourceReachable = d.src.contains { FileManager.default.fileExists(atPath: $0) }
+        case .retry:
+            // The rows' own sources, not `src` (which holds ids). All gone ⇒ keep the row for a remount.
+            // A Photos source counts as reachable, as it does for a `.photos` deposit.
+            let paths = ((try? session.journal.files(ids: d.src)) ?? []).compactMap(\.sourcePath)
+            sourceReachable = paths.contains { IngestItem.photoAssetId(fromSource: $0) != nil || FileManager.default.fileExists(atPath: $0) }
+        }
         if sourceReachable && failures.allSatisfy(\.kind.isPermanent) {
             try session.journal.removePendingDeposit(d.id)
         } else {
@@ -267,8 +348,9 @@ public actor DaemonService {
         }
     }
 
-    /// One wording for an upload nothing can resume — shown on the row, gatekept by Ben (placeholder).
-    static let interruptedUploadReason = "Upload didn\u{2019}t finish. Add this to your backup again to complete it."
+    /// One wording for an upload nothing can resume — shown on the row, gatekept by Ben (placeholder). Names
+    /// the fact only: what to DO about it is the row's own Try again / Locate… / Remove, not a sentence.
+    static let interruptedUploadReason = "Upload didn\u{2019}t finish."
 
     /// Flip files stuck "Uploading" that nothing will ever drive to an honest `failed` state (see
     /// `Journal.markInterruptedUploads`). Runs only when it is UNAMBIGUOUS that a planned file is orphaned:
@@ -664,9 +746,11 @@ public actor DaemonService {
         let date: Int?
         let lastAttemptAt: Int?
         let error: String?
+        /// Where the bytes live on this Mac, or null — what the app keys "Try again" vs "Locate…" off.
+        let sourcePath: String?
 
         enum CodingKeys: String, CodingKey {
-            case id, relativePath, size, status, blobId, date, lastAttemptAt, error
+            case id, relativePath, size, status, blobId, date, lastAttemptAt, error, sourcePath
         }
 
         func encode(to encoder: Encoder) throws {
@@ -679,9 +763,14 @@ public actor DaemonService {
             try c.encode(date, forKey: .date)
             try c.encode(lastAttemptAt, forKey: .lastAttemptAt)
             try c.encode(error, forKey: .error)
+            try c.encode(sourcePath, forKey: .sourcePath)
         }
     }
     private struct AckDTO: Encodable { let ok: Bool }
+    /// `retryFiles`' answer: how many rows are back in the queue, and how many we could not retry (no source
+    /// on disk — those rows now carry `missingSourceReason`). Counts, not ids: the rows themselves are the
+    /// record, and a mass retry must not echo 56k ids back over the wire.
+    struct RetryFilesResultDTO: Encodable { let queued: Int; let missing: Int }
 
     /// The answer to "will this come back?", so the client can say so instead of letting the user find out.
     /// `isWatched` = the file is still on disk inside a watched folder, so the folder would keep re-finding
@@ -1108,7 +1197,7 @@ public actor DaemonService {
             guard let session else { return AnyEncodable([FileDTO]()) }
             return AnyEncodable(try session.journal.listFiles().map {
                 FileDTO(id: $0.id, relativePath: $0.relativePath, size: $0.size, status: $0.status.rawValue, blobId: $0.blobId,
-                        date: $0.createdAt, lastAttemptAt: $0.lastAttemptAt, error: $0.error)
+                        date: $0.createdAt, lastAttemptAt: $0.lastAttemptAt, error: $0.error, sourcePath: $0.sourcePath)
             })
         case "listExcludes":
             guard let session else { return AnyEncodable([String]()) }
@@ -1270,6 +1359,18 @@ public actor DaemonService {
             // runStarted/fileArchived/blobFailed/runFinished events (exactly like a scheduled run).
             Task { await self.deposit(paths: paths, into: dest, conflicts: conflicts, excludeExtra: extra) }
             return AnyEncodable(AckDTO(ok: true))
+        case "retryFiles":
+            // The user's Try again / Locate… on failed rows. Either `ids` (newline-joined journal file ids)
+            // or `all: "true"` (every failed row — the scope is read from the journal, never sent);
+            // `sourcePath` (optional, single id only) is where they just told us the bytes are.
+            let ids: [String]?
+            if p["all"] == "true" {
+                ids = nil
+            } else {
+                guard let raw = p["ids"], !raw.isEmpty else { throw ColdStorageError.invalidRequest("retryFiles requires params.ids (newline-joined file ids) or params.all = \"true\"") }
+                ids = raw.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+            }
+            return AnyEncodable(try retryFiles(ids: ids, sourcePath: p["sourcePath"]))
         case "depositPhotos":
             _ = try requireSession("depositPhotos")
             // Explicit photo deposit (the photo analogue of `deposit`): archive these PICKED Photos assets

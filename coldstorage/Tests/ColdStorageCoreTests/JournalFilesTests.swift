@@ -93,4 +93,102 @@ import Foundation
         try j.markFileArchived("x", blobId: "blob-1", offset: 0, length: 1, firstFrame: 0, plaintextSha256: "sha", size: 1)
         #expect(try #require(try j.listFiles().first).status == .archived)
     }
+
+    // MARK: - retry from the row (`retryFiles`)
+
+    /// `sourcePath` rides on the row and is COALESCEd on re-upsert: a source that knows the path sets it,
+    /// one that doesn't (a Photos asset, a synthetic item) must not erase it — that path is the only thing
+    /// that makes a later "Try again" possible without asking the user where the file went.
+    @Test func sourcePathPersistsAndSurvivesAPathlessUpsert() throws {
+        let j = try tempJournal()
+        try j.upsert([IngestItem(id: "x", relativePath: "a/b.jpg", size: 1, content: .sha256("h"), createdAt: nil,
+                                 isFavorite: false, sourcePath: "/Users/me/b.jpg",
+                                 open: { AsyncThrowingStream { $0.finish() } })])
+        #expect(try #require(try j.listFiles().first).sourcePath == "/Users/me/b.jpg")
+        try j.upsert([item("x", path: "a/b.jpg", size: 1)])   // helper carries no sourcePath
+        #expect(try #require(try j.listFiles().first).sourcePath == "/Users/me/b.jpg")
+        try j.setSourcePath(id: "x", "/Volumes/T7/b.jpg")     // the user's Locate…
+        #expect(try #require(try j.files(ids: ["x"]).first).sourcePath == "/Volumes/T7/b.jpg")
+    }
+
+    /// "Try again" requeues ONLY failed rows, as a fresh claim (no stale error, no attempt clock) — an
+    /// archived file has nothing to retry and a queued one is already in flight. Returns exactly what flipped.
+    @Test func requeueFailedFilesFlipsOnlyFailedRowsClean() throws {
+        let j = try tempJournal()
+        try j.upsert([item("f", path: "f.jpg", size: 1), item("a", path: "a.jpg", size: 1), item("q", path: "q.jpg", size: 1)])
+        try j.markFilesFailed(["f"], error: "boom")
+        try j.markFileArchived("a", blobId: "b", offset: 0, length: 1, firstFrame: 0, plaintextSha256: "s", size: 1)
+        #expect(try j.requeueFailedFiles(ids: ["f", "a", "q", "nope"]) == ["f"])
+        let byId = Dictionary(uniqueKeysWithValues: try j.listFiles().map { ($0.id, $0) })
+        #expect(byId["f"]?.status == .planned)
+        #expect(byId["f"]?.error == nil)
+        #expect(byId["f"]?.lastAttemptAt == nil)
+        #expect(byId["a"]?.status == .archived)
+        #expect(byId["q"]?.status == .planned)
+        #expect(try j.requeueFailedFiles(ids: []).isEmpty)
+    }
+
+    /// The retry source re-ingests the SAME row (id + relativePath, even one renamed since the drop) from
+    /// its recorded source, and skips rows whose source is missing or was never recorded — never invents a
+    /// second file next to the failed one.
+    @Test func retrySourceReingestsSameRowFromSourcePath() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cs-retry-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let onDisk = dir.appendingPathComponent("orig.jpg")
+        try Data("hello".utf8).write(to: onDisk)
+        let rows = [
+            FileRow(id: "keep", relativePath: "Renamed/new-name.jpg", size: 0, status: .failed, blobId: nil, createdAt: nil, sourcePath: onDisk.path),
+            FileRow(id: "gone", relativePath: "x.jpg", size: 0, status: .failed, blobId: nil, createdAt: nil, sourcePath: dir.appendingPathComponent("gone.jpg").path),
+            FileRow(id: "never", relativePath: "y.jpg", size: 0, status: .failed, blobId: nil, createdAt: nil, sourcePath: nil),
+        ]
+        let items = try await RetryFilesSource(rows: rows).enumerate()
+        #expect(items.map(\.id) == ["keep"])
+        let it = try #require(items.first)
+        #expect(it.relativePath == "Renamed/new-name.jpg")
+        #expect(it.size == 5)
+        #expect(it.sourcePath == onDisk.path)
+        #expect(it.content.planKey == (try LocalDirSource.sha256Hex(of: onDisk)))
+    }
+
+    /// A mass failure is one cause across a whole drop — more rows than SQLite will bind in one `IN (…)`
+    /// (32,766). The id-taking reads and the requeue must chunk, and "everything failed" must come from the
+    /// journal itself rather than a client-sent list.
+    @Test func idSetsBeyondTheBindLimitAreChunked() throws {
+        let j = try tempJournal()
+        let n = 40_000
+        try j.upsert((0..<n).map { item("f\($0)", path: "drop/\($0).bin", size: 1) })
+        let ids = (0..<n).map { "f\($0)" }
+        try j.markFilesFailed(ids, error: "AccessDenied")
+        #expect(try j.failedFiles().count == n)
+        #expect(try j.files(ids: ids).count == n)
+        #expect(try j.requeueFailedFiles(ids: ids).count == n)
+        #expect(try j.failedFiles().isEmpty)
+    }
+
+    /// A failed PHOTO row retries too: its `photos:<id>` source is re-resolved and the asset re-keyed onto
+    /// the row (same id, same vault path). A stale asset the resolver drops is simply absent.
+    @Test func retrySourceReresolvesPhotoRowsOntoTheirRows() async throws {
+        struct FakeResolver: PhotoResolver {
+            func resolve(assetIds: [String], scratchDir: URL) async throws -> [IngestItem] {
+                assetIds.filter { $0 == "asset-1" }.map {
+                    IngestItem(id: $0, relativePath: "IMG_0001.HEIC", size: 9, content: .opaque("k"),
+                               createdAt: nil, isFavorite: true, open: { AsyncThrowingStream { $0.finish() } })
+                }
+            }
+        }
+        let rows = [
+            FileRow(id: "p1", relativePath: "Trip/renamed.heic", size: 0, status: .failed, blobId: nil, createdAt: nil,
+                    sourcePath: IngestItem.photoSourcePrefix + "asset-1"),
+            FileRow(id: "p2", relativePath: "Trip/gone.heic", size: 0, status: .failed, blobId: nil, createdAt: nil,
+                    sourcePath: IngestItem.photoSourcePrefix + "asset-stale"),
+        ]
+        let scratch = FileManager.default.temporaryDirectory
+        let items = try await RetryFilesSource(rows: rows, photos: (resolver: FakeResolver(), scratchDir: scratch)).enumerate()
+        #expect(items.map(\.id) == ["p1"])
+        #expect(items.first?.relativePath == "Trip/renamed.heic")
+        #expect(items.first?.size == 9)
+        // No resolver on this platform ⇒ photo rows are skipped, never mis-read as paths.
+        #expect(try await RetryFilesSource(rows: rows).enumerate().isEmpty)
+    }
 }

@@ -33,18 +33,23 @@ import {
 } from "./model.ts";
 
 let depositSeq = 0;
+/** An optimistic row's id — one the daemon has never seen. A retry on such a row can't go through
+ * `retryFiles` (no journal row to requeue); it re-issues the original `deposit` from the dropped path. */
+const OPTIMISTIC_PREFIX = "dep-";
+const optimisticId = (stamp: number, i: number): string => `${OPTIMISTIC_PREFIX}${stamp}-${i}`;
+export const isOptimisticId = (id: string): boolean => id.startsWith(OPTIMISTIC_PREFIX);
 
 export interface FilesApi {
   /** The flat file list with live restore status overlaid — the browser renders the tree from this. */
   files: ArchivedFile[];
   /** Just-created, still-empty folders (virtual paths) to surface alongside the derived tree. */
   virtualFolders: string[];
-  /** Add optimistic "uploading" rows for dropped items in `intoDir` (each carrying its local `srcPath` for
+  /** Add optimistic "uploading" rows for dropped items in `intoDir` (each carrying its local `sourcePath` for
    * retry, and its byte `size` where known — file drops know it up front, photo picks don't until the
    * daemon resolves them); returns their ids so the caller can flip status ({@link setDepositStatus}) as
    * the real `deposit` command resolves. The `size` feeds the deposit gate's in-flight accounting, so an
    * uploading row counts against the quota before its bytes ever land in S3 (see `state/entitlement.ts`). */
-  deposit: (items: { name: string; srcPath?: string; size?: number }[], intoDir: string) => string[];
+  deposit: (items: { name: string; sourcePath?: string; size?: number }[], intoDir: string) => string[];
   /** Set optimistic deposit rows' status (uploading ⇄ failed) by id — drives the retry cycle and keeps a
    * failed upload visible ON the file (⚠ couldn't upload) rather than vanishing or stuck on "uploading".
    *
@@ -155,10 +160,10 @@ export const useFiles = (
     return base.map((file) => applyUpload(applyRestore(file, newestByFile.get(file.id), now, staleAfter), now, staleAfter));
   }, [base, newestByFile, staleAfter]);
 
-  const deposit = useCallback((items: { name: string; srcPath?: string; size?: number }[], intoDir: string): string[] => {
+  const deposit = useCallback((items: { name: string; sourcePath?: string; size?: number }[], intoDir: string): string[] => {
     const stamp = ++depositSeq;
     const added: ArchivedFile[] = items.map((it, i) => ({
-      id: `dep-${stamp}-${i}`,
+      id: optimisticId(stamp, i),
       relativePath: joinPath(intoDir, it.name),
       // Real size where the caller knows it (a file drop) so this row counts against the quota while it
       // uploads; 0 when unknown (a photo pick, resolved daemon-side) — the daemon's usage read catches
@@ -172,7 +177,7 @@ export const useFiles = (
       // not "abandoned": otherwise every fresh drop would flag itself the instant it appeared.
       lastAttemptAt: null,
       error: null,
-      srcPath: it.srcPath ?? null, // remembered so a failed upload can be retried
+      sourcePath: it.sourcePath ?? null, // remembered so a failed upload can be retried
     }));
     if (added.length === 0) return [];
     setBase((prev) => [...prev, ...added]);

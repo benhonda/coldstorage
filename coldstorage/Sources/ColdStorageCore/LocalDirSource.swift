@@ -94,7 +94,7 @@ public struct LocalDirSource: IngestSource {
             IngestItem(
                 id: e.relativePath, relativePath: e.relativePath, size: e.size,
                 content: .sha256(try Self.sha256Hex(of: e.url)),   // the byte-reading pass — preview skips it
-                createdAt: e.modifiedAt, isFavorite: false,
+                createdAt: e.modifiedAt, isFavorite: false, sourcePath: e.url.path,
                 open: { Self.stream(e.url) })
         }
     }

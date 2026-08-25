@@ -331,12 +331,12 @@ Secrets live in Keychain, never in the UI.
 - **Commands — SSOT is `DaemonService.handle`:** `ping · getStatus · listSources · listFiles ·
   listExcludes · addSource · removeSource · addExclude · removeExclude · restorePlan · requestRestore ·
   listRestores · cancelRestore · resumeRestore · forgetRestore ·
-  deposit · depositPhotos · previewDeposit · movePath · createFolder · deletePath · authenticate ·
+  deposit · depositPhotos · previewDeposit · retryFiles · movePath · createFolder · deletePath · authenticate ·
   deauthenticate · setQuota · mintVault · unlockVault · unlockVaultWithRecoveryCode · lockVault ·
   triggerNow · cancelRun · pauseSource · resumeSource`.
 - **Events — SSOT is the `DaemonEvent(...)` call sites:** `runStarted · fileArchived · uploadProgress ·
   runProgress · runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged ·
-  restoresChanged · restoreProgress · restoreCompleted · error`.
+  restoresChanged · restoreProgress · restoreCompleted · usageChanged · error`.
 - **Every command is session-scoped** (§2): signed out, the four reads answer empty and everything else
   throws *"not signed in"*. `getStatus` says so explicitly — `signedIn: bool` — and its `bytesStored`
   (the S3-derived storage-quota usage figure) is non-null whenever signed in, `null` only when not.

@@ -59,7 +59,7 @@ public struct ExplicitPathsSource: IngestSource {
                     let rel = Self.join(e.destDir, "\(base)/\(it.relativePath)")
                     items.append(IngestItem(id: rel, relativePath: rel, size: it.size, content: it.content,
                                             createdAt: it.createdAt, isFavorite: it.isFavorite,
-                                            metadata: it.metadata, open: it.open))
+                                            metadata: it.metadata, sourcePath: it.sourcePath, open: it.open))
                 }
             } else {
                 let rel = Self.join(e.destDir, e.url.lastPathComponent)
@@ -69,7 +69,7 @@ public struct ExplicitPathsSource: IngestSource {
                 items.append(IngestItem(
                     id: rel, relativePath: rel, size: v?.fileSize ?? 0,
                     content: .sha256(sha),
-                    createdAt: v?.contentModificationDate, isFavorite: false,
+                    createdAt: v?.contentModificationDate, isFavorite: false, sourcePath: url.path,
                     open: { LocalDirSource.stream(url) }))
             }
         }
@@ -108,4 +108,52 @@ public struct ExplicitPathsSource: IngestSource {
 
     /// Join a vault dir + a sub-path ("" + "a/b" → "a/b"; "x" + "a/b" → "x/a/b").
     static func join(_ dir: String, _ sub: String) -> String { dir.isEmpty ? sub : "\(dir)/\(sub)" }
+}
+
+/// The user's **Try again** on failed rows: re-ingest exactly those journal rows — same `id`, same
+/// `relativePath` — from each row's own `sourcePath`: a filesystem path, or a `photos:<id>` asset the
+/// resolver re-resolves. Not a re-drop: a re-drop places by `dest/<basename>`, which for a row that was
+/// renamed, moved, or "Keep Both"-ed since would land a SECOND file next to the failed one instead of
+/// finishing it. A row whose source has gone missing (or never had one) is skipped here — `retryFiles`
+/// already refused to queue those, and the orphan sweep flips a skipped straggler back to `failed` with a
+/// reason rather than leaving it "Uploading" for nobody.
+public struct RetryFilesSource: IngestSource {
+    let rows: [FileRow]
+    /// How to re-resolve `photos:` sources, when this platform can (nil off macOS: those rows are skipped
+    /// and the orphan sweep reports them, same as a vanished file).
+    let photos: (resolver: any PhotoResolver, scratchDir: URL)?
+    public init(rows: [FileRow], photos: (resolver: any PhotoResolver, scratchDir: URL)? = nil) {
+        self.rows = rows; self.photos = photos
+    }
+
+    public func enumerate() async throws -> [IngestItem] {
+        var items: [IngestItem] = []
+        // Photos first, as one resolve (the resolver batches; a stale id is dropped, not fatal). Each
+        // resolved asset is re-keyed onto ITS row — same id, same vault path — never re-placed by name.
+        let photoRows = rows.compactMap { r in r.sourcePath.flatMap(IngestItem.photoAssetId).map { (asset: $0, row: r) } }
+        if let photos, !photoRows.isEmpty {
+            let byAsset = Dictionary(try await photos.resolver.resolve(assetIds: photoRows.map(\.asset), scratchDir: photos.scratchDir)
+                                         .map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            for (asset, row) in photoRows {
+                guard let it = byAsset[asset] else { continue }
+                items.append(IngestItem(id: row.id, relativePath: row.relativePath, size: it.size, content: it.content,
+                                        createdAt: it.createdAt, isFavorite: it.isFavorite, metadata: it.metadata,
+                                        sourcePath: row.sourcePath, open: it.open))
+            }
+        }
+        for row in rows {
+            guard let src = row.sourcePath, IngestItem.photoAssetId(fromSource: src) == nil else { continue }
+            let url = URL(fileURLWithPath: src)
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: src, isDirectory: &isDir), !isDir.boolValue else { continue }
+            let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            let sha = try LocalDirSource.sha256Hex(of: url)
+            items.append(IngestItem(
+                id: row.id, relativePath: row.relativePath, size: v?.fileSize ?? 0,
+                content: .sha256(sha),
+                createdAt: v?.contentModificationDate, isFavorite: false, sourcePath: src,
+                open: { LocalDirSource.stream(url) }))
+        }
+        return items
+    }
 }

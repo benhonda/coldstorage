@@ -51,4 +51,40 @@ import Crypto
         _ = await daemon.respond(to: ControlRequest(id: 2, method: "listFiles", params: [:]))
         #expect(ContinuousClock.now - t2 < .seconds(2))
     }
+
+    /// The other half of "never wait": when the background listing DOES land, the daemon must say so.
+    /// The UI re-reads status only on daemon events, so a silent cache fill leaves the storage meter on
+    /// its skeleton for the whole session. Pins `usageChanged` — published once the cache is filled, with
+    /// the figure — and that a `getStatus` after it carries `bytesStored`.
+    @Test func usageChangedFiresWhenTheBackgroundListingLands() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("cs-gs-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bus = EventBus()
+        let sessions = SessionFactory(dataRoot: root.appendingPathComponent("data"), store: FakeVault(), canSelfThaw: false)
+        let daemon = DaemonService(bus: bus, sessions: sessions)
+        let session = try sessions.make(.user(sub: "s", identityId: "ca-central-1:1"))
+        session.vaultKey.setMasterKey(SymmetricKey(size: .bits256))
+
+        let landed = AsyncStream<DaemonEvent> { continuation in
+            _ = bus.subscribe { e in if e.name == "usageChanged" { continuation.yield(e) } }
+        }
+        await daemon.beginSession(session)
+
+        // Cold cache: this answer has no figure, and it kicks the background listing.
+        let first = await daemon.respond(to: ControlRequest(id: 1, method: "getStatus", params: [:]))
+        let firstStatus = try JSONSerialization.jsonObject(with: JSONEncoder().encode(first.result)) as? [String: Any]
+        #expect(firstStatus?["bytesStored"] is NSNull || firstStatus?["bytesStored"] == nil)
+
+        // The event arrives (bounded — a hang here IS the bug), carrying the number.
+        let event = try await withThrowingTimeout(seconds: 5) {
+            for await e in landed { return e }
+            throw CancellationError()
+        }
+        #expect(event.data["bytesStored"] == "0")
+
+        // And the next status read serves it from the cache.
+        let second = await daemon.respond(to: ControlRequest(id: 2, method: "getStatus", params: [:]))
+        let secondStatus = try JSONSerialization.jsonObject(with: JSONEncoder().encode(second.result)) as? [String: Any]
+        #expect(secondStatus?["bytesStored"] as? Int == 0)
+    }
 }

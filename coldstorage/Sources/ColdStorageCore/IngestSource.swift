@@ -64,7 +64,7 @@ public struct MountedSource: IngestSource {
             let rel = "\(mountPath)/\(it.relativePath)"
             return IngestItem(id: rel, relativePath: rel, size: it.size, content: it.content,
                               createdAt: it.createdAt, isFavorite: it.isFavorite,
-                              metadata: it.metadata, open: it.open)
+                              metadata: it.metadata, sourcePath: it.sourcePath, open: it.open)
         }
     }
 }

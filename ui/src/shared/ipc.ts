@@ -22,6 +22,7 @@ export type {
   ExcludeSuggestion,
   ListedFile,
   Method,
+  RetryFilesResult,
   ParamsArg,
   RestoreRow,
   RestoreState,
@@ -47,6 +48,8 @@ export const IPC = {
   chooseFolder: "dialog:chooseFolder",
   /** invoke: open the native files-AND-folders upload picker (multi-select); resolves to the chosen paths (or [] if cancelled). */
   chooseUploads: "dialog:chooseUploads",
+  /** invoke: open a single-file picker titled for the file being looked for; resolves to the chosen path or null. */
+  chooseFile: "dialog:chooseFile",
   /** invoke: the OS Downloads directory (default save destination). */
   downloadsDir: "dialog:downloadsDir",
   /** invoke: reveal a path in Finder, `(absolutePath → void)`. */
@@ -434,6 +437,10 @@ export interface ColdstoreApi {
    * (which can't offer folders at all). Distinct from {@link chooseFolder} (single dir, for a
    * watched-folder / restore destination). */
   chooseUploads(defaultPath?: string): Promise<string[]>;
+  /** Open a single-FILE picker (a window sheet on macOS) — the "Locate…" on a failed upload whose source
+   * we don't have. `name` is the file being looked for, so the sheet's title says what to find. Resolves
+   * to the chosen absolute path, or null if cancelled. */
+  chooseFile(name: string): Promise<string | null>;
   /** The OS Downloads directory (absolute) — the default save destination for a requested copy. */
   getDownloadsDir(): Promise<string>;
   /** Present the native macOS Photos picker (option B) and resolve to the picked photos ({id, name}), or []

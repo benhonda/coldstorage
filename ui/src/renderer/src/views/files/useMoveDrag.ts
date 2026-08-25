@@ -29,6 +29,11 @@
  * So every drag is also watched by a heartbeat: `dragover` keeps firing while a drag is alive (the
  * spec mandates it even when the pointer is still), and when it stops for {@link DRAG_DEAD_MS} the
  * drag is over, however it ended. `reset` is the one end-of-drag path, and it's idempotent.
+ *
+ * ESC can't end an OS drag — Finder owns that session and only Finder can put the file back; a
+ * destination has no way to cancel it. So Esc here means REFUSE: every cue comes down, and until the
+ * drag really ends (heartbeat / dragend / drop) nothing accepts it — no-drop cursor everywhere, and a
+ * release lands nothing. "Cancel" then "took the files anyway" is the one outcome this must never have.
  */
 import { useRef, useState } from "react";
 import { type Row, type RowTarget, canMoveInto, moveIsNoop } from "./model.ts";
@@ -102,6 +107,9 @@ export interface MoveDrag {
   /** Call from the browser container's dragenter/dragover so the heartbeat watches EVERY drag over
    * the surface — an OS file drag has no dragstart of ours to hook. */
   track: () => void;
+  /** Has the user Esc'd this drag? The container must then refuse it too (no preventDefault, no
+   * deposit) until it actually ends. */
+  isRefused: () => boolean;
 }
 
 export const useMoveDrag = (opts: {
@@ -122,6 +130,7 @@ export const useMoveDrag = (opts: {
   const spring = useRef<{ key: string; timer: ReturnType<typeof setTimeout> } | null>(null);
   const docCleanup = useRef<(() => void) | null>(null);
   const heartbeat = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refused = useRef(false);
   const [dropDir, setDropDir] = useState<string | null>(null);
   const [holdKey, setHoldKey] = useState<string | null>(null);
 
@@ -133,6 +142,7 @@ export const useMoveDrag = (opts: {
   /** Idempotent end-of-drag reset — reachable from EVERY way a drag can end (see the header). */
   const reset = (): void => {
     dragged.current = null;
+    refused.current = false;
     cancelSpring();
     setDropDir(null);
     setHoldKey(null);
@@ -153,10 +163,17 @@ export const useMoveDrag = (opts: {
       if (heartbeat.current) clearTimeout(heartbeat.current);
       heartbeat.current = setTimeout(reset, DRAG_DEAD_MS);
     };
-    // Esc: Chromium cancels the drag and MAY skip dragend / dragleave; the heartbeat would catch it
-    // ~1s later, but if the key event reaches us at all we can end it now.
+    // Esc = refuse (see the header). Every cue comes down NOW; the drag itself stays tracked so the
+    // real end (heartbeat / dragend / drop) still runs the one reset. A row move's Esc does end the
+    // drag (Chromium cancels it) — refusing first just guarantees nothing lands in between.
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") reset();
+      if (e.key !== "Escape") return;
+      refused.current = true;
+      dragged.current = null;
+      cancelSpring();
+      setDropDir(null);
+      setHoldKey(null);
+      opts.onDragEnded();
     };
     document.addEventListener("dragover", beat);
     document.addEventListener("dragend", reset);
@@ -175,6 +192,7 @@ export const useMoveDrag = (opts: {
    * background only takes real moves, so an ordinary within-folder drag never lights the card up.
    * An OS file drag lands on any explicit folder (it can't cycle — nothing in the vault is moving). */
   const allowed = (e: React.DragEvent, dir: string, explicit: boolean): boolean => {
+    if (refused.current) return false;
     if (isFileDrag(e)) return explicit;
     if (!isMoveDrag(e)) return false;
     const t = dragged.current;
@@ -277,13 +295,13 @@ export const useMoveDrag = (opts: {
       // No preventDefault anywhere: the drop stays refused (no-drop cursor), only the hold counts.
       // Either drag kind may hold — a row move wants Back as much as a Finder drag does.
       onDragEnter: (e) => {
-        if (!isMoveDrag(e) && !isFileDrag(e)) return;
+        if (refused.current || (!isMoveDrag(e) && !isFileDrag(e))) return;
         track();
         setHoldKey(key);
         arm(key, fire);
       },
       onDragOver: (e) => {
-        if (!isMoveDrag(e) && !isFileDrag(e)) return;
+        if (refused.current || (!isMoveDrag(e) && !isFileDrag(e))) return;
         track();
         setHoldKey(key);
         arm(key, fire);
@@ -297,5 +315,6 @@ export const useMoveDrag = (opts: {
     }),
     isHolding: (key) => holdKey === key,
     track,
+    isRefused: () => refused.current,
   };
 };

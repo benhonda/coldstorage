@@ -30,21 +30,32 @@ public struct IngestItem: Sendable {
     public let createdAt: Date?
     public let isFavorite: Bool
     public let metadata: [String: String]  // EXIF, album, Live-Photo pairing, …
+    /// Where the bytes come from: an absolute path on THIS Mac, or `photos:<localIdentifier>` for a Photos
+    /// asset (see `photoSourcePrefix`), or nil when unknown. Persisted on the journal row (`files.sourcePath`)
+    /// so a failed upload can be re-tried from its source long after the deposit that carried it is gone —
+    /// the row itself remembers where to look.
+    public let sourcePath: String?
+    /// The one spelling of a Photos-asset source. A `sourcePath` with this prefix names an asset the
+    /// `PhotoResolver` can re-resolve; anything else is a filesystem path.
+    public static let photoSourcePrefix = "photos:"
+    public static func photoAssetId(fromSource s: String) -> String? {
+        s.hasPrefix(photoSourcePrefix) ? String(s.dropFirst(photoSourcePrefix.count)) : nil
+    }
     public let open: @Sendable () -> AsyncThrowingStream<Data, Error>  // plaintext byte stream
 
     public init(id: String, relativePath: String, size: Int, content: ContentKey,
-                createdAt: Date?, isFavorite: Bool, metadata: [String: String] = [:],
+                createdAt: Date?, isFavorite: Bool, metadata: [String: String] = [:], sourcePath: String? = nil,
                 open: @escaping @Sendable () -> AsyncThrowingStream<Data, Error>) {
         self.id = id; self.relativePath = relativePath; self.size = size
         self.content = content; self.createdAt = createdAt
-        self.isFavorite = isFavorite; self.metadata = metadata; self.open = open
+        self.isFavorite = isFavorite; self.metadata = metadata; self.sourcePath = sourcePath; self.open = open
     }
 
     /// A copy re-keyed to a new vault path (path-keyed sources use id == relativePath), preserving the
     /// captured byte stream + intrinsic metadata. Used to "Keep Both" a colliding deposit under a fresh name.
     func rekeyed(to relativePath: String) -> IngestItem {
         IngestItem(id: relativePath, relativePath: relativePath, size: size, content: content,
-                   createdAt: createdAt, isFavorite: isFavorite, metadata: metadata, open: open)
+                   createdAt: createdAt, isFavorite: isFavorite, metadata: metadata, sourcePath: sourcePath, open: open)
     }
 }
 
@@ -70,11 +81,13 @@ public enum SourceKind: String, Codable, Sendable { case folder, photos }
 /// file it named has settled. Watched folders are re-scanned every pass, so an interrupted one resumes by
 /// itself; a drop had no such anchor: kill the daemon mid-30 GB and its files sat "uploading" in the tree
 /// with nobody uploading them, until the user happened to drop the same folder again (2026-08-25). This row
-/// is the anchor. `src` is absolute paths (`.files`) or Photos localIdentifiers (`.photos`); `conflicts`
-/// and `excludeExtra` are the user's answers at drop time, replayed verbatim so a resumed deposit lands
-/// exactly where — and skips exactly what — the original would have.
+/// is the anchor. `src` is absolute paths (`.files`), Photos localIdentifiers (`.photos`), or journal file
+/// ids (`.retry` — the user's "Try again" on failed rows, re-read from each row's own `sourcePath`; `dest`
+/// is unused, the rows already know where they live); `conflicts` and `excludeExtra` are the user's
+/// answers at drop time, replayed verbatim so a resumed deposit lands exactly where — and skips exactly
+/// what — the original would have.
 public struct PendingDeposit: Sendable, Equatable {
-    public enum Kind: String, Sendable { case files, photos }
+    public enum Kind: String, Sendable { case files, photos, retry }
     public let id: String
     public let kind: Kind
     public let src: [String]

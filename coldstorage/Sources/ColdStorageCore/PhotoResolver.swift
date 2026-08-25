@@ -51,9 +51,12 @@ public struct PhotoDepositSource: IngestSource {
         // the resolver from the assetId and is carried verbatim here, independent of `id`.
         let items = try await resolver.resolve(assetIds: assetIds, scratchDir: scratchDir).map { it in
             let rel = ExplicitPathsSource.join(destDir, it.relativePath)
+            // `sourcePath` names the asset (the resolver's `id` is its localIdentifier), so a failed photo
+            // row can be retried by re-resolving it — same as a file row retries from its path.
             return IngestItem(id: rel, relativePath: rel,
                               size: it.size, content: it.content, createdAt: it.createdAt,
-                              isFavorite: it.isFavorite, metadata: it.metadata, open: it.open)
+                              isFavorite: it.isFavorite, metadata: it.metadata,
+                              sourcePath: IngestItem.photoSourcePrefix + it.id, open: it.open)
         }
         // Nothing resolved → nothing would be archived. Surface it (don't silently no-op) so the picked rows
         // can't just flash then vanish. A PARTIAL resolve (some stale ids dropped) still proceeds for the ones

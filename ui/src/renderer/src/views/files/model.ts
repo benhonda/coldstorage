@@ -107,9 +107,11 @@ export interface ArchivedFile {
   error: string | null;
   /** When `here`: the local path the thawed bytes landed at. */
   localPath?: string | null;
-  /** For an optimistic (not-yet-uploaded) drop: the local absolute source path, so a failed upload can be
-   * retried by re-issuing `deposit`. Null/absent for journal-backed files. UI-only — never from the daemon. */
-  srcPath?: string | null;
+  /** Where the bytes come from (a path, or a `photos:` asset — opaque here), or null. Journal truth
+   * (`ListedFile.sourcePath`) for a daemon row; for an optimistic drop it's the dropped path. A failed row
+   * with one gets **Try again**, without one **Locate…** — the daemon can only retry what it knows where
+   * to find. */
+  sourcePath: string | null;
 }
 
 /** A folder row — synthesized from the paths beneath it; size/count/status are rolled up. */
@@ -592,4 +594,5 @@ export const fileFromJournal = (row: ListedFile): ArchivedFile => ({
   date: row.date != null ? new Date(row.date * 1000).toISOString() : null,
   lastAttemptAt: row.lastAttemptAt,
   error: row.error,
+  sourcePath: row.sourcePath,
 });

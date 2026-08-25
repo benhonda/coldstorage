@@ -142,6 +142,9 @@ export interface AppState {
    * stored, so there's nothing here that can contradict the chips above it. */
   excludeSuggestions: ExcludeSuggestion[];
   run: RunProgress | null;
+  /** The live `blobFailed` log — the MOMENT of a failure (a quota refusal opens the paywall off it). NOT
+   * what the "couldn't upload" pill counts: that reads the journal's `failed` files, the same truth the
+   * row ⚠ shows, so the two can't disagree and neither is lost on restart. */
   failures: BlobFailure[];
   /** Every transfer this Mac has requested, newest first — active and history — read from the daemon's
    * journal (`listRestores`), never accumulated here. Authoritative: the daemon owns and drives these,
@@ -199,7 +202,6 @@ export type Action =
   | { type: "excludesLoaded"; excludes: string[] }
   | { type: "excludeSuggestionsLoaded"; suggestions: ExcludeSuggestion[] }
   | { type: "restoresLoaded"; restores: RestoreRow[] }
-  | { type: "failuresDismissed" }
   | EventAction;
 
 /**
@@ -384,13 +386,6 @@ export const reducer = (state: AppState, action: Action): AppState => {
       return { ...state, restores: action.restores, restoreProgress };
     }
 
-    case "failuresDismissed":
-      // The user acknowledged the "couldn't upload" pill and asked it gone. An acknowledgement, not a
-      // resolution: the affected file rows keep their journal-backed ⚠ status, and a daemon that re-hits
-      // the same fault (e.g. a still-over-quota blob on the next auto-run pass) re-adds its failure —
-      // the pill re-asserting a still-true condition is honest, not a dismissal bug.
-      return { ...state, failures: [] };
-
 
     case "event":
       return foldEvent(state, action);
@@ -497,6 +492,7 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
 
     case "restoresChanged":
     case "restoreCompleted":
+    case "usageChanged":
       // Authoritative refresh is the controller's job (it re-reads `listRestores`); no fold here. Same
       // pattern as sourcesChanged/filesChanged — and for a stronger reason: a renderer-side fold of these
       // is what used to lose an in-flight transfer on sign-out.

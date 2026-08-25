@@ -201,19 +201,6 @@ describe("failures, pause, restore, error", () => {
     expect(s.failures.map((f) => f.blob)).toEqual(["b2"]);
   });
 
-  test("failuresDismissed clears recorded failures; a later blobFailed re-surfaces", () => {
-    const cleared = run(
-      { type: "event", name: "blobFailed", data: { blob: "b1", kind: "permanent", message: "boom", paths: "a.jpg" } },
-      { type: "failuresDismissed" },
-    );
-    expect(cleared.failures).toEqual([]);
-    const again = reducer(cleared, {
-      type: "event",
-      name: "blobFailed",
-      data: { blob: "b1", kind: "permanent", message: "boom", paths: "a.jpg" },
-    });
-    expect(again.failures).toHaveLength(1);
-  });
 
   test("restoresLoaded replaces the transfer list wholesale", () => {
     const s = run({ type: "restoresLoaded", restores: [transfer("t1"), transfer("t2")] });

@@ -101,6 +101,21 @@ export interface ListedFile {
    * after a TRANSIENT one — those keep retrying, so the row is honestly still in flight while naming the
    * snag. Cleared the moment an attempt succeeds. */
   error: string | null;
+  /** Where the bytes come from — an absolute path on this Mac, or `photos:<localIdentifier>` for a Photos
+   * asset — or null for a row from before the daemon recorded sources. What the app keys a failed row's
+   * action off: a source ⇒ **Try again** (`retryFiles`), none ⇒ **Locate…** (the user points at it, then
+   * the same command with `sourcePath`). Opaque to the app: never parse it, only test for null. */
+  sourcePath: string | null;
+}
+
+/** `RetryFilesResultDTO` — `retryFiles`' answer, as COUNTS. `queued` rows are back in the upload queue (a
+ *  durable deposit owns them now); `missing` rows could not be retried — no recorded source, or it isn't on
+ *  disk right now — and the daemon has written that verdict onto each such row's `error`, so the tree and
+ *  the failures panel say it from journal truth on the next read. No ids: a mass retry must not echo 56k
+ *  of them back over the wire. */
+export interface RetryFilesResult {
+  queued: number;
+  missing: number;
 }
 
 /** How a deposit resolves a name-collision (the Finder-style prompt). Mirrors Swift `ConflictPolicy`.
@@ -364,6 +379,13 @@ export interface Commands {
    * time* and *never again* are different answers, and offering the first must never quietly do the
    * second. "Remember this" is a separate `addExclude` the app issues alongside. */
   deposit: { params: { src: string; dest: string; conflicts?: string; excludeExtra?: string }; result: Ack };
+  /** The user's Try again / Locate… on FAILED rows: re-ingest exactly those journal rows (same id, same
+   * vault path — never a second file beside the failed one) from each row's own `sourcePath`. Scope is
+   * `ids` (newline-joined file ids) OR `all: "true"` — every failed row, read daemon-side (a mass failure
+   * is one cause across a drop; the client never ships the list). `sourcePath` (one id only) records where
+   * the user just said the bytes are. Replies at once with counts; the upload itself runs as a durable
+   * deposit (survives a restart) and reports through the usual run events. */
+  retryFiles: { params: { ids?: string; all?: "true"; sourcePath?: string }; result: RetryFilesResult };
   /** Explicit photo deposit (the photo analogue of `deposit`): archive these PICKED Photos-library assets
    * once under `dest` (a vault-relative folder; "" = root). `assetIds` is newline-joined Photos
    * localIdentifiers — only the picked assets are read, never the whole library. Mac-only (PhotoKit); off
@@ -405,7 +427,9 @@ export interface Commands {
      * daemon's malformed-request reply carries `id: 0`, which no client request can ever match — so the
      * call hangs to its timeout with no error. `ParamsArg` now rejects non-string params at compile time. */
     params: { path: string; alsoIgnore?: "true" | "false" };
-    result: { ok: boolean; ignored: boolean };
+    /** `isWatched`: the file is still on disk inside a live watched folder, so a scan would find it again
+     *  (`DeleteResultDTO`); `ignored`: we also added the exclude, so it won't. */
+    result: { ok: boolean; isWatched: boolean; ignored: boolean };
   };
   /** What restoring these files would take to serve — the input to the backend's `POST /retrieval/quote`
    * (root RETRIEVAL.md). Ask this BEFORE showing any price: a restore is billed on the whole BLOBS that

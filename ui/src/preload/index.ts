@@ -31,6 +31,7 @@ const api: ColdstoreApi = {
 
   chooseFolder: (defaultPath?: string) => ipcRenderer.invoke(IPC.chooseFolder, defaultPath),
   chooseUploads: (defaultPath?: string) => ipcRenderer.invoke(IPC.chooseUploads, defaultPath),
+  chooseFile: (name: string) => ipcRenderer.invoke(IPC.chooseFile, name),
   getDownloadsDir: () => ipcRenderer.invoke(IPC.downloadsDir),
   getAppInfo: () => ipcRenderer.invoke(IPC.appInfo),
   revealInFinder: (path: string) => ipcRenderer.invoke(IPC.revealInFinder, path),

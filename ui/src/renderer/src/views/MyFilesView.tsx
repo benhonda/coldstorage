@@ -92,6 +92,11 @@ interface Props {
   /** Called with the size of the deposit that was refused (0 when the vault was already full before we
    *  knew the size) — the modal it opens says something different for "full" than for "this one is too big". */
   onDepositBlocked: (incomingBytes: number) => void;
+  /** Re-upload failed rows from their recorded sources (App owns the daemon call — the sidebar's
+   * "couldn't upload" panel offers the very same action, so it lives in one place). */
+  onRetryUploads: (scope: ArchivedFile[] | "all") => void;
+  /** A failed row we don't know where to find on disk: ask the user, then retry from there. */
+  onLocateUpload: (file: ArchivedFile) => void;
   /** Files the Downloads page asked us to re-open the request dialog for (a download that needs buying
    * again — the whole list at once for a grouped row). Null most of the time. */
   requestFileIds?: string[] | null;
@@ -121,6 +126,8 @@ export const MyFilesView = ({
   run,
   hasRoomFor,
   onDepositBlocked,
+  onRetryUploads,
+  onLocateUpload,
   requestFileIds,
   onRequestOpened,
   onShowDownloads,
@@ -505,13 +512,20 @@ export const MyFilesView = ({
     }
 
     const restorable = filesForTargets(targets).filter((f) => f.status === "frozen");
-    // a single failed upload we still hold the source path for → offer Retry at the top
-    const retryable = single?.type === "file" && single.file.status === "failed" && single.file.srcPath ? single.file : null;
+    // Failed uploads in the selection (a folder counts every failed file under it) → their actions at the
+    // top: Try again for the ones with a recorded source, Locate… for a single one without.
+    const failed = filesForTargets(targets).filter((f) => f.status === "failed");
+    const retryable = failed.filter((f) => f.sourcePath !== null);
+    const locatable = single?.type === "file" && single.file.status === "failed" && single.file.sourcePath === null ? single.file : null;
+    const uploadActions: MenuEntry[] = [
+      ...(retryable.length > 0
+        ? [{ label: retryable.length > 1 ? `Try again (${retryable.length})` : "Try again", icon: "refresh", onClick: () => onRetryUploads(retryable) }]
+        : []),
+      ...(locatable ? [{ label: "Locate…", icon: "search", onClick: () => onLocateUpload(locatable) }] : []),
+    ];
     const items: MenuEntry[] = targets.length
       ? [
-          ...(retryable
-            ? ([{ label: "Retry upload", icon: "refresh", onClick: () => retryDeposit(retryable) }, "separator"] as MenuEntry[])
-            : []),
+          ...(uploadActions.length > 0 ? ([...uploadActions, "separator"] as MenuEntry[]) : []),
           { label: "Get info", icon: "info", onClick: () => setInfoOpen(true), disabled: !single },
           { label: "Rename", icon: "edit", onClick: () => single && startRename(rowKey(single)), disabled: !single },
           { label: "Move to…", icon: "drive_file_move", onClick: () => setMoveTargets(targets) },
@@ -553,7 +567,7 @@ export const MyFilesView = ({
     kind: "files" | "photos";
     wire: string; // newline-joined absolute paths (files) or Photos localIdentifiers (photos)
     dest: string;
-    srcByPath: Map<string, string>; // previewed vault path → local srcPath (top-level picks only) so a failed upload can retry
+    srcByPath: Map<string, string>; // previewed vault path → local source path (top-level picks only) so a failed upload can retry
     fallback: string[]; // target relativePaths — names the drop in the UI, and stands in for an unavailable photo preview
   }): Promise<void> => {
     // Quota gate, pass 1 (Phase 5c): if the vault is already full, bail to the paywall before any
@@ -663,12 +677,12 @@ export const MyFilesView = ({
       return;
     }
     // Optimistic "uploading" rows for what will land — names carry their full vault path (so intoDir is "").
-    // Each carries its srcPath (for retry) and byte size (for the in-flight half of the quota gate).
+    // Each carries its source path (for retry) and byte size (for the in-flight half of the quota gate).
     const optimisticIds = filesApi.deposit(
       rows.map((r) => {
-        const srcPath = opts.srcByPath.get(r.original);
+        const sourcePath = opts.srcByPath.get(r.original);
         const size = sizeByOriginal.get(r.original);
-        return { name: r.relativePath, ...(srcPath ? { srcPath } : {}), ...(size != null ? { size } : {}) };
+        return { name: r.relativePath, ...(sourcePath ? { sourcePath } : {}), ...(size != null ? { size } : {}) };
       }),
       "",
     );
@@ -725,24 +739,6 @@ export const MyFilesView = ({
     }
     depositPaths(paths, dest);
   };
-  // Retry a failed upload: flip the row back to uploading and re-issue its deposit (we kept its srcPath).
-  // No preview/prompt — a retry targets the same path it already owns (overwrite-self is a no-op upsert).
-  const retryDeposit = (file: ArchivedFile): void => {
-    if (!file.srcPath) return;
-    // Re-uploading bytes that never landed (the failed row) — count them as incoming against the quota.
-    if (!hasRoomFor(file.size)) {
-      onDepositBlocked(file.size);
-      return;
-    }
-    const srcPath = file.srcPath;
-    filesApi.setDepositStatus([file.id], "uploading");
-    exec(() =>
-      api.request("deposit", { src: srcPath, dest: parentOf(file.relativePath) }).catch((e: unknown) => {
-        filesApi.setDepositStatus([file.id], "failed", `${e}`);
-        throw e;
-      }),
-    );
-  };
   // ── add photos (native picker) — REAL explicit photo deposit (option B) ──
   // The native macOS Photos picker (a separate helper) returns PHAsset localIdentifiers; the daemon
   // resolves them to full-res originals (incl. iCloud download). Same collision handling as a file drop —
@@ -771,14 +767,16 @@ export const MyFilesView = ({
   // A drop on the blank area / a file row / anywhere not a folder = "into the OPEN folder". A drop ON a
   // folder row/tile/crumb never reaches here — the folder target consumes it (useMoveDrag.onDropFiles).
   // The frame comes down via `onDragEnded` (the hook's document-level drop hook fires `reset`).
+  // An Esc'd (refused) drag is left to the browser default: no preventDefault → Finder snaps it back.
   const onDrop = (e: React.DragEvent): void => {
-    if (isMoveDrag(e)) return; // an internal row drag is never an upload (folder targets consume it)
+    if (isMoveDrag(e) || drag.isRefused()) return; // a row drag is never an upload (folder targets consume it)
     e.preventDefault();
     depositFiles([...e.dataTransfer.files], dir);
   };
   const onDragEnter = (e: React.DragEvent): void => {
     if (!isFileDrag(e)) return;
     drag.track();
+    if (drag.isRefused()) return; // keep tracking so the real end still resets, but no frame
     dragDepth.current += 1;
     setDropActive(true);
   };
@@ -857,6 +855,7 @@ export const MyFilesView = ({
           // leaving default here shows the no-drop cursor over everything else — Finder-style.
           if (isMoveDrag(e)) return;
           drag.track();
+          if (drag.isRefused()) return; // Esc'd: no-drop cursor, and a release lands nothing
           e.preventDefault();
           e.dataTransfer.dropEffect = "copy";
         }}

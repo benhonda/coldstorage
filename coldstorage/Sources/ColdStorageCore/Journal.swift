@@ -40,11 +40,15 @@ public struct FileRow: Sendable {
     /// queued after a TRANSIENT fault — those keep retrying, so the row stays honest about being in flight
     /// while still naming the snag. Cleared the moment an attempt succeeds.
     public let error: String?
+    /// Where the bytes live on this Mac, or nil (a Photos asset, or a row from before the column existed).
+    /// The seam that makes a failed upload retryable from the row alone (`retryFiles`), and the fact the
+    /// app keys "Try again" vs "Locate…" off: with a path we can retry, without one we have to ask.
+    public let sourcePath: String?
     public init(id: String, relativePath: String, size: Int, status: FileStatus, blobId: String?,
-                createdAt: Int?, lastAttemptAt: Int? = nil, error: String? = nil) {
+                createdAt: Int?, lastAttemptAt: Int? = nil, error: String? = nil, sourcePath: String? = nil) {
         self.id = id; self.relativePath = relativePath; self.size = size
         self.status = status; self.blobId = blobId; self.createdAt = createdAt
-        self.lastAttemptAt = lastAttemptAt; self.error = error
+        self.lastAttemptAt = lastAttemptAt; self.error = error; self.sourcePath = sourcePath
     }
 }
 
@@ -196,6 +200,12 @@ public final class Journal: @unchecked Sendable {
         // and "planned" alone cannot tell a queued file apart from an abandoned one.
         if !fileCols.contains("lastAttemptAt") {
             try exec("ALTER TABLE files ADD COLUMN lastAttemptAt INTEGER")
+        }
+        // Where each file's bytes live on this Mac, so a failed upload can be retried from the row itself
+        // (`retryFiles`). Nullable, not backfilled: a legacy row genuinely doesn't know, and the app offers
+        // "Locate…" for exactly that case rather than us guessing a path.
+        if !fileCols.contains("sourcePath") {
+            try exec("ALTER TABLE files ADD COLUMN sourcePath TEXT")
         }
         // Deletion as its OWN column, so tombstoning stops destroying the row's kind + lifecycle. Not a bare
         // column add — it carries existing tombstones over and repairs what the old scheme corrupted.
@@ -402,12 +412,16 @@ public final class Journal: @unchecked Sendable {
             // `createdAt` is captured here at discovery (the SSOT moment for intrinsic file metadata).
             // `size` is best-effort here — a Photos asset is size 0 until streamed; `markFileArchived`
             // overwrites it with the exact plaintext byte count once the bytes are sealed.
+            // `sourcePath` is COALESCEd: a source that knows the path refreshes it, one that doesn't (a
+            // Photos asset re-resolved, a synthetic test item) must not erase what an earlier pass recorded.
             try run("""
-                INSERT INTO files(id, relativePath, size, contentHash, status, createdAt) VALUES(?1,?2,?3,?4,?5,?6)
+                INSERT INTO files(id, relativePath, size, contentHash, status, createdAt, sourcePath) VALUES(?1,?2,?3,?4,?5,?6,?7)
                 ON CONFLICT(id) DO UPDATE SET relativePath=excluded.relativePath, size=excluded.size,
-                    contentHash=excluded.contentHash, status=excluded.status, createdAt=excluded.createdAt
+                    contentHash=excluded.contentHash, status=excluded.status, createdAt=excluded.createdAt,
+                    sourcePath=COALESCE(excluded.sourcePath, files.sourcePath)
                 """, [.text(it.id), .text(it.relativePath), .int(it.size), .text(it.content.planKey), .text(FileStatus.planned.rawValue),
-                      it.createdAt.map { .int(Int($0.timeIntervalSince1970)) } ?? .null])
+                      it.createdAt.map { .int(Int($0.timeIntervalSince1970)) } ?? .null,
+                      it.sourcePath.map { .text($0) } ?? .null])
         }
         }
     }
@@ -779,16 +793,76 @@ public final class Journal: @unchecked Sendable {
     /// `.discovered` rather than dropping the row (the file still exists; the UI coarsens status anyway).
     public func listFiles() throws -> [FileRow] {
         lock.lock(); defer { lock.unlock() }
-        return try run("SELECT id, relativePath, size, status, blobId, createdAt, lastAttemptAt, error FROM files WHERE deletedAt IS NULL ORDER BY relativePath").map {
-            FileRow(id: $0["id"] as? String ?? "",
-                    relativePath: $0["relativePath"] as? String ?? "",
-                    size: $0["size"] as? Int ?? 0,
-                    status: FileStatus(rawValue: $0["status"] as? String ?? "") ?? .discovered,
-                    blobId: $0["blobId"] as? String,
-                    createdAt: $0["createdAt"] as? Int,
-                    lastAttemptAt: $0["lastAttemptAt"] as? Int,
-                    error: $0["error"] as? String)
+        return try run("SELECT \(Self.fileRowColumns) FROM files WHERE deletedAt IS NULL ORDER BY relativePath").map(Self.fileRow)
+    }
+
+    /// The same rows, by id — for `retryFiles`, which acts on a handful of rows the user pointed at and
+    /// must not pay for (or lock around) a whole-tree read to find them. Tombstoned rows are excluded, as in
+    /// `listFiles`: a file the user deleted is not something "Try again" may quietly bring back.
+    public func files(ids: [String]) throws -> [FileRow] {
+        guard !ids.isEmpty else { return [] }
+        lock.lock(); defer { lock.unlock() }
+        return try Self.chunks(ids).flatMap { chunk in
+            try run("SELECT \(Self.fileRowColumns) FROM files WHERE deletedAt IS NULL AND id IN (\(Self.marks(chunk)))",
+                    chunk.map { .text($0) }).map(Self.fileRow)
         }
+    }
+
+    /// Every live `failed` row — "retry everything" reads its scope from here, never from a client-sent id
+    /// list (56k ids is a 2 MB request and past SQLite's bind limit; the journal already knows the set).
+    public func failedFiles() throws -> [FileRow] {
+        lock.lock(); defer { lock.unlock() }
+        return try run("SELECT \(Self.fileRowColumns) FROM files WHERE deletedAt IS NULL AND status=? ORDER BY relativePath",
+                       [.text(FileStatus.failed.rawValue)]).map(Self.fileRow)
+    }
+
+    /// `id IN (…)` batches. SQLite caps bound variables (32,766 by default) and a mass failure — one cause
+    /// across a whole drop — is exactly when an id set is bigger than that. Chunked, not one statement.
+    private static func chunks(_ ids: [String], size: Int = 900) -> [[String]] {
+        stride(from: 0, to: ids.count, by: size).map { Array(ids[$0..<min($0 + size, ids.count)]) }
+    }
+    private static func marks(_ chunk: [String]) -> String { chunk.map { _ in "?" }.joined(separator: ",") }
+
+    private static let fileRowColumns = "id, relativePath, size, status, blobId, createdAt, lastAttemptAt, error, sourcePath"
+    private static func fileRow(_ r: [String: Any]) -> FileRow {
+        FileRow(id: r["id"] as? String ?? "",
+                relativePath: r["relativePath"] as? String ?? "",
+                size: r["size"] as? Int ?? 0,
+                status: FileStatus(rawValue: r["status"] as? String ?? "") ?? .discovered,
+                blobId: r["blobId"] as? String,
+                createdAt: r["createdAt"] as? Int,
+                lastAttemptAt: r["lastAttemptAt"] as? Int,
+                error: r["error"] as? String,
+                sourcePath: r["sourcePath"] as? String)
+    }
+
+    /// The user's "Try again": put `failed` rows back in the queue as a fresh claim — `planned`, no recorded
+    /// fault, no attempt clock — so the tree says "Uploading" the moment they ask, not "retrying against
+    /// <the old error>". Only `failed` rows flip: an archived file has nothing to retry, and a queued one is
+    /// already in flight. Returns the ids actually requeued.
+    @discardableResult
+    public func requeueFailedFiles(ids: [String]) throws -> [String] {
+        guard !ids.isEmpty else { return [] }
+        lock.lock(); defer { lock.unlock() }
+        var hits: [String] = []
+        try transaction {
+            for chunk in Self.chunks(ids) {
+                let found = try run("SELECT id FROM files WHERE status=? AND deletedAt IS NULL AND id IN (\(Self.marks(chunk)))",
+                                    [.text(FileStatus.failed.rawValue)] + chunk.map { .text($0) }).compactMap { $0["id"] as? String }
+                guard !found.isEmpty else { continue }
+                try run("UPDATE files SET status=?, error=NULL, lastAttemptAt=NULL WHERE id IN (\(Self.marks(found)))",
+                        [.text(FileStatus.planned.rawValue)] + found.map { .text($0) })
+                hits += found
+            }
+        }
+        return hits
+    }
+
+    /// The user's "Locate…": they pointed at where a file's bytes now live. Recorded on the row so the
+    /// retry that follows — and any later one — reads from there.
+    public func setSourcePath(id: String, _ path: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("UPDATE files SET sourcePath=?1 WHERE id=?2", [.text(path), .text(id)])
     }
 
     /// Relocate the subtree rooted at `from` to `to` — the journal edit behind a file/folder **move OR
@@ -1150,7 +1224,9 @@ public final class Journal: @unchecked Sendable {
     public func markFilesFailed(_ ids: [String], error: String) throws {
         guard !ids.isEmpty else { return }
         lock.lock(); defer { lock.unlock() }
-        for id in ids {
+        // One transaction: a mass retry can mark tens of thousands of rows, and autocommit's per-statement
+        // fsync would turn that into seconds of disk wait for what is one fact.
+        try transaction { for id in ids {
             // **Never flip an ARCHIVED file to failed.** A file whose bytes are verified in S3 is archived,
             // full stop — a *later* blob's failure says nothing about it. Without this guard, any blob that
             // re-plans an already-stored file (and then fails, or is refused over quota) marks that file ⚠ in
@@ -1160,7 +1236,7 @@ public final class Journal: @unchecked Sendable {
                 UPDATE files SET status=?1, error=?2, lastAttemptAt=CAST(strftime('%s','now') AS INTEGER)
                 WHERE id=?3 AND status!=?4
                 """, [.text(FileStatus.failed.rawValue), .text(error), .text(id), .text(FileStatus.archived.rawValue)])
-        }
+        } }
     }
 
     /// Record a TRANSIENT upload fault against a blob's files: why the last attempt failed, and that one was
