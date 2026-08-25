@@ -15,6 +15,7 @@
  * holds no `s3:RestoreObject`, so only the backend can thaw a blob, and only for a restore that's paid
  * for. See the retrieval methods at the bottom of this class.
  */
+import log from "electron-log/main";
 import { shell } from "electron";
 import type { CatalogPlan, EntitlementStatus, ManagePage, PlanChangePreview, RetrievalQuote, SubscriptionInfo } from "../../shared/ipc.ts";
 
@@ -72,7 +73,10 @@ export class EntitlementManager {
       const quotaBytes = typeof record?.quotaBytes === "number" ? record.quotaBytes : null;
       this.setStatus({ ...this.status, known: true, active, quotaBytes, error: null });
     } catch (e) {
-      this.setStatus({ ...this.status, error: e instanceof Error ? e.message : String(e) });
+      const message = e instanceof Error ? e.message : String(e);
+      // main.log too: the UI shows this as "Billing unavailable", but the URL it failed against lives here.
+      log.error(`entitlement refresh failed against ${this.baseUrl}/entitlement: ${message}`);
+      this.setStatus({ ...this.status, error: message });
     }
   }
 

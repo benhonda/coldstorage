@@ -57,8 +57,13 @@ export const billingState = (
   // and until the webhook lands the subscription read still legitimately says "nothing here".
   if (entitlement.checkingOut) return { kind: "checkingOut" };
 
-  if (subscription.status === "loading") return { kind: "loading" };
   if (subscription.status === "error") return { kind: "unavailable", message: subscription.message };
+  // The entitlement read FAILED (never succeeded, and main recorded why). This used to fall through to
+  // "loading" below — `known` stays false on failure — so an expired token or an unreachable backend
+  // rendered as an endless "Checking…" skeleton with no message and no Retry, because the only surface
+  // that showed `entitlement.error` was the subscribe modal (PILLAR5: a failure that looks like a wait).
+  if (!entitlement.known && entitlement.error) return { kind: "unavailable", message: entitlement.error };
+  if (subscription.status === "loading") return { kind: "loading" };
 
   // Entitlement hasn't been fetched even once, so `active` below is meaningless — not false. Waiting
   // is honest; guessing "Free" at a subscriber is not.

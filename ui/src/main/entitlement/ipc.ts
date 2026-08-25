@@ -5,6 +5,7 @@ import type { EntitlementManager } from "./manager.ts";
 
 export const registerEntitlementIpc = (entitlement: EntitlementManager): (() => void) => {
   ipcMain.handle(IPC.entitlementStatus, () => entitlement.entitlementStatus());
+  ipcMain.handle(IPC.entitlementRefresh, () => entitlement.refresh());
   ipcMain.handle(IPC.entitlementCatalog, () => entitlement.getCatalog());
   ipcMain.handle(IPC.entitlementSubscribe, (_e, priceId: string) => entitlement.subscribe(priceId));
   ipcMain.handle(IPC.entitlementReopenCheckout, () => entitlement.reopenCheckout());
@@ -33,6 +34,7 @@ export const registerEntitlementIpc = (entitlement: EntitlementManager): (() => 
 
   return () => {
     ipcMain.removeHandler(IPC.entitlementStatus);
+    ipcMain.removeHandler(IPC.entitlementRefresh);
     ipcMain.removeHandler(IPC.entitlementCatalog);
     ipcMain.removeHandler(IPC.entitlementSubscribe);
     ipcMain.removeHandler(IPC.entitlementReopenCheckout);

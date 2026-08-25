@@ -75,6 +75,7 @@ const api: ColdstoreApi = {
   },
 
   getEntitlement: () => ipcRenderer.invoke(IPC.entitlementStatus),
+  refreshEntitlement: () => ipcRenderer.invoke(IPC.entitlementRefresh),
   getPlanCatalog: () => ipcRenderer.invoke(IPC.entitlementCatalog),
   subscribe: (priceId: string) => ipcRenderer.invoke(IPC.entitlementSubscribe, priceId),
   reopenCheckout: () => ipcRenderer.invoke(IPC.entitlementReopenCheckout),

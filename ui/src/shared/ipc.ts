@@ -96,6 +96,8 @@ export const IPC = {
   vaultStatusChanged: "vault:statusChanged",
   /** invoke: current {@link EntitlementStatus}. */
   entitlementStatus: "entitlement:status",
+  /** invoke: re-read the entitlement from the backend now (the billing panel's Retry). */
+  entitlementRefresh: "entitlement:refresh",
   /** invoke: the sellable plan catalog `(→ CatalogPlan[])` — what the subscribe picker renders. */
   entitlementCatalog: "entitlement:catalog",
   /** invoke: start a subscription checkout for a chosen plan `(priceId)` (opens the system browser + polls). */
@@ -490,6 +492,10 @@ export interface ColdstoreApi {
   onVaultStatus(listener: (status: VaultStatus) => void): () => void;
   /** Current subscription entitlement — for first paint before any push arrives. */
   getEntitlement(): Promise<EntitlementStatus>;
+  /** Re-read the entitlement from the backend now. Resolves when the read has settled either way; the
+   * result arrives via {@link onEntitlement}. Main only refreshes on its own at sign-in and after a
+   * billing action, so a failed first read had no second chance without this. */
+  refreshEntitlement(): Promise<void>;
   /** The sellable plan catalog for the subscribe picker, fetched live from the billing server.
    * Rejects when the server is unreachable — the picker shows a retryable error, never a stale list. */
   getPlanCatalog(): Promise<CatalogPlan[]>;

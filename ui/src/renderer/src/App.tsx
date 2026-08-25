@@ -561,7 +561,13 @@ export const App = ({ api, store, retryFiles }: Props): React.JSX.Element => {
           onSubscribe={() => setPaywallReason("upgrade")}
           billing={billing}
           onSubscriptionChanged={recordSubscription}
-          onRetryBilling={() => setSubscriptionAttempt((n) => n + 1)}
+          // Retry BOTH reads: the subscription (this component's) and the entitlement (main's) — the
+          // panel's "unavailable" can come from either, and a Retry that only refetched one left the
+          // other's failure standing.
+          onRetryBilling={() => {
+            void api.refreshEntitlement();
+            setSubscriptionAttempt((n) => n + 1);
+          }}
           tab={settingsTab}
           onTabChange={setSettingsTab}
           appInfo={state.appInfo}

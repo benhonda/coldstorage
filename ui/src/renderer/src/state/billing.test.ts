@@ -29,6 +29,30 @@ const entitlement = (over: Partial<EntitlementStatus> = {}): EntitlementStatus =
   ...over,
 });
 
+describe("billingState — the entitlement read itself failed", () => {
+  // `known` stays false on a failed fetch; before this branch existed, that read as "loading" forever.
+  const failed = entitlement({ known: false, error: "entitlement check failed: http 401" });
+
+  test("is 'unavailable' with main's reason — not an endless 'Checking…'", () => {
+    expect(billingState({ status: "ready", value: null }, failed)).toEqual({
+      kind: "unavailable",
+      message: "entitlement check failed: http 401",
+    });
+  });
+
+  test("outranks a subscription read still in flight — the failure is terminal, the wait is not", () => {
+    expect(billingState({ status: "loading" }, failed).kind).toBe("unavailable");
+  });
+
+  test("a checkout in progress still outranks it", () => {
+    expect(billingState({ status: "loading" }, entitlement({ ...failed, checkingOut: true })).kind).toBe("checkingOut");
+  });
+
+  test("not-yet-fetched with NO error is still an honest wait", () => {
+    expect(billingState({ status: "ready", value: null }, entitlement({ known: false })).kind).toBe("loading");
+  });
+});
+
 const sub = (over: Partial<SubscriptionInfo> = {}): SubscriptionInfo => ({
   status: "active",
   plan: { size: "1 TB", years: 3, priceId: "pri_x", amountCents: 30000, perMonthCents: 833, quotaBytes: 1e12 },
