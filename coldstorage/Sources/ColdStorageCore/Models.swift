@@ -66,6 +66,29 @@ public struct BlobPlan: Sendable {
 /// library is a single platform source with no path. The journal is the SSOT — add/remove flows
 /// through IPC into this table, so sources survive daemon restarts.
 public enum SourceKind: String, Codable, Sendable { case folder, photos }
+/// An explicit deposit — a drop, or a photo pick — recorded BEFORE its run starts and kept until every
+/// file it named has settled. Watched folders are re-scanned every pass, so an interrupted one resumes by
+/// itself; a drop had no such anchor: kill the daemon mid-30 GB and its files sat "uploading" in the tree
+/// with nobody uploading them, until the user happened to drop the same folder again (2026-08-25). This row
+/// is the anchor. `src` is absolute paths (`.files`) or Photos localIdentifiers (`.photos`); `conflicts`
+/// and `excludeExtra` are the user's answers at drop time, replayed verbatim so a resumed deposit lands
+/// exactly where — and skips exactly what — the original would have.
+public struct PendingDeposit: Sendable, Equatable {
+    public enum Kind: String, Sendable { case files, photos }
+    public let id: String
+    public let kind: Kind
+    public let src: [String]
+    public let dest: String
+    public let conflicts: [String: String]
+    public let excludeExtra: [String]
+    public let createdAt: Int
+    public init(id: String, kind: Kind, src: [String], dest: String, conflicts: [String: String],
+                excludeExtra: [String], createdAt: Int) {
+        self.id = id; self.kind = kind; self.src = src; self.dest = dest
+        self.conflicts = conflicts; self.excludeExtra = excludeExtra; self.createdAt = createdAt
+    }
+}
+
 public struct SourceRow: Sendable {
     public let id: String          // stable key — the absolute path for folders
     public let kind: SourceKind

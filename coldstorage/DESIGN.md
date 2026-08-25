@@ -194,6 +194,13 @@ objects carrying them.
   `restores`); file and part
   state machines are independent.
 
+> **Scale (140k+ files).** The journal is indexed for the hot interactive reads — `files(deletedAt,status)`,
+> `files(blobId)`, `blobs(status)`, `blob_members(fileId)` — and opened with `synchronous=NORMAL`, a 64 MiB
+> page cache and 256 MiB mmap. Without these, `summary()`'s three `count(*)` scans read the whole `files`
+> table off disk on every `getStatus`, under the one journal lock, stalling every command for tens of
+> seconds right after sign-in on a big vault (the 2026-08-25 "Couldn't load your files" incident — the tree
+> was intact; the daemon was lock-starved). Measured after: `summary()` ~10 ms, the reap join ~50 µs at 141k.
+
 ## 5. Resume protocol — survive anything
 
 On daemon start and after every outage/crash:
@@ -211,7 +218,13 @@ On daemon start and after every outage/crash:
 completed — so complete promptly, and the bucket has a **lifecycle rule aborting incomplete multipart
 uploads after 14 days** (applied, `infra/coldstorage`).
 
-6. **A deposit costs the deposit, not the library.** The engine plans only files that are **not already
+6. **An explicit deposit is journaled before it runs** (`PendingDeposit`, the `deposits` table), and the
+   scheduled pass replays whatever is still owed — so a drop or photo pick interrupted by a crash, an app
+   update or a reboot resumes on its own, exactly like a watched folder always did. The row clears only
+   when nothing retryable remains; a replay never revives a file the user deleted in between (the
+   upsert's tombstone rule). Guarded by `DurableDepositTests`.
+
+7. **A deposit costs the deposit, not the library.** The engine plans only files that are **not already
    archived** (`Journal.settledFileIds`). Blob ids are content-derived from their members, so planning over
    the whole scan meant one new file re-grouped its folder, minted fresh ids for already-verified blobs,
    missed the `isBlobVerified` short-circuit, and re-uploaded the lot — stranding the originals, which

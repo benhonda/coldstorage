@@ -145,6 +145,11 @@ public final class Journal: @unchecked Sendable {
               requestedAt INTEGER NOT NULL, readyAt INTEGER, lastStepAt INTEGER,
               completedAt INTEGER, error TEXT);
             CREATE INDEX IF NOT EXISTS restores_state ON restores(state);
+            -- Explicit deposits still owed (see `PendingDeposit`): what makes a drop survive a restart.
+            CREATE TABLE IF NOT EXISTS deposits(
+              id TEXT PRIMARY KEY, kind TEXT NOT NULL, src TEXT NOT NULL, dest TEXT NOT NULL,
+              conflicts TEXT NOT NULL DEFAULT '{}', excludeExtra TEXT NOT NULL DEFAULT '',
+              createdAt INTEGER NOT NULL);
             """)
         if excludesIsNew {
             for p in Self.defaultExcludes {
@@ -493,6 +498,38 @@ public final class Journal: @unchecked Sendable {
             INSERT INTO sources(id, kind, path, mountPath, paused) VALUES(?1,?2,?3,?4,?5)
             ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, path=excluded.path, mountPath=excluded.mountPath, paused=excluded.paused
             """, [.text(s.id), .text(s.kind.rawValue), s.path.map(Bind.text) ?? .null, .text(s.mountPath), .int(s.paused ? 1 : 0)])
+    }
+
+    // MARK: - pending deposits (explicit drops / photo picks still owed — see `PendingDeposit`)
+
+    public func addPendingDeposit(_ d: PendingDeposit) throws {
+        lock.lock(); defer { lock.unlock() }
+        let conflicts = String(decoding: try JSONEncoder().encode(d.conflicts), as: UTF8.self)
+        try run("""
+            INSERT OR REPLACE INTO deposits(id, kind, src, dest, conflicts, excludeExtra, createdAt)
+            VALUES(?1,?2,?3,?4,?5,?6,?7)
+            """, [.text(d.id), .text(d.kind.rawValue), .text(d.src.joined(separator: "\n")), .text(d.dest),
+                  .text(conflicts), .text(d.excludeExtra.joined(separator: "\n")), .int(d.createdAt)])
+    }
+
+    public func removePendingDeposit(_ id: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("DELETE FROM deposits WHERE id=?1", [.text(id)])
+    }
+
+    /// Oldest first, so a replay honours the order the user dropped things in.
+    public func listPendingDeposits() throws -> [PendingDeposit] {
+        lock.lock(); defer { lock.unlock() }
+        return try run("SELECT id, kind, src, dest, conflicts, excludeExtra, createdAt FROM deposits ORDER BY createdAt, id").compactMap {
+            guard let kind = PendingDeposit.Kind(rawValue: $0["kind"] as? String ?? "") else { return nil }
+            let split = { (s: String) in s.split(separator: "\n").map(String.init).filter { !$0.isEmpty } }
+            let conflicts = (try? JSONDecoder().decode([String: String].self,
+                                                       from: Data(($0["conflicts"] as? String ?? "{}").utf8))) ?? [:]
+            return PendingDeposit(id: $0["id"] as? String ?? "", kind: kind,
+                                  src: split($0["src"] as? String ?? ""), dest: $0["dest"] as? String ?? "",
+                                  conflicts: conflicts, excludeExtra: split($0["excludeExtra"] as? String ?? ""),
+                                  createdAt: $0["createdAt"] as? Int ?? 0)
+        }
     }
 
     public func removeSource(_ id: String) throws {
@@ -1059,6 +1096,35 @@ public final class Journal: @unchecked Sendable {
     /// ⚠ row is journal truth that survives a `listFiles` refresh and a restart, not a UI guess. Transient
     /// failures are left untouched (they retry next pass). A later successful re-archive overwrites this back
     /// to `archived` (self-correcting). No-op on an empty id set.
+    /// **Orphaned uploads → an honest failed state.** A `planned`/`uploading` file that nothing is driving
+    /// — no active run, no pending deposit, no watched source over its path — will spin "Uploading" forever
+    /// (its blob was interrupted before `lastAttemptAt` was ever stamped, so the stall detector never fires).
+    /// That is a lie: nothing will ever upload it. This flips every such file to `failed` with a reason the
+    /// UI shows, so the row says "needs attention" and the user can re-add the folder to finish it. Covered
+    /// files — those whose `relativePath` sits at or under one of `mountPaths` (the active watched-source
+    /// roots) — are LEFT ALONE: a scan still drives those. With no mounts, nothing is covered, so every
+    /// planned/uploading file is treated as orphaned (the caller only invokes this when it's safe: no run in
+    /// flight and no pending deposits — those own their own files). Returns how many rows it changed.
+    @discardableResult
+    public func markInterruptedUploads(notUnder mountPaths: [String], reason: String, now: Int) throws -> Int {
+        lock.lock(); defer { lock.unlock() }
+        var binds: [Bind] = [.text(FileStatus.failed.rawValue), .text(reason), .int(now)]
+        // Coverage: the file is at a mount root, or nested under it. Uses the SAME prefix test as
+        // `movePath`/`deletePath`/`createFolder` — `substr(relativePath, 1, length(m)+1) = m + "/"` — NOT
+        // `LIKE`, whose `_`/`%` are wildcards: a mount named `My_Photos` would otherwise "cover" a sibling
+        // `MyXPhotos` and leave its files spinning forever. `0` (never covered) when there are no mounts.
+        var covered = "0"
+        if !mountPaths.isEmpty {
+            covered = mountPaths.map { _ in "(relativePath = ? OR substr(relativePath, 1, length(?) + 1) = ?)" }.joined(separator: " OR ")
+            for m in mountPaths { binds.append(.text(m)); binds.append(.text(m)); binds.append(.text("\(m)/")) }
+        }
+        try run("""
+            UPDATE files SET status=?, error=?, lastAttemptAt=?
+             WHERE status IN ('planned','uploading') AND deletedAt IS NULL AND NOT (\(covered))
+            """, binds)
+        return (try run("SELECT changes() AS c").first?["c"] as? Int) ?? 0
+    }
+
     public func markFilesFailed(_ ids: [String], error: String) throws {
         guard !ids.isEmpty else { return }
         lock.lock(); defer { lock.unlock() }

@@ -96,6 +96,9 @@ public actor DaemonService {
         permanentlyFailedBlobs = []
         quotaBytes = nil   // the app re-pushes this user's quota right after authenticate; never inherit the last user's
         bus.publish(DaemonEvent("filesChanged", ["signedIn": new.identity.directoryName]))
+        // Anything this user's last session still owed (`PendingDeposit`) resumes on the next pass — make
+        // that now, not up to an interval away: a restart mid-deposit should pick up within seconds.
+        trigger()
     }
 
     /// Set (or clear, with `nil`) the storage quota the engine enforces on every run. The wire handler
@@ -151,7 +154,9 @@ public actor DaemonService {
     public func runOnce() async throws {
         guard let session else { return }
         try await withRunLock(skipIfBusy: true) {
-            try await performRun(session: session, source: try currentSource(session))
+            _ = try await performRun(session: session, source: try currentSource(session))
+            await replayPendingDeposits(session)
+            reconcileOrphanedUploads(session)
         }
     }
 
@@ -165,24 +170,7 @@ public actor DaemonService {
     /// forgotten; nothing persists unless the app separately calls `addExclude`.
     func deposit(paths: [String], into dir: String, conflicts: [String: ConflictPolicy] = [:],
                  excludeExtra: [String] = []) async {
-        do {
-            let session = try requireSession("deposit")
-            let entries = paths.map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: $0), destDir: dir) }
-            let exclude = ExcludeMatcher(patterns: excludeMatcher(session).patterns + excludeExtra)
-            let base = ExplicitPathsSource(entries: entries, exclude: exclude)
-            // WAIT for any run in flight, then go — a deposit is the user's explicit action and must not be
-            // dropped, but it also must not race a concurrent pass over the same journal.
-            //
-            // `explicitDeposit` is what lets this un-delete: dropping a file IS the ask, and a re-scan's
-            // "I can still see it on disk" is not. The revive is scoped to the items this source actually
-            // enumerates (`Journal.upsert`), NOT to the dropped path's whole former subtree — un-deleting by
-            // prefix brought back every file that had ever lived under a re-dropped folder, on-disk or not.
-            try await withRunLock(skipIfBusy: false) {
-                try await performRun(session: session, source: resolveCollisions(session, base, conflicts),
-                                     explicitDeposit: true)
-            }
-        }
-        catch { bus.publish(DaemonEvent("error", ["message": "deposit: \(error)"])) }
+        await depositExplicit(kind: .files, src: paths, into: dir, conflicts: conflicts, excludeExtra: excludeExtra)
     }
 
     /// Archive an explicit set of picked Photos-library assets once — the photo analogue of `deposit`
@@ -193,21 +181,31 @@ public actor DaemonService {
     /// fire-and-forget; a missing resolver (off macOS) or setup error surfaces as an `error` event, while
     /// per-blob upload failures surface as `blobFailed` (same as any run).
     func depositPhotos(assetIds: [String], into dir: String, conflicts: [String: ConflictPolicy] = [:]) async {
-        guard let resolver = photoResolver else {
+        guard photoResolver != nil else {
             bus.publish(DaemonEvent("error", ["message": "depositPhotos: Photos ingest is unavailable on this platform"]))
             return
         }
+        await depositExplicit(kind: .photos, src: assetIds, into: dir, conflicts: conflicts, excludeExtra: [])
+    }
+
+    /// The one explicit-deposit path (drop OR photo pick). **Recorded before it runs** (`PendingDeposit`),
+    /// so a daemon killed mid-way — a crash, an app update, a reboot — owes the rest and pays it on the
+    /// next pass (`replayPendingDeposits`). WAITS for any run in flight, then goes — a deposit is the user's
+    /// explicit action and must not be dropped, but it also must not race a concurrent pass over the same
+    /// journal. Any setup error surfaces as an `error` event; the row stays, so the next pass retries.
+    private func depositExplicit(kind: PendingDeposit.Kind, src: [String], into dir: String,
+                                 conflicts: [String: ConflictPolicy], excludeExtra: [String]) async {
         do {
-            // Session FIRST: it owns the scratch dir the resolver materializes pushed assets into, and that
-            // dir is per-user (they're plaintext bytes) — so there is no source to build until we know who.
-            let session = try requireSession("depositPhotos")
-            let base = PhotoDepositSource(resolver: resolver, assetIds: assetIds,
-                                          destDir: dir, scratchDir: session.scratchDir)
-            try await withRunLock(skipIfBusy: false) {   // wait-then-run, like `deposit` — never dropped
-                // Explicit, exactly like a file drop — so re-picking a photo you deleted brings it back.
-                // It didn't before: this path never un-deleted anything, so the deposit silently no-op'd.
-                try await performRun(session: session, source: resolveCollisions(session, base, conflicts),
-                                     explicitDeposit: true)
+            let session = try requireSession(kind == .files ? "deposit" : "depositPhotos")
+            let pending = PendingDeposit(id: UUID().uuidString, kind: kind, src: src, dest: dir,
+                                         conflicts: conflicts.mapValues(\.rawValue), excludeExtra: excludeExtra,
+                                         createdAt: Int(Date().timeIntervalSince1970))
+            try session.journal.addPendingDeposit(pending)
+            try await withRunLock(skipIfBusy: false) {
+                // `explicitDeposit: true` is what lets a drop un-delete: dropping a file IS the ask, and a
+                // re-scan's "I can still see it on disk" is not. The revive is scoped to the items this source
+                // actually enumerates (`Journal.upsert`), NOT to the dropped path's whole former subtree.
+                try await runPendingDeposit(pending, session: session, explicit: true)
             }
         }
         catch let e as ColdStorageError {
@@ -216,7 +214,83 @@ public actor DaemonService {
             // settings"). Other ColdStorageErrors fall through to the generic surface below.
             bus.publish(DaemonEvent("error", Self.errorEventData(e)))
         }
-        catch { bus.publish(DaemonEvent("error", ["message": "depositPhotos: \(error)"])) }
+        catch { bus.publish(DaemonEvent("error", ["message": "\(kind == .files ? "deposit" : "depositPhotos"): \(error)"])) }
+    }
+
+    /// Run one recorded deposit and settle its row. **Must be called under `withRunLock`.** The row is
+    /// removed only when nothing retryable remains: every failure permanent (skip-listed, retrying is
+    /// pointless) or none at all. A stop, a transient fault, or an over-quota refusal keeps the row —
+    /// those are exactly the outcomes a later pass can finish. `explicit` is `true` for the user's own
+    /// drop (may revive deleted files) and `false` for a replay, which must NOT: a file the user deleted
+    /// in the app between the drop and the replay stays deleted (the upsert's tombstone rule).
+    private func runPendingDeposit(_ d: PendingDeposit, session: UserSession, explicit: Bool) async throws {
+        let conflicts = d.conflicts.compactMapValues { ConflictPolicy(rawValue: $0) }
+        let base: any IngestSource
+        switch d.kind {
+        case .files:
+            let entries = d.src.map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: $0), destDir: d.dest) }
+            let exclude = ExcludeMatcher(patterns: excludeMatcher(session).patterns + d.excludeExtra)
+            base = ExplicitPathsSource(entries: entries, exclude: exclude)
+        case .photos:
+            // A replay on a platform without PhotoKit (or before the resolver is wired) leaves the row for
+            // a daemon that can — never drop a pick because THIS process couldn't read the library.
+            guard let resolver = photoResolver else { return }
+            base = PhotoDepositSource(resolver: resolver, assetIds: d.src, destDir: d.dest, scratchDir: session.scratchDir)
+        }
+        let failures = try await performRun(session: session, source: resolveCollisions(session, base, conflicts),
+                                            explicitDeposit: explicit)
+        // Keep a files-deposit whose source is currently UNREACHABLE (every path missing — an unplugged
+        // drive, a folder not yet remounted): we can't confirm its files are settled, so the empty run this
+        // produced is "nothing to do right now", not "done". Retry next pass. A photos deposit has no path
+        // to check. Otherwise: remove once nothing retryable remains (all-permanent or, the common case,
+        // no failures at all — the files archived).
+        let sourceReachable = d.kind == .photos || d.src.contains { FileManager.default.fileExists(atPath: $0) }
+        if sourceReachable && failures.allSatisfy(\.kind.isPermanent) {
+            try session.journal.removePendingDeposit(d.id)
+        } else {
+            log("DaemonService: deposit \(d.id) kept for the next pass — \(sourceReachable ? "\(failures.filter { !$0.kind.isPermanent }.count) blob(s) still owed" : "source unreachable")")
+        }
+    }
+
+    /// One wording for an upload nothing can resume — shown on the row, gatekept by Ben (placeholder).
+    static let interruptedUploadReason = "Upload didn\u{2019}t finish. Add this to your backup again to complete it."
+
+    /// Flip files stuck "Uploading" that nothing will ever drive to an honest `failed` state (see
+    /// `Journal.markInterruptedUploads`). Runs only when it is UNAMBIGUOUS that a planned file is orphaned:
+    /// no run is in flight (caller holds the lock, so true here) and there are no pending deposits — a
+    /// pending deposit owns its own not-yet-uploaded files and its replay will settle them, so we must not
+    /// condemn those. The classic case is a drop interrupted by a crash/restart on a build older than
+    /// durable deposits (2026-08-25): those files have no pending-deposit row and no watched source, so
+    /// nothing resumes them, and they would spin forever without this.
+    private func reconcileOrphanedUploads(_ session: UserSession) {
+        // If we CAN'T read the deposit queue, do nothing — this sweep condemns planned files, and a pending
+        // deposit owns its own not-yet-uploaded ones. Failing to the "no deposits → proceed" side on a read
+        // error could flip a live deposit's files to failed. Unknown ⇒ bail (and say why).
+        guard let pending = try? session.journal.listPendingDeposits() else {
+            log("DaemonService: orphan reconcile skipped — could not read pending deposits")
+            return
+        }
+        guard pending.isEmpty else { return }
+        let mounts = ((try? session.journal.listSources()) ?? [])
+            .filter { !$0.paused }.map(\.mountPath).filter { !$0.isEmpty }
+        let now = Int(Date().timeIntervalSince1970)
+        do {
+            let n = try session.journal.markInterruptedUploads(notUnder: mounts, reason: Self.interruptedUploadReason, now: now)
+            if n > 0 {
+                log("DaemonService: \(n) interrupted upload(s) marked needs-attention (orphaned planned files, nothing to resume them)")
+                bus.publish(DaemonEvent("filesChanged", ["interruptedUploads": "\(n)"]))
+            }
+        } catch { log("DaemonService: orphan reconcile failed — \(error)") }
+    }
+
+    /// Finish what earlier deposits still owe. Runs on every pass (after the watched-folder scan) and so
+    /// right after sign-in, which `beginSession` wakes the loop for. **Caller holds the run lock.**
+    private func replayPendingDeposits(_ session: UserSession) async {
+        let pending = (try? session.journal.listPendingDeposits()) ?? []
+        for d in pending {
+            do { try await runPendingDeposit(d, session: session, explicit: false) }
+            catch { bus.publish(DaemonEvent("error", ["message": "resuming a deposit: \(error)"])) }
+        }
     }
 
     /// Wrap a deposit source so the user's collision choices are honored (Keep Both / Replace / Skip). A
@@ -243,8 +317,9 @@ public actor DaemonService {
     /// skip-lists permanent ones (so a doomed blob isn't re-attempted every pass). **Must be called through
     /// `withRunLock`** — it does not manage the run lock itself, so calling it bare would defeat the mutual
     /// exclusion. Every call site does.
+    @discardableResult
     private func performRun(session: UserSession, source: IngestSource,
-                            explicitDeposit: Bool = false) async throws {
+                            explicitDeposit: Bool = false) async throws -> [BlobFailure] {
         bus.publish(DaemonEvent("runStarted"))
         let bus = self.bus
         let onFile: @Sendable (String, String) async -> Void = { id, blob in
@@ -355,6 +430,7 @@ public actor DaemonService {
         bus.publish(DaemonEvent("runFinished", ["filesArchived": "\(s.archived)", "filesTotal": "\(s.total)",
                                                 "blobsFailed": "\(failures.count - stopped.count)",
                                                 "filesStopped": "\(stopped.reduce(0) { $0 + $1.files.count })"]))
+        return failures
     }
 
     /// The engine Task of the run in flight, if any — what `cancelRun` cancels. Set/cleared by `performRun`.
