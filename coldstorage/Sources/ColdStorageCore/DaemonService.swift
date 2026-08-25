@@ -757,9 +757,12 @@ public actor DaemonService {
         defer { usageRefreshing = false }
         do { _ = try await refreshUsage(session) }
         // A persistent failure (expired STS, AccessDenied, a wedged link past the 30 s cap) is WHY
-        // `bytesStored` stays null and the storage meter sits pending — say so in the err log rather than
-        // leave a dev staring at an unexplained blank (PILLAR5). The next getStatus retries.
-        catch { log("DaemonService: usage refresh failed — \(error)") }
+        // `bytesStored` stays null and the storage meter sits pending — say so in the err log AND to the
+        // UI, rather than leave anyone staring at an unexplained blank (PILLAR5). The next getStatus retries.
+        catch {
+            log("DaemonService: usage refresh failed — \(error)")
+            bus.publish(DaemonEvent("error", ["message": "reading how much is stored: \(error)"]))
+        }
     }
 
     /// The actual listing + credit math, cached on success. Separate from `currentUsageBytes` so the
@@ -776,6 +779,10 @@ public actor DaemonService {
         let credit = (try? session.journal.reclaimedCreditBytes()) ?? 0
         let bytes = max(0, listed - credit)
         cachedUsage = (prefix: prefix, bytes: bytes, at: Date())
+        // Tell the UI the number exists. `getStatus` answers from this cache and never waits on the
+        // listing, so without this the client has no reason to ask again — it only re-reads status on
+        // daemon events — and the storage meter sat on its skeleton until the next `runFinished`.
+        bus.publish(DaemonEvent("usageChanged", ["bytesStored": "\(bytes)"]))
         return bytes
     }
 

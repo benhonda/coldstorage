@@ -107,6 +107,11 @@ export const connectController = (api: ColdstoreApi, store: Store): Controller =
     // A download moved (or finished). One event for the whole list — we re-read it rather than patch a
     // local copy, because the daemon's journal is the only thing that knows where a download really stands.
     else if (name === "restoresChanged" || name === "restoreCompleted") void refreshRestores();
+    // The background S3 usage listing landed. `getStatus` serves `bytesStored` from that cache and never
+    // waits on the listing, so this event is the ONLY thing that turns the meter's skeleton into a number
+    // before the next run finishes (the 2026-08-25 non-blocking change had no such signal, and the meter
+    // stayed pending for the whole session).
+    else if (name === "usageChanged") void refreshStatus();
   });
 
   const offLifecycle = api.onLifecycle((state) => {

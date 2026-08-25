@@ -588,6 +588,10 @@ export interface DaemonEvents {
   /** A transfer finished and the bytes are on disk. Distinct from `restoresChanged` because a completion
    * is a moment, not a state — it's what a "your copy is ready" notification hangs off. */
   restoreCompleted: { file: string; out: string };
+  /** The background S3 usage listing landed and `getStatus` will now serve `bytesStored` (the figure
+   * rides along, as a decimal string). The ONLY signal that a status read taken while the cache was cold
+   * is stale — `getStatus` never waits on the listing, and the client only re-reads on events. */
+  usageChanged: { bytesStored: string };
   /** A daemon-side error surfaced to the user as a toast. `code`, when present, marks a KNOWN, actionable
    * failure the UI can offer recovery for — `photosAccessDenied` (the daemon lacks full Photos access →
    * show an "Open Photos settings" button) and `photosNoneResolved` (none of the picked photos could be
