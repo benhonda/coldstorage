@@ -17,7 +17,7 @@ import sqlite3, sys, glob, os
 root, want = sys.argv[1], sys.argv[2]
 js = sorted(glob.glob(f"{root}/users/*/coldstore.sqlite"), key=os.path.getmtime, reverse=True)
 if not js:
-    print("ERR:no journal under " + root + "/users/ — sign in once (task ui:mac:live)"); raise SystemExit
+    print("ERR:no journal under " + root + "/users/ — sign in once (task app:mac:run:staging-local)"); raise SystemExit
 try:
     # READ-ONLY: the daemon has this file open, and a diagnostic must never be able to write to the index
     # that IS the vault's tree.

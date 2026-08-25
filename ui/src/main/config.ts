@@ -30,8 +30,9 @@ export type AppConfig = {
   cognitoDomain?: string | undefined;
   cognitoClientId?: string | undefined;
   /** Account-backend base URL (Phase 5b) — where the app fetches/stores the zero-knowledge key-blob and
-   * checks entitlement. NOT read from here by a packaged app — the lane is a property of the BUILD and
-   * comes from the baked file alone (`vault/config.ts`); this field carries it for DEV runs only. */
+   * checks entitlement. Present ONLY in the baked file (`task ui:config:bake ENV=…`): the lane is a
+   * property of the BUILD, and a user `config.json` never carries it — a dev run gets its lane from the
+   * environment instead (`vault/config.ts`). */
   accountApiBaseUrl?: string | undefined;
 };
 
