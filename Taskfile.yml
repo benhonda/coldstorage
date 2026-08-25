@@ -1820,12 +1820,6 @@ tasks:
       # when you're debugging a half-configured environment in the first place).
       - bun --env-file=.env.vercel --env-file=.env run scripts/db-doctor.ts
 
-  backend:accounts:inspect:
-    desc: "What the accounts table holds — the row behind the app's plan badge (sub → subscription_active + Paddle ids). For \"I paid but it says Free\": the badge keys on the signed-in Cognito sub, never the email, so a Google vs email-code sign-in mismatch shows up here as a paid row under one sub and a bare row under the other. READ-ONLY; targets the DATABASE_URL in .env (db-target names the lane). `-- --sub <cognito-sub>` narrows to one account."
-    dir: account-backend
-    cmds:
-      - bun --env-file=.env.vercel --env-file=.env run scripts/inspect-accounts.ts {{.CLI_ARGS}}
-
   backend:api:health:
     desc: "Ask a DEPLOYED backend whether the database IT reads is migrated to the schema ITS code expects — the one question you cannot answer from your laptop (the API's DATABASE_URL lives on Vercel, not in your .env). ENV=staging|production (default staging)."
     vars:
