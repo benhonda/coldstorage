@@ -23,7 +23,7 @@ scan/encrypt/upload/restore/journal. The UI reads state and sends commands.
 > (factual: deep storage is slow to open). Status is *information*, not comfort — neither alarm nor
 > reassurance, just facts.
 >
-> **Getting files back is a "download" (Ben, 2026-07-27).** The page is **Downloads**, one row per
+> **Getting files back is a "download" (Ben, 2026-07-27).** The page is **Download Requests** (nav + title; `route: "downloads"` in code), one row per
 > REQUEST (ask for a folder of 300, get one row — see the grouping note in the flow below), and a row's
 > states are **pending → downloading → done**. This supersedes both prior rulings — 2026-06-24's
 > "not 'download'" and the "Transfers" era that followed — because *transfer*, *copy* and *request* had
@@ -274,12 +274,12 @@ drop the instant it appeared.
    your Downloads folder [Show] [Open]."* *(Notification still open, below.)*
 5. The local copy expires after the requested `days`, then re-freezes → honest *"available until
    Jun 28,"* download-again is one click.
-6. A count on the **Downloads** nav item (above Settings) — the page is the detail, so the badge has
+6. A count on the **Download Requests** nav item (above Settings) — the page is the detail, so the badge has
    somewhere to go. Downloads are journal rows the daemon drives, so they survive sign-out, relaunch and
    a closed app. (Superseded the sidebar-foot pill + its popover, 2026-07-27.) The badge counts
    REQUESTS, not files — the same fold the page shows.
 7. Batch/folder request → one **combined** quote (`240 files · ~a day · ~$3.10`) — **and one row
-   (2026-07-27)**. The Downloads page folds the daemon's per-file rows into one row per request
+   (2026-07-27)**. The Download Requests page folds the daemon's per-file rows into one row per request
    (`views/downloads/model.ts`): `jobId` is the group key (it IS the quote — everything bought together
    shows together; null jobIds never merge), the label is the files' shared vault folder ("Photos"),
    the headline state has a stated precedence (unpaid > downloading > pending > failed > stopped >
@@ -583,7 +583,7 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   `views/AccountCard.tsx` (avatar · email · a Drive-style storage meter fed by the gate's own
   used/quota figures; the plan badge hangs off the AVATAR's bottom edge rather than sitting beside the
   name — see "Sidebar account chip" below — and only when the meter can't name the quota; click → a
-  popover: identity summary + **Upgrade** on a free account + "Settings…" deep-linking to
+  popover: identity summary + **Upgrade** on a free account + "Account settings…" deep-linking to
   Settings › Account + Sign out)
   + Settings › Account
   (`views/BillingPanel.tsx` + `views/ChangePlanModal.tsx` with a proration preview; invoices, card,

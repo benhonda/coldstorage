@@ -142,9 +142,11 @@ export const AccountCard = ({
           </span>
           {/* Three states, not two. The meter used to collapse entirely whenever `usedBytes` was null,
               which conflated "the daemon hasn't reported yet" with "there's nothing to report" — and did
-              it while shifting the chip's layout as the value popped in. Pending now holds the space with
-              a placeholder; a null usage with a live connection still collapses, because that's a real
-              absence rather than a wait. */}
+              it while shifting the chip's layout as the value popped in. While signed in a null usage is
+              ALWAYS a wait now (`getStatus` fills `bytesStored` from a background S3 listing — see
+              App.tsx's `storageFigurePending`), so the skeleton holds the space until it lands; a
+              signed-out install shows nothing. If that listing keeps failing the number stays pending —
+              the daemon logs why (`usage refresh failed` in coldstored.err.log). */}
           {usedBytes == null && usagePending && (
             <span className="cs-account-meter">
               <Skeleton width="100%" height={4} label="Checking storage used" />
@@ -233,7 +235,7 @@ export const AccountCard = ({
               }}
             >
               <Icon name="settings" size={20} />
-              Settings…
+              Account settings…
             </button>
             <button
               type="button"

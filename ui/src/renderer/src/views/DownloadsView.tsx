@@ -1,5 +1,5 @@
 /**
- * **Downloads** — every request this Mac has made to get files back, active and past, **one row per
+ * **Download Requests** — every request this Mac has made to get files back, active and past, **one row per
  * request**. Ask for a folder of 300 photos and you get one row ("Photos"), not 300; the daemon's journal
  * stays per-file underneath (see `downloads/model.ts` for the fold and why `jobId` is the group key).
  *
@@ -527,7 +527,7 @@ export const DownloadsView = ({
   };
 
   return (
-    <Page title="Downloads">
+    <Page title="Download Requests">
       {restores.length === 0 ? (
         <EmptyState
           icon="download"
