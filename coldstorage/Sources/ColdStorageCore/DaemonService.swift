@@ -1,6 +1,20 @@
 import Foundation
 import Crypto   // SymmetricKey — the vault commands (Phase 5b) decode/return the MasterKey
 
+/// Run `body`, but give up after `seconds` — a network call on a flaky link can otherwise hang a task
+/// indefinitely (the AWS SDK retries under the hood). Whichever finishes first wins; the loser is
+/// cancelled. Used to bound the background S3 usage listing so a wedged link can't pin it forever.
+struct TimedOutError: Error {}
+func withThrowingTimeout<T: Sendable>(seconds: Double, _ body: @escaping @Sendable () async throws -> T) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask { try await body() }
+        group.addTask { try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)); throw TimedOutError() }
+        defer { group.cancelAll() }
+        let result = try await group.next()!
+        return result
+    }
+}
+
 /// The long-running service: turns the proven engine into `coldstored`. Owns the run loop, the live
 /// source set (rebuilt each pass from the journal registry, paused folders filtered out), per-source
 /// pause/resume, and the command surface the control socket dispatches to. Emits progress to the
@@ -54,6 +68,7 @@ public actor DaemonService {
     // current enough for a soft deposit gate. Per-VaultPrefix so a mid-session re-auth (different
     // identity) never serves a stale total for the wrong user.
     private var cachedUsage: (prefix: VaultPrefix, bytes: Int, at: Date)?
+    private var usageRefreshing = false
     private let usageCacheTTL: TimeInterval = 60
     // The storage quota this account is allowed, pushed down by the app from its entitlement fetch
     // (`setQuota`). `nil` ⇒ DON'T enforce — dogfood mode, or an entitlement the app hasn't resolved — which
@@ -719,31 +734,64 @@ public actor DaemonService {
     /// Storage-quota usage: bytes actually stored in S3 under the caller's own prefix (see
     /// `S3Store.usageBytes` for why this is S3, not the local journal). Cached `usageCacheTTL` seconds so a
     /// UI that polls `getStatus` frequently doesn't trigger a fresh S3 listing on every poll.
-    private func currentUsageBytes(_ session: UserSession) async throws -> Int {
+    /// The cached S3 usage total if it is still within `usageCacheTTL` — else `nil`. Pure actor state, no
+    /// I/O, so it is safe to read on the `getStatus` hot path. The live listing is done by
+    /// `refreshUsageInBackground`, never inline on a request.
+    private func cachedUsageIfFresh(_ prefix: VaultPrefix) -> Int? {
+        guard let c = cachedUsage, c.prefix == prefix, Date().timeIntervalSince(c.at) < usageCacheTTL else { return nil }
+        return c.bytes
+    }
+
+    /// Kick a usage refresh that updates `cachedUsage` when it lands — WITHOUT blocking whoever asked. At
+    /// most one runs at a time (`usageRefreshing`). Bounded by a hard timeout so a wedged S3 listing on a
+    /// flaky network expires instead of pinning a task forever; the next `getStatus` simply reports the
+    /// last known figure (or null) and triggers another try. This is what keeps `bytesStored` eventually
+    /// correct without ever letting it stall a status read.
+    private func refreshUsageInBackground(_ session: UserSession) {
+        guard !usageRefreshing else { return }
+        usageRefreshing = true
+        Task { await self.performUsageRefresh(session) }
+    }
+    /// One background refresh, on the actor: list, cache, and clear the in-flight flag whatever happens.
+    private func performUsageRefresh(_ session: UserSession) async {
+        defer { usageRefreshing = false }
+        do { _ = try await refreshUsage(session) }
+        // A persistent failure (expired STS, AccessDenied, a wedged link past the 30 s cap) is WHY
+        // `bytesStored` stays null and the storage meter sits pending — say so in the err log rather than
+        // leave a dev staring at an unexplained blank (PILLAR5). The next getStatus retries.
+        catch { log("DaemonService: usage refresh failed — \(error)") }
+    }
+
+    /// The actual listing + credit math, cached on success. Separate from `currentUsageBytes` so the
+    /// background refresh and the (rare) inline caller share one implementation.
+    @discardableResult
+    private func refreshUsage(_ session: UserSession) async throws -> Int {
         let prefix = session.prefix
-        if let cached = cachedUsage, cached.prefix == prefix, Date().timeIntervalSince(cached.at) < usageCacheTTL {
-            return cached.bytes
+        // Capture only Sendable locals for the timed closure — never `session` (not Sendable across the
+        // task-group boundary the timeout uses). `store` is a `Vault`, which is Sendable.
+        let store = session.restoreEngine.store
+        let listed = try await withThrowingTimeout(seconds: 30) {
+            try await store.usageBytes(prefix: prefix)
         }
-        let listed = try await session.restoreEngine.store.usageBytes(prefix: prefix)
-        // S3 keeps listing an object until it is physically removed, and lifecycle runs once a day — so the
-        // listing lags reality by up to a day or more. Subtract blobs we've tagged whose 180-day minimum has
-        // already run out: AWS has stopped charging us for those, so the user should have the space back.
-        // Never credit a blob still inside its minimum — we're still paying, so they're still holding it.
-        //
-        // KNOWN IMPRECISION, deliberately conservative: `f.size` is PLAINTEXT bytes while `listed` is
-        // ciphertext, so the credit under-shoots by the AEAD tag overhead (~4 ppm). And the credit expires on
-        // a time window rather than on the object actually leaving the listing. Both err the same way — usage
-        // reads slightly HIGH — so a deposit is refused marginally early rather than a plan being overrun.
-        // The exact fix is to have `usageBytes` return key→size and credit only listed reaped objects.
-        //
-        // Credit is journal-derived and therefore per-device. A second Mac that didn't perform the delete
-        // won't credit it and will read usage HIGH until S3 drops the object — conservative, so the failure
-        // mode is a deposit refused slightly early, never a plan quietly overrun. Making this exact across
-        // devices needs a server-side index, not a bigger local sum.
         let credit = (try? session.journal.reclaimedCreditBytes()) ?? 0
         let bytes = max(0, listed - credit)
         cachedUsage = (prefix: prefix, bytes: bytes, at: Date())
         return bytes
+    }
+
+    /// The usage figure the QUOTA ENFORCEMENT path needs before a deposit — here a fresh listing is worth
+    /// waiting for (a deposit that overshoots the plan is the thing this prevents), unlike `getStatus`,
+    /// which must never wait. Cache-first, else a live refresh.
+    ///
+    /// S3 keeps listing an object until it is physically removed, and lifecycle runs once a day — so the
+    /// listing lags reality by up to a day. `refreshUsage` subtracts blobs we've tagged whose 180-day
+    /// minimum has run out (AWS stopped charging; the user gets the space back), never one still inside its
+    /// minimum. KNOWN IMPRECISION, deliberately conservative: plaintext `f.size` vs ciphertext `listed`, and
+    /// a time-window credit — both err usage HIGH, so a deposit is refused marginally early rather than a
+    /// plan overrun. Per-device (journal-derived): a second Mac reads HIGH until S3 drops the object.
+    private func currentUsageBytes(_ session: UserSession) async throws -> Int {
+        if let fresh = cachedUsageIfFresh(session.prefix) { return fresh }
+        return try await refreshUsage(session)
     }
 
     /// Decode a base64 32-byte key param, or nil if absent. Throws on present-but-malformed (wrong length
@@ -1024,18 +1072,26 @@ public actor DaemonService {
                                               staleAfterSeconds: RestoreRow.staleAfter(intervalSeconds: intervalSeconds)))
             }
             let s = try session.journal.summary()
+            // Keep `bytesStored` eventually-correct without ever waiting on S3: if the cache is cold/stale,
+            // start a background listing that fills it for the NEXT getStatus. This one answers now.
+            if cachedUsageIfFresh(session.prefix) == nil { refreshUsageInBackground(session) }
             return AnyEncodable(StatusDTO(signedIn: true, filesTotal: s.total, filesArchived: s.archived,
                                           blobsVerified: s.blobsVerified, running: running,
                                           permanentlyFailedBlobs: permanentlyFailedBlobs.count,
                                           sources: try sourceDTOs(session),
-                                          // `try?`, deliberately: this is the ONE field backed by a live,
-                                          // paginated S3 listing, so it is the one that can be slow or fail
-                                          // (expired STS, AccessDenied) while every other field — all read
-                                          // from the local journal — is sound. Letting it throw took the
-                                          // whole snapshot down, and the client's 10 s request deadline
-                                          // turned a slow listing into no status at all. A degraded field
-                                          // the UI can label beats a status call that answers nothing.
-                                          bytesStored: try? await currentUsageBytes(session),
+                                          // **Never a network call on this path.** `bytesStored` is the one
+                                          // field backed by a live, PAGINATED S3 listing — ~one round trip
+                                          // per 1,000 objects, so ~15 for a 15k-blob vault. `try?` catches a
+                                          // THROW, not a HANG: on a flaky network those calls retry and the
+                                          // whole `getStatus` blocked past the client's 10 s deadline — and
+                                          // because every command shares this actor, a status stuck on S3
+                                          // dragged listFiles/authenticate/setQuota down with it. The daemon
+                                          // sampled IDLE in a URLSession read while the app timed out on
+                                          // everything (2026-08-25). So: serve the CACHED usage, or `nil`
+                                          // immediately if there is none, and refresh it in the BACKGROUND
+                                          // (off the request, off this actor's critical path). The UI already
+                                          // treats a null `bytesStored` as "pending", not "empty".
+                                          bytesStored: cachedUsageIfFresh(session.prefix),
                                           staleAfterSeconds: RestoreRow.staleAfter(intervalSeconds: intervalSeconds)))
         case "listSources":
             guard let session else { return AnyEncodable([SourceDTO]()) }

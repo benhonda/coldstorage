@@ -7,12 +7,6 @@ import Csqlite3
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-/// Line to the daemon's stderr (→ `coldstored.err.log`, tailed by `task daemon:mac:logs`). A schema
-/// migration that silently rewrites rows is exactly the invisible work this product refuses to do.
-private func log(_ message: String) {
-    FileHandle.standardError.write(Data("\(message)\n".utf8))
-}
-
 public struct PartRow: Sendable {
     public var blobId: String
     public var partNumber: Int
@@ -80,7 +74,21 @@ public final class Journal: @unchecked Sendable {
         db = h
         try exec("PRAGMA journal_mode=WAL;")
         try exec("PRAGMA busy_timeout=5000;")
+        // **Sizing for a big vault.** A 141k-file journal made every `getStatus` (three `count(*)` scans of
+        // `files`) read the whole table off disk under the one journal lock, stalling every other command
+        // for tens of seconds right after sign-in — the "Setting up… / Couldn't load your files" incident
+        // (2026-08-25). The scans are fixed by the indexes in `migrate()`; these make the working set stay
+        // resident so a cold cache can't re-pay the disk on every read. `synchronous=NORMAL` is the WAL-safe
+        // setting (a crash can lose the last commit, never corrupt — and the journal re-derives from S3 via
+        // ListParts regardless). mmap + a real page cache turn repeat reads into memory hits.
+        try exec("PRAGMA synchronous=NORMAL;")
+        try exec("PRAGMA cache_size=-65536;")     // 64 MiB of page cache (negative = KiB), not the 2 MiB default
+        try exec("PRAGMA mmap_size=268435456;")   // 256 MiB memory-mapped I/O — repeat reads skip the syscall
         try migrate()
+        // Give the query planner stats for the new indexes on a big existing journal. Cheap, idempotent,
+        // and it's what makes the planner actually PREFER `files_live_status` over a scan on the first
+        // getStatus after this upgrade rather than after enough writes to trigger auto-analyze.
+        try? exec("ANALYZE;")
     }
 
     /// Smart default excludes — the junk a non-technical user never means to upload. Seeded into the
@@ -223,6 +231,20 @@ public final class Journal: @unchecked Sendable {
         if !restoreCols.contains("lastStepAt") {
             try exec("ALTER TABLE restores ADD COLUMN lastStepAt INTEGER")
         }
+
+        // **Indexes for the hot interactive reads — created LAST, after every column migration above** (they
+        // name `deletedAt`, which `migrateDeletionOffStatus` adds). The tree is 140k+ files now; without
+        // these, `summary()`'s three `count(*)` (every getStatus), `settledFileIds` + the reap join (every
+        // pass) and the tree read each scan `files`/`blob_members` end to end under the one journal lock,
+        // stalling every command for tens of seconds right after sign-in (2026-08-25). `files.id` and
+        // `blob_members(blobId,fileId)` are already covered by their primary keys; these add the predicates
+        // those PKs don't. IF NOT EXISTS, so this is a one-time build on an existing journal and a no-op after.
+        try exec("""
+            CREATE INDEX IF NOT EXISTS files_live_status ON files(deletedAt, status);
+            CREATE INDEX IF NOT EXISTS files_blobId ON files(blobId);
+            CREATE INDEX IF NOT EXISTS blobs_status ON blobs(status);
+            CREATE INDEX IF NOT EXISTS blob_members_fileId ON blob_members(fileId);
+            """)
     }
 
     /// Move deletion out of `files.status` and into `files.deletedAt`, and repair the rows the old scheme

@@ -1,12 +1,6 @@
 import Foundation
 import Crypto
 
-/// Line to the daemon's stderr (→ `coldstored.err.log`, tailed by `task daemon:mac:logs`). The portable Core
-/// has no logger; upload faults are otherwise only emitted over the control socket, invisible at the daemon.
-private func log(_ message: String) {
-    FileHandle.standardError.write(Data("\(message)\n".utf8))
-}
-
 /// One determinate upload-progress tick for a solo-blob file: how many encrypted bytes are up out of the
 /// blob's total. Named fields (not a positional tuple) so the `uploaded`/`total` pair — both `Int` — can't
 /// be transposed at the call site, which would silently invert the percentage.
