@@ -83,10 +83,11 @@ src/renderer/     The web app (React). No Node, no socket — talks to window.co
                       folder into its own subtree, no no-op drop) is pure + tested in model.ts
                       (canMoveInto/moveIsNoop).
       Breadcrumb, StatusBadge (StatusIcon: ✓ stored · ↑ uploading · ⚠ couldn't upload · ↓ transferring ·
-                      saved-here), ContextMenu (incl. Retry upload on failed rows), InfoModal (Get info),
-                      RequestBackModal (request-a-copy + native folder picker), GettingBackPanel (transfer
-                      queue), FailuresPanel (the sidebar "N couldn't upload" popover — the journal's failed
-                      rows grouped by cause; Try again / Locate… / Remove per file when a cause is small).
+                      saved-here), ContextMenu (incl. Try again / Locate… on failed rows), InfoModal (Get
+                      info — a failed row's kind + the daemon's detail), RequestBackModal (request-a-copy +
+                      native folder picker). Failed uploads live on the Uploads page (`views/UploadsView.tsx`
+                      + `views/uploads/`: `model.ts` folds the tree's rows into the daemon's batches by
+                      `depositId`; `failure.ts` is the one place a `failureKind` becomes words).
 ```
 
 ## Commands (run from repo root)

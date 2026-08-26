@@ -192,7 +192,7 @@ describe("failures, pause, restore, error", () => {
     expect(s.failures[0]?.files).toEqual([]);
   });
 
-  test("fileArchived prunes the failure of its blob (a retry that lands clears the pill), leaving others", () => {
+  test("fileArchived prunes the failure of its blob (a retry that lands clears the badge), leaving others", () => {
     const s = run(
       { type: "event", name: "blobFailed", data: { blob: "b1", kind: "overQuota", message: "full", paths: "a.jpg" } },
       { type: "event", name: "blobFailed", data: { blob: "b2", kind: "permanent", message: "NoSuchBucket", paths: "b.jpg" } },
@@ -209,6 +209,21 @@ describe("failures, pause, restore, error", () => {
     // A later read is the whole truth, not a merge — the daemon's journal owns this list.
     const later = reducer(s, { type: "restoresLoaded", restores: [transfer("t2")] });
     expect(later.restores.map((r) => r.id)).toEqual(["t2"]);
+  });
+
+  test("depositsLoaded replaces the batch list wholesale, and sign-out clears it", () => {
+    const batch = (id: string) => ({ id, kind: "files" as const, mode: "ingest" as const, state: "done" as const, dest: "", src: ["/d"], createdAt: 1, finishedAt: 2 });
+    const s = run({ type: "depositsLoaded", deposits: [batch("d1"), batch("d2")] });
+    expect(s.deposits.map((d) => d.id)).toEqual(["d1", "d2"]);
+    expect(s.depositsLoad).toEqual({ state: "loaded" });
+    // A failed re-read keeps the last good list and says so — stale beats blank, and blank must not read
+    // as "nothing uploaded yet".
+    const failed = reducer(s, { type: "depositsLoadFailed", error: "timed out" });
+    expect(failed.deposits).toBe(s.deposits);
+    expect(failed.depositsLoad).toEqual({ state: "failed", error: "timed out" });
+    expect(reducer(s, { type: "depositsLoaded", deposits: [batch("d2")] }).deposits.map((d) => d.id)).toEqual(["d2"]);
+    // The event says only "it changed" — no fold; the controller re-reads.
+    expect(reducer(s, { type: "event", name: "depositsChanged", data: {} }).deposits).toBe(s.deposits);
   });
 
   test("restore events do NOT fold into the list — the controller re-reads it", () => {

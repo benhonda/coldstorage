@@ -14,6 +14,7 @@ import type {
   ConnectionState,
   DaemonEventName,
   DaemonEvents,
+  Deposit,
   EntitlementStatus,
   ExcludeSuggestion,
   ListedFile,
@@ -143,13 +144,21 @@ export interface AppState {
   excludeSuggestions: ExcludeSuggestion[];
   run: RunProgress | null;
   /** The live `blobFailed` log — the MOMENT of a failure (a quota refusal opens the paywall off it). NOT
-   * what the "couldn't upload" pill counts: that reads the journal's `failed` files, the same truth the
-   * row ⚠ shows, so the two can't disagree and neither is lost on restart. */
+   * what the Uploads badge counts: that reads the journal's `failed` files, the same truth the row ⚠
+   * shows, so the two can't disagree and neither is lost on restart. */
   failures: BlobFailure[];
   /** Every transfer this Mac has requested, newest first — active and history — read from the daemon's
    * journal (`listRestores`), never accumulated here. Authoritative: the daemon owns and drives these,
    * so they survive a sign-out, a relaunch, and a closed app. */
   restores: RestoreRow[];
+  /** Every batch this Mac has dropped or picked, newest first — the Uploads page's rows, read from the
+   * daemon's journal (`listDeposits`). Same contract as `restores`: authoritative, never accumulated here;
+   * a batch's counts come from `files` (by `depositId`), so the two can't disagree. */
+  deposits: Deposit[];
+  /** Whether `deposits` is a truth yet — the twin of {@link filesLoad}, for the same reason: an empty
+   * list and a failed read must not look alike on a page whose empty state tells the user to go drop
+   * files. */
+  depositsLoad: { state: "pending" } | { state: "loaded" } | { state: "failed"; error: string };
   /** Live download progress keyed by restore row id — see {@link RestoreProgress}. */
   restoreProgress: Record<string, RestoreProgress>;
   lastError: string | null;
@@ -175,6 +184,8 @@ export const initialState: AppState = {
   run: null,
   failures: [],
   restores: [],
+  deposits: [],
+  depositsLoad: { state: "pending" },
   restoreProgress: {},
   lastError: null,
   lastErrorCode: null,
@@ -202,6 +213,8 @@ export type Action =
   | { type: "excludesLoaded"; excludes: string[] }
   | { type: "excludeSuggestionsLoaded"; suggestions: ExcludeSuggestion[] }
   | { type: "restoresLoaded"; restores: RestoreRow[] }
+  | { type: "depositsLoaded"; deposits: Deposit[] }
+  | { type: "depositsLoadFailed"; error: string }
   | EventAction;
 
 /**
@@ -333,6 +346,8 @@ export const reducer = (state: AppState, action: Action): AppState => {
         run: null,
         failures: [],
         restores: [],
+        deposits: [],
+        depositsLoad: { state: "pending" },
         restoreProgress: {},
         lastError: null,
         lastErrorCode: null,
@@ -371,6 +386,12 @@ export const reducer = (state: AppState, action: Action): AppState => {
       return { ...state, excludes: action.excludes };
     case "excludeSuggestionsLoaded":
       return { ...state, excludeSuggestions: action.suggestions };
+
+    case "depositsLoaded":
+      return { ...state, deposits: action.deposits, depositsLoad: { state: "loaded" } };
+    case "depositsLoadFailed":
+      // Keep the last good list (stale beats blank); only the load state says it couldn't be refreshed.
+      return { ...state, depositsLoad: { state: "failed", error: action.error } };
 
     case "restoresLoaded": {
       // The authoritative list is also the progress slice's janitor: an entry whose row is no longer
@@ -492,6 +513,7 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
 
     case "restoresChanged":
     case "restoreCompleted":
+    case "depositsChanged":
     case "usageChanged":
       // Authoritative refresh is the controller's job (it re-reads `listRestores`); no fold here. Same
       // pattern as sourcesChanged/filesChanged — and for a stronger reason: a renderer-side fold of these

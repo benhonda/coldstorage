@@ -7,17 +7,19 @@
  * store's daemon-backed `restores` list) and daemon-backed settings (excludes from the store, mutated via
  * commands). It threads slices to the three views, keeps the shared `exec` command runner (surfaces
  * rejections as a toast), and pins the foot of the sidebar: a quiet status line only when the background
- * uploader isn't running, and the stuck-uploads pill.
+ * uploader isn't running.
  *
- * In-flight downloads used to live down there too, as a count + popover. They now have their own page —
- * a count in the sidebar foot with a popover hanging off it had nowhere to send anyone, and it was built
- * from renderer memory, so it lost the user's downloads on sign-out.
+ * In-flight downloads and failed uploads both used to live down there, as a count + popover each. They
+ * now have their own pages (Download Requests, Uploads) — a count in the sidebar foot with a popover
+ * hanging off it had nowhere to send anyone, and it was built from renderer memory, so it lost the user's
+ * downloads on sign-out.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Icon, Modal, Button } from "./ui/primitives.tsx";
+import { Modal, Button } from "./ui/primitives.tsx";
 import { Sidebar, type NavItem } from "./ui/layout.tsx";
 import { useToast } from "./ui/toast.tsx";
 import type { Store } from "./state/store.ts";
+import type { Commands } from "../../shared/ipc.ts";
 import type { ColdstoreApi, ConnectionState, SubscriptionInfo } from "../../shared/ipc.ts";
 import { billingState, subscriptionOf, type Loadable } from "./state/billing.ts";
 import { isActiveRestore } from "../../shared/ipc.ts";
@@ -26,7 +28,8 @@ import { useAppState } from "./useStore.ts";
 import { useResizable } from "./ui/useResizable.ts";
 import { baseName, fileFromJournal, isFolderMarker, isUploadOutstanding, parentOf, type ArchivedFile } from "./views/files/model.ts";
 import { isOptimisticId, useFiles } from "./views/files/useFiles.ts";
-import { FailuresPanel } from "./views/files/FailuresPanel.tsx";
+import { UploadsView } from "./views/UploadsView.tsx";
+import { buildUploads, type UploadBatch, type WatchedFolder } from "./views/uploads/model.ts";
 import { eventAction } from "./state/reducer.ts";
 import { bytesAvailable } from "./state/entitlement.ts";
 import { formatBytes } from "./views/files/model.ts";
@@ -48,9 +51,9 @@ const NOT_RUNNING: Partial<Record<ConnectionState, string>> = {
   disconnected: "Not running",
 };
 
-type Route = "files" | "downloads" | "settings";
+type Route = "files" | "uploads" | "downloads" | "settings";
 
-const ROUTES: readonly Route[] = ["files", "downloads", "settings"];
+const ROUTES: readonly Route[] = ["files", "uploads", "downloads", "settings"];
 
 const isRoute = (id: string): id is Route => (ROUTES as readonly string[]).includes(id);
 
@@ -59,16 +62,17 @@ interface Props {
   store: Store;
   /** Re-read the tree by hand — the file browser's Retry when a `listFiles` read failed. */
   retryFiles: () => Promise<void>;
+  /** Re-read the batch list by hand — the Uploads page's Retry when a `listDeposits` read failed. */
+  retryDeposits: () => Promise<void>;
 }
 
-export const App = ({ api, store, retryFiles }: Props): React.JSX.Element => {
+export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX.Element => {
   const state = useAppState(store);
   const [route, setRoute] = useState<Route>("files");
   // Settings' active subpage, owned here (not in SettingsView) for two reasons: the sidebar chip's
   // popover deep-links to Settings › Account, and the last-visited tab survives a trip to My Files.
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const toast = useToast();
-  const [failuresOpen, setFailuresOpen] = useState(false);
   // Set by the Downloads page to send the user back to My Files with the request dialog open for these
   // files — the way out of a download that needs re-buying (unpaid, or its thaw window lapsed). A LIST
   // because a grouped row re-asks every file that needs re-buying in one go. Cleared by MyFilesView once
@@ -256,32 +260,48 @@ export const App = ({ api, store, retryFiles }: Props): React.JSX.Element => {
   );
   const notRunning = NOT_RUNNING[state.connection];
 
+  // ── uploads: ONE truth, folded per batch ──
+  // The Uploads page's rows: the daemon's batches (`listDeposits`) with the SAME tree rows the browser
+  // draws folded in by `depositId`, so a batch's "3 of 500 couldn't upload" and the tree's three ⚠ rows
+  // are one fact. The nav badge is the failed-row count off the same fold. This replaced a sidebar-foot
+  // pill + popover that had nowhere to send anyone and no button for the case that mattered most (a drop
+  // interrupted by a restart) — the same promotion Downloads got, for the same reason.
+  const uploads = useMemo(
+    () => buildUploads(state.deposits, filesApi.files, state.status?.sources ?? [], state.run?.active ?? false),
+    [state.deposits, filesApi.files, state.status?.sources, state.run?.active],
+  );
+
   const NAV: NavItem[] = [
     { id: "files", label: "My Files", icon: "folder" },
-    // Above Settings, and carrying the in-flight count: the badge belongs on the page that can explain it.
-    { id: "downloads", label: "Download Requests", icon: "download", badge: activeDownloads },
+    // Each carries the count that its page explains: uploads that need a hand, downloads in flight.
+    { id: "uploads", label: "Uploads", icon: "cloud_upload", badge: uploads.failedTotal, badgeLabel: "couldn't upload" },
+    { id: "downloads", label: "Download Requests", icon: "download", badge: activeDownloads, badgeLabel: "in progress" },
     { id: "settings", label: "Settings", icon: "settings" },
   ];
 
-  // ── failed uploads: ONE truth, three actions ──
-  // The rows the tree marks ⚠ are the list the sidebar pill counts and its panel shows — journal `failed`
-  // files (plus an optimistic drop whose deposit command itself was refused). The pill used to count a
-  // separate in-memory log of `blobFailed` events, which went blank on restart while the rows stayed red,
-  // and its "Try again" re-ran the scheduler, which never re-plans a file with no source (PILLAR5: a ⚠
-  // with no honest action is a shrug). Now every failed row has one: Try again / Locate… / Remove.
-  const failedUploads = useMemo(() => filesApi.files.filter((f) => f.status === "failed"), [filesApi.files]);
-
   /** Tell the user what a retry could NOT do. The rows already carry the daemon's verdict (it wrote the
-   * reason onto each one), so this is the headline only. PLACEHOLDER copy — Ben to finalize. */
+   * kind onto each one — `missingSource`), so this is the headline only. */
   const reportMissing = (missing: number): void => {
     if (missing > 0) toast.error(`${missing.toLocaleString()} ${missing === 1 ? "file" : "files"} couldn’t be found on disk — see the row for what to do.`);
   };
 
-  /** Re-upload failed rows from their recorded sources. `"all"` = every failed row, scoped by the daemon
-   * (never a 56k-id list from here). A journal row goes through `retryFiles` (the daemon requeues it and
-   * runs a durable deposit); an optimistic row the daemon never saw re-issues its original `deposit`. */
-  const retryUploads = (scope: ArchivedFile[] | "all"): void => {
-    const targets = scope === "all" ? failedUploads : scope;
+  /** What a retry covers: a handful of rows, one batch, or one watched folder. The last two are resolved
+   * by the daemon from the journal — never a 56k-id list from here; the rows are only needed locally to
+   * price the retry against the quota and flip them optimistically. */
+  type RetryScope = ArchivedFile[] | { depositId: string } | { sourceMount: string };
+  const retryTargets = (scope: RetryScope): ArchivedFile[] => {
+    if (Array.isArray(scope)) return scope;
+    if ("depositId" in scope) return uploads.batches.find((b) => b.id === scope.depositId)?.failures.flatMap((g) => g.files) ?? [];
+    return uploads.folders.find((f) => f.source.mountPath === scope.sourceMount)?.failures.flatMap((g) => g.files) ?? [];
+  };
+  const retryParams = (scope: RetryScope, journal: ArchivedFile[]): Commands["retryFiles"]["params"] =>
+    Array.isArray(scope) ? { ids: journal.map((f) => f.id).join("\n") } : scope;
+
+  /** Re-upload failed rows from their recorded sources. A journal row goes through `retryFiles` (the
+   * daemon requeues it and reopens its batch); an optimistic row the daemon never saw re-issues its
+   * original `deposit`. */
+  const retryUploads = (scope: RetryScope): void => {
+    const targets = retryTargets(scope);
     const withSource = targets.filter((f) => f.status === "failed" && f.sourcePath !== null);
     if (withSource.length === 0) return;
     // Bytes that never landed are incoming again — gate them like any deposit.
@@ -293,13 +313,15 @@ export const App = ({ api, store, retryFiles }: Props): React.JSX.Element => {
     }
     const optimistic = withSource.filter((f) => isOptimisticId(f.id));
     const journal = withSource.filter((f) => !isOptimisticId(f.id));
+    // Flip optimistically; if the command itself is refused, put the rows back AS THEY WERE (their real
+    // failure kind included) — the retry didn't happen, which is not the same as a fresh failure.
     filesApi.setDepositStatus(withSource.map((f) => f.id), "uploading");
     for (const f of optimistic) {
       const src = f.sourcePath;
       if (src === null) continue; // filtered above; narrows the type without a cast
       exec(() =>
         api.request("deposit", { src, dest: parentOf(f.relativePath) }).catch((e: unknown) => {
-          filesApi.setDepositStatus([f.id], "failed", `${e}`);
+          filesApi.restoreRows([f]);
           throw e;
         }),
       );
@@ -307,9 +329,9 @@ export const App = ({ api, store, retryFiles }: Props): React.JSX.Element => {
     if (journal.length > 0) {
       exec(async () => {
         const r = await api
-          .request("retryFiles", scope === "all" ? { all: "true" } : { ids: journal.map((f) => f.id).join("\n") })
+          .request("retryFiles", retryParams(scope, journal))
           .catch((e: unknown) => {
-            filesApi.setDepositStatus(journal.map((f) => f.id), "failed", `${e}`);
+            filesApi.restoreRows(journal);
             throw e;
           });
         reportMissing(r.missing); // the rows themselves re-read with the daemon's verdict (`filesChanged`)
@@ -326,22 +348,30 @@ export const App = ({ api, store, retryFiles }: Props): React.JSX.Element => {
       filesApi.setDepositStatus([file.id], "uploading");
       if (isOptimisticId(file.id)) {
         await api.request("deposit", { src: picked, dest: parentOf(file.relativePath) }).catch((e: unknown) => {
-          filesApi.setDepositStatus([file.id], "failed", `${e}`);
+          filesApi.restoreRows([file]);
           throw e;
         });
         return;
       }
       const r = await api.request("retryFiles", { ids: file.id, sourcePath: picked }).catch((e: unknown) => {
-        filesApi.setDepositStatus([file.id], "failed", `${e}`);
+        filesApi.restoreRows([file]);
         throw e;
       });
       reportMissing(r.missing); // only a folder pick or a race with the disk can land here
     });
   };
 
-  /** "Remove" from the failures panel: take the file out of the backup. No bytes are at stake (nothing
-   * landed), so no confirm — but a file inside a watched folder WILL be found again by the next scan, and
-   * the daemon tells us so; we pass that on rather than let it silently reappear. */
+  /** "Remove these" on a batch that didn't finish: take its failed files out of the backup, tree first
+   * (instant), then the journal (one command — never a per-file loop over 56k rows). */
+  const removeFailedBatch = (b: UploadBatch): void => {
+    const failed = b.failures.flatMap((g) => g.files);
+    filesApi.remove(failed.map((f) => ({ kind: "file", id: f.id, path: f.relativePath })));
+    exec(() => api.request("removeFailedFiles", { depositId: b.id }));
+  };
+
+  /** "Remove" on one failed row: take the file out of the backup. No bytes are at stake (nothing landed),
+   * so no confirm — but a file inside a watched folder WILL be found again by the next scan, and the
+   * daemon tells us so; we pass that on rather than let it silently reappear. */
   const removeUpload = (file: ArchivedFile): void => {
     filesApi.remove([{ kind: "file", id: file.id, path: file.relativePath }]);
     if (isOptimisticId(file.id)) return; // never reached the daemon — nothing to delete there
@@ -349,7 +379,7 @@ export const App = ({ api, store, retryFiles }: Props): React.JSX.Element => {
       const r = await api.request("deletePath", { path: file.relativePath });
       if (r.isWatched) {
         // An error toast, deliberately: it waits to be read, and "this will come back" is something the
-        // user has to act on. PLACEHOLDER copy — Ben to finalize
+        // user has to act on.
         toast.error(`Removed — but “${baseName(file.relativePath)}” is inside a watched folder, so the next scan will find it again. To keep it out, delete it in My Files and choose “Don’t back up”.`);
       }
     });
@@ -396,22 +426,6 @@ export const App = ({ api, store, retryFiles }: Props): React.JSX.Element => {
           <span className={`cs-dot cs-dot--${state.connection}`} />
           {notRunning}
         </div>
-      )}
-      {failedUploads.length > 0 && (
-        // Persistent (not a toast — a toast was missed): the failed-row count, click → the failures panel.
-        // Same list the tree marks ⚠, so it clears exactly when the last one is retried or removed.
-        // PLACEHOLDER copy — Ben to finalize.
-        <button
-          type="button"
-          className="cs-failed"
-          onClick={(e) => {
-            e.stopPropagation();
-            setFailuresOpen((v) => !v);
-          }}
-        >
-          <Icon name="error" size={16} />
-          {failedUploads.length.toLocaleString()} couldn&apos;t upload
-        </button>
       )}
     </>
   );
@@ -579,16 +593,6 @@ export const App = ({ api, store, retryFiles }: Props): React.JSX.Element => {
         aria-label="Resize sidebar"
       />
 
-      {failuresOpen && failedUploads.length > 0 && (
-        <FailuresPanel
-          files={failedUploads}
-          onRetry={retryUploads}
-          onLocate={locateUpload}
-          onRemove={removeUpload}
-          onClose={() => setFailuresOpen(false)}
-        />
-      )}
-
       {route === "files" && (
         <MyFilesView
           api={api}
@@ -609,6 +613,21 @@ export const App = ({ api, store, retryFiles }: Props): React.JSX.Element => {
           requestFileIds={requestFileIds}
           onRequestOpened={() => setRequestFileIds(null)}
           onShowDownloads={() => setRoute("downloads")}
+        />
+      )}
+      {route === "uploads" && (
+        <UploadsView
+          api={api}
+          exec={exec}
+          model={uploads}
+          load={state.depositsLoad}
+          onRetryLoad={() => exec(retryDeposits)}
+          onRetryBatch={(b: UploadBatch) => retryUploads({ depositId: b.id })}
+          onRetryFolder={(f: WatchedFolder) => retryUploads({ sourceMount: f.source.mountPath })}
+          onRetryFiles={retryUploads}
+          onLocate={locateUpload}
+          onRemoveFile={removeUpload}
+          onRemoveFailed={removeFailedBatch}
         />
       )}
       {route === "downloads" && (

@@ -51,9 +51,8 @@ const KIND_ICON: Record<FileKind, string> = {
  * can vouch for must not keep signalling life. The file tree has no stall verdict of its own to pass, so
  * it takes the default; that seam is the reason this is a prop and not a lookup inside STATUS.
  *
- * `reason` is the daemon's own words for what went wrong (`ArchivedFile.error`), appended to the label so a
- * stuck row can say WHY rather than leaving the user to guess from a glyph. The journal has carried this
- * string since failures were first persisted; nothing showed it until now. */
+ * `reason` is the words for what went wrong (`uploads/failure.ts`, from the row's `failureKind`), appended
+ * to the label so a stuck row can say WHY rather than leaving the user to guess from a glyph. */
 export const StatusIcon = ({
   status,
   reason = null,
@@ -71,7 +70,7 @@ export const StatusIcon = ({
 }): React.JSX.Element | null => {
   const s = STATUS[status];
   if (!s) return null;
-  const label = override ?? (reason ? `${s.label} — ${reason}` : s.label);
+  const label = override ?? withReason(status, s.label, reason);
   const pulse = alive && status === "pending" ? " cs-pulse" : "";
   return (
     <span className={`cs-statusicon cs-statusicon--${s.tone}${pulse}`} role="img" aria-label={label} title={label}>
@@ -123,9 +122,15 @@ export const KindIcon = ({ kind, size = 22 }: { kind: FileKind; size?: number })
   <Icon name={KIND_ICON[kind]} size={size} />
 );
 
-/** Plain human label for a status — for the Get-info modal's key/value line. `reason` (the daemon's
- * `error`) is appended when there is one, so the modal names the fault instead of restating the state. */
-export const statusLabel = (status: FileStatus, reason: string | null = null): string => {
-  const base = STATUS[status]?.label ?? "Stored";
-  return reason ? `${base} — ${reason}` : base;
+/** Plain human label for a status — for the Get-info modal's key/value line. `reason` (the failure kind's
+ * words) is appended when there is one, so the modal names the fault instead of restating the state. */
+export const statusLabel = (status: FileStatus, reason: string | null = null): string =>
+  withReason(status, STATUS[status]?.label ?? "Stored", reason);
+
+/** A `failed` row's reason IS its status (the kind's words say more than "Couldn't upload" ever could, and
+ * one of them is literally "Couldn't upload" — appending would read it twice); any other status keeps
+ * its own label and names the snag after a dash. */
+const withReason = (status: FileStatus, base: string, reason: string | null): string => {
+  if (!reason) return base;
+  return status === "failed" ? reason : `${base} — ${reason}`;
 };

@@ -16,6 +16,8 @@ import type { Store } from "./store.ts";
 export interface Controller {
   dispose: () => void;
   refreshFiles: () => Promise<void>;
+  /** Re-read the batch list by hand — the Uploads page's Retry when a `listDeposits` read failed. */
+  refreshDeposits: () => Promise<void>;
 }
 
 export const connectController = (api: ColdstoreApi, store: Store): Controller => {
@@ -69,6 +71,19 @@ export const connectController = (api: ColdstoreApi, store: Store): Controller =
   const refreshRestores = (): Promise<void> =>
     syncing("restores", async () => store.dispatch({ type: "restoresLoaded", restores: await api.request("listRestores") }));
 
+  // Same shape as `refreshFiles`: a failed read is STATE, so the Uploads page can say "couldn't load"
+  // instead of rendering the "nothing uploaded yet" hero — which would tell the user to go drop files —
+  // over an empty slice.
+  const refreshDeposits = (): Promise<void> =>
+    syncing("deposits", async () => {
+      try {
+        store.dispatch({ type: "depositsLoaded", deposits: await api.request("listDeposits") });
+      } catch (e) {
+        store.dispatch({ type: "depositsLoadFailed", error: e instanceof Error ? e.message : String(e) });
+        throw e;
+      }
+    });
+
 
   const offEvent = api.onEvent((name, data) => {
     store.dispatch(eventAction(name, data));
@@ -97,13 +112,18 @@ export const connectController = (api: ColdstoreApi, store: Store): Controller =
       // They used to vanish for good (renderer-held, cleared by `authChanged`), leaving a file the user had
       // paid to retrieve showing a plain green "Stored" ✓.
       void refreshRestores();
+      void refreshDeposits(); // same sign-in resync: the batches come back with the files
     }
     // A finished run may have archived new files / changed their status — re-read both the counts
-    // (getStatus) and the tree (listFiles).
+    // (getStatus) and the tree (listFiles). Not the batches: the daemon publishes `depositsChanged`
+    // itself whenever a run settles or reopens one, so a read here would be a second read of the same.
     else if (name === "runFinished") {
       void refreshStatus();
       void refreshFiles();
     }
+    // The batch list moved (a drop recorded, a batch settled/reopened, an orphan adopted) — one event for
+    // the whole list, re-read rather than patched, exactly like `restoresChanged`.
+    else if (name === "depositsChanged") void refreshDeposits();
     // A download moved (or finished). One event for the whole list — we re-read it rather than patch a
     // local copy, because the daemon's journal is the only thing that knows where a download really stands.
     else if (name === "restoresChanged" || name === "restoreCompleted") void refreshRestores();
@@ -122,6 +142,7 @@ export const connectController = (api: ColdstoreApi, store: Store): Controller =
       void refreshExcludes();
       void refreshExcludeSuggestions();
       void refreshRestores();
+      void refreshDeposits();
     }
   });
 
@@ -156,7 +177,7 @@ export const connectController = (api: ColdstoreApi, store: Store): Controller =
     // connected refreshes so the right screen paints as soon as the auth answer is in.
     store.dispatch({ type: "initialized" });
     if (state === "connected") {
-      await Promise.all([refreshStatus(), refreshFiles(), refreshExcludes(), refreshExcludeSuggestions(), refreshRestores()]);
+      await Promise.all([refreshStatus(), refreshFiles(), refreshExcludes(), refreshExcludeSuggestions(), refreshRestores(), refreshDeposits()]);
     }
   })();
 
@@ -171,5 +192,6 @@ export const connectController = (api: ColdstoreApi, store: Store): Controller =
       offUpdate();
     },
     refreshFiles,
+    refreshDeposits,
   };
 };

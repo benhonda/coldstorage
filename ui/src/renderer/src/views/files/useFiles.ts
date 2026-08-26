@@ -58,6 +58,10 @@ export interface FilesApi {
    * no explanation, while a background fault from an hour ago had one. Passing `null` (a retry going back to
    * "uploading") clears it, for the reason every sibling clears on success. */
   setDepositStatus: (ids: string[], status: FileStatus, reason?: string | null) => void;
+  /** Put rows back exactly as they were — the rollback for an optimistic flip whose command was refused.
+   * Not `setDepositStatus(…, "failed")`: that would relabel a row's real failure kind (`interrupted`,
+   * `missingSource`, …) as `permanent`, which is a lie about a retry that merely didn't get through. */
+  restoreRows: (rows: ArchivedFile[]) => void;
   /** Rename a file or folder (journal basename edit / prefix sweep). */
   rename: (target: RowTarget, newName: string) => void;
   /** Move files/folders under `toDir` (journal re-parent / prefix sweep — no S3, no thaw). */
@@ -177,6 +181,8 @@ export const useFiles = (
       // not "abandoned": otherwise every fresh drop would flag itself the instant it appeared.
       lastAttemptAt: null,
       error: null,
+      failureKind: null,
+      depositId: null, // the daemon mints the batch; the post-runFinished reread carries its id
       sourcePath: it.sourcePath ?? null, // remembered so a failed upload can be retried
     }));
     if (added.length === 0) return [];
@@ -192,7 +198,16 @@ export const useFiles = (
   const setDepositStatus = useCallback((ids: string[], status: FileStatus, reason: string | null = null): void => {
     if (ids.length === 0) return;
     const set = new Set(ids);
-    setBase((prev) => prev.map((f) => (set.has(f.id) ? { ...f, status, error: reason } : f)));
+    // A row flipped to `failed` from here is a command the daemon refused outright — a fault that won't
+    // fix itself by retrying the same way, i.e. `permanent`, with the rejection as its detail.
+    const failureKind = status === "failed" ? "permanent" : null;
+    setBase((prev) => prev.map((f) => (set.has(f.id) ? { ...f, status, error: reason, failureKind } : f)));
+  }, []);
+
+  const restoreRows = useCallback((rows: ArchivedFile[]): void => {
+    if (rows.length === 0) return;
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    setBase((prev) => prev.map((f) => byId.get(f.id) ?? f));
   }, []);
 
   const rename = useCallback((target: RowTarget, newName: string): void => {
@@ -258,5 +273,5 @@ export const useFiles = (
     [base, virtualFolders],
   );
 
-  return { files, virtualFolders, deposit, setDepositStatus, rename, move, remove, newFolder };
+  return { files, virtualFolders, deposit, setDepositStatus, restoreRows, rename, move, remove, newFolder };
 };

@@ -62,6 +62,7 @@ import { FolderTree } from "./files/FolderTree.tsx";
 import { InfoModal, type SelectionSummary } from "./files/InfoModal.tsx";
 import { RequestBackModal } from "./files/RequestBackModal.tsx";
 import { KindIcon, StatusBadges } from "./files/StatusBadge.tsx";
+import { failureReason } from "./uploads/failure.ts";
 import { Button, EmptyState, IconButton, Icon, Modal } from "../ui/primitives.tsx";
 import { Page } from "../ui/layout.tsx";
 
@@ -94,7 +95,7 @@ interface Props {
   onDepositBlocked: (incomingBytes: number) => void;
   /** Re-upload failed rows from their recorded sources (App owns the daemon call — the sidebar's
    * "couldn't upload" panel offers the very same action, so it lives in one place). */
-  onRetryUploads: (scope: ArchivedFile[] | "all") => void;
+  onRetryUploads: (scope: ArchivedFile[]) => void;
   /** A failed row we don't know where to find on disk: ask the user, then retry from there. */
   onLocateUpload: (file: ArchivedFile) => void;
   /** Files the Downloads page asked us to re-open the request dialog for (a download that needs buying
@@ -1196,11 +1197,11 @@ const FileList = ({
             {isUploadingRow(badges) && <span className="cs-spinner" aria-hidden="true" />}
             {/* status icon by the ⋯: ✓ stored · ↑ uploading · ⚠ couldn't upload · ↓ transferring · saved-here.
                 An empty folder has nothing stored, so it shows no badge. */}
-            {/* `reason` is the daemon's own words for a fault (journal `files.error`), so a ⚠ or a stalled
+            {/* `reason` is the words for the row's failure kind (`uploads/failure.ts`), so a ⚠ or a stalled
                 row can say WHY on hover instead of leaving the user to guess. Folders roll up a status but
                 not a reason — a folder has no single fault to name. */}
             {!isEmptyFolder(row) && (
-              <StatusBadges badges={badges} reason={row.type === "file" ? row.file.error : null} />
+              <StatusBadges badges={badges} reason={row.type === "file" ? failureReason(row.file) : null} />
             )}
             <IconButton
               icon="more_horiz"
@@ -1309,7 +1310,7 @@ const Gallery = ({
           <span className="cs-tile-foot">
             <span className="cs-tile-name" title={row.name}>{row.name}</span>
             {!isEmptyFolder(row) && (
-              <StatusBadges badges={rowBadges(row)} reason={row.type === "file" ? row.file.error : null} />
+              <StatusBadges badges={rowBadges(row)} reason={row.type === "file" ? failureReason(row.file) : null} />
             )}
           </span>
         </button>

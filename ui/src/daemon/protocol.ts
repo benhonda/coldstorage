@@ -106,13 +106,51 @@ export interface ListedFile {
    * action off: a source ⇒ **Try again** (`retryFiles`), none ⇒ **Locate…** (the user points at it, then
    * the same command with `sourcePath`). Opaque to the app: never parse it, only test for null. */
   sourcePath: string | null;
+  /** The batch ({@link Deposit}) that last claimed this file, or null for a file a watched folder owns.
+   * The Uploads page's group key: a batch's counts are derived from these rows, never stored. */
+  depositId: string | null;
+  /** WHY a `failed` row failed, or null on any other status. The ONLY thing the app turns into user
+   * copy — `error` is developer detail. Mirrors Swift `FileFailureKind`. */
+  failureKind: FileFailureKind | null;
 }
 
-/** `RetryFilesResultDTO` — `retryFiles`' answer, as COUNTS. `queued` rows are back in the upload queue (a
- *  durable deposit owns them now); `missing` rows could not be retried — no recorded source, or it isn't on
- *  disk right now — and the daemon has written that verdict onto each such row's `error`, so the tree and
- *  the failures panel say it from journal truth on the next read. No ids: a mass retry must not echo 56k
- *  of them back over the wire. */
+/** Why a file's upload failed — the closed set the app renders copy from (`views/uploads/failure.ts`).
+ * The journal used to store the sentence itself, which froze last month's wording onto last month's rows;
+ * now it stores the kind and the app owns the words. Mirrors Swift `FileFailureKind`. */
+export type FileFailureKind = "permanent" | "overQuota" | "stopped" | "missingSource" | "interrupted";
+
+/**
+ * `DepositDTO` — one batch on the Uploads page: a drop (`files`) or a photo pick (`photos`), recorded
+ * before it ran and kept afterwards as the user's own unit of upload history. `state` is `pending` while
+ * the daemon still owes it (a replay finishes it on the next pass) and `done` once every file settled.
+ * `mode` is how a replay re-reads the bytes: `ingest` enumerates `src` again; `retry` re-ingests the
+ * batch's OWN owed rows from each row's `sourcePath` — "Try again" reopens the same row in this mode,
+ * so a retry is an action on a batch, never a second batch. Counts are NOT here: derive them from the
+ * `listFiles` rows whose `depositId` matches, so they can never disagree with the tree.
+ *
+ * `src` is what was dropped — absolute paths for `files`, Photos localIdentifiers for `photos`; for a
+ * batch the daemon minted to adopt orphaned failures (`mode: "retry"`, never ran as a drop) it is the
+ * top-level vault folders those files sit in, so the batch names itself the same way. Show basenames,
+ * never the raw strings. */
+export interface Deposit {
+  id: string;
+  kind: "files" | "photos";
+  mode: "ingest" | "retry";
+  state: "pending" | "done";
+  /** Vault-relative folder the batch landed under ("" = root). */
+  dest: string;
+  src: string[];
+  /** Unix seconds it was dropped / picked. */
+  createdAt: number;
+  /** Unix seconds it last settled; null while owed. */
+  finishedAt: number | null;
+}
+
+/** `RetryFilesResultDTO` — `retryFiles`' answer, as COUNTS. `queued` rows are back in the upload queue
+ *  (their batch is reopened and runs them); `missing` rows could not be retried — no recorded source, or it
+ *  isn't on disk right now — and the daemon has written that verdict onto each such row (`failureKind:
+ *  "missingSource"`), so the tree and the Uploads page say it from journal truth on the next read. No ids:
+ *  a mass retry must not echo 56k of them back over the wire. */
 export interface RetryFilesResult {
   queued: number;
   missing: number;
@@ -380,12 +418,25 @@ export interface Commands {
    * second. "Remember this" is a separate `addExclude` the app issues alongside. */
   deposit: { params: { src: string; dest: string; conflicts?: string; excludeExtra?: string }; result: Ack };
   /** The user's Try again / Locate… on FAILED rows: re-ingest exactly those journal rows (same id, same
-   * vault path — never a second file beside the failed one) from each row's own `sourcePath`. Scope is
-   * `ids` (newline-joined file ids) OR `all: "true"` — every failed row, read daemon-side (a mass failure
-   * is one cause across a drop; the client never ships the list). `sourcePath` (one id only) records where
-   * the user just said the bytes are. Replies at once with counts; the upload itself runs as a durable
-   * deposit (survives a restart) and reports through the usual run events. */
-  retryFiles: { params: { ids?: string; all?: "true"; sourcePath?: string }; result: RetryFilesResult };
+   * vault path — never a second file beside the failed one) from each row's own `sourcePath`. ONE scope:
+   * `ids` (newline-joined file ids), `all: "true"` (every failed row), `depositId` (a batch), or
+   * `sourceMount` (a watched folder's `mountPath`) — the last three are read daemon-side (a mass failure
+   * is one cause across a drop; the client never ships the list). `sourcePath` (with a single id only)
+   * records where the user just said the bytes are. Replies at once with counts; each row's batch is
+   * reopened (`mode: "retry"`, survives a restart) and runs, reporting through the usual run events. */
+  retryFiles: {
+    params: { ids?: string; all?: "true"; depositId?: string; sourceMount?: string; sourcePath?: string };
+    result: RetryFilesResult;
+  };
+  /** Every batch this Mac has dropped or picked, newest first — the Uploads page's list. Empty when
+   * signed out. Re-read on `depositsChanged`. */
+  listDeposits: { params: Record<string, never>; result: Deposit[] };
+  /** The Uploads page's "Remove these" on a batch that didn't finish: tombstone its `failed` rows (nothing
+   * landed for them, so no bytes are at stake). Emits `filesChanged`. */
+  removeFailedFiles: { params: { depositId: string }; result: Ack };
+  /** Drop a settled batch from the history; its files stay in the tree, unowned. The daemon refuses while
+   * the batch is still owed or any of its files is `failed` — remove those first. Emits `depositsChanged`. */
+  forgetDeposit: { params: { depositId: string }; result: Ack };
   /** Explicit photo deposit (the photo analogue of `deposit`): archive these PICKED Photos-library assets
    * once under `dest` (a vault-relative folder; "" = root). `assetIds` is newline-joined Photos
    * localIdentifiers — only the picked assets are read, never the whole library. Mac-only (PhotoKit); off
@@ -587,8 +638,8 @@ export interface DaemonEvents {
    * Absent on the early-abort path (a run that threw before planning). */
   runFinished: { filesArchived: string; filesTotal: string; blobsFailed: string; filesStopped?: string };
   /** A blob that failed to archive this pass. `paths` is the newline-joined relativePaths of the files it
-   * batched (named in the failures panel + used to flip their rows); permanent failures are also persisted
-   * as a per-file `failed` status in the journal, so the ⚠ survives the next `listFiles` read. */
+   * batched (used to flip their rows live); permanent failures are also persisted as a per-file `failed`
+   * status in the journal, so the ⚠ survives the next `listFiles` read. */
   blobFailed: { blob: string; kind: "permanent" | "transient" | "overQuota"; message: string; paths: string };
   sourcesChanged: { added?: string; removed?: string; paused?: string; resumed?: string };
   /** The exclude registry changed via add/removeExclude (carries the affected pattern for logging). The
@@ -603,6 +654,9 @@ export interface DaemonEvents {
    * that copy is what silently lost an in-flight transfer on sign-out. The journal is the SSOT; this event
    * says only "it changed". */
   restoresChanged: Record<string, never>;
+  /** The batch list moved — a drop recorded, a batch settled or reopened, a retry, an orphan adoption —
+   * re-read `listDeposits`. Same one-event-for-the-list shape as `restoresChanged`, for the same reason. */
+  depositsChanged: Record<string, never>;
   /** Determinate download progress for ONE `transferring` row: plaintext bytes decrypted and on disk so
    * far, emitted once per ~4 MiB frame while the ranged GET streams. `id` is the RestoreRow id (the key
    * the Transfers page folds by); `totalBytes` is the row's own plaintext size — numerator and denominator

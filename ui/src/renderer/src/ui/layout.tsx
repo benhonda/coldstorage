@@ -18,6 +18,9 @@ export interface NavItem {
    * count belongs: it sits ON the page that explains it, one click from the detail, instead of floating in
    * the sidebar foot as a popover with nowhere to go. */
   badge?: number;
+  /** What the badge counts, for assistive tech — "in progress", "couldn't upload". Required with `badge`
+   * in spirit: a bare number is not a label. */
+  badgeLabel?: string;
 }
 
 /** Navigation rail. The `footer` slot holds whatever the app pins to the foot (storage line,
@@ -55,7 +58,7 @@ export const Sidebar = ({
           <Icon name={it.icon} size={22} />
           <span className="cs-nav-label">{it.label}</span>
           {it.badge ? (
-            <span className="cs-nav-badge" aria-label={`${it.badge} in progress`}>
+            <span className="cs-nav-badge" aria-label={`${it.badge} ${it.badgeLabel ?? ""}`.trim()}>
               {it.badge}
             </span>
           ) : null}

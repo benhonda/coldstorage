@@ -31,6 +31,7 @@ import { etaSeconds, throughput, type RestoreProgress } from "../state/reducer.t
 import { Badge, Button, EmptyState, Icon, Modal } from "../ui/primitives.tsx";
 import { Page } from "../ui/layout.tsx";
 import { timeLeft, timeLeftSentence } from "../ui/duration.ts";
+import { when } from "../ui/when.ts";
 import { baseName, formatBytes } from "./files/model.ts";
 import {
   commonOutDir,
@@ -138,16 +139,6 @@ const STATE: Record<RestoreState, { label: string; tone: Tone; icon: string }> =
 const alive = (state: RestoreState, wait: WaitNote | null): string =>
   state === "pending" && !wait?.stalled ? " cs-pulse" : "";
 
-/** Date + time — a download is a same-week thing, so the hour is the useful part. */
-const when = (unixSeconds: number | null): string => {
-  if (!unixSeconds) return "—";
-  return new Date(unixSeconds * 1000).toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-};
 
 /**
  * The downloading row's readout — "1.2 GB of 50 GB · 42 MB/s · About 20 minutes left" — from its live

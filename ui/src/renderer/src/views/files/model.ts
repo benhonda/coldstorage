@@ -7,7 +7,7 @@
  * The flat file list comes from the daemon's `listFiles` read (journal-backed); {@link fileFromJournal}
  * maps each raw wire row ({@link ListedFile}) into the {@link ArchivedFile} the browser draws.
  */
-import type { ConflictPolicy, ListedFile } from "../../../../shared/ipc.ts";
+import type { ConflictPolicy, FileFailureKind, ListedFile } from "../../../../shared/ipc.ts";
 
 /**
  * Per-file state — the journal `FileStatus` folded with the file's live transfer, if it has one.
@@ -103,8 +103,15 @@ export interface ArchivedFile {
   date: string | null;
   /** Unix seconds the upload path last tried this file; null if it never has. Feeds {@link uploadStall}. */
   lastAttemptAt: number | null;
-  /** Why the last upload attempt failed, or null — shown on the row rather than left in the journal. */
+  /** Developer-facing detail of the last upload fault (an S3 code, a thrown message), or null. NOT user
+   * copy — that comes from {@link failureKind} via `uploads/failure.ts`; this rides quietly under a file
+   * row on the Uploads page and under Get info › Details. */
   error: string | null;
+  /** WHY a `failed` row failed — the closed set the app renders copy from. Null on any other status. */
+  failureKind: FileFailureKind | null;
+  /** The batch this file rode in ({@link Deposit}), or null: a watched folder's file, or an optimistic
+   * drop row the daemon hasn't claimed yet. */
+  depositId: string | null;
   /** When `here`: the local path the thawed bytes landed at. */
   localPath?: string | null;
   /** Where the bytes come from (a path, or a `photos:` asset — opaque here), or null. Journal truth
@@ -594,5 +601,7 @@ export const fileFromJournal = (row: ListedFile): ArchivedFile => ({
   date: row.date != null ? new Date(row.date * 1000).toISOString() : null,
   lastAttemptAt: row.lastAttemptAt,
   error: row.error,
+  failureKind: row.failureKind,
+  depositId: row.depositId,
   sourcePath: row.sourcePath,
 });

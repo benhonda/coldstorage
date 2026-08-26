@@ -595,57 +595,6 @@ button.cs-kv:hover { background: var(--surface-hover); }
   font: var(--type-label);
   color: var(--text-secondary);
 }
-/* A `.cs-getting` pill lived here — the sidebar-foot "Transferring N" button that opened a popover.
-   Both are gone: transfers have their own page now, and the count rides the nav item (.cs-nav-badge). */
-
-/* couldn't-upload is a button (opens the failures popover) — calm, not alarm-red */
-.cs-failed {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  width: 100%;
-  margin: var(--space-1) 0 0;
-  padding: var(--space-2) var(--space-3);
-  border: 0;
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--negative) 12%, transparent);
-  color: var(--negative);
-  font: var(--type-label);
-  text-align: left;
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out);
-}
-.cs-failed:hover { background: color-mix(in srgb, var(--negative) 20%, transparent); }
-.cs-failed .csf-icon { font-size: 16px; }
-
-/* ── getting-back queue popover ─────────────────────────────────── */
-.cs-queue {
-  position: fixed;
-  left: var(--space-4);
-  bottom: var(--space-12);
-  z-index: 30;
-  width: calc(var(--sidebar-width) - var(--space-8));
-  padding: var(--space-3);
-  background: var(--surface-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-popover);
-}
-.cs-queue-head { font: var(--type-label); color: var(--text-tertiary); padding: 0 var(--space-2) var(--space-2); }
-.cs-queue-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2); }
-.cs-queue-row .csf-icon { color: var(--amber-500); flex: 0 0 auto; }
-.cs-queue-main { min-width: 0; }
-.cs-queue-name { font: var(--type-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cs-queue-sub { font: var(--type-label); color: var(--text-secondary); }
-/* the same popover, in the failure key — red icon + a foot action */
-.cs-queue--fail .cs-queue-row .csf-icon { color: var(--negative); }
-.cs-queue-foot { padding: var(--space-2) var(--space-2) 0; }
-.cs-queue-actions { display: flex; gap: var(--space-1); flex: 0 0 auto; margin-left: auto; }
-.cs-queue-cause + .cs-queue-cause { border-top: 1px solid var(--border-subtle); margin-top: var(--space-1); padding-top: var(--space-1); }
-.cs-queue-row--file { padding-left: calc(var(--space-2) + 18px + var(--space-3)); }
-/* two side-by-side foot actions (the failures popover's Dismiss + Try again) */
-.cs-queue-foot--row { display: flex; gap: var(--space-2); }
-
 /* ── topbar lead (the title column) ─────────────────────────────── */
 .cs-topbar-lead { min-width: 0; display: flex; flex-direction: column; }
 
@@ -1893,6 +1842,25 @@ button.cs-kv:hover { background: var(--surface-hover); }
   padding: var(--space-2) 0;
 }
 .cs-download--child + .cs-download--child { margin-top: 0; border-top: 1px solid var(--border-subtle); }
+/* A row with nothing to expand keeps the chevron's width so names line up down the page. */
+.cs-download-expand--none { width: 20px; }
+
+/* ── Uploads: one cause inside an expanded batch ────────────────
+   The words for the cause, its count, then (few enough to act on one at a time) the files with their own
+   buttons. Nothing here ever draws 56,930 rows — past the cap the cause reads as a count. */
+.cs-upload-cause + .cs-upload-cause { margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border-subtle); }
+.cs-upload-cause-head { display: flex; align-items: baseline; gap: var(--space-2); }
+.cs-upload-cause-label { font: var(--type-body-strong); }
+.cs-upload-cause-count { font: var(--type-label); color: var(--text-secondary); }
+.cs-upload-cause-explain { font: var(--type-label); color: var(--text-tertiary); margin-top: 2px; }
+.cs-upload-cause-more { font: var(--type-label); color: var(--text-tertiary); padding: var(--space-2) 0 0; }
+.cs-upload-file { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) 0; }
+.cs-upload-file + .cs-upload-file { border-top: 1px solid var(--border-subtle); }
+.cs-upload-file-main { flex: 1; min-width: 0; }
+.cs-upload-file-name { font: var(--type-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-upload-file-sub { font: var(--type-label); color: var(--text-secondary); }
+.cs-upload-file-detail { font: var(--type-label); color: var(--text-tertiary); font-family: ui-monospace, Menlo, monospace; margin-top: 2px; overflow-wrap: anywhere; }
+.cs-upload-file-actions { flex: 0 0 auto; display: flex; gap: var(--space-1); }
 
 /* ── Settings foot: which build this is + whether it's current (VersionFooter) ──
    Quiet by construction — a rule above it, secondary text, small type. It sits below the cards on both

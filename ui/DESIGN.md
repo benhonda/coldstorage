@@ -65,6 +65,10 @@ Two jobs are the whole product: **get files up** and **get them back**. The app 
 - **My Files** — the entire drive: browse, drop-to-upload, reorganize, request a download.
 - **Settings** — one door, two subpages (tabs): **General** (this-Mac behavior) and **Account**
   (identity/plan — configured installs only; the sidebar identity chip's popover deep-links here).
+- Plus two **ledgers**, each a page because a count in the sidebar foot had nowhere to send anyone:
+  **Uploads** (every drop / photo pick + watched folder, with what didn't upload — see its section) and
+  **Download Requests** (every request to get files back). Both read the daemon's journal, never
+  renderer memory, and each nav item carries the count its page explains.
 
 Sidebar is resizable; no docked detail panel — the per-row `⋯` (and right-click) opens actions,
 **Get info** opens a modal.
@@ -97,9 +101,9 @@ it had worked.
 - Currently fires on: any `exec` rejection · the daemon's live `error` channel · a failed retrieval
   payment (which used to write into a dialog that had already closed, so it went nowhere) · a started
   download, with a **See downloads** action · a completed download, with **Show in Finder**.
-- **Not** for uploads. Deposits have their own ambient surfaces (the progress banner, per-row badges, the
-  stuck-uploads pill) and the daemon auto-runs on a timer — toasting those would be noise. The pill is
-  still the right call for stuck uploads specifically: a one-shot toast gets missed.
+- **Not** for uploads. Deposits have their own surfaces (the progress banner, per-row badges, the
+  **Uploads** page and its nav badge) and the daemon auto-runs on a timer — toasting those would be noise.
+  A failed upload is a persistent fact and gets a persistent surface: a one-shot toast gets missed.
 
 ```
 ┌────────────┬────────────────────────────────────────────────────────┐
@@ -124,19 +128,14 @@ it had worked.
   quiet green ✓ **stored** (explicit success is what makes silence trustworthy — stored must be
   distinguishable from stuck) · blue ↑ **uploading** (a transient retry stays here; it self-heals) ·
   muted-red ⚠ **couldn't upload** (permanent/stuck — and every ⚠ carries an action, on the row's
-  context menu AND in the sidebar's "N couldn't upload" pill → `FailuresPanel`: **Try again** (the daemon
-  re-ingests that exact row from its recorded `sourcePath` via `retryFiles`, as a durable deposit),
+  context menu AND on the **Uploads** page, inside the batch it belongs to: **Try again** (the daemon
+  re-ingests that exact row from its recorded `sourcePath` via `retryFiles`, reopening its batch),
   **Locate…** (no source known — a pre-`sourcePath` row, or a drive that's gone: the user points at the
   file, same command with `sourcePath`; a Photos row retries by re-resolving its `photos:<id>` source, so
-  it never needs Locate; a retry that can't find the source writes that verdict onto the
-  row, so the reason is journal truth, not app memory), **Remove**. The pill counts the journal's `failed`
-  rows — the SAME list the tree marks, so it can't disagree with the rows or go blank on restart the way
-  the old `blobFailed`-event log did — and clears itself when the last one is retried or removed; no
-  Dismiss, because a list that IS the rows has nothing separate to acknowledge. The panel is **grouped by
-  cause** (the row's `error`), never a flat list: a mass failure is one cause across a whole drop, so 56k
-  rows read as one line with a count and the folders it hit; per-file rows only when a cause is small
-  enough to act on one at a time; "Try again for all" retries with `all: "true"` — the scope is the
-  daemon's, the client never ships an id list) ·
+  it never needs Locate; a retry that can't find the source writes that verdict onto the row as a
+  `failureKind`, so the reason is journal truth, not app memory), **Remove**. The row's tooltip and Get
+  info say WHY from the row's `failureKind` through `views/uploads/failure.ts` — the app owns the words,
+  the journal holds only the kind (see the Uploads page below) ·
   amber ⧗ **waiting on deep storage** (the thaw — nothing is moving yet) · blue ↓ **Downloading**
   (bytes actually moving) · green `download_done`
   **saved on this Mac**. No icon = nothing in flight.
@@ -206,6 +205,42 @@ it had worked.
    naming what was dropped. Neither may pass as a successful no-op — that combination is what made a
    30 GB folder drop look like the app had ignored it (2026-08-24).
 
+
+## Uploads — the page (2026-08-26)
+
+**One row per thing the user did.** The page is **Uploads** (nav + title; `route: "uploads"` in code), the
+mirror of Download Requests: a drop or a photo pick is one row however many files rode in it, and its
+failures show up IN it ("3 of 500 couldn't upload") rather than as a loose red list. It replaced the
+sidebar-foot "N couldn't upload" pill and the `FailuresPanel` popover it opened — a surface with nowhere to
+send anyone and no button for the case that mattered most: a drop interrupted by a restart, whose 56,930
+files sat ⚠ with a truncated sentence and nothing to do about them.
+
+- **The batch is the daemon's `Deposit`** (`listDeposits`): recorded before it runs, KEPT once it settles.
+  `state` is `pending` while owed (a replay finishes it) and `done` once every file settled. A batch's
+  counts are NEVER stored — `views/uploads/model.ts` folds the same `ArchivedFile` rows My Files draws by
+  `depositId`, so the page and the tree cannot disagree. The nav badge is the failed-row count off that fold.
+- **A retry is an action on a batch, never a new one.** "Try again" (`retryFiles` with `depositId`)
+  reopens the same row in `mode: "retry"` — the daemon re-ingests the batch's own owed rows from each
+  row's `sourcePath`, in place — and the row's counts move. The `.retry` deposit KIND is gone with it.
+- **Sections:** In progress (`uploading` — a run is moving its files — or `waiting`, still owed but
+  nothing moving; it picks up on the next pass) · Needs attention (`didntFinish`) · Watched folders
+  (each source as a row: stored / uploading / couldn't-upload counts over the unclaimed files under its
+  mount, paused / can't-reach-it states, its own Try again via `sourceMount`) · Earlier (`done`).
+- **Expanding a row** shows its failures **grouped by cause** (`failureKind`, worst-for-the-user first),
+  each with its words and count; per-file rows with Try again / Locate… / Remove only when a cause is
+  small enough to act on one at a time (20). Nothing on the page ever draws 56k lines.
+- **Batch actions:** Try again (N) · **Remove these** (tombstone the failed rows —
+  confirmed, since it's tens of thousands of rows in a click) · Remove (a finished batch leaves the list;
+  its files stay put — the daemon refuses while any file is still failed). No per-row Stop: a run is one
+  thing and stopping "this batch" would stop every batch in flight — the deposit banner owns Stop.
+- **Load state is honest:** `listDeposits` has the same pending / loaded / failed slice as the tree
+  (`depositsLoad`), so a failed read shows "Couldn't load your uploads" + Retry, never the "nothing
+  uploaded yet" hero over an empty list.
+- **No failure is ever batchless.** A failed row no watched folder covers and no deposit claims — the
+  orphan sweep's own condemnations, a removed watched folder's leftovers, and every failed row from
+  before this shipped (migrated on first open) — is adopted into a settled `mode: "retry"` batch named by
+  its top-level folders, so it shows here like any other drop.
+
 ## Request-a-download flow (available, not advertised)
 1. Trigger from the row `⋯` / Get-info modal; works on one file, a multi-select, or a folder.
 2. **Confirm = explicit modal** (paid + multi-hour → never accidental), button **"Start download"**:
@@ -261,9 +296,12 @@ on `ListedFile`. A file that isn't getting anywhere resolves to a **`stalled`** 
 warning tone, deliberately *not* the `failed` ⚠, because nothing has given up. `uploadStall` names which
 kind: `retrying` (a fault is recorded) or `unattended` (silence past the daemon's window).
 
-`files.error` had been sitting in the journal **unread since failures were first persisted** — even a
-permanently failed file showed a bare ⚠ that couldn't say why. It's now on the row icon's label, in
-Get info, and under the file's name in the failures panel — next to the action that answers it.
+A failed file used to show a bare ⚠ that couldn't say why. The WHY is now the row's `failureKind`
+(`permanent · overQuota · stopped · missingSource · interrupted`), rendered to words by
+`views/uploads/failure.ts` on the row icon's label, in Get info and on the Uploads page; the daemon's
+`error` (an S3 code, a thrown message) is developer detail and shows only under Get info › Details.
+Storing the kind rather than the sentence is deliberate: the sentence was persisted copy, so old rows kept
+old wording forever and one cause fragmented into as many "reasons" as there had been phrasings of it.
 
 One asymmetry is deliberate: a null `lastAttemptAt` is **not** a stall, where a null `lastStepAt` is. A
 restore row is created by an explicit user request and handed to the loop, so never-stepped means the loop
@@ -496,7 +534,8 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
 - **Commands (SSOT = `DaemonService.handle`):** `ping · getStatus · listSources · listFiles ·
   listExcludes · addSource · removeSource · addExclude · removeExclude · restorePlan · requestRestore ·
   listRestores · cancelRestore · resumeRestore · forgetRestore ·
-  deposit · depositPhotos · previewDeposit · retryFiles · movePath · createFolder · deletePath · pathIsWatched · authenticate ·
+  deposit · depositPhotos · previewDeposit · retryFiles · listDeposits · removeFailedFiles · forgetDeposit ·
+  movePath · createFolder · deletePath · pathIsWatched · authenticate ·
   deauthenticate · mintVault · unlockVault · unlockVaultWithRecoveryCode · lockVault · triggerNow ·
   cancelRun · pauseSource · resumeSource`. (`authenticate`/`deauthenticate` = the **session** opened/closed —
   per-user S3 creds plus the user's journal, staging dir and key holder; the `*Vault*` four = the

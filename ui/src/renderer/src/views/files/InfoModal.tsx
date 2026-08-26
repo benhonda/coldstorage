@@ -7,6 +7,7 @@
 import type { ArchivedFile } from "./model.ts";
 import { formatBytes, formatDate } from "./model.ts";
 import { KindIcon, statusLabel } from "./StatusBadge.tsx";
+import { failureReason } from "../uploads/failure.ts";
 import { Button, Icon, KeyValueRow, Modal } from "../../ui/primitives.tsx";
 
 /** Resolved selection passed in by the browser. `files` = concrete files (folders expanded). */
@@ -70,7 +71,10 @@ export const InfoModal = ({
           <div>
             <KeyValueRow label="Kind" value={sel.file.kind} />
             <KeyValueRow label="Size" value={formatBytes(sel.file.size)} />
-            <KeyValueRow label="Status" value={statusLabel(sel.file.status, sel.file.error)} />
+            <KeyValueRow label="Status" value={statusLabel(sel.file.status, failureReason(sel.file))} />
+            {/* The daemon's own detail for the fault — an S3 code, a thrown message. Developer-grade, which
+                is exactly why it lives here and nowhere louder. */}
+            {sel.file.status === "failed" && sel.file.error && <KeyValueRow label="Details" value={sel.file.error} />}
             <KeyValueRow label="Uploaded" value={formatDate(sel.file.date)} />
             {/* A "Ready by" row used to sit here, reading `file.readyBy` — a field nothing ever wrote, so
                 it never rendered once. The honest version points at where a download actually lives now. */}
