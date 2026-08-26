@@ -218,11 +218,17 @@ On daemon start and after every outage/crash:
 completed — so complete promptly, and the bucket has a **lifecycle rule aborting incomplete multipart
 uploads after 14 days** (applied, `infra/coldstorage`).
 
-6. **An explicit deposit is journaled before it runs** (`PendingDeposit`, the `deposits` table), and the
-   scheduled pass replays whatever is still owed — so a drop or photo pick interrupted by a crash, an app
-   update or a reboot resumes on its own, exactly like a watched folder always did. The row clears only
-   when nothing retryable remains; a replay never revives a file the user deleted in between (the
-   upsert's tombstone rule). Guarded by `DurableDepositTests`.
+6. **An explicit deposit is journaled before it runs** (`Deposit`, the `deposits` table), and the
+   scheduled pass replays whatever is still `pending` — so a drop or photo pick interrupted by a crash, an
+   app update or a reboot resumes on its own, exactly like a watched folder always did. The row is marked
+   `done` (never deleted) once nothing retryable remains: it is then the batch the app's Uploads page
+   shows, and its files point back at it (`files.depositId`). "Try again" reopens the same row in `.retry`
+   mode, which re-ingests the batch's own owed rows in place. A replay never revives a file the user
+   deleted in between (the upsert's tombstone rule). A failed row that nothing owns — the orphan sweep's
+   condemnations, a removed watched folder's leftovers — is adopted into a settled batch so the app can
+   always show it (`Journal.adoptOrphanedFailures`). WHY a file failed is a `FileFailureKind` on the row;
+   the app owns the words. Guarded by `DurableDepositTests`, `OrphanedUploadTests`,
+   `FailureKindMigrationTests`.
 
 7. **A deposit costs the deposit, not the library.** The engine plans only files that are **not already
    archived** (`Journal.settledFileIds`). Blob ids are content-derived from their members, so planning over

@@ -115,8 +115,8 @@ public struct ExplicitPathsSource: IngestSource {
 /// resolver re-resolves. Not a re-drop: a re-drop places by `dest/<basename>`, which for a row that was
 /// renamed, moved, or "Keep Both"-ed since would land a SECOND file next to the failed one instead of
 /// finishing it. A row whose source has gone missing (or never had one) is skipped here — `retryFiles`
-/// already refused to queue those, and the orphan sweep flips a skipped straggler back to `failed` with a
-/// reason rather than leaving it "Uploading" for nobody.
+/// already refused to queue those, and the orphan sweep flips a skipped straggler back to `failed` (as
+/// `.interrupted`) rather than leaving it "Uploading" for nobody.
 public struct RetryFilesSource: IngestSource {
     let rows: [FileRow]
     /// How to re-resolve `photos:` sources, when this platform can (nil off macOS: those rows are skipped

@@ -1,6 +1,26 @@
 import Foundation
 import AWSClientRuntime   // AWSServiceError.errorCode — to read the S3 error code
 
+/// WHY a file is `failed` — a closed set the app turns into words, and the ONLY thing it turns into words.
+/// The journal used to hold the user-facing sentence itself (`files.error`), which made copy a persisted
+/// fact: a row written by last month's build kept last month's wording forever, and one cause fragmented
+/// into as many "reasons" as there had been phrasings of it. Now the row carries the KIND; the app owns the
+/// sentence; `files.error` keeps the developer-facing detail (an S3 code, a thrown message) for Get info.
+/// `Codable` as its raw string — the wire spelling the app's `FileFailureKind` mirrors.
+public enum FileFailureKind: String, Codable, Sendable {
+    /// A fault that won't self-heal — access denied, a bad hash, an unsupported storage class.
+    case permanent
+    /// Refused before upload: storing it would cross the vault's quota. Retries once there's room.
+    case overQuota
+    /// The user pressed Stop before this landed. Not a fault; the next pass or a retry finishes it.
+    case stopped
+    /// "Try again" could not find the bytes: no recorded source, or the path isn't on disk right now.
+    case missingSource
+    /// Nothing is driving this upload any more — the daemon died mid-drop on a build that had no durable
+    /// deposit to replay, or the folder that owned it was unwatched. The bytes never landed.
+    case interrupted
+}
+
 /// How to react to a failure (graceful error handling, design §error-handling). The AWS SDK already
 /// retries *transient* faults (throttling/5xx/timeouts) with backoff before they ever reach us, so by
 /// the time an error surfaces here the decision is: is it worth another pass *later* (transient — a
@@ -39,6 +59,15 @@ public enum FailureKind: Sendable, Equatable {
 
     /// The one wording for a user-stopped upload, wherever it surfaces (journal `error`, log, wire).
     public static let stoppedMessage = "Stopped before it finished uploading."
+
+    /// The `FileFailureKind` a blob failure of this kind writes onto its files — nil for transient, which
+    /// never marks a file `failed` (it stays queued and retries next pass).
+    public var fileFailureKind: FileFailureKind? {
+        switch self {
+        case .permanent: return .permanent; case .overQuota: return .overQuota
+        case .stopped: return .stopped; case .transient: return nil
+        }
+    }
 
     /// S3/Glacier error codes that won't self-heal — re-attempting just burns cycles. Conservative on
     /// purpose: anything *not* listed defaults to `.transient` (keep trying) rather than silently giving

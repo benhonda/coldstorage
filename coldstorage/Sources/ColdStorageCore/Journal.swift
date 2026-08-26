@@ -36,19 +36,29 @@ public struct FileRow: Sendable {
     /// while the daemon was idle. The upload twin of `RestoreRow.lastStepAt`, and for the same reason: the
     /// tree renders `planned` as "Uploading", and without a clock that claim has no expiry.
     public let lastAttemptAt: Int?
-    /// Why the last attempt failed, or nil. Present on a `failed` file (a permanent fault) AND on one still
-    /// queued after a TRANSIENT fault — those keep retrying, so the row stays honest about being in flight
-    /// while still naming the snag. Cleared the moment an attempt succeeds.
+    /// The developer-facing detail of the last fault, or nil — an S3 error code, a thrown message. Present
+    /// on a `failed` file AND on one still queued after a TRANSIENT fault (those keep retrying, so the row
+    /// stays honest about being in flight while still naming the snag). Cleared the moment an attempt
+    /// succeeds. NOT user copy: the app renders that from `failureKind` and shows this under Get info.
     public let error: String?
     /// Where the bytes live on this Mac, or nil (a Photos asset, or a row from before the column existed).
     /// The seam that makes a failed upload retryable from the row alone (`retryFiles`), and the fact the
     /// app keys "Try again" vs "Locate…" off: with a path we can retry, without one we have to ask.
     public let sourcePath: String?
+    /// The explicit deposit (drop / photo pick) that last claimed this file, or nil for a file a watched
+    /// folder owns. The batch key: the Uploads page counts a deposit's rows through this, so a batch's
+    /// "3 of 500 couldn't upload" is derived from the same rows the tree marks ⚠ — never a stored count.
+    public let depositId: String?
+    /// WHY a `failed` row failed — the closed set the app renders copy from (see `FileFailureKind`). Nil
+    /// on every other status, and cleared the moment the row is re-planned or archived.
+    public let failureKind: FileFailureKind?
     public init(id: String, relativePath: String, size: Int, status: FileStatus, blobId: String?,
-                createdAt: Int?, lastAttemptAt: Int? = nil, error: String? = nil, sourcePath: String? = nil) {
+                createdAt: Int?, lastAttemptAt: Int? = nil, error: String? = nil, sourcePath: String? = nil,
+                depositId: String? = nil, failureKind: FileFailureKind? = nil) {
         self.id = id; self.relativePath = relativePath; self.size = size
         self.status = status; self.blobId = blobId; self.createdAt = createdAt
         self.lastAttemptAt = lastAttemptAt; self.error = error; self.sourcePath = sourcePath
+        self.depositId = depositId; self.failureKind = failureKind
     }
 }
 
@@ -157,11 +167,13 @@ public final class Journal: @unchecked Sendable {
               requestedAt INTEGER NOT NULL, readyAt INTEGER, lastStepAt INTEGER,
               completedAt INTEGER, error TEXT);
             CREATE INDEX IF NOT EXISTS restores_state ON restores(state);
-            -- Explicit deposits still owed (see `PendingDeposit`): what makes a drop survive a restart.
+            -- Explicit deposits (see `Deposit`): owed while `state = 'pending'` (what makes a drop survive a
+            -- restart), and kept as the batch's identity once 'done' (what gives the Uploads page its rows).
             CREATE TABLE IF NOT EXISTS deposits(
               id TEXT PRIMARY KEY, kind TEXT NOT NULL, src TEXT NOT NULL, dest TEXT NOT NULL,
               conflicts TEXT NOT NULL DEFAULT '{}', excludeExtra TEXT NOT NULL DEFAULT '',
-              createdAt INTEGER NOT NULL);
+              createdAt INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'pending',
+              mode TEXT NOT NULL DEFAULT 'ingest', finishedAt INTEGER);
             """)
         if excludesIsNew {
             for p in Self.defaultExcludes {
@@ -242,6 +254,31 @@ public final class Journal: @unchecked Sendable {
             try exec("ALTER TABLE restores ADD COLUMN lastStepAt INTEGER")
         }
 
+        // Deposits stopped being a to-do queue and became the upload history (2026-08-26): a row used to be
+        // DELETED the moment it settled, so no batch existed to hang a failure off. `state`/`mode`/`finishedAt`
+        // are what let a row outlive its run; an existing row is still owed, so the defaults are exactly right.
+        let depositCols = try run("PRAGMA table_info(deposits)").compactMap { $0["name"] as? String }
+        // All three in ONE transaction (SQLite DDL is transactional): a crash between two autocommit ALTERs
+        // would leave `state` present and the gate satisfied, so `mode` would never be added and every
+        // deposit read would throw for good. All-or-nothing, so the gate is trustworthy.
+        if !depositCols.contains("state") {
+            try transaction {
+                try exec("ALTER TABLE deposits ADD COLUMN state TEXT NOT NULL DEFAULT 'pending'")
+                try exec("ALTER TABLE deposits ADD COLUMN mode TEXT NOT NULL DEFAULT 'ingest'")
+                try exec("ALTER TABLE deposits ADD COLUMN finishedAt INTEGER")
+                // The previous build's "Try again" recorded a deposit of `kind='retry'` (a list of file ids
+                // to re-ingest). A retry is an action on a batch now, not a row, so such a row has no
+                // meaning: drop it. Its planned files are condemned + adopted by the orphan sweep.
+                try run("DELETE FROM deposits WHERE kind='retry'")
+            }
+        }
+        // The two columns that make a failure legible as part of a BATCH rather than a loose red row: which
+        // deposit claimed the file, and WHY it failed as a kind the app renders (not a sentence the journal
+        // stores — see `FileFailureKind`). Not a bare column add: the rows that already exist are exactly the
+        // ones the user is looking at, so they are carried over (`migrateFailuresOntoDeposits`).
+        if !fileCols.contains("failureKind") {
+            try migrateFailuresOntoDeposits()
+        }
         // **Indexes for the hot interactive reads — created LAST, after every column migration above** (they
         // name `deletedAt`, which `migrateDeletionOffStatus` adds). The tree is 140k+ files now; without
         // these, `summary()`'s three `count(*)` (every getStatus), `settledFileIds` + the reap join (every
@@ -254,7 +291,49 @@ public final class Journal: @unchecked Sendable {
             CREATE INDEX IF NOT EXISTS files_blobId ON files(blobId);
             CREATE INDEX IF NOT EXISTS blobs_status ON blobs(status);
             CREATE INDEX IF NOT EXISTS blob_members_fileId ON blob_members(fileId);
+            CREATE INDEX IF NOT EXISTS files_depositId ON files(depositId);
             """)
+    }
+
+    /// Give every existing failure a kind and a batch. One-shot, gated on `files.failureKind`'s absence.
+    ///
+    /// **Kind.** The old rows hold the user-facing sentence the daemon of the day wrote (`error`), and the
+    /// only way to recover a kind from a sentence is to know the sentences. These are the ones every build
+    /// so far has written — inlined here because the constants they came from are gone on purpose (the app
+    /// owns the copy now); anything else was a permanent blob fault, whose message is exactly the developer
+    /// detail `error` is for, so it stays.
+    ///
+    /// **Batch.** Failed rows no watched folder covers had a deposit once — the one that was deleted when it
+    /// settled — and now have nothing to show under. `adoptOrphanedFailuresLocked` gives them one, the same
+    /// way the orphan sweep does for the ones it condemns from here on: one mechanism, and no row on the
+    /// Uploads page ever has to be "unknown batch".
+    private func migrateFailuresOntoDeposits() throws {
+        let now = Int(Date().timeIntervalSince1970)
+        // The ALTERs ride inside the transaction with the backfill: a crash between the two column adds
+        // would otherwise re-run `ADD COLUMN depositId` on the next open ("duplicate column") and the journal
+        // would never open again. All-or-nothing, so the `failureKind` gate above is trustworthy.
+        try transaction {
+            try exec("ALTER TABLE files ADD COLUMN depositId TEXT")
+            try exec("ALTER TABLE files ADD COLUMN failureKind TEXT")
+            let failed = FileStatus.failed.rawValue
+            let byPrefix: [(prefix: String, kind: FileFailureKind)] = [
+                ("Upload didn\u{2019}t finish", .interrupted),
+                ("Couldn\u{2019}t find this file on disk", .missingSource),
+                (FailureKind.stoppedMessage, .stopped),
+                ("Not enough storage left", .overQuota),
+            ]
+            for (prefix, kind) in byPrefix {
+                try run("UPDATE files SET failureKind=?1, error=NULL WHERE status=?2 AND failureKind IS NULL AND substr(error, 1, length(?3)) = ?3",
+                        [.text(kind.rawValue), .text(failed), .text(prefix)])
+            }
+            // Anything else is a permanent blob fault, and that is not a guess: a transient fault never
+            // marked a file `failed` (it stayed queued), so no other path ever wrote this status.
+            try run("UPDATE files SET failureKind=?1 WHERE status=?2 AND failureKind IS NULL",
+                    [.text(FileFailureKind.permanent.rawValue), .text(failed)])
+            let mounts = try run("SELECT mountPath FROM sources WHERE paused=0 AND mountPath != ''")
+                .compactMap { $0["mountPath"] as? String }
+            try adoptOrphanedFailuresLocked(notUnder: mounts, now: now)
+        }
     }
 
     /// Move deletion out of `files.status` and into `files.deletedAt`, and repair the rows the old scheme
@@ -393,7 +472,10 @@ public final class Journal: @unchecked Sendable {
     /// tombstoned file back (see `reviveFiles`); a re-scan must never, or deleting anything inside a watched
     /// folder would be undone by the next poll. Scoping the revive to `items` is what stops a re-deposited
     /// folder resurrecting every file that was *ever* in it.
-    public func upsert(_ items: [IngestItem], reviving: Bool = false) throws {
+    /// `depositId` is the explicit deposit these items ride in (nil for a watched folder's scan). It is
+    /// COALESCEd like `sourcePath`: a new deposit claims the row; a scan that re-finds a dropped file must
+    /// not strip it of the batch it belongs to.
+    public func upsert(_ items: [IngestItem], reviving: Bool = false, depositId: String? = nil) throws {
         lock.lock(); defer { lock.unlock() }
         try transaction {
         if reviving { try reviveFilesLocked(ids: items.map(\.id)) }
@@ -414,14 +496,19 @@ public final class Journal: @unchecked Sendable {
             // overwrites it with the exact plaintext byte count once the bytes are sealed.
             // `sourcePath` is COALESCEd: a source that knows the path refreshes it, one that doesn't (a
             // Photos asset re-resolved, a synthetic test item) must not erase what an earlier pass recorded.
+            // `failureKind` is cleared: the row is `planned` again, and a kind on a queued file would be a
+            // verdict about an attempt that hasn't happened. (`error` is deliberately kept — a transient
+            // snag's detail stays legible on a still-queued row; see `recordFileFault`.)
             try run("""
-                INSERT INTO files(id, relativePath, size, contentHash, status, createdAt, sourcePath) VALUES(?1,?2,?3,?4,?5,?6,?7)
+                INSERT INTO files(id, relativePath, size, contentHash, status, createdAt, sourcePath, depositId)
+                VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
                 ON CONFLICT(id) DO UPDATE SET relativePath=excluded.relativePath, size=excluded.size,
                     contentHash=excluded.contentHash, status=excluded.status, createdAt=excluded.createdAt,
-                    sourcePath=COALESCE(excluded.sourcePath, files.sourcePath)
+                    sourcePath=COALESCE(excluded.sourcePath, files.sourcePath),
+                    depositId=COALESCE(excluded.depositId, files.depositId), failureKind=NULL
                 """, [.text(it.id), .text(it.relativePath), .int(it.size), .text(it.content.planKey), .text(FileStatus.planned.rawValue),
                       it.createdAt.map { .int(Int($0.timeIntervalSince1970)) } ?? .null,
-                      it.sourcePath.map { .text($0) } ?? .null])
+                      it.sourcePath.map { .text($0) } ?? .null, depositId.map { .text($0) } ?? .null])
         }
         }
     }
@@ -536,36 +623,129 @@ public final class Journal: @unchecked Sendable {
             """, [.text(s.id), .text(s.kind.rawValue), s.path.map(Bind.text) ?? .null, .text(s.mountPath), .int(s.paused ? 1 : 0)])
     }
 
-    // MARK: - pending deposits (explicit drops / photo picks still owed — see `PendingDeposit`)
+    // MARK: - deposits (explicit drops / photo picks — owed while pending, the upload history once done)
 
-    public func addPendingDeposit(_ d: PendingDeposit) throws {
+    public func addDeposit(_ d: Deposit) throws {
         lock.lock(); defer { lock.unlock() }
+        try addDepositLocked(d)
+    }
+
+    private func addDepositLocked(_ d: Deposit) throws {
         let conflicts = String(decoding: try JSONEncoder().encode(d.conflicts), as: UTF8.self)
         try run("""
-            INSERT OR REPLACE INTO deposits(id, kind, src, dest, conflicts, excludeExtra, createdAt)
-            VALUES(?1,?2,?3,?4,?5,?6,?7)
+            INSERT OR REPLACE INTO deposits(id, kind, src, dest, conflicts, excludeExtra, createdAt, state, mode, finishedAt)
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
             """, [.text(d.id), .text(d.kind.rawValue), .text(d.src.joined(separator: "\n")), .text(d.dest),
-                  .text(conflicts), .text(d.excludeExtra.joined(separator: "\n")), .int(d.createdAt)])
+                  .text(conflicts), .text(d.excludeExtra.joined(separator: "\n")), .int(d.createdAt),
+                  .text(d.state.rawValue), .text(d.mode.rawValue), d.finishedAt.map(Bind.int) ?? .null])
     }
 
-    public func removePendingDeposit(_ id: String) throws {
+    /// The deposit has settled: nothing it owes is retryable by a pass (every file archived, or failed for
+    /// good). The row STAYS — it is now the batch the Uploads page shows.
+    public func settleDeposit(_ id: String, at now: Int) throws {
         lock.lock(); defer { lock.unlock() }
-        try run("DELETE FROM deposits WHERE id=?1", [.text(id)])
+        try run("UPDATE deposits SET state=?2, finishedAt=?3 WHERE id=?1",
+                [.text(id), .text(Deposit.State.done.rawValue), .int(now)])
+        guard try changed() == 1 else { throw ColdStorageError.invalidRequest("settleDeposit: no deposit \(id)") }
     }
 
-    /// Oldest first, so a replay honours the order the user dropped things in.
-    public func listPendingDeposits() throws -> [PendingDeposit] {
+    /// The user's "Try again" on a settled batch: reopen the SAME row, in `.retry` mode, so the next run
+    /// re-ingests its own still-owed rows in place (see `Deposit.Mode`) and a crash in between still owes
+    /// them. Never a new row — a retry is an action on a batch, not a batch.
+    /// Only a `done` row reopens: a `pending` one is already owed, and rewriting its mode to `.retry`
+    /// would stop its replay re-enumerating `src` — the rest of an interrupted drop would never be read.
+    /// Returns whether the row was reopened (false: still pending, or no such deposit).
+    @discardableResult
+    public func reopenDeposit(_ id: String) throws -> Bool {
         lock.lock(); defer { lock.unlock() }
-        return try run("SELECT id, kind, src, dest, conflicts, excludeExtra, createdAt FROM deposits ORDER BY createdAt, id").compactMap {
-            guard let kind = PendingDeposit.Kind(rawValue: $0["kind"] as? String ?? "") else { return nil }
-            let split = { (s: String) in s.split(separator: "\n").map(String.init).filter { !$0.isEmpty } }
-            let conflicts = (try? JSONDecoder().decode([String: String].self,
-                                                       from: Data(($0["conflicts"] as? String ?? "{}").utf8))) ?? [:]
-            return PendingDeposit(id: $0["id"] as? String ?? "", kind: kind,
-                                  src: split($0["src"] as? String ?? ""), dest: $0["dest"] as? String ?? "",
-                                  conflicts: conflicts, excludeExtra: split($0["excludeExtra"] as? String ?? ""),
-                                  createdAt: $0["createdAt"] as? Int ?? 0)
+        try run("UPDATE deposits SET state=?2, mode=?3, finishedAt=NULL WHERE id=?1 AND state=?4",
+                [.text(id), .text(Deposit.State.pending.rawValue), .text(Deposit.Mode.retry.rawValue),
+                 .text(Deposit.State.done.rawValue)])
+        return try changed() == 1
+    }
+
+    /// Rows the last statement touched. Caller holds `lock`.
+    private func changed() throws -> Int { (try run("SELECT changes() AS c").first?["c"] as? Int) ?? 0 }
+
+    /// Drop a settled batch from the history. Its files keep their rows in the tree and simply stop
+    /// pointing at a deposit. Refused while the row is still owed, or while any of its files is `failed`
+    /// (a failure with no batch to show under is exactly the invisible state this table exists to end;
+    /// remove the failed files first).
+    public func forgetDeposit(_ id: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try transaction {
+            guard let row = try run("SELECT state FROM deposits WHERE id=?1", [.text(id)]).first else {
+                throw ColdStorageError.invalidRequest("forgetDeposit: no deposit \(id)")
+            }
+            guard (row["state"] as? String) == Deposit.State.done.rawValue else {
+                throw ColdStorageError.invalidRequest("forgetDeposit: deposit \(id) is still uploading")
+            }
+            let failed = try run("SELECT count(*) c FROM files WHERE depositId=?1 AND deletedAt IS NULL AND status=?2",
+                                 [.text(id), .text(FileStatus.failed.rawValue)]).first?["c"] as? Int ?? 0
+            guard failed == 0 else {
+                throw ColdStorageError.invalidRequest("forgetDeposit: deposit \(id) still has \(failed) failed file(s)")
+            }
+            try run("UPDATE files SET depositId=NULL WHERE depositId=?1", [.text(id)])
+            try run("DELETE FROM deposits WHERE id=?1", [.text(id)])
         }
+    }
+
+    /// Every deposit, newest first — the Uploads page's list.
+    public func listDeposits() throws -> [Deposit] {
+        lock.lock(); defer { lock.unlock() }
+        return try run("SELECT \(Self.depositColumns) FROM deposits ORDER BY createdAt DESC, id").compactMap(Self.deposit)
+    }
+
+    /// The deposits still owed, oldest first, so a replay honours the order the user dropped things in.
+    public func pendingDeposits() throws -> [Deposit] {
+        lock.lock(); defer { lock.unlock() }
+        return try run("SELECT \(Self.depositColumns) FROM deposits WHERE state=?1 ORDER BY createdAt, id",
+                       [.text(Deposit.State.pending.rawValue)]).compactMap(Self.deposit)
+    }
+
+    public func deposit(id: String) throws -> Deposit? {
+        lock.lock(); defer { lock.unlock() }
+        return try run("SELECT \(Self.depositColumns) FROM deposits WHERE id=?1", [.text(id)]).compactMap(Self.deposit).first
+    }
+
+    private static let depositColumns = "id, kind, src, dest, conflicts, excludeExtra, createdAt, state, mode, finishedAt"
+    private static func deposit(_ r: [String: Any]) -> Deposit? {
+        guard let kind = Deposit.Kind(rawValue: r["kind"] as? String ?? ""),
+              let state = Deposit.State(rawValue: r["state"] as? String ?? ""),
+              let mode = Deposit.Mode(rawValue: r["mode"] as? String ?? "") else {
+            // Never silent: a row this build can't read is a row the user can't see. Loud in the log, and
+            // dropped from the list rather than crashing every read over it.
+            log("Journal: deposit \(r["id"] as? String ?? "?") has an unknown kind/state/mode (\(r["kind"] ?? "-")/\(r["state"] ?? "-")/\(r["mode"] ?? "-")) — not listed")
+            return nil
+        }
+        let split = { (s: String) in s.split(separator: "\n").map(String.init).filter { !$0.isEmpty } }
+        let conflicts = (try? JSONDecoder().decode([String: String].self,
+                                                   from: Data((r["conflicts"] as? String ?? "{}").utf8))) ?? [:]
+        return Deposit(id: r["id"] as? String ?? "", kind: kind,
+                       src: split(r["src"] as? String ?? ""), dest: r["dest"] as? String ?? "",
+                       conflicts: conflicts, excludeExtra: split(r["excludeExtra"] as? String ?? ""),
+                       createdAt: r["createdAt"] as? Int ?? 0, state: state, mode: mode,
+                       finishedAt: r["finishedAt"] as? Int)
+    }
+
+    /// A deposit's own rows in the given statuses — what a `.retry`-mode replay re-ingests (`planned`: the
+    /// rows "Try again" just requeued, or an interrupted retry left mid-way).
+    public func depositFiles(_ id: String, statuses: [FileStatus]) throws -> [FileRow] {
+        guard !statuses.isEmpty else { return [] }
+        lock.lock(); defer { lock.unlock() }
+        return try run("SELECT \(Self.fileRowColumns) FROM files WHERE deletedAt IS NULL AND depositId=? AND status IN (\(Self.marks(statuses.map(\.rawValue)))) ORDER BY relativePath",
+                       [.text(id)] + statuses.map { .text($0.rawValue) }).map(Self.fileRow)
+    }
+
+    /// Tombstone every `failed` row of a deposit — the Uploads page's "Remove these" on a batch that
+    /// didn't finish. Nothing landed for these, so no bytes are at stake; the tree just stops listing
+    /// them. Returns how many rows it removed.
+    @discardableResult
+    public func removeFailedFiles(inDeposit id: String) throws -> Int {
+        lock.lock(); defer { lock.unlock() }
+        try run("UPDATE files SET deletedAt=?1 WHERE depositId=?2 AND deletedAt IS NULL AND status=?3",
+                [.int(Int(Date().timeIntervalSince1970)), .text(id), .text(FileStatus.failed.rawValue)])
+        return try changed()
     }
 
     public func removeSource(_ id: String) throws {
@@ -816,6 +996,19 @@ public final class Journal: @unchecked Sendable {
                        [.text(FileStatus.failed.rawValue)]).map(Self.fileRow)
     }
 
+    /// The `failed` rows a watched folder owns: under its mount, and claimed by no deposit. "Try again" on
+    /// a watched-folder row on the Uploads page reads its scope from here.
+    public func failedFiles(underMount mount: String) throws -> [FileRow] {
+        lock.lock(); defer { lock.unlock() }
+        var binds: [Bind] = [.text(FileStatus.failed.rawValue)]
+        let covered = Self.coverageClause([mount], into: &binds)
+        return try run("""
+            SELECT \(Self.fileRowColumns) FROM files
+             WHERE deletedAt IS NULL AND status=? AND depositId IS NULL AND (\(covered))
+             ORDER BY relativePath
+            """, binds).map(Self.fileRow)
+    }
+
     /// `id IN (…)` batches. SQLite caps bound variables (32,766 by default) and a mass failure — one cause
     /// across a whole drop — is exactly when an id set is bigger than that. Chunked, not one statement.
     private static func chunks(_ ids: [String], size: Int = 900) -> [[String]] {
@@ -823,7 +1016,7 @@ public final class Journal: @unchecked Sendable {
     }
     private static func marks(_ chunk: [String]) -> String { chunk.map { _ in "?" }.joined(separator: ",") }
 
-    private static let fileRowColumns = "id, relativePath, size, status, blobId, createdAt, lastAttemptAt, error, sourcePath"
+    private static let fileRowColumns = "id, relativePath, size, status, blobId, createdAt, lastAttemptAt, error, sourcePath, depositId, failureKind"
     private static func fileRow(_ r: [String: Any]) -> FileRow {
         FileRow(id: r["id"] as? String ?? "",
                 relativePath: r["relativePath"] as? String ?? "",
@@ -833,7 +1026,9 @@ public final class Journal: @unchecked Sendable {
                 createdAt: r["createdAt"] as? Int,
                 lastAttemptAt: r["lastAttemptAt"] as? Int,
                 error: r["error"] as? String,
-                sourcePath: r["sourcePath"] as? String)
+                sourcePath: r["sourcePath"] as? String,
+                depositId: r["depositId"] as? String,
+                failureKind: (r["failureKind"] as? String).flatMap(FileFailureKind.init(rawValue:)))
     }
 
     /// The user's "Try again": put `failed` rows back in the queue as a fresh claim — `planned`, no recorded
@@ -850,7 +1045,7 @@ public final class Journal: @unchecked Sendable {
                 let found = try run("SELECT id FROM files WHERE status=? AND deletedAt IS NULL AND id IN (\(Self.marks(chunk)))",
                                     [.text(FileStatus.failed.rawValue)] + chunk.map { .text($0) }).compactMap { $0["id"] as? String }
                 guard !found.isEmpty else { continue }
-                try run("UPDATE files SET status=?, error=NULL, lastAttemptAt=NULL WHERE id IN (\(Self.marks(found)))",
+                try run("UPDATE files SET status=?, error=NULL, failureKind=NULL, lastAttemptAt=NULL WHERE id IN (\(Self.marks(found)))",
                         [.text(FileStatus.planned.rawValue)] + found.map { .text($0) })
                 hits += found
             }
@@ -1184,58 +1379,100 @@ public final class Journal: @unchecked Sendable {
         // timestamp through (and every write here means exactly "we just tried, now").
         try run("""
             UPDATE files SET status=?1, blobId=?2, "offset"=?3, length=?4, firstFrame=?5, plaintextSha256=?6,
-              size=?7, error=NULL, lastAttemptAt=CAST(strftime('%s','now') AS INTEGER) WHERE id=?8
+              size=?7, error=NULL, failureKind=NULL, lastAttemptAt=CAST(strftime('%s','now') AS INTEGER) WHERE id=?8
             """, [.text(FileStatus.archived.rawValue), .text(blobId), .int(offset), .int(length), .int(firstFrame), .text(plaintextSha256), .int(size), .text(id)])
     }
 
-    /// Mark logical files `failed` (+ record why) — written when their blob fails *permanently*, so the UI's
-    /// ⚠ row is journal truth that survives a `listFiles` refresh and a restart, not a UI guess. Transient
-    /// failures are left untouched (they retry next pass). A later successful re-archive overwrites this back
-    /// to `archived` (self-correcting). No-op on an empty id set.
     /// **Orphaned uploads → an honest failed state.** A `planned`/`uploading` file that nothing is driving
     /// — no active run, no pending deposit, no watched source over its path — will spin "Uploading" forever
     /// (its blob was interrupted before `lastAttemptAt` was ever stamped, so the stall detector never fires).
-    /// That is a lie: nothing will ever upload it. This flips every such file to `failed` with a reason the
-    /// UI shows, so the row says "needs attention" and the user can re-add the folder to finish it. Covered
-    /// files — those whose `relativePath` sits at or under one of `mountPaths` (the active watched-source
-    /// roots) — are LEFT ALONE: a scan still drives those. With no mounts, nothing is covered, so every
-    /// planned/uploading file is treated as orphaned (the caller only invokes this when it's safe: no run in
-    /// flight and no pending deposits — those own their own files). Returns how many rows it changed.
+    /// That is a lie: nothing will ever upload it. This flips every such file to `failed` as `.interrupted`,
+    /// so the row says so and the Uploads page can offer a way out. Covered files — those whose
+    /// `relativePath` sits at or under one of `mountPaths` (the active watched-source roots) — are LEFT
+    /// ALONE: a scan still drives those. With no mounts, nothing is covered, so every planned/uploading file
+    /// is treated as orphaned (the caller only invokes this when it's safe: no run in flight and no pending
+    /// deposits — those own their own files). Returns how many rows it changed.
     @discardableResult
-    public func markInterruptedUploads(notUnder mountPaths: [String], reason: String, now: Int) throws -> Int {
+    public func markInterruptedUploads(notUnder mountPaths: [String], now: Int) throws -> Int {
         lock.lock(); defer { lock.unlock() }
-        var binds: [Bind] = [.text(FileStatus.failed.rawValue), .text(reason), .int(now)]
-        // Coverage: the file is at a mount root, or nested under it. Uses the SAME prefix test as
-        // `movePath`/`deletePath`/`createFolder` — `substr(relativePath, 1, length(m)+1) = m + "/"` — NOT
-        // `LIKE`, whose `_`/`%` are wildcards: a mount named `My_Photos` would otherwise "cover" a sibling
-        // `MyXPhotos` and leave its files spinning forever. `0` (never covered) when there are no mounts.
-        var covered = "0"
-        if !mountPaths.isEmpty {
-            covered = mountPaths.map { _ in "(relativePath = ? OR substr(relativePath, 1, length(?) + 1) = ?)" }.joined(separator: " OR ")
-            for m in mountPaths { binds.append(.text(m)); binds.append(.text(m)); binds.append(.text("\(m)/")) }
-        }
+        var binds: [Bind] = [.text(FileStatus.failed.rawValue), .text(FileFailureKind.interrupted.rawValue), .int(now)]
+        let covered = Self.coverageClause(mountPaths, into: &binds)
         try run("""
-            UPDATE files SET status=?, error=?, lastAttemptAt=?
+            UPDATE files SET status=?, failureKind=?, error=NULL, lastAttemptAt=?
              WHERE status IN ('planned','uploading') AND deletedAt IS NULL AND NOT (\(covered))
             """, binds)
-        return (try run("SELECT changes() AS c").first?["c"] as? Int) ?? 0
+        return try changed()
     }
 
-    public func markFilesFailed(_ ids: [String], error: String) throws {
+    /// Give every `failed` row that no batch shows — claimed by no deposit, covered by no watched mount —
+    /// a batch to show under: one settled `.files` deposit in `.retry` mode (it has no `src` to re-enumerate;
+    /// its rows are its source), named by the top-level folders those rows sit in so the Uploads page reads
+    /// it like any other drop. The rows are the sweep's own condemnations (`markInterruptedUploads`) and
+    /// whatever a removed watched folder left behind. Returns how many rows were adopted.
+    @discardableResult
+    public func adoptOrphanedFailures(notUnder mountPaths: [String], now: Int) throws -> Int {
+        lock.lock(); defer { lock.unlock() }
+        var n = 0
+        try transaction { n = try adoptOrphanedFailuresLocked(notUnder: mountPaths, now: now) }
+        return n
+    }
+
+    /// Caller holds `lock` and is inside a transaction.
+    @discardableResult
+    private func adoptOrphanedFailuresLocked(notUnder mountPaths: [String], now: Int) throws -> Int {
+        var binds: [Bind] = [.text(FileStatus.failed.rawValue)]
+        let covered = Self.coverageClause(mountPaths, into: &binds)
+        let orphanWhere = "status=? AND deletedAt IS NULL AND depositId IS NULL AND NOT (\(covered))"
+        let rows = try run("SELECT relativePath, lastAttemptAt FROM files WHERE \(orphanWhere)", binds)
+        guard !rows.isEmpty else { return 0 }
+        // Top-level folders, most files first — the batch's name. A file at the root names itself.
+        var counts: [String: Int] = [:]
+        for r in rows {
+            let path = r["relativePath"] as? String ?? ""
+            counts[path.split(separator: "/").first.map(String.init) ?? path, default: 0] += 1
+        }
+        let folders = counts.sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }.map(\.key)
+        let earliest = rows.compactMap { $0["lastAttemptAt"] as? Int }.min() ?? now
+        let deposit = Deposit(id: UUID().uuidString, kind: .files, src: folders, dest: "", conflicts: [:],
+                              excludeExtra: [], createdAt: earliest, state: .done, mode: .retry, finishedAt: now)
+        try addDepositLocked(deposit)
+        try run("UPDATE files SET depositId=? WHERE \(orphanWhere)", [.text(deposit.id)] + binds)
+        return rows.count
+    }
+
+    /// Coverage: the file is at a mount root, or nested under it. Uses the SAME prefix test as
+    /// `movePath`/`deletePath`/`createFolder` — `substr(relativePath, 1, length(m)+1) = m + "/"` — NOT
+    /// `LIKE`, whose `_`/`%` are wildcards: a mount named `My_Photos` would otherwise "cover" a sibling
+    /// `MyXPhotos` and leave its files spinning forever. `0` (never covered) when there are no mounts.
+    /// Appends its binds to `binds`, in the order the returned clause consumes them.
+    private static func coverageClause(_ mountPaths: [String], into binds: inout [Bind]) -> String {
+        guard !mountPaths.isEmpty else { return "0" }
+        for m in mountPaths { binds.append(.text(m)); binds.append(.text(m)); binds.append(.text("\(m)/")) }
+        return mountPaths.map { _ in "(relativePath = ? OR substr(relativePath, 1, length(?) + 1) = ?)" }.joined(separator: " OR ")
+    }
+
+    /// Mark logical files `failed`, with WHY as a kind (what the app renders) and, optionally, the
+    /// developer-facing detail (`error` — an S3 code, a thrown message). Written when their blob fails
+    /// *permanently*, is refused over quota, or is stopped — so the UI's ⚠ row is journal truth that
+    /// survives a `listFiles` refresh and a restart, not a UI guess. Transient failures are left untouched
+    /// (they retry next pass). A later successful re-archive overwrites this back to `archived`
+    /// (self-correcting). No-op on an empty id set.
+    public func markFilesFailed(_ ids: [String], kind: FileFailureKind, error: String? = nil) throws {
         guard !ids.isEmpty else { return }
         lock.lock(); defer { lock.unlock() }
         // One transaction: a mass retry can mark tens of thousands of rows, and autocommit's per-statement
         // fsync would turn that into seconds of disk wait for what is one fact.
-        try transaction { for id in ids {
+        try transaction { for chunk in Self.chunks(ids) {
             // **Never flip an ARCHIVED file to failed.** A file whose bytes are verified in S3 is archived,
             // full stop — a *later* blob's failure says nothing about it. Without this guard, any blob that
             // re-plans an already-stored file (and then fails, or is refused over quota) marks that file ⚠ in
             // the tree, telling the user a backup they already have didn't happen. The bytes are fine either
             // way; the lie is the damage, and it is the one claim this product cannot afford to get wrong.
             try run("""
-                UPDATE files SET status=?1, error=?2, lastAttemptAt=CAST(strftime('%s','now') AS INTEGER)
-                WHERE id=?3 AND status!=?4
-                """, [.text(FileStatus.failed.rawValue), .text(error), .text(id), .text(FileStatus.archived.rawValue)])
+                UPDATE files SET status=?, failureKind=?, error=?, lastAttemptAt=CAST(strftime('%s','now') AS INTEGER)
+                WHERE status!=? AND id IN (\(Self.marks(chunk)))
+                """, [.text(FileStatus.failed.rawValue), .text(kind.rawValue), error.map(Bind.text) ?? .null,
+                      .text(FileStatus.archived.rawValue)] + chunk.map { .text($0) })
         } }
     }
 

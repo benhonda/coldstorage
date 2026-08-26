@@ -111,7 +111,7 @@ public actor DaemonService {
         permanentlyFailedBlobs = []
         quotaBytes = nil   // the app re-pushes this user's quota right after authenticate; never inherit the last user's
         bus.publish(DaemonEvent("filesChanged", ["signedIn": new.identity.directoryName]))
-        // Anything this user's last session still owed (`PendingDeposit`) resumes on the next pass — make
+        // Anything this user's last session still owed (`Deposit`, still pending) resumes on the next pass — make
         // that now, not up to an interval away: a restart mid-deposit should pick up within seconds.
         trigger()
     }
@@ -203,17 +203,20 @@ public actor DaemonService {
         await depositExplicit(kind: .photos, src: assetIds, into: dir, conflicts: conflicts, excludeExtra: [])
     }
 
-    /// The one explicit-deposit path (drop OR photo pick). **Recorded before it runs** (`PendingDeposit`),
+    /// The one explicit-deposit path (drop OR photo pick). **Recorded before it runs** (`Deposit`),
     /// so a daemon killed mid-way — a crash, an app update, a reboot — owes the rest and pays it on the
     /// next pass (`replayPendingDeposits`). WAITS for any run in flight, then goes — a deposit is the user's
     /// explicit action and must not be dropped, but it also must not race a concurrent pass over the same
     /// journal. Any setup error surfaces as an `error` event; the row stays, so the next pass retries.
-    private func depositExplicit(kind: PendingDeposit.Kind, src: [String], into dir: String,
+    private func depositExplicit(kind: Deposit.Kind, src: [String], into dir: String,
                                  conflicts: [String: ConflictPolicy], excludeExtra: [String]) async {
         do {
             let session = try requireSession(Self.commandName(for: kind))
-            let pending = Self.newPendingDeposit(kind: kind, src: src, into: dir, conflicts: conflicts, excludeExtra: excludeExtra)
-            try session.journal.addPendingDeposit(pending)
+            let pending = Deposit(id: UUID().uuidString, kind: kind, src: src, dest: dir,
+                                  conflicts: conflicts.mapValues(\.rawValue), excludeExtra: excludeExtra,
+                                  createdAt: Int(Date().timeIntervalSince1970))
+            try session.journal.addDeposit(pending)
+            bus.publish(DaemonEvent("depositsChanged"))
             await runRecordedDeposit(pending, session: session)
         } catch { publishDepositError(error, kind: kind) }
     }
@@ -221,22 +224,15 @@ public actor DaemonService {
     /// One surface for a deposit that could not be set up or run. Photo-access / nothing-resolved are
     /// user-recoverable: surface the bare message (already a clean sentence) plus a `code` the UI keys an
     /// action off (e.g. `photosAccessDenied` → "Open Photos settings"). Anything else names the command.
-    private func publishDepositError(_ error: Error, kind: PendingDeposit.Kind) {
+    private func publishDepositError(_ error: Error, kind: Deposit.Kind) {
         if let e = error as? ColdStorageError { bus.publish(DaemonEvent("error", Self.errorEventData(e))) }
         else { bus.publish(DaemonEvent("error", ["message": "\(Self.commandName(for: kind)): \(error)"])) }
     }
 
-    private static func newPendingDeposit(kind: PendingDeposit.Kind, src: [String], into dir: String,
-                                          conflicts: [String: ConflictPolicy], excludeExtra: [String]) -> PendingDeposit {
-        PendingDeposit(id: UUID().uuidString, kind: kind, src: src, dest: dir,
-                       conflicts: conflicts.mapValues(\.rawValue), excludeExtra: excludeExtra,
-                       createdAt: Int(Date().timeIntervalSince1970))
-    }
-
-    /// Run a deposit that is ALREADY in the journal. Split from `depositExplicit` so `retryFiles` can record
+    /// Run a deposit that is ALREADY in the journal. Split from `depositExplicit` so `retryFiles` can reopen
     /// its row synchronously (before it replies, and before any pass can see requeued files with no deposit
     /// owning them) and only defer the run.
-    private func runRecordedDeposit(_ pending: PendingDeposit, session: UserSession) async {
+    private func runRecordedDeposit(_ pending: Deposit, session: UserSession) async {
         do {
             try await withRunLock(skipIfBusy: false) {
                 // `explicitDeposit: true` is what lets a drop un-delete: dropping a file IS the ask, and a
@@ -247,38 +243,54 @@ public actor DaemonService {
         } catch { publishDepositError(error, kind: pending.kind) }
     }
 
-    private static func commandName(for kind: PendingDeposit.Kind) -> String {
+    private static func commandName(for kind: Deposit.Kind) -> String {
         switch kind {
         case .files: return "deposit"
         case .photos: return "depositPhotos"
-        case .retry: return "retryFiles"
         }
     }
 
-    /// The wording for a retry we could not make — written to the ROW, so the tree, Get info and the
-    /// failures panel all say it from one place. Placeholder, gatekept by Ben.
-    static let missingSourceReason = "Couldn\u{2019}t find this file on disk. Reconnect the drive it\u{2019}s on and try again, or use Locate\u{2026} to point at it."
+    /// What "Try again" acts on. The scope is always resolved daemon-side from the journal — never a
+    /// client-sent list of 56k ids (neither a sane request nor under SQLite's bind limit); a batch or a
+    /// watched folder names its rows by key.
+    enum RetryScope {
+        /// A handful of rows the user pointed at (a row's context menu; Locate…).
+        case ids([String])
+        /// Every `failed` row, everywhere.
+        case all
+        /// Every `failed` row of one deposit — the Uploads page's "Try again" on a batch.
+        case deposit(String)
+        /// Every `failed` row a watched folder owns — the same button on a folder row.
+        case source(mountPath: String)
+    }
 
-    /// The user's **Try again** (and **Locate…**, when `sourcePath` is given) on failed uploads — a handful
-    /// of rows by id, or `all` of them (the scope comes from the journal, never a client-sent list: a mass
-    /// failure is one cause across a whole drop, and 56k ids is neither a sane request nor under SQLite's
-    /// bind limit). Splits them into the ones we can actually retry — a recorded source that is on disk
-    /// right now — and the ones we can't (no source, or it's gone). The latter get that verdict WRITTEN TO
-    /// THEIR ROW (`missingSourceReason`), so the reason reaches the tree and the panel as journal truth on
-    /// the next read rather than as something the app has to remember; the reply carries only counts.
-    /// The retryable ones are requeued AND their `.retry` deposit is recorded before this replies — in
-    /// that order, and both before the run — so no pass can ever see them as planned-with-nobody-owning-
-    /// them (the orphan sweep would flip them straight back to failed), and a crash still owes them.
-    func retryFiles(ids: [String]?, sourcePath: String?) throws -> RetryFilesResultDTO {
+    /// The user's **Try again** (and **Locate…**, when `sourcePath` is given) on failed uploads. Splits the
+    /// scope into the rows we can actually retry — a recorded source that is on disk right now — and the
+    /// ones we can't (no source, or it's gone). The latter get that verdict WRITTEN TO THEIR ROW as
+    /// `.missingSource`, so it reaches the tree and the Uploads page as journal truth on the next read
+    /// rather than as something the app has to remember; the reply carries only counts.
+    ///
+    /// The retryable ones are requeued AND their deposit is reopened (`.retry` mode) before this replies —
+    /// in that order, and both before the run — so no pass can ever see them as planned-with-nobody-owning-
+    /// them (the orphan sweep would flip them straight back to failed), and a crash still owes them. A retry
+    /// is an action ON the batch the rows belong to, never a new batch: the same row reopens, its counts
+    /// move, and the Uploads page keeps one line per thing the user did. Rows a watched folder owns have no
+    /// deposit to reopen — their folder's next scan re-plans them by itself, and we bring that pass forward.
+    func retryFiles(_ scope: RetryScope, sourcePath: String?) throws -> RetryFilesResultDTO {
         let session = try requireSession("retryFiles")
         if let sourcePath {
-            guard let ids, ids.count == 1, let id = ids.first else {
+            guard case .ids(let ids) = scope, ids.count == 1, let id = ids.first else {
                 throw ColdStorageError.invalidRequest("retryFiles: sourcePath applies to exactly one file")
             }
             try session.journal.setSourcePath(id: id, sourcePath)
         }
-        let rows = try ids.map { try session.journal.files(ids: $0).filter { $0.status == .failed } }
-            ?? session.journal.failedFiles()
+        let rows: [FileRow]
+        switch scope {
+        case .ids(let ids): rows = try session.journal.files(ids: ids).filter { $0.status == .failed }
+        case .all: rows = try session.journal.failedFiles()
+        case .deposit(let id): rows = try session.journal.depositFiles(id, statuses: [.failed])
+        case .source(let mount): rows = try session.journal.failedFiles(underMount: mount)
+        }
         let retryable = rows.filter { r in
             guard let p = r.sourcePath else { return false }
             // A Photos asset can't be stat'd; it's retryable wherever a resolver exists (a stale id is
@@ -290,67 +302,91 @@ public actor DaemonService {
         let queued = try session.journal.requeueFailedFiles(ids: retryable.map(\.id))
         let queuedSet = Set(queued)
         let missing = rows.map(\.id).filter { !queuedSet.contains($0) }
-        try session.journal.markFilesFailed(missing, error: Self.missingSourceReason)
+        try session.journal.markFilesFailed(missing, kind: .missingSource)
         if !missing.isEmpty { bus.publish(DaemonEvent("filesChanged", ["missingSource": "\(missing.count)"])) }
         if !queued.isEmpty {
-            let pending = Self.newPendingDeposit(kind: .retry, src: queued, into: "", conflicts: [:], excludeExtra: [])
-            try session.journal.addPendingDeposit(pending)
             bus.publish(DaemonEvent("filesChanged", ["retried": "\(queued.count)"]))
-            Task { await self.runRecordedDeposit(pending, session: session) }
+            // Reopen each SETTLED batch the requeued rows belong to (in the order they were dropped) and run
+            // them back to back. Everything else rides the next pass, brought forward: a watched folder's
+            // rows (its scan re-plans them), a batch still `pending` (already owed — reopening it would
+            // rewrite its mode and stop its replay reading `src`), and a row whose deposit is gone.
+            let byDeposit = Dictionary(grouping: retryable.filter { queuedSet.contains($0.id) }, by: \.depositId)
+            var reopened: [Deposit] = []
+            var ridesAPass = byDeposit[nil]?.isEmpty == false
+            for id in byDeposit.keys.compactMap({ $0 }) {
+                if try session.journal.reopenDeposit(id), let d = try session.journal.deposit(id: id) { reopened.append(d) }
+                else { ridesAPass = true }
+            }
+            reopened.sort { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }
+            if !reopened.isEmpty { bus.publish(DaemonEvent("depositsChanged")) }
+            if ridesAPass { trigger() }
+            Task {
+                for d in reopened {
+                    // Re-read: a scheduled pass may have won the run lock and already replayed + settled it,
+                    // in which case there is nothing left to run (and running it would be an empty run
+                    // announcing itself as a real one).
+                    do {
+                        guard let current = try session.journal.deposit(id: d.id), current.state == .pending else { continue }
+                        await self.runRecordedDeposit(current, session: session)
+                    } catch { self.publishDepositError(error, kind: d.kind) }
+                }
+            }
         }
         return RetryFilesResultDTO(queued: queued.count, missing: missing.count)
     }
 
     /// Run one recorded deposit and settle its row. **Must be called under `withRunLock`.** The row is
-    /// removed only when nothing retryable remains: every failure permanent (skip-listed, retrying is
-    /// pointless) or none at all. A stop, a transient fault, or an over-quota refusal keeps the row —
+    /// marked `done` only when nothing retryable remains: every failure permanent (skip-listed, retrying is
+    /// pointless) or none at all. A stop, a transient fault, or an over-quota refusal keeps it `pending` —
     /// those are exactly the outcomes a later pass can finish. `explicit` is `true` for the user's own
     /// drop (may revive deleted files) and `false` for a replay, which must NOT: a file the user deleted
     /// in the app between the drop and the replay stays deleted (the upsert's tombstone rule).
-    private func runPendingDeposit(_ d: PendingDeposit, session: UserSession, explicit: Bool) async throws {
+    private func runPendingDeposit(_ d: Deposit, session: UserSession, explicit: Bool) async throws {
         let conflicts = d.conflicts.compactMapValues { ConflictPolicy(rawValue: $0) }
         let base: any IngestSource
-        switch d.kind {
-        case .files:
+        switch (d.mode, d.kind) {
+        case (.ingest, .files):
             let entries = d.src.map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: $0), destDir: d.dest) }
             let exclude = ExcludeMatcher(patterns: excludeMatcher(session).patterns + d.excludeExtra)
             base = ExplicitPathsSource(entries: entries, exclude: exclude)
-        case .photos:
+        case (.ingest, .photos):
             // A replay on a platform without PhotoKit (or before the resolver is wired) leaves the row for
             // a daemon that can — never drop a pick because THIS process couldn't read the library.
             guard let resolver = photoResolver else { return }
             base = PhotoDepositSource(resolver: resolver, assetIds: d.src, destDir: d.dest, scratchDir: session.scratchDir)
-        case .retry:
-            base = RetryFilesSource(rows: try session.journal.files(ids: d.src),
+        case (.retry, _):
+            // A reopened batch: finish its OWN owed rows in place, from each row's `sourcePath` (see
+            // `Deposit.Mode`). `uploading` too — a retry interrupted mid-blob leaves rows there.
+            base = RetryFilesSource(rows: try session.journal.depositFiles(d.id, statuses: [.planned, .uploading]),
                                     photos: photoResolver.map { (resolver: $0, scratchDir: session.scratchDir) })
         }
-        let failures = try await performRun(session: session, source: resolveCollisions(session, base, conflicts),
-                                            explicitDeposit: explicit)
+        // Drop-time collision answers apply to the DROP. A retry re-ingests rows that already exist, in
+        // place (same id, same path) — re-applying "keep both" there would rename a file beside itself.
+        let source = d.mode == .retry ? base : resolveCollisions(session, base, conflicts)
+        let failures = try await performRun(session: session, source: source, explicitDeposit: explicit, depositId: d.id)
         // Keep a files-deposit whose source is currently UNREACHABLE (every path missing — an unplugged
         // drive, a folder not yet remounted): we can't confirm its files are settled, so the empty run this
         // produced is "nothing to do right now", not "done". Retry next pass. A photos deposit has no path
-        // to check. Otherwise: remove once nothing retryable remains (all-permanent or, the common case,
+        // to check. Otherwise: settle once nothing retryable remains (all-permanent or, the common case,
         // no failures at all — the files archived).
         let sourceReachable: Bool
-        switch d.kind {
-        case .photos: sourceReachable = true
-        case .files: sourceReachable = d.src.contains { FileManager.default.fileExists(atPath: $0) }
-        case .retry:
-            // The rows' own sources, not `src` (which holds ids). All gone ⇒ keep the row for a remount.
-            // A Photos source counts as reachable, as it does for a `.photos` deposit.
-            let paths = ((try? session.journal.files(ids: d.src)) ?? []).compactMap(\.sourcePath)
-            sourceReachable = paths.contains { IngestItem.photoAssetId(fromSource: $0) != nil || FileManager.default.fileExists(atPath: $0) }
+        switch (d.mode, d.kind) {
+        case (.ingest, .photos): sourceReachable = true
+        case (.ingest, .files): sourceReachable = d.src.contains { FileManager.default.fileExists(atPath: $0) }
+        case (.retry, _):
+            // The rows' own sources, not `src`. Nothing still owed ⇒ the retry finished. Otherwise all gone
+            // ⇒ keep the row owed for a remount. A Photos source counts as reachable, as for `.photos`.
+            let owed = (try? session.journal.depositFiles(d.id, statuses: [.planned, .uploading])) ?? []
+            sourceReachable = owed.isEmpty || owed.compactMap(\.sourcePath)
+                .contains { IngestItem.photoAssetId(fromSource: $0) != nil || FileManager.default.fileExists(atPath: $0) }
         }
         if sourceReachable && failures.allSatisfy(\.kind.isPermanent) {
-            try session.journal.removePendingDeposit(d.id)
+            try session.journal.settleDeposit(d.id, at: Int(Date().timeIntervalSince1970))
+            bus.publish(DaemonEvent("depositsChanged"))
         } else {
             log("DaemonService: deposit \(d.id) kept for the next pass — \(sourceReachable ? "\(failures.filter { !$0.kind.isPermanent }.count) blob(s) still owed" : "source unreachable")")
         }
     }
-
-    /// One wording for an upload nothing can resume — shown on the row, gatekept by Ben (placeholder). Names
-    /// the fact only: what to DO about it is the row's own Try again / Locate… / Remove, not a sentence.
-    static let interruptedUploadReason = "Upload didn\u{2019}t finish."
 
     /// Flip files stuck "Uploading" that nothing will ever drive to an honest `failed` state (see
     /// `Journal.markInterruptedUploads`). Runs only when it is UNAMBIGUOUS that a planned file is orphaned:
@@ -363,19 +399,27 @@ public actor DaemonService {
         // If we CAN'T read the deposit queue, do nothing — this sweep condemns planned files, and a pending
         // deposit owns its own not-yet-uploaded ones. Failing to the "no deposits → proceed" side on a read
         // error could flip a live deposit's files to failed. Unknown ⇒ bail (and say why).
-        guard let pending = try? session.journal.listPendingDeposits() else {
+        guard let pending = try? session.journal.pendingDeposits() else {
             log("DaemonService: orphan reconcile skipped — could not read pending deposits")
             return
         }
         guard pending.isEmpty else { return }
-        let mounts = ((try? session.journal.listSources()) ?? [])
-            .filter { !$0.paused }.map(\.mountPath).filter { !$0.isEmpty }
+        let sources = (try? session.journal.listSources()) ?? []
+        // Condemn under ACTIVE mounts only: a paused folder's scan isn't driving anything, so its planned
+        // files are genuinely orphaned. Adopt under NO registered mount, paused or not: pausing is not
+        // unwatching, and a paused folder's failures still belong to that folder's row, not a minted batch.
+        let active = sources.filter { !$0.paused }.map(\.mountPath).filter { !$0.isEmpty }
+        let registered = sources.map(\.mountPath).filter { !$0.isEmpty }
         let now = Int(Date().timeIntervalSince1970)
         do {
-            let n = try session.journal.markInterruptedUploads(notUnder: mounts, reason: Self.interruptedUploadReason, now: now)
-            if n > 0 {
-                log("DaemonService: \(n) interrupted upload(s) marked needs-attention (orphaned planned files, nothing to resume them)")
+            let n = try session.journal.markInterruptedUploads(notUnder: active, now: now)
+            // Every failed row no batch shows gets one — the sweep's own condemnations above, and whatever a
+            // removed watched folder left behind — so the Uploads page never has a failure it can't list.
+            let adopted = try session.journal.adoptOrphanedFailures(notUnder: registered, now: now)
+            if n > 0 || adopted > 0 {
+                log("DaemonService: \(n) interrupted upload(s) marked needs-attention, \(adopted) orphaned failure(s) given a batch")
                 bus.publish(DaemonEvent("filesChanged", ["interruptedUploads": "\(n)"]))
+                bus.publish(DaemonEvent("depositsChanged"))
             }
         } catch { log("DaemonService: orphan reconcile failed — \(error)") }
     }
@@ -383,7 +427,7 @@ public actor DaemonService {
     /// Finish what earlier deposits still owe. Runs on every pass (after the watched-folder scan) and so
     /// right after sign-in, which `beginSession` wakes the loop for. **Caller holds the run lock.**
     private func replayPendingDeposits(_ session: UserSession) async {
-        let pending = (try? session.journal.listPendingDeposits()) ?? []
+        let pending = (try? session.journal.pendingDeposits()) ?? []
         for d in pending {
             do { try await runPendingDeposit(d, session: session, explicit: false) }
             catch { bus.publish(DaemonEvent("error", ["message": "resuming a deposit: \(error)"])) }
@@ -416,7 +460,7 @@ public actor DaemonService {
     /// exclusion. Every call site does.
     @discardableResult
     private func performRun(session: UserSession, source: IngestSource,
-                            explicitDeposit: Bool = false) async throws -> [BlobFailure] {
+                            explicitDeposit: Bool = false, depositId: String? = nil) async throws -> [BlobFailure] {
         bus.publish(DaemonEvent("runStarted"))
         let bus = self.bus
         let onFile: @Sendable (String, String) async -> Void = { id, blob in
@@ -467,7 +511,7 @@ public actor DaemonService {
         let prefix = session.prefix
         let task = Task {
             try await engine.run(source: source, skipBlobIds: skip, prefix: prefix, quota: quota,
-                                 explicitDeposit: explicitDeposit,
+                                 explicitDeposit: explicitDeposit, depositId: depositId,
                                  onFileArchived: onFile, onProgress: onProgress, onRunProgress: onRunProgress)
         }
         runTask = task
@@ -482,7 +526,7 @@ public actor DaemonService {
         }
         for f in failures {
             // Name the affected files by path (newline-joined) so a live watcher flips their rows + lists them
-            // in the failures panel without waiting for the next listFiles read. NOT for a Stop: a 30 GB folder
+            // on the Uploads page without waiting for the next listFiles read. NOT for a Stop: a 30 GB folder
             // stopped early is hundreds of blobs, and a flood of "failed" events for something the user chose
             // would bury the real faults in the UI's bounded failure log. The rows reconcile on the
             // `listFiles` re-read `runFinished` triggers; the count rides on `runFinished` itself.
@@ -493,17 +537,20 @@ public actor DaemonService {
                                                    "paths": f.files.map(\.path).joined(separator: "\n")]))
             if f.kind.isPermanent {
                 permanentlyFailedBlobs.insert(f.blobId)
-                // Persist the ⚠ as journal truth (survives refresh + restart). Best-effort: a write hiccup here
-                // must not abort surfacing the remaining failures — the event already reported the fault.
-                try? session.journal.markFilesFailed(f.files.map(\.id), error: f.kind.message)
-            } else if f.kind.isOverQuota || f.kind.isStopped {
+                // Persist the ⚠ as journal truth (survives refresh + restart): the KIND is what the app renders,
+                // the message is the developer detail under Get info. Best-effort: a write hiccup here must not
+                // abort surfacing the remaining failures — the event already reported the fault.
+                do { try session.journal.markFilesFailed(f.files.map(\.id), kind: .permanent, error: f.kind.message) }
+                catch { log("DaemonService: could not persist failed state for blob \(f.blobId): \(error)") }
+            } else if let kind = f.kind.fileFailureKind {
                 // Mark the files `failed` too, so their rows leave "uploading" — an over-quota file was upserted
                 // (status `planned` = "uploading" in the UI) but never archived, and would otherwise sit
                 // pending FOREVER after the refusal. But do NOT skip-list the blob: unlike a permanent fault,
                 // this heals the moment there's room — a folder re-scan resets it to `planned` and retries.
                 // A STOPPED blob is the same shape: not a fault, retried on the next pass / re-drop, and its
                 // files would otherwise read "uploading" for an upload the user just ended.
-                try? session.journal.markFilesFailed(f.files.map(\.id), error: f.kind.message)
+                do { try session.journal.markFilesFailed(f.files.map(\.id), kind: kind) }
+                catch { log("DaemonService: could not persist failed state for blob \(f.blobId): \(error)") }
             } else {
                 // TRANSIENT — and until now the only case that left NOTHING behind. The two above were given
                 // journal truth precisely because a file stuck reading "Uploading" forever is a lie; a
@@ -748,9 +795,13 @@ public actor DaemonService {
         let error: String?
         /// Where the bytes live on this Mac, or null — what the app keys "Try again" vs "Locate…" off.
         let sourcePath: String?
+        /// The batch (deposit) this row belongs to, or null for a watched folder's file.
+        let depositId: String?
+        /// Why a `failed` row failed (`FileFailureKind` raw value), or null — the app's copy key.
+        let failureKind: String?
 
         enum CodingKeys: String, CodingKey {
-            case id, relativePath, size, status, blobId, date, lastAttemptAt, error, sourcePath
+            case id, relativePath, size, status, blobId, date, lastAttemptAt, error, sourcePath, depositId, failureKind
         }
 
         func encode(to encoder: Encoder) throws {
@@ -764,12 +815,31 @@ public actor DaemonService {
             try c.encode(lastAttemptAt, forKey: .lastAttemptAt)
             try c.encode(error, forKey: .error)
             try c.encode(sourcePath, forKey: .sourcePath)
+            try c.encode(depositId, forKey: .depositId)
+            try c.encode(failureKind, forKey: .failureKind)
+        }
+    }
+    /// One batch on the Uploads page (`listDeposits`). Counts are NOT here: the app derives them from the
+    /// same `listFiles` rows the tree draws, keyed by `depositId`, so a batch's "3 of 500 couldn't upload"
+    /// can never disagree with the rows underneath it. Every optional is encoded as `null`, not omitted
+    /// (see `FileDTO`).
+    private struct DepositDTO: Encodable {
+        let id, kind, mode, state, dest: String
+        let src: [String]
+        let createdAt: Int
+        let finishedAt: Int?
+        enum CodingKeys: String, CodingKey { case id, kind, mode, state, dest, src, createdAt, finishedAt }
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(id, forKey: .id); try c.encode(kind, forKey: .kind); try c.encode(mode, forKey: .mode)
+            try c.encode(state, forKey: .state); try c.encode(dest, forKey: .dest); try c.encode(src, forKey: .src)
+            try c.encode(createdAt, forKey: .createdAt); try c.encode(finishedAt, forKey: .finishedAt)
         }
     }
     private struct AckDTO: Encodable { let ok: Bool }
     /// `retryFiles`' answer: how many rows are back in the queue, and how many we could not retry (no source
-    /// on disk — those rows now carry `missingSourceReason`). Counts, not ids: the rows themselves are the
-    /// record, and a mass retry must not echo 56k ids back over the wire.
+    /// on disk — those rows are now `failed` as `.missingSource`). Counts, not ids: the rows themselves are
+    /// the record, and a mass retry must not echo 56k ids back over the wire.
     struct RetryFilesResultDTO: Encodable { let queued: Int; let missing: Int }
 
     /// The answer to "will this come back?", so the client can say so instead of letting the user find out.
@@ -1197,8 +1267,32 @@ public actor DaemonService {
             guard let session else { return AnyEncodable([FileDTO]()) }
             return AnyEncodable(try session.journal.listFiles().map {
                 FileDTO(id: $0.id, relativePath: $0.relativePath, size: $0.size, status: $0.status.rawValue, blobId: $0.blobId,
-                        date: $0.createdAt, lastAttemptAt: $0.lastAttemptAt, error: $0.error, sourcePath: $0.sourcePath)
+                        date: $0.createdAt, lastAttemptAt: $0.lastAttemptAt, error: $0.error, sourcePath: $0.sourcePath,
+                        depositId: $0.depositId, failureKind: $0.failureKind?.rawValue)
             })
+        case "listDeposits":
+            // Every batch the user has dropped or picked, newest first — the Uploads page's list. Signed
+            // out ⇒ empty, like every other read here.
+            guard let session else { return AnyEncodable([DepositDTO]()) }
+            return AnyEncodable(try session.journal.listDeposits().map {
+                DepositDTO(id: $0.id, kind: $0.kind.rawValue, mode: $0.mode.rawValue, state: $0.state.rawValue,
+                           dest: $0.dest, src: $0.src, createdAt: $0.createdAt, finishedAt: $0.finishedAt)
+            })
+        case "removeFailedFiles":
+            // The Uploads page's "Remove these" on a batch that didn't finish: tombstone its `failed` rows.
+            let session = try requireSession("removeFailedFiles")
+            guard let id = p["depositId"], !id.isEmpty else { throw ColdStorageError.invalidRequest("removeFailedFiles requires params.depositId") }
+            let n = try session.journal.removeFailedFiles(inDeposit: id)
+            bus.publish(DaemonEvent("filesChanged", ["deleted": "\(n) failed file(s) of deposit \(id)"]))
+            return AnyEncodable(AckDTO(ok: true))
+        case "forgetDeposit":
+            // Drop a settled, fully-stored batch from the history (its files stay in the tree). The journal
+            // refuses while the batch is owed or still has a failed file — see `Journal.forgetDeposit`.
+            let session = try requireSession("forgetDeposit")
+            guard let id = p["depositId"], !id.isEmpty else { throw ColdStorageError.invalidRequest("forgetDeposit requires params.depositId") }
+            try session.journal.forgetDeposit(id)
+            bus.publish(DaemonEvent("depositsChanged"))
+            return AnyEncodable(AckDTO(ok: true))
         case "listExcludes":
             guard let session else { return AnyEncodable([String]()) }
             return AnyEncodable(try session.journal.listExcludes())
@@ -1360,17 +1454,22 @@ public actor DaemonService {
             Task { await self.deposit(paths: paths, into: dest, conflicts: conflicts, excludeExtra: extra) }
             return AnyEncodable(AckDTO(ok: true))
         case "retryFiles":
-            // The user's Try again / Locate… on failed rows. Either `ids` (newline-joined journal file ids)
-            // or `all: "true"` (every failed row — the scope is read from the journal, never sent);
-            // `sourcePath` (optional, single id only) is where they just told us the bytes are.
-            let ids: [String]?
+            // The user's Try again / Locate… on failed rows. ONE of: `ids` (newline-joined journal file
+            // ids), `all: "true"` (every failed row), `depositId` (a batch), `sourceMount` (a watched
+            // folder's mount path) — the last three are resolved from the journal, never sent as a list.
+            // `sourcePath` (optional, `ids` with a single id only) is where they just told us the bytes are.
+            let scope: RetryScope
             if p["all"] == "true" {
-                ids = nil
+                scope = .all
+            } else if let id = p["depositId"], !id.isEmpty {
+                scope = .deposit(id)
+            } else if let mount = p["sourceMount"], !mount.isEmpty {
+                scope = .source(mountPath: mount)
             } else {
-                guard let raw = p["ids"], !raw.isEmpty else { throw ColdStorageError.invalidRequest("retryFiles requires params.ids (newline-joined file ids) or params.all = \"true\"") }
-                ids = raw.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+                guard let raw = p["ids"], !raw.isEmpty else { throw ColdStorageError.invalidRequest("retryFiles requires one of params.ids (newline-joined file ids), params.all = \"true\", params.depositId, params.sourceMount") }
+                scope = .ids(raw.split(separator: "\n").map(String.init).filter { !$0.isEmpty })
             }
-            return AnyEncodable(try retryFiles(ids: ids, sourcePath: p["sourcePath"]))
+            return AnyEncodable(try retryFiles(scope, sourcePath: p["sourcePath"]))
         case "depositPhotos":
             _ = try requireSession("depositPhotos")
             // Explicit photo deposit (the photo analogue of `deposit`): archive these PICKED Photos assets

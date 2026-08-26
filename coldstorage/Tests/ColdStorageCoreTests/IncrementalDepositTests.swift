@@ -94,7 +94,7 @@ import Foundation
         let id = try #require(try f.journal.listFiles().first).id
         #expect(try f.journal.isFileArchived(id) == true)
 
-        try f.journal.markFilesFailed([id], error: "Not enough storage left to back this up.")
+        try f.journal.markFilesFailed([id], kind: .overQuota)
 
         #expect(try f.journal.isFileArchived(id) == true, "an archived file was flipped to failed — the tree now claims a stored backup didn't happen")
         #expect(try f.journal.listFiles().first?.blobId != nil)   // and still resolves to its blob

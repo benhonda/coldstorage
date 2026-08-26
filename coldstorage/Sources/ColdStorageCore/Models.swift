@@ -77,17 +77,30 @@ public struct BlobPlan: Sendable {
 /// library is a single platform source with no path. The journal is the SSOT — add/remove flows
 /// through IPC into this table, so sources survive daemon restarts.
 public enum SourceKind: String, Codable, Sendable { case folder, photos }
-/// An explicit deposit — a drop, or a photo pick — recorded BEFORE its run starts and kept until every
-/// file it named has settled. Watched folders are re-scanned every pass, so an interrupted one resumes by
-/// itself; a drop had no such anchor: kill the daemon mid-30 GB and its files sat "uploading" in the tree
-/// with nobody uploading them, until the user happened to drop the same folder again (2026-08-25). This row
-/// is the anchor. `src` is absolute paths (`.files`), Photos localIdentifiers (`.photos`), or journal file
-/// ids (`.retry` — the user's "Try again" on failed rows, re-read from each row's own `sourcePath`; `dest`
-/// is unused, the rows already know where they live); `conflicts` and `excludeExtra` are the user's
-/// answers at drop time, replayed verbatim so a resumed deposit lands exactly where — and skips exactly
-/// what — the original would have.
-public struct PendingDeposit: Sendable, Equatable {
-    public enum Kind: String, Sendable { case files, photos, retry }
+/// An explicit deposit — a drop, or a photo pick — recorded BEFORE its run starts and KEPT afterwards as
+/// the user's own unit of upload history: "the folder I dropped on Tuesday" is one row here, however many
+/// files rode in it. Watched folders are re-scanned every pass, so an interrupted one resumes by itself; a
+/// drop had no such anchor: kill the daemon mid-30 GB and its files sat "uploading" in the tree with nobody
+/// uploading them, until the user happened to drop the same folder again (2026-08-25). This row is the
+/// anchor while `state == .pending` (still owed — the scheduled pass replays it) and the batch's identity
+/// once `.done` (every file settled: archived, or failed with nothing left to retry). Files point back at
+/// the deposit that last claimed them (`FileRow.depositId`), so a batch's counts are derived from its rows
+/// and never stored here — the two can't disagree.
+///
+/// `src` is absolute paths (`.files`) or Photos localIdentifiers (`.photos`) — or, for a batch the orphan
+/// sweep minted to adopt failures nothing owned (`.retry` from birth, never ran as a drop), the vault
+/// folders its rows sit in, for display only; `conflicts` and `excludeExtra`
+/// are the user's answers at drop time, replayed verbatim so a resumed deposit lands exactly where — and
+/// skips exactly what — the original would have. `mode` says how a replay re-reads the bytes: `.ingest`
+/// enumerates `src` again (the first run, or one interrupted before it settled); `.retry` re-ingests the
+/// deposit's OWN still-owed rows from each row's `sourcePath` — the user's "Try again" on a settled batch,
+/// which must finish the failed rows in place (same id, same vault path) rather than re-drop `src` and land
+/// a second copy beside every file that was renamed or moved since. A retry is therefore an action ON a
+/// deposit — it reopens the same row — never a new one.
+public struct Deposit: Sendable, Equatable {
+    public enum Kind: String, Sendable { case files, photos }
+    public enum State: String, Sendable { case pending, done }
+    public enum Mode: String, Sendable { case ingest, retry }
     public let id: String
     public let kind: Kind
     public let src: [String]
@@ -95,10 +108,16 @@ public struct PendingDeposit: Sendable, Equatable {
     public let conflicts: [String: String]
     public let excludeExtra: [String]
     public let createdAt: Int
+    public let state: State
+    public let mode: Mode
+    /// When it last settled (`.done`); nil while owed. Cleared again by a retry, which reopens the row.
+    public let finishedAt: Int?
     public init(id: String, kind: Kind, src: [String], dest: String, conflicts: [String: String],
-                excludeExtra: [String], createdAt: Int) {
+                excludeExtra: [String], createdAt: Int, state: State = .pending, mode: Mode = .ingest,
+                finishedAt: Int? = nil) {
         self.id = id; self.kind = kind; self.src = src; self.dest = dest
         self.conflicts = conflicts; self.excludeExtra = excludeExtra; self.createdAt = createdAt
+        self.state = state; self.mode = mode; self.finishedAt = finishedAt
     }
 }
 

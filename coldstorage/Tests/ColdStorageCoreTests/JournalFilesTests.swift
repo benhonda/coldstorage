@@ -77,9 +77,11 @@ import Foundation
     @Test func markFilesFailedPersistsFailedStatus() throws {
         let j = try tempJournal()
         try j.upsert([item("x", path: "a/b.jpg", size: 1), item("y", path: "a/c.jpg", size: 2)])
-        try j.markFilesFailed(["x", "y"], error: "S3 AccessDenied")
+        try j.markFilesFailed(["x", "y"], kind: .permanent, error: "S3 AccessDenied")
         let rows = try j.listFiles()
         #expect(rows.allSatisfy { $0.status == .failed })
+        // The KIND is what the app renders; the message stays as developer detail.
+        #expect(rows.allSatisfy { $0.failureKind == .permanent && $0.error == "S3 AccessDenied" })
     }
 
     /// A later successful re-archive overwrites a prior `failed` back to `archived` (self-correcting after a
@@ -87,9 +89,9 @@ import Foundation
     @Test func reArchiveClearsFailedAndEmptyIsNoop() throws {
         let j = try tempJournal()
         try j.upsert([item("x", path: "a/b.jpg", size: 1)])
-        try j.markFilesFailed([], error: "ignored")              // no-op, doesn't throw
+        try j.markFilesFailed([], kind: .permanent, error: "ignored")              // no-op, doesn't throw
         #expect(try #require(try j.listFiles().first).status == .planned)
-        try j.markFilesFailed(["x"], error: "S3 AccessDenied")
+        try j.markFilesFailed(["x"], kind: .permanent, error: "S3 AccessDenied")
         try j.markFileArchived("x", blobId: "blob-1", offset: 0, length: 1, firstFrame: 0, plaintextSha256: "sha", size: 1)
         #expect(try #require(try j.listFiles().first).status == .archived)
     }
@@ -116,7 +118,7 @@ import Foundation
     @Test func requeueFailedFilesFlipsOnlyFailedRowsClean() throws {
         let j = try tempJournal()
         try j.upsert([item("f", path: "f.jpg", size: 1), item("a", path: "a.jpg", size: 1), item("q", path: "q.jpg", size: 1)])
-        try j.markFilesFailed(["f"], error: "boom")
+        try j.markFilesFailed(["f"], kind: .permanent, error: "boom")
         try j.markFileArchived("a", blobId: "b", offset: 0, length: 1, firstFrame: 0, plaintextSha256: "s", size: 1)
         #expect(try j.requeueFailedFiles(ids: ["f", "a", "q", "nope"]) == ["f"])
         let byId = Dictionary(uniqueKeysWithValues: try j.listFiles().map { ($0.id, $0) })
@@ -159,7 +161,7 @@ import Foundation
         let n = 40_000
         try j.upsert((0..<n).map { item("f\($0)", path: "drop/\($0).bin", size: 1) })
         let ids = (0..<n).map { "f\($0)" }
-        try j.markFilesFailed(ids, error: "AccessDenied")
+        try j.markFilesFailed(ids, kind: .permanent, error: "AccessDenied")
         #expect(try j.failedFiles().count == n)
         #expect(try j.files(ids: ids).count == n)
         #expect(try j.requeueFailedFiles(ids: ids).count == n)

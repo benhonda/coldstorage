@@ -114,6 +114,7 @@ public actor UploadEngine {
                     prefix: VaultPrefix,
                     quota: QuotaLimit? = nil,
                     explicitDeposit: Bool = false,
+                    depositId: String? = nil,
                     onFileArchived: (@Sendable (String, String) async -> Void)? = nil,
                     onProgress: (@Sendable (UploadProgress) async -> Void)? = nil,
                     onRunProgress: (@Sendable (RunProgress) async -> Void)? = nil) async throws -> [BlobFailure] {
@@ -125,7 +126,8 @@ public actor UploadEngine {
         log("UploadEngine: scanned \(items.count) item(s) — RSS \(ProcessMemory.resident)")
         // `explicitDeposit` is the user re-dropping these exact items, which is the only thing that may bring
         // a deleted file back (`Journal.reviveFiles`).
-        try journal.upsert(items, reviving: explicitDeposit)
+        // `depositId` stamps the batch onto every row it claims — the Uploads page's key (nil for a scan).
+        try journal.upsert(items, reviving: explicitDeposit, depositId: depositId)
         // ── UN-TAG BEFORE ANYTHING RELIES ON THOSE BYTES ───────────────────────────────────────────────
         // A live file pointing at an object queued for lifecycle expiry is the one inconsistency here that
         // destroys data on a timer rather than surfacing as an error. Re-checked every run, not just after
