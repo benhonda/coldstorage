@@ -8,6 +8,7 @@
  * daemon then drives — this view starts a download, the Downloads page tracks it.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ColdstoreApi, ConflictPolicy, DepositPreviewItem, ExcludeSuggestion, RetrievalQuote } from "../../../shared/ipc.ts";
 import { RECLAIM } from "../../../shared/reclaim-constants.ts";
 import type { Exec } from "./types.ts";
@@ -1132,14 +1133,29 @@ const FileList = ({
     if (o && Math.hypot(e.clientX - o.x, e.clientY - o.y) > PRESS_DRIFT_PX) cancelPress();
   };
 
+  // Virtualized: only the rows in (and just around) the viewport exist in the DOM. A 5k-file folder used
+  // to be 5k live rows, re-rendered on every daemon event — the lag a big drop was felt as. Heights are
+  // measured (`measureElement`), so the estimate only has to be close; `--cs-row-h` is the real one.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_ESTIMATE_PX,
+    overscan: 12,
+    getItemKey: (i) => {
+      const row = rows[i];
+      return row ? rowKey(row) : i;
+    },
+  });
+
   return (
-  // Finder-style: a click that lands on the list's blank area (the card itself, not a row) clears the
-  // selection; a right-click there opens the empty-area menu. Row events bubble here too, but
-  // target!==currentTarget for them, so they don't deselect / double-fire.
+  // Finder-style: a click that lands on the list's blank area (the card itself, the header, or the filler
+  // — anything that isn't a row) clears the selection; a right-click there opens the empty-area menu.
   <div
+    ref={scrollRef}
     className="cs-filelist"
-    onClick={(e) => e.target === e.currentTarget && onClearSelection()}
-    onContextMenu={(e) => e.target === e.currentTarget && onRowContext(e)}
+    onClick={(e) => isBlankArea(e, ".cs-fl-row, .cs-fl-head") && onClearSelection()}
+    onContextMenu={(e) => isBlankArea(e, ".cs-fl-row, .cs-fl-head") && onRowContext(e)}
   >
     <div className="cs-fl-grid cs-fl-head">
       <span>Name</span>
@@ -1147,17 +1163,30 @@ const FileList = ({
       <span>Date</span>
       <span />
     </div>
-    {rows.map((row, i) => {
+    {/* the scroll runway: as tall as every row would be, with only the visible ones placed inside it */}
+    <div className="cs-fl-body" style={{ height: virtualizer.getTotalSize() }}>
+    {virtualizer.getVirtualItems().map((item) => {
+      const row = rows[item.index];
+      if (!row) return null; // unreachable — the virtualizer indexes `rows` — satisfies noUncheckedIndexedAccess
+      const i = item.index;
       const key = rowKey(row);
       const isFolder = row.type === "folder";
       const badges = rowBadges(row);
       const src = drag.source(row);
+      // zebra by index, not :nth-child — only a window of rows is ever in the DOM, so DOM parity is meaningless
+      const classes = [
+        "cs-fl-grid",
+        "cs-fl-row",
+        i % 2 === 1 ? "cs-fl-row--even" : "",
+        isFolder && drag.isDropTarget(row.path) ? "cs-fl-row--drop" : "",
+      ].filter(Boolean).join(" ");
       return (
         <div
-          key={key}
-          className={
-            isFolder && drag.isDropTarget(row.path) ? "cs-fl-grid cs-fl-row cs-fl-row--drop" : "cs-fl-grid cs-fl-row"
-          }
+          key={item.key}
+          ref={virtualizer.measureElement}
+          data-index={i}
+          className={classes}
+          style={{ transform: `translateY(${item.start}px)` }}
           role="row"
           aria-selected={selected.has(key)}
           draggable={renaming !== key}
@@ -1216,18 +1245,28 @@ const FileList = ({
         </div>
       );
     })}
+    </div>
     {/* striped filler so the zebra reads continuously into the empty space below the last row (and fills
         the body of an empty folder). Shift by one band when the row count is odd so parity continues. */}
     <div
       className="cs-fl-filler"
       aria-hidden="true"
-      onClick={onClearSelection}
-      onContextMenu={(e) => onRowContext(e)}
       style={{ "--fill-shift": rows.length % 2 === 0 ? "0px" : "var(--cs-row-h)" } as React.CSSProperties}
     />
   </div>
   );
 };
+
+/** Row-height estimate for the virtualizer, before a row is measured: `--cs-row-h` (`--control-md`). */
+const ROW_ESTIMATE_PX = 34;
+/** Gallery-row estimate: a 4:3 tile at the minimum column width, plus its foot. Measured once rendered. */
+const TILE_ROW_ESTIMATE_PX = 170;
+
+/** Did this click land on the container's own blank area — nothing matching `rowSelector` under it? The
+ * virtualized lists wrap their rows in a runway element, so `target === currentTarget` no longer means
+ * "blank": the runway is a hit too. */
+const isBlankArea = (e: React.MouseEvent, rowSelector: string): boolean =>
+  !(e.target instanceof Element && e.target.closest(rowSelector));
 
 const RenameInput = ({
   initial,
@@ -1263,6 +1302,16 @@ const RenameInput = ({
 
 // ── grid / gallery view ────────────────────────────────────────────
 
+/** How many tiles fit across `el` under the gallery's own CSS (`--cs-tile-min` + `column-gap`), so the
+ * CSS stays the one place the tile width is decided. */
+const galleryColumns = (el: HTMLElement): number => {
+  const cs = getComputedStyle(el);
+  const min = parseFloat(cs.getPropertyValue("--cs-tile-min")) || 150;
+  const gap = parseFloat(cs.columnGap) || 0;
+  const width = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  return Math.max(1, Math.floor((width + gap) / (min + gap)));
+};
+
 const Gallery = ({
   rows,
   selected,
@@ -1280,44 +1329,81 @@ const Gallery = ({
   /** Right-click handler — pass a tile's row for a row menu, omit it for the empty-area menu. */
   onRowContext: (e: React.MouseEvent, row?: Row) => void;
   onClearSelection: () => void;
-}): React.JSX.Element => (
+}): React.JSX.Element => {
+  // Virtualized by ROW of tiles (same reason as the list — see FileList). The column count follows the
+  // container's width, read through the gallery's own CSS so the tile size has one SSOT.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [cols, setCols] = useState(1);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const measure = (): void => setCols(galleryColumns(el));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const rowCount = Math.ceil(rows.length / cols);
+  const virtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => TILE_ROW_ESTIMATE_PX,
+    overscan: 3,
+  });
+
+  return (
   // click / right-click on the blank grid area (not a tile) clears the selection / opens the empty menu
   <div
+    ref={scrollRef}
     className="cs-gallery"
-    onClick={(e) => e.target === e.currentTarget && onClearSelection()}
-    onContextMenu={(e) => e.target === e.currentTarget && onRowContext(e)}
+    onClick={(e) => isBlankArea(e, ".cs-tile") && onClearSelection()}
+    onContextMenu={(e) => isBlankArea(e, ".cs-tile") && onRowContext(e)}
   >
-    {rows.map((row, i) => {
-      const key = rowKey(row);
-      const isFolder = row.type === "folder";
-      const src = drag.source(row);
-      return (
-        <button
-          key={key}
-          type="button"
-          className={isFolder && drag.isDropTarget(row.path) ? "cs-tile cs-tile--drop" : "cs-tile"}
-          aria-selected={selected.has(key)}
-          draggable
-          onDragStart={src.onDragStart}
-          onDragEnd={src.onDragEnd}
-          {...(isFolder ? drag.target(row.path) : {})}
-          onClick={(e) => onRowClick(e, row, i)}
-          onDoubleClick={() => onRowOpen(row)}
-          onContextMenu={(e) => onRowContext(e, row)}
-        >
-          {/* file-type icon today; a real thumbnail when R2 lands (the only R2-gated piece) */}
-          <span className="cs-tile-thumb">{row.type === "folder" ? <Icon name="folder" size={40} /> : <KindIcon kind={row.file.kind} size={40} />}</span>
-          <span className="cs-tile-foot">
-            <span className="cs-tile-name" title={row.name}>{row.name}</span>
-            {!isEmptyFolder(row) && (
-              <StatusBadges badges={rowBadges(row)} reason={row.type === "file" ? failureReason(row.file) : null} />
-            )}
-          </span>
-        </button>
-      );
-    })}
+    <div className="cs-gallery-body" style={{ height: virtualizer.getTotalSize() }}>
+    {virtualizer.getVirtualItems().map((item) => (
+      <div
+        key={item.key}
+        ref={virtualizer.measureElement}
+        data-index={item.index}
+        className="cs-gallery-row"
+        style={{ transform: `translateY(${item.start}px)`, gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+      >
+        {rows.slice(item.index * cols, (item.index + 1) * cols).map((row, j) => {
+          const i = item.index * cols + j;
+          const key = rowKey(row);
+          const isFolder = row.type === "folder";
+          const src = drag.source(row);
+          return (
+            <button
+              key={key}
+              type="button"
+              className={isFolder && drag.isDropTarget(row.path) ? "cs-tile cs-tile--drop" : "cs-tile"}
+              aria-selected={selected.has(key)}
+              draggable
+              onDragStart={src.onDragStart}
+              onDragEnd={src.onDragEnd}
+              {...(isFolder ? drag.target(row.path) : {})}
+              onClick={(e) => onRowClick(e, row, i)}
+              onDoubleClick={() => onRowOpen(row)}
+              onContextMenu={(e) => onRowContext(e, row)}
+            >
+              {/* file-type icon today; a real thumbnail when R2 lands (the only R2-gated piece) */}
+              <span className="cs-tile-thumb">{row.type === "folder" ? <Icon name="folder" size={40} /> : <KindIcon kind={row.file.kind} size={40} />}</span>
+              <span className="cs-tile-foot">
+                <span className="cs-tile-name" title={row.name}>{row.name}</span>
+                {!isEmptyFolder(row) && (
+                  <StatusBadges badges={rowBadges(row)} reason={row.type === "file" ? failureReason(row.file) : null} />
+                )}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    ))}
+    </div>
   </div>
-);
+  );
+};
 
 // ── first run / empty folder ───────────────────────────────────────
 

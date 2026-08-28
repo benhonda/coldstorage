@@ -710,6 +710,10 @@ button.cs-kv:hover { background: var(--surface-hover); }
   );
   background-position: 0 var(--fill-shift, 0px);
 }
+/* the virtualizer's runway: as tall as every row would be; the rendered rows are placed inside it
+   absolutely (translateY) — see FileList. Below it, the filler stripes whatever's left. */
+.cs-fl-body { position: relative; flex: 0 0 auto; width: 100%; }
+.cs-fl-body > .cs-fl-row { position: absolute; top: 0; left: 0; }
 .cs-fl-grid {
   display: grid;
   grid-template-columns: 1fr var(--cs-col-size) var(--cs-col-date) var(--cs-col-actions);
@@ -844,7 +848,8 @@ button.cs-kv:hover { background: var(--surface-hover); }
    the only way to be exactly right on all four states is to composite the same two layers they do. It also
    fixes a small old lie — hovering a striped row used to REPLACE the stripe with a translucent wash, which
    made the row go lighter on hover; the tint now sits over the stripe. */
-.cs-fl-row:nth-child(even) { --row-base: var(--surface-raised); }
+/* by index, not :nth-child — the list is virtualized, so only a window of rows is in the DOM at once */
+.cs-fl-row--even { --row-base: var(--surface-raised); }
 .cs-fl-row:hover { --row-tint: var(--surface-hover); }
 .cs-fl-row[aria-selected="true"] { --row-tint: var(--accent-subtle); }
 /* drag-to-move: this folder row is the hovered, legal destination. Dashed accent = "drops in here",
@@ -878,14 +883,25 @@ button.cs-kv:hover { background: var(--surface-hover); }
 
 /* ── gallery (grid) view ────────────────────────────────────────── */
 .cs-gallery {
+  /* the tile's minimum width and the gap between tiles — the SSOT the Gallery reads (getComputedStyle)
+     to decide how many columns fit, since it virtualizes by row of tiles and lays each row out itself */
+  --cs-tile-min: 150px;
+  column-gap: var(--space-4);
   flex: 1 1 auto;
   overflow-y: auto;
   min-height: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: var(--space-4);
   padding: var(--space-3);
-  align-content: start;
+}
+/* the runway (see .cs-fl-body); each virtual row is one line of tiles */
+.cs-gallery-body { position: relative; width: 100%; }
+.cs-gallery-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  display: grid;
+  gap: var(--space-4);
+  padding-bottom: var(--space-4);
 }
 .cs-tile {
   border: 1px solid var(--border-card);

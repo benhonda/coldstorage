@@ -32,6 +32,7 @@
   "dependencies": {
     "@fontsource/hanken-grotesk": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
+    "@tanstack/react-virtual": "^3.14.10",
     "electron-log": "^5.4.4",
     "electron-updater": "^6.8.9",
     "material-symbols": "^0.45.2",
