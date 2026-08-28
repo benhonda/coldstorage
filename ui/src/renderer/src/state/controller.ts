@@ -86,7 +86,8 @@ export const connectController = (api: ColdstoreApi, store: Store): Controller =
 
 
   const offEvent = api.onEvent((name, data) => {
-    store.dispatch(eventAction(name, data));
+    // Coalesced: a run streams thousands of these, one IPC task each — see `Store.dispatchCoalesced`.
+    store.dispatchCoalesced(eventAction(name, data));
     // Resync the authoritative snapshot when the daemon reports the registry or a run changed it.
     if (name === "sourcesChanged") void refreshSources();
     // An add/removeExclude changed the registry — re-read it (the next scan already applies the change).

@@ -314,6 +314,10 @@ describe("controller sync policy", () => {
     await tick();
 
     f.fireEvent("fileArchived", { file: "x.jpg", blob: "b1" });
+    // Events are coalesced into one fold per frame (`Store.dispatchCoalesced`), so the fold is not
+    // synchronous — but a direct dispatch drains the queue first, which is what a snapshot read does.
+    expect(store.getState().run).toBeNull();
+    await new Promise((r) => setTimeout(r, 20));
     expect(store.getState().run?.filesArchived).toBe(1);
   });
 
