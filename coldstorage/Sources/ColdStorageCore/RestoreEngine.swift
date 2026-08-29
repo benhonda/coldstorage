@@ -122,6 +122,7 @@ public struct RestoreEngine: Sendable {
                 throw ColdStorageError.integrity("restored '\(fileId)' claims 0 bytes but its recorded hash isn't empty's")
             }
             try Data().write(to: outURL)
+            try applyMetadata(fileId: fileId, to: outURL)
             return
         }
 
@@ -192,12 +193,22 @@ public struct RestoreEngine: Sendable {
             // this is the portable Core, and the pre-streaming behavior (overwrite an existing file) holds.
             if fm.fileExists(atPath: outURL.path) { try fm.removeItem(at: outURL) }
             try fm.moveItem(at: partial, to: outURL)
+            try applyMetadata(fileId: fileId, to: outURL)
         } catch {
             // Whatever failed — a dropped stream, a bad frame, the hash check — leave NOTHING behind:
             // no partial to confuse a Finder window, no unverified bytes at the destination.
             try? sink.close()
             try? fm.removeItem(at: partial)
             throw error
+        }
+    }
+
+    /// Put the file's dates, permissions, flags and tags back (`FileMetadata.apply`). The bytes are already
+    /// verified and in place; anything here that won't stick is logged, never a failed restore.
+    private func applyMetadata(fileId: String, to outURL: URL) throws {
+        guard let m = try journal.fileMetadata(fileId) else { return }
+        for problem in m.apply(to: outURL) {
+            log("RestoreEngine: '\(fileId)' restored, but couldn't put back \(problem)")
         }
     }
 }

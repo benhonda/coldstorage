@@ -23,7 +23,7 @@ import Foundation
 
     private func item(_ path: String, hash: String? = nil) -> IngestItem {
         IngestItem(id: path, relativePath: path, size: 1, content: .sha256(hash ?? "h-\(path)"),
-                   createdAt: nil, isFavorite: false,
+                   isFavorite: false,
                    open: { AsyncThrowingStream { $0.finish() } })
     }
 

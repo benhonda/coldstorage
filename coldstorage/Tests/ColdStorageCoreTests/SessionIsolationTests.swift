@@ -50,7 +50,7 @@ import Foundation
         let a = try f.sessions.make(.user(sub: "sub-alice", identityId: "ca-central-1:alice"))
         await f.daemon.beginSession(a)
         try a.journal.upsert([IngestItem(id: "a1", relativePath: "Taxes/2025-return.pdf", size: 4096,
-                                         content: .sha256("hash-a1"), createdAt: nil, isFavorite: false,
+                                         content: .sha256("hash-a1"), isFavorite: false,
                                          open: { AsyncThrowingStream { $0.finish() } })])
 
         let aFiles = try await reply(f.daemon, "listFiles").result as? [[String: Any]]

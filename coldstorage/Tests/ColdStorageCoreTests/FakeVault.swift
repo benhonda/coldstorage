@@ -105,6 +105,9 @@ final class FakeVault: Vault, @unchecked Sendable {
     var untagCalls: [String] { lock.withLock { _untagCalls } }
     func unmarkReclaimable(key: String) async throws { lock.withLock { _untagCalls.append(key) } }
 
+    /// The assembled object, as S3 would hold it — what a journal-less recovery has to work from.
+    func object(_ key: String) -> Data? { lock.withLock { _objects[key] } }
+
     func verify(key: String) async throws {
         guard !retainParts || lock.withLock({ _objects[key] != nil }) else { throw ColdStorageError.s3("no such object \(key)") }
     }

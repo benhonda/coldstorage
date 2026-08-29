@@ -13,7 +13,7 @@ import Crypto
 /// is RECORDED, that it comes back on the next read, and that stopping/resuming/forgetting do what their
 /// names claim.
 @Suite struct RestoreCommandTests {
-    private func fixture(frozen: Bool = true) -> (daemon: DaemonService, sessions: SessionFactory, root: URL) {
+    static func fixture(frozen: Bool = true) -> (daemon: DaemonService, sessions: SessionFactory, root: URL) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("cs-restorecmd-\(UUID().uuidString)", isDirectory: true)
         // `canSelfThaw: false` = the multi-user daemon, which is the interesting one: it may not thaw, so
@@ -41,7 +41,7 @@ import Crypto
         let s = try f.sessions.make(.user(sub: "sub-ben", identityId: "ca-central-1:ben"))
         await f.daemon.beginSession(s)
         try s.journal.upsert([IngestItem(id: "f1", relativePath: "Photos/beach.jpg", size: 2048,
-                                        content: .sha256("hash-f1"), createdAt: nil, isFavorite: false,
+                                        content: .sha256("hash-f1"), isFavorite: false,
                                         open: { AsyncThrowingStream { $0.finish() } })])
         try s.journal.ensureBlob(BlobPlan(id: "b1", items: [], prefix: s.prefix),
                                  noncePrefix: Data(repeating: 1, count: 8),
@@ -54,7 +54,7 @@ import Crypto
     // MARK: - the wire shape the app binds to
 
     @Test func requestRestoreRecordsATransferAndAnswersWithTheList() async throws {
-        let f = fixture()
+        let f = Self.fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         _ = try await signedInWithArchivedFile(f)
 
@@ -92,7 +92,7 @@ import Crypto
     /// It used to live only in the renderer, so signing back in showed a plain green "Stored" ✓ and no sign
     /// a copy had ever been asked for.
     @Test func transfersSurviveASignOutAndSignIn() async throws {
-        let f = fixture()
+        let f = Self.fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         _ = try await signedInWithArchivedFile(f)
         _ = try await reply(f.daemon, "requestRestore", ["file": "f1", "out": "/tmp/beach.jpg"])
@@ -114,7 +114,7 @@ import Crypto
     /// tree (see `SessionIsolationTests`), and worth pinning separately because transfers carry destinations
     /// on disk and what someone paid to retrieve.
     @Test func anotherAccountSeesNoneOfTheFirstsTransfers() async throws {
-        let f = fixture()
+        let f = Self.fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         _ = try await signedInWithArchivedFile(f)
         _ = try await reply(f.daemon, "requestRestore", ["file": "f1", "out": "/tmp/beach.jpg"])
@@ -128,7 +128,7 @@ import Crypto
     // MARK: - stop / resume / forget
 
     @Test func stoppingATransferMarksItCanceled() async throws {
-        let f = fixture()
+        let f = Self.fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         _ = try await signedInWithArchivedFile(f)
         let started = rows(try await reply(f.daemon, "requestRestore", ["file": "f1", "out": "/tmp/beach.jpg"]).result)
@@ -139,7 +139,7 @@ import Crypto
     }
 
     @Test func resumingAStoppedTransferPutsItBackToWork() async throws {
-        let f = fixture()
+        let f = Self.fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         _ = try await signedInWithArchivedFile(f)
         let started = rows(try await reply(f.daemon, "requestRestore", ["file": "f1", "out": "/tmp/beach.jpg"]).result)
@@ -154,7 +154,7 @@ import Crypto
     /// Clearing history is for FINISHED transfers. Letting someone "remove" a live one would leave the run
     /// loop quietly driving a transfer they believe is gone.
     @Test func forgettingRefusesWhileTheTransferIsStillActive() async throws {
-        let f = fixture()
+        let f = Self.fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         _ = try await signedInWithArchivedFile(f)
         let started = rows(try await reply(f.daemon, "requestRestore", ["file": "f1", "out": "/tmp/beach.jpg"]).result)
@@ -187,7 +187,7 @@ import Crypto
     /// delivered file stuck reading "Transferring" forever.
     @Test func aTransferThatCompletesEndsSavedWithItsWindowStamped() async throws {
         let fm = FileManager.default
-        let f = fixture(frozen: false)     // FakeVault: reports thawed AND serves real ranged reads
+        let f = Self.fixture(frozen: false)     // FakeVault: reports thawed AND serves real ranged reads
         defer { try? fm.removeItem(at: f.root) }
 
         let session = try f.sessions.make(.user(sub: "sub-ben", identityId: "ca-central-1:ben"))
@@ -224,7 +224,7 @@ import Crypto
     /// second live row beside it. Without this, the "Ask again" way out of a stalled transfer leaves the
     /// dead one sitting in "In progress" and padding the sidebar count for good.
     @Test func askingAgainSupersedesTheTransferStillInFlight() async throws {
-        let f = fixture()          // frozen vault ⇒ the first transfer stays active
+        let f = Self.fixture()          // frozen vault ⇒ the first transfer stays active
         defer { try? FileManager.default.removeItem(at: f.root) }
         let session = try await signedInWithArchivedFile(f)
 
@@ -242,7 +242,7 @@ import Crypto
     // MARK: - refusals
 
     @Test func requestingAnUnknownFileIsRejected() async throws {
-        let f = fixture()
+        let f = Self.fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         _ = try await signedInWithArchivedFile(f)
         let out = try await reply(f.daemon, "requestRestore", ["file": "nope", "out": "/tmp/x"])
@@ -250,7 +250,7 @@ import Crypto
     }
 
     @Test func requestRestoreNeedsBothFileAndDestination() async throws {
-        let f = fixture()
+        let f = Self.fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         _ = try await signedInWithArchivedFile(f)
         #expect(try await reply(f.daemon, "requestRestore", ["file": "f1"]).error != nil)
@@ -258,8 +258,29 @@ import Crypto
     }
 
     @Test func signedOutDaemonRefusesToStartATransfer() async throws {
-        let f = fixture()
+        let f = Self.fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         #expect(try await reply(f.daemon, "requestRestore", ["file": "f1", "out": "/tmp/x"]).error != nil)
+    }
+}
+
+/// `listFiles` on the wire carries the file's own dates. `FileDTO` has a hand-written encoder (to emit
+/// explicit nulls), so a field added to the struct is NOT automatically a field on the wire — the two
+/// date fields were once exactly that: present in Swift, absent in the JSON the app read. This pins them.
+@Suite struct ListFilesWireTests {
+    @Test func listFilesCarriesTheFilesOwnDates() async throws {
+        let f = RestoreCommandTests.fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let s = try f.sessions.make(.user(sub: "sub-ben", identityId: "ca-central-1:ben"))
+        await f.daemon.beginSession(s)
+        try s.journal.upsert([IngestItem(id: "f1", relativePath: "a.txt", size: 1, content: .sha256("h"), isFavorite: false,
+                                        metadata: FileMetadata(modifiedAt: 1_700_000_000, createdAt: 1_600_000_000),
+                                        open: { AsyncThrowingStream { $0.finish() } })])
+        let line = await f.daemon.respond(to: ControlRequest(id: 1, method: "listFiles", params: [:]))
+        let rows = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(line.result)) as? [[String: Any]])
+        let row = try #require(rows.first)
+        #expect(row["modifiedAt"] as? Int == 1_700_000_000)
+        #expect(row["createdAt"] as? Int == 1_600_000_000)
+        #expect(row["date"] == nil, "the legacy single date is gone from the wire")
     }
 }

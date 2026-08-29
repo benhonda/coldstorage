@@ -8,7 +8,7 @@ const file = (
   status: ArchivedFile["status"],
   extra: Partial<ArchivedFile> = {},
 ): ArchivedFile => ({
-  id, relativePath: id, size: 1, status, kind: "other", date: null, lastAttemptAt: null,
+  id, relativePath: id, size: 1, status, kind: "other", date: null, modifiedAt: null, createdAt: null, lastAttemptAt: null,
   error: null, failureKind: null, depositId: null, sourcePath: "/src", ...extra,
 });
 

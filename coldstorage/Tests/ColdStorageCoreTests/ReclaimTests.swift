@@ -266,7 +266,7 @@ import Foundation
         // through the real API: `ensureBlob` records membership, and its blob-row insert is a no-op on
         // conflict, so this adds a member to the existing blob without disturbing it.
         let ghost = IngestItem(id: "ghost-file-id", relativePath: "ghost.jpg", size: 1,
-                               content: .sha256("ghost"), createdAt: nil, isFavorite: false,
+                               content: .sha256("ghost"), isFavorite: false,
                                open: { AsyncThrowingStream { $0.finish() } })
         try f.journal.ensureBlob(BlobPlan(id: blobId, items: [ghost], prefix: .dev),
                                  noncePrefix: Data(), wrappedDEK: Data())

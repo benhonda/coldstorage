@@ -1,6 +1,7 @@
 #if canImport(Photos)
 import Foundation
 import Photos
+import CoreLocation
 import ColdStorageCore
 
 /// Streams full-res originals from the Photos library (incl. iCloud download) — the proven mechanics
@@ -35,12 +36,23 @@ public struct PhotoKitSource: IngestSource {
                 relativePath: res.originalFilename,
                 size: 0,                                    // unknown until streamed
                 content: .opaque(assetId),                  // an identity, NOT a hash — nothing to verify against
-                createdAt: asset.creationDate,
                 isFavorite: asset.isFavorite,
-                metadata: ["uti": res.uniformTypeIdentifier],
+                metadata: Self.metadata(for: asset, resource: res),
                 open: { Self.stream(assetId: assetId, scratch: scratch) }))
         }
         return items
+    }
+
+    /// What a Photos asset knows about itself that has no filesystem home. `createdAt` is the CAPTURE date
+    /// (a restored photo gets it as its creation date); the rest rides in `photo` for the day the browser
+    /// shows it. No mtime/mode/xattrs — an asset isn't a file until PhotoKit streams it.
+    static func metadata(for asset: PHAsset, resource res: PHAssetResource) -> FileMetadata {
+        var photo = ["uti": res.uniformTypeIdentifier, "favorite": asset.isFavorite ? "1" : "0"]
+        if let loc = asset.location {
+            photo["latitude"] = "\(loc.coordinate.latitude)"; photo["longitude"] = "\(loc.coordinate.longitude)"
+        }
+        if asset.mediaSubtypes.contains(.photoLive) { photo["livePhoto"] = "1" }
+        return FileMetadata(createdAt: asset.creationDate.map { Int($0.timeIntervalSince1970) }, photo: photo)
     }
 
     /// Re-resolve the asset's photo resource by stable id, then stream it (incl. iCloud download). We
@@ -128,9 +140,8 @@ public struct PhotoKitResolver: PhotoResolver {
                 relativePath: res.originalFilename,
                 size: 0,                                    // unknown until streamed; real hash computed at archive time
                 content: .opaque(assetId),                  // an identity, NOT a hash — nothing to verify against
-                createdAt: asset.creationDate,
                 isFavorite: asset.isFavorite,
-                metadata: ["uti": res.uniformTypeIdentifier],
+                metadata: Self.metadata(for: asset, resource: res),
                 open: { PhotoKitSource.stream(assetId: assetId, scratch: scratch) }))
         }
         // Observability: a count mismatch points at stale picks or (more likely) an id the daemon can't see.

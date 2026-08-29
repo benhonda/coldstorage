@@ -27,9 +27,11 @@ public struct IngestItem: Sendable {
     public let relativePath: String
     public let size: Int
     public let content: ContentKey         // the plan's key — and whether the bytes can be checked against it
-    public let createdAt: Date?
     public let isFavorite: Bool
-    public let metadata: [String: String]  // EXIF, album, Live-Photo pairing, …
+    /// Everything about the item that isn't its bytes (dates, mode, flags, xattrs, Photos facts) — journaled,
+    /// written into the blob's manifest, put back on restore, and (its `date`) what the planner orders on.
+    /// The ONE record of these facts; see `FileMetadata`.
+    public let metadata: FileMetadata
     /// Where the bytes come from: an absolute path on THIS Mac, or `photos:<localIdentifier>` for a Photos
     /// asset (see `photoSourcePrefix`), or nil when unknown. Persisted on the journal row (`files.sourcePath`)
     /// so a failed upload can be re-tried from its source long after the deposit that carried it is gone —
@@ -44,10 +46,10 @@ public struct IngestItem: Sendable {
     public let open: @Sendable () -> AsyncThrowingStream<Data, Error>  // plaintext byte stream
 
     public init(id: String, relativePath: String, size: Int, content: ContentKey,
-                createdAt: Date?, isFavorite: Bool, metadata: [String: String] = [:], sourcePath: String? = nil,
+                isFavorite: Bool, metadata: FileMetadata = FileMetadata(), sourcePath: String? = nil,
                 open: @escaping @Sendable () -> AsyncThrowingStream<Data, Error>) {
         self.id = id; self.relativePath = relativePath; self.size = size
-        self.content = content; self.createdAt = createdAt
+        self.content = content
         self.isFavorite = isFavorite; self.metadata = metadata; self.sourcePath = sourcePath; self.open = open
     }
 
@@ -55,7 +57,7 @@ public struct IngestItem: Sendable {
     /// captured byte stream + intrinsic metadata. Used to "Keep Both" a colliding deposit under a fresh name.
     func rekeyed(to relativePath: String) -> IngestItem {
         IngestItem(id: relativePath, relativePath: relativePath, size: size, content: content,
-                   createdAt: createdAt, isFavorite: isFavorite, metadata: metadata, sourcePath: sourcePath, open: open)
+                   isFavorite: isFavorite, metadata: metadata, sourcePath: sourcePath, open: open)
     }
 }
 

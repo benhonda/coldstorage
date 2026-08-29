@@ -63,7 +63,7 @@ public struct MountedSource: IngestSource {
         return try await base.enumerate().map { it in
             let rel = "\(mountPath)/\(it.relativePath)"
             return IngestItem(id: rel, relativePath: rel, size: it.size, content: it.content,
-                              createdAt: it.createdAt, isFavorite: it.isFavorite,
+                              isFavorite: it.isFavorite,
                               metadata: it.metadata, sourcePath: it.sourcePath, open: it.open)
         }
     }

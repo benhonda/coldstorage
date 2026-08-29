@@ -44,10 +44,23 @@ public struct LocalDirSource: IngestSource {
         }
     }
 
+    /// Something the walk saw and deliberately did NOT archive — named, so the deposit can say so. A silent
+    /// skip is the exact failure `walk` was rewritten to stop committing (see the comment inside it).
+    public struct Skipped: Sendable, Equatable {
+        public enum Reason: String, Sendable { case symlink }
+        public let relativePath: String
+        public let reason: Reason
+    }
+    /// A walk's two outputs: what will be archived, and what was passed over on purpose.
+    public struct Walk: Sendable {
+        public let entries: [Entry]
+        public let skipped: [Skipped]
+    }
+
     /// Walk the tree, applying excludes, WITHOUT reading a single byte of content.
-    public func walk() throws -> [Entry] {
+    public func walk() throws -> Walk {
         let fm = FileManager.default
-        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
         // **`return []` used to live here, and it was the worst silent failure in the product.** A watched
         // folder that can't be read — external drive unmounted, folder deleted or renamed, macOS permission
         // revoked — makes `enumerator(at:)` return nil, and an empty result is INDISTINGUISHABLE from "the
@@ -65,6 +78,7 @@ public struct LocalDirSource: IngestSource {
             throw ColdStorageError.sourceUnreadable("can't read \(root.path) — check this Mac's permission for that folder")
         }
         var entries: [Entry] = []
+        var skipped: [Skipped] = []
         // Drain via nextObject() rather than `for…in`: macOS Foundation marks NSEnumerator's
         // Sequence iterator unavailable in async contexts (Linux's swift-corelibs doesn't). Lazy, so
         // we don't materialize the whole tree as an array first.
@@ -78,6 +92,14 @@ public struct LocalDirSource: IngestSource {
                 if v.isDirectory == true { en.skipDescendants() }
                 continue
             }
+            // A symlink is not its target: archiving the bytes it points at would restore a COPY where a
+            // link was, and following it could walk out of the folder entirely (or loop). We don't back
+            // them up — but that is a fact the user must be told, not a row that just never appears.
+            if v.isSymbolicLink == true {
+                skipped.append(Skipped(relativePath: rel, reason: .symlink))
+                en.skipDescendants()   // a link to a folder must not be walked as the folder
+                continue
+            }
             guard v.isRegularFile == true else { continue }
             // A suggested-but-inactive pattern is NOT a prune — we keep walking so the prompt can quote a
             // real file count and byte total. Name patterns match on any path component, so a file deep
@@ -86,15 +108,23 @@ public struct LocalDirSource: IngestSource {
                                  modifiedAt: v.contentModificationDate,
                                  suggestedBy: suggest.isEmpty ? nil : suggest.firstMatch(rel)))
         }
-        return entries
+        return Walk(entries: entries, skipped: skipped)
     }
 
     public func enumerate() async throws -> [IngestItem] {
-        try walk().map { e in
+        let walk = try walk()
+        // The background scan has no prompt to put these in front of, so the log is where the fact lives.
+        if !walk.skipped.isEmpty {
+            log("LocalDirSource: \(root.path) — skipped \(walk.skipped.count) symlink(s) (not backed up): "
+                + walk.skipped.prefix(5).map(\.relativePath).joined(separator: ", "))
+        }
+        return try walk.entries.map { e in
             IngestItem(
                 id: e.relativePath, relativePath: e.relativePath, size: e.size,
                 content: .sha256(try Self.sha256Hex(of: e.url)),   // the byte-reading pass — preview skips it
-                createdAt: e.modifiedAt, isFavorite: false, sourcePath: e.url.path,
+                isFavorite: false,
+                metadata: FileMetadata.capture(at: e.url),         // dates, mode, flags, tags — the file beyond its bytes
+                sourcePath: e.url.path,
                 open: { Self.stream(e.url) })
         }
     }

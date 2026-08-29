@@ -14,7 +14,7 @@ import Foundation
 
     private func item(_ id: String, path: String, size: Int) -> IngestItem {
         IngestItem(id: id, relativePath: path, size: size, content: .sha256("h-\(id)"),
-                   createdAt: nil, isFavorite: false,
+                   isFavorite: false,
                    open: { AsyncThrowingStream { $0.finish() } })
     }
 
@@ -58,18 +58,19 @@ import Foundation
         #expect(try #require(try j.listFiles().first).size == 2_097_152)    // real plaintext, not the 0 nor the ciphertext length
     }
 
-    /// `createdAt` captured at upsert survives to `listFiles` (epoch seconds); a source with no date → nil.
-    @Test func createdAtRoundTrips() throws {
+    /// The file's metadata captured at upsert survives to `listFiles` intact; a source with none → empty.
+    @Test func metadataRoundTrips() throws {
         let j = try tempJournal()
-        let when = Date(timeIntervalSince1970: 1_700_000_000)
+        let m = FileMetadata(modifiedAt: 1_700_000_000, createdAt: 1_600_000_000, mode: 0o644, xattrs: ["user.tag": Data([1, 2])])
         try j.upsert([
             IngestItem(id: "dated", relativePath: "a.jpg", size: 1, content: .sha256("h1"),
-                       createdAt: when, isFavorite: false, open: { AsyncThrowingStream { $0.finish() } }),
-            item("undated", path: "b.jpg", size: 1),   // helper passes createdAt: nil
+                       isFavorite: false, metadata: m, open: { AsyncThrowingStream { $0.finish() } }),
+            item("plain", path: "b.jpg", size: 1),
         ])
         let rows = try j.listFiles()
-        #expect(rows.first(where: { $0.id == "dated" })?.createdAt == 1_700_000_000)
-        #expect(rows.first(where: { $0.id == "undated" })?.createdAt == nil)
+        #expect(rows.first(where: { $0.id == "dated" })?.metadata == m)
+        #expect(rows.first(where: { $0.id == "plain" })?.metadata == FileMetadata())
+        #expect(try j.fileMetadata("dated") == m)
     }
 
     /// A permanently-failed blob marks its files `failed` so the UI's ⚠ is journal truth, not a UI guess —
@@ -103,8 +104,7 @@ import Foundation
     /// that makes a later "Try again" possible without asking the user where the file went.
     @Test func sourcePathPersistsAndSurvivesAPathlessUpsert() throws {
         let j = try tempJournal()
-        try j.upsert([IngestItem(id: "x", relativePath: "a/b.jpg", size: 1, content: .sha256("h"), createdAt: nil,
-                                 isFavorite: false, sourcePath: "/Users/me/b.jpg",
+        try j.upsert([IngestItem(id: "x", relativePath: "a/b.jpg", size: 1, content: .sha256("h"), isFavorite: false, sourcePath: "/Users/me/b.jpg",
                                  open: { AsyncThrowingStream { $0.finish() } })])
         #expect(try #require(try j.listFiles().first).sourcePath == "/Users/me/b.jpg")
         try j.upsert([item("x", path: "a/b.jpg", size: 1)])   // helper carries no sourcePath
@@ -140,9 +140,9 @@ import Foundation
         let onDisk = dir.appendingPathComponent("orig.jpg")
         try Data("hello".utf8).write(to: onDisk)
         let rows = [
-            FileRow(id: "keep", relativePath: "Renamed/new-name.jpg", size: 0, status: .failed, blobId: nil, createdAt: nil, sourcePath: onDisk.path),
-            FileRow(id: "gone", relativePath: "x.jpg", size: 0, status: .failed, blobId: nil, createdAt: nil, sourcePath: dir.appendingPathComponent("gone.jpg").path),
-            FileRow(id: "never", relativePath: "y.jpg", size: 0, status: .failed, blobId: nil, createdAt: nil, sourcePath: nil),
+            FileRow(id: "keep", relativePath: "Renamed/new-name.jpg", size: 0, status: .failed, blobId: nil, sourcePath: onDisk.path),
+            FileRow(id: "gone", relativePath: "x.jpg", size: 0, status: .failed, blobId: nil, sourcePath: dir.appendingPathComponent("gone.jpg").path),
+            FileRow(id: "never", relativePath: "y.jpg", size: 0, status: .failed, blobId: nil, sourcePath: nil),
         ]
         let items = try await RetryFilesSource(rows: rows).enumerate()
         #expect(items.map(\.id) == ["keep"])
@@ -175,15 +175,13 @@ import Foundation
             func resolve(assetIds: [String], scratchDir: URL) async throws -> [IngestItem] {
                 assetIds.filter { $0 == "asset-1" }.map {
                     IngestItem(id: $0, relativePath: "IMG_0001.HEIC", size: 9, content: .opaque("k"),
-                               createdAt: nil, isFavorite: true, open: { AsyncThrowingStream { $0.finish() } })
+                               isFavorite: true, open: { AsyncThrowingStream { $0.finish() } })
                 }
             }
         }
         let rows = [
-            FileRow(id: "p1", relativePath: "Trip/renamed.heic", size: 0, status: .failed, blobId: nil, createdAt: nil,
-                    sourcePath: IngestItem.photoSourcePrefix + "asset-1"),
-            FileRow(id: "p2", relativePath: "Trip/gone.heic", size: 0, status: .failed, blobId: nil, createdAt: nil,
-                    sourcePath: IngestItem.photoSourcePrefix + "asset-stale"),
+            FileRow(id: "p1", relativePath: "Trip/renamed.heic", size: 0, status: .failed, blobId: nil, sourcePath: IngestItem.photoSourcePrefix + "asset-1"),
+            FileRow(id: "p2", relativePath: "Trip/gone.heic", size: 0, status: .failed, blobId: nil, sourcePath: IngestItem.photoSourcePrefix + "asset-stale"),
         ]
         let scratch = FileManager.default.temporaryDirectory
         let items = try await RetryFilesSource(rows: rows, photos: (resolver: FakeResolver(), scratchDir: scratch)).enumerate()

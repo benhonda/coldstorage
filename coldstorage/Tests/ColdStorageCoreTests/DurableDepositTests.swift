@@ -178,7 +178,7 @@ import Crypto
 
     private static func item(_ path: String, sourcePath: String?) -> IngestItem {
         IngestItem(id: path, relativePath: path, size: 40_000, content: .sha256(String(repeating: "b", count: 64)),
-                   createdAt: nil, isFavorite: false, sourcePath: sourcePath,
+                   isFavorite: false, sourcePath: sourcePath,
                    open: { AsyncThrowingStream { $0.finish() } })
     }
 

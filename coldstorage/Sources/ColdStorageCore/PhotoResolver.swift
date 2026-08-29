@@ -54,7 +54,7 @@ public struct PhotoDepositSource: IngestSource {
             // `sourcePath` names the asset (the resolver's `id` is its localIdentifier), so a failed photo
             // row can be retried by re-resolving it — same as a file row retries from its path.
             return IngestItem(id: rel, relativePath: rel,
-                              size: it.size, content: it.content, createdAt: it.createdAt,
+                              size: it.size, content: it.content,
                               isFavorite: it.isFavorite, metadata: it.metadata,
                               sourcePath: IngestItem.photoSourcePrefix + it.id, open: it.open)
         }
@@ -71,8 +71,8 @@ public struct PhotoDepositSource: IngestSource {
     /// Where these picks WOULD land. Resolving an asset reads no bytes (a photo's content key is `.opaque` —
     /// PhotoKit doesn't produce the bytes until `open` streams them), so unlike the file path this was never
     /// the expensive part; it exists so `previewDeposit` has one shape to call for both kinds of deposit.
-    public func previewPaths() async throws -> [DepositPreviewPath] {
-        try await resolver.resolve(assetIds: assetIds, scratchDir: scratchDir)
-            .map { DepositPreviewPath(relativePath: ExplicitPathsSource.join(destDir, $0.relativePath), size: $0.size) }
+    public func previewPaths() async throws -> DepositPreview {
+        DepositPreview(paths: try await resolver.resolve(assetIds: assetIds, scratchDir: scratchDir)
+            .map { DepositPreviewPath(relativePath: ExplicitPathsSource.join(destDir, $0.relativePath), size: $0.size) })
     }
 }

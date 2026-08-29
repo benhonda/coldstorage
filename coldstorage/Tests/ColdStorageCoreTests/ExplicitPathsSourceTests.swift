@@ -53,3 +53,59 @@ import Foundation
         #expect(items.isEmpty)
     }
 }
+
+/// Symlinks are not backed up — and that must be a FACT the preview reports, never a file that quietly
+/// fails to appear.
+@Suite struct SymlinkSkipTests {
+    @Test func aSymlinkInsideADroppedFolderIsReportedNotArchived() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("cs-symlink-\(UUID().uuidString)")
+        let folder = root.appendingPathComponent("trip")
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        try Data("real".utf8).write(to: folder.appendingPathComponent("real.txt"))
+        try fm.createSymbolicLink(at: folder.appendingPathComponent("link.txt"), withDestinationURL: folder.appendingPathComponent("real.txt"))
+
+        let src = ExplicitPathsSource(entries: [.init(url: folder, destDir: "")])
+        let preview = try await src.previewPaths()
+        #expect(preview.paths.map(\.relativePath) == ["trip/real.txt"])
+        #expect(preview.skipped == [.init(relativePath: "trip/link.txt", reason: .symlink)])
+        #expect(try await src.enumerate().map(\.relativePath) == ["trip/real.txt"])
+    }
+
+    /// `fileExists(isDirectory:)` follows links — so without the symlink check coming first, a link to a
+    /// folder would be walked as that folder and its contents uploaded as copies.
+    @Test func aDroppedSymlinkToAFolderIsNotWalked() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("cs-symlink-\(UUID().uuidString)")
+        let real = root.appendingPathComponent("real")
+        try fm.createDirectory(at: real, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        try Data("x".utf8).write(to: real.appendingPathComponent("inside.txt"))
+        let link = root.appendingPathComponent("shortcut")
+        try fm.createSymbolicLink(at: link, withDestinationURL: real)
+
+        let src = ExplicitPathsSource(entries: [.init(url: link, destDir: "")])
+        let preview = try await src.previewPaths()
+        #expect(preview.paths.isEmpty)
+        #expect(preview.skipped == [.init(relativePath: "shortcut", reason: .symlink)])
+        #expect(try await src.enumerate().isEmpty)
+    }
+
+    @Test func aDroppedSymlinkItselfIsReportedNotArchived() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("cs-symlink-\(UUID().uuidString)")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let target = root.appendingPathComponent("real.txt")
+        try Data("real".utf8).write(to: target)
+        let link = root.appendingPathComponent("alias.txt")
+        try fm.createSymbolicLink(at: link, withDestinationURL: target)
+
+        let src = ExplicitPathsSource(entries: [.init(url: link, destDir: "Docs")])
+        let preview = try await src.previewPaths()
+        #expect(preview.paths.isEmpty)
+        #expect(preview.skipped == [.init(relativePath: "Docs/alias.txt", reason: .symlink)])
+        #expect(try await src.enumerate().isEmpty)
+    }
+}

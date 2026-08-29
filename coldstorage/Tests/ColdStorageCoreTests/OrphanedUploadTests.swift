@@ -77,6 +77,6 @@ import Crypto
 
     private func item(_ path: String) -> IngestItem {
         IngestItem(id: path, relativePath: path, size: 10, content: .sha256(String(repeating: "a", count: 64)),
-                   createdAt: Date(), isFavorite: false, open: { AsyncThrowingStream { $0.yield(Data(repeating: 1, count: 10)); $0.finish() } })
+                   isFavorite: false, open: { AsyncThrowingStream { $0.yield(Data(repeating: 1, count: 10)); $0.finish() } })
     }
 }

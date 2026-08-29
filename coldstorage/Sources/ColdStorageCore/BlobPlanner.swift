@@ -41,7 +41,7 @@ public struct BlobPlanner: Sendable {
     /// blobs at the end, and only used to sort items *within* a folder — never to decide who batches with whom.
     static func newestFirst(_ a: IngestItem, _ b: IngestItem) -> Bool {
         if a.isFavorite != b.isFavorite { return a.isFavorite }                       // favorites first
-        let (ca, cb) = (a.createdAt ?? .distantPast, b.createdAt ?? .distantPast)
+        let (ca, cb) = (a.metadata.date ?? Int.min, b.metadata.date ?? Int.min)          // the file's own date
         if ca != cb { return ca > cb }                                                // newest first
         return a.id < b.id                                                            // stable tiebreaker → deterministic
     }

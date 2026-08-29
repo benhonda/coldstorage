@@ -78,7 +78,7 @@ import Foundation
     @Test func createFolderIsNoOpWhenPathAlreadyHasAFile() throws {
         let j = try tempJournal()
         try j.upsert([IngestItem(id: "f1", relativePath: "Photos/a.jpg", size: 10, content: .sha256("h1"),
-                                 createdAt: nil, isFavorite: false,
+                                 isFavorite: false,
                                  open: { AsyncThrowingStream { $0.finish() } })])
         try j.createFolder(path: "Photos")
         #expect(try j.listFiles().filter { $0.relativePath == "Photos" }.isEmpty)   // no marker added

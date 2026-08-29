@@ -4,7 +4,7 @@ import Foundation
 
 private func item(_ id: String, size: Int, created: TimeInterval, favorite: Bool = false, dir: String = "d") -> IngestItem {
     IngestItem(id: id, relativePath: "\(dir)/\(id)", size: size, content: .sha256(id),
-               createdAt: Date(timeIntervalSince1970: created), isFavorite: favorite,
+               isFavorite: favorite, metadata: FileMetadata(modifiedAt: Int(created)),
                open: { AsyncThrowingStream { $0.finish() } })
 }
 

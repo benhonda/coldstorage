@@ -88,8 +88,10 @@ export interface ListedFile {
   size: number;
   status: string;
   blobId: string | null;
-  /** Capture/creation date as Unix epoch SECONDS, or null when the journal has none (legacy rows). */
-  date: number | null;
+  /** From the file's captured metadata (`FileMetadata`): last-modified and created (Unix seconds). A photo
+   * has only `createdAt` (its capture date); null where unknown. */
+  modifiedAt: number | null;
+  createdAt: number | null;
   /** Unix seconds the upload path last actually TRIED this file — every outcome, success or fault. Null when
    * no attempt has been made yet (scanned into the journal while the daemon was idle, or a legacy row).
    *
@@ -165,6 +167,13 @@ export type ConflictPolicy = "keepBoth" | "replace" | "skip";
  *  item WOULD land at, its size in bytes (a free stat from the placement walk — the pre-flight quota gate
  *  prices the deposit off these, so a folder deposit is gated as precisely as a loose file; 0 when unknown),
  *  and whether a live row already sits there (a collision to prompt on). */
+/** `DepositPreviewDTO` — a deposit's dry run: what lands (`items`) and what the walk passed over on purpose
+ *  (`skipped`, with why) so the app can say so instead of letting a dropped item silently not appear. */
+export interface DepositPreview {
+  items: DepositPreviewItem[];
+  skipped: { relativePath: string; reason: "symlink" }[];
+}
+
 export interface DepositPreviewItem {
   relativePath: string;
   size: number;
@@ -450,7 +459,7 @@ export interface Commands {
    * `conflicts` param on `deposit`/`depositPhotos` (a JSON map of vault relativePath → policy). */
   previewDeposit: {
     params: { dest: string; src?: string; assetIds?: string };
-    result: DepositPreviewItem[];
+    result: DepositPreview;
   };
   /** Reorganize: relocate the subtree at `from` → `to` — a file/folder MOVE or RENAME (a rename is just a
    * move to a sibling path). A cheap journal `relativePath` edit (no S3, no thaw, the blob never moves);

@@ -13,6 +13,7 @@ import {
   crumbsFor,
   ROOT_CRUMB,
   childrenOf,
+  toggleSort,
   moveIsNoop,
   fileFromJournal,
   filesUnder,
@@ -40,6 +41,8 @@ const file = (relativePath: string, size: number, status: ArchivedFile["status"]
   status,
   kind: "other",
   date: null,
+  modifiedAt: null,
+  createdAt: null,
   lastAttemptAt: null,
   error: null,
 });
@@ -55,6 +58,41 @@ describe("childrenOf", () => {
   test("root lists immediate folders then files, A–Z", () => {
     const rows = childrenOf(sample, "");
     expect(rows.map((r) => (r.type === "folder" ? `📁${r.name}` : r.name))).toEqual(["📁Photos", "readme.txt"]);
+  });
+
+  describe("sorting", () => {
+    const dated = (path: string, size: number, date: string | null): ArchivedFile => ({ ...file(path, size), date });
+    const set = [
+      dated("b.txt", 5, "2024-01-01T00:00:00.000Z"),
+      dated("a.txt", 50, "2022-01-01T00:00:00.000Z"),
+      dated("c.txt", 20, null),
+      dated("Old/x.txt", 1, "2020-01-01T00:00:00.000Z"),
+      dated("New/y.txt", 1, "2025-01-01T00:00:00.000Z"),
+      dated("New/z.txt", 1, "2021-01-01T00:00:00.000Z"),
+    ];
+    const names = (rows: ReturnType<typeof childrenOf>): string[] => rows.map((r) => r.name);
+
+    test("folders stay ahead of files whatever the sort", () => {
+      expect(names(childrenOf(set, "", [], { key: "size", dir: "asc" }))).toEqual(["Old", "New", "b.txt", "c.txt", "a.txt"]);
+    });
+
+    test("by size, descending", () => {
+      expect(names(childrenOf(set, "", [], { key: "size", dir: "desc" }))).toEqual(["New", "Old", "a.txt", "c.txt", "b.txt"]);
+    });
+
+    test("by date: a folder carries its newest descendant, and undated rows sink either way", () => {
+      expect(names(childrenOf(set, "", [], { key: "date", dir: "desc" }))).toEqual(["New", "Old", "b.txt", "a.txt", "c.txt"]);
+      expect(names(childrenOf(set, "", [], { key: "date", dir: "asc" }))).toEqual(["Old", "New", "a.txt", "b.txt", "c.txt"]);
+      const folder = childrenOf(set, "", [], { key: "date", dir: "desc" })[0];
+      expect(folder?.type === "folder" && folder.date).toBe("2025-01-01T00:00:00.000Z");
+    });
+
+    test("toggleSort flips the active column and starts a new one the expected way", () => {
+      expect(toggleSort({ key: "name", dir: "asc" }, "name")).toEqual({ key: "name", dir: "desc" });
+      expect(toggleSort({ key: "name", dir: "asc" }, "date")).toEqual({ key: "date", dir: "desc" });
+      expect(toggleSort({ key: "date", dir: "desc" }, "size")).toEqual({ key: "size", dir: "desc" });
+      expect(toggleSort({ key: "size", dir: "desc" }, "name")).toEqual({ key: "name", dir: "asc" });
+    });
   });
 
   test("a folder row rolls up descendant size + count across nested dirs", () => {
@@ -191,7 +229,8 @@ describe("aggregates", () => {
       size: 4_100_000,
       status: "archived",
       blobId: "blob-1",
-      date: null,
+      modifiedAt: null,
+      createdAt: null,
       lastAttemptAt: null,
       error: null,
       ...over,
@@ -206,14 +245,26 @@ describe("aggregates", () => {
         status: "frozen",
         kind: "photo",
         date: null,
+        modifiedAt: null,
+        createdAt: null,
         lastAttemptAt: null,
         error: null,
       });
     });
 
-    test("renders the journal's epoch-seconds date to an ISO string", () => {
+    test("renders the journal's epoch-seconds dates to ISO strings", () => {
       // 1_700_000_000 s → 2023-11-14T22:13:20.000Z (epoch is seconds; JS Date wants ms).
-      expect(fileFromJournal(row({ date: 1_700_000_000 })).date).toBe("2023-11-14T22:13:20.000Z");
+      expect(fileFromJournal(row({ modifiedAt: 1_700_000_000 })).modifiedAt).toBe("2023-11-14T22:13:20.000Z");
+    });
+
+    test("the shown date prefers modified, then created", () => {
+      const f = fileFromJournal(row({ modifiedAt: 3, createdAt: 2 }));
+      expect(f.date).toBe(f.modifiedAt);
+      expect(f.modifiedAt).toBe("1970-01-01T00:00:03.000Z");
+      expect(f.createdAt).toBe("1970-01-01T00:00:02.000Z");
+      // a photo: capture date only
+      expect(fileFromJournal(row({ modifiedAt: null, createdAt: 2 })).date).toBe("1970-01-01T00:00:02.000Z");
+      expect(fileFromJournal(row()).date).toBeNull();
     });
 
     test("coarsens in-pipeline statuses to uploading", () => {

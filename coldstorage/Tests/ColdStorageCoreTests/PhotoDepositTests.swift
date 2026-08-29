@@ -20,7 +20,7 @@ import Foundation
                 // (they don't exist until it streams them). A `.sha256(id)` here would be a lie, and the
                 // engine's drift guard would rightly refuse to archive bytes that don't hash to it.
                 return IngestItem(id: id, relativePath: a.name, size: a.data.count, content: .opaque(id),
-                                  createdAt: nil, isFavorite: false, metadata: ["uti": "public.jpeg"],
+                                  isFavorite: false, metadata: FileMetadata(photo: ["uti": "public.jpeg"]),
                                   open: { AsyncThrowingStream { c in c.yield(a.data); c.finish() } })
             }
         }

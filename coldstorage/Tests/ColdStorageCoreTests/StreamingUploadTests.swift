@@ -49,7 +49,10 @@ import Foundation
         #expect(try f.journal.isFileArchived(items[0].id) == true)
         #expect(f.store.completedKeys.count == 1)
         #expect(f.store.uploadedPartNumbers == [1])            // one small blob → one final part
-        #expect(f.store.uploaded.count == EnvelopeCipher.encryptedSize(ofPlaintext: items[0].size))
+        // The file's ciphertext is exactly the predicted size, and it ends precisely where the blob's own
+        // trailer (the manifest) begins — the trailer is extra, never part of any file's span.
+        #expect(try BlobTrailer.footer(of: f.store.uploaded).manifestRange.lowerBound
+                == EnvelopeCipher.encryptedSize(ofPlaintext: items[0].size))
     }
 
     /// The size the progress bar's denominator is derived from has to be exactly right, or a large upload
@@ -63,7 +66,8 @@ import Foundation
 
         _ = try await f.engine.run(source: f.source, prefix: .dev)
 
-        #expect(f.store.uploaded.count == EnvelopeCipher.encryptedSize(ofPlaintext: plaintext.count))
+        #expect(try BlobTrailer.footer(of: f.store.uploaded).manifestRange.lowerBound
+                == EnvelopeCipher.encryptedSize(ofPlaintext: plaintext.count))
     }
 
     /// RESUME. A killed run left an open multipart upload with part 1 already on S3. The re-run must reuse
@@ -92,6 +96,13 @@ import Foundation
         #expect(f.store.uploadedPartNumbers == [2])            // part 1 was GENERATED but not re-sent
         #expect(f.store.completedKeys.count == 1)
         #expect(try f.journal.isFileArchived(items[0].id) == true)
+        // The throughput figure counts what was SENT, not what was generated: a resume that re-sent 1 of 2
+        // parts must report part 2's bytes alone, or the MB/s in the log overstates the link — in exactly the
+        // situation someone is reading it. `store.uploaded` is every byte the fake was handed.
+        let throughput = try #require(await f.engine.lastRunThroughput)
+        #expect(throughput.uploadedBytes == f.store.uploaded.count)
+        #expect(throughput.uploadedBytes < EnvelopeCipher.encryptedSize(ofPlaintext: plaintext.count))
+        #expect(throughput.blobsUploaded == 1)
     }
 
     /// **RESUME WHERE S3 AND THE JOURNAL DISAGREE.** `uploadPart` returns for part 1, then the process dies
@@ -169,7 +180,7 @@ import Foundation
                                // `.opaque` = an identity, not a hash — so there is nothing to check the
                                // streamed bytes against, and the type is what says so.
                                content: .opaque("some-asset-id"),
-                               createdAt: nil, isFavorite: false,
+                               isFavorite: false,
                                open: { AsyncThrowingStream { c in c.yield(bytes); c.finish() } })
 
         let failures = try await f.engine.run(source: StaticSource(items: [photo]), prefix: .dev)

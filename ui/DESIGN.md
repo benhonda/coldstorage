@@ -200,6 +200,8 @@ it had worked.
 6. **A drop is never silent, from the instant it lands:** `previewDeposit` recursively stats everything
    dropped, which on a big folder takes real time — so the drop draws a *Reading "X"…* banner
    (`DepositProgress`) immediately, and it sits alongside (never replaces) a run already uploading. The
+   walk also reports what it deliberately passed over (`skipped`, today symlinks — ColdStorage backs up
+   files, not links to them), and the app says so in a toast before anything uploads. The
    two ways that walk can come back with nothing are told apart and both surface: a preview that FAILS
    is an error, and a preview that returns EMPTY (unreadable path, or everything excluded) is an error
    naming what was dropped. Neither may pass as a successful no-op — that combination is what made a

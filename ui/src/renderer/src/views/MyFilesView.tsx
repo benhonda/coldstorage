@@ -9,7 +9,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import type { ColdstoreApi, ConflictPolicy, DepositPreviewItem, ExcludeSuggestion, RetrievalQuote } from "../../../shared/ipc.ts";
+import type { ColdstoreApi, ConflictPolicy, DepositPreview, DepositPreviewItem, ExcludeSuggestion, RetrievalQuote } from "../../../shared/ipc.ts";
 import { RECLAIM } from "../../../shared/reclaim-constants.ts";
 import type { Exec } from "./types.ts";
 import type { FilesApi } from "./files/useFiles.ts";
@@ -22,6 +22,10 @@ import {
   baseName,
   canMoveInto,
   childrenOf,
+  DEFAULT_SORT,
+  type SortKey,
+  type SortSpec,
+  toggleSort,
   filesUnder,
   formatBytes,
   formatDate,
@@ -110,6 +114,7 @@ interface Props {
 }
 
 type ViewMode = "list" | "grid";
+const SORT_LABEL: Record<SortKey, string> = { name: "Name", size: "Size", date: "Date" };
 interface MenuState {
   x: number;
   y: number;
@@ -196,7 +201,14 @@ export const MyFilesView = ({
   };
   const lastIndex = useRef<number | null>(null);
 
-  const rows = useMemo(() => childrenOf(files, dir, virtualFolders), [files, dir, virtualFolders]);
+  // Sort order — a per-screen preference (localStorage, like the sidebar width), never an account setting.
+  const [sort, setSort] = useState<SortSpec>(readSort);
+  const sortBy = (key: SortKey): void => {
+    const next = toggleSort(sort, key);
+    setSort(next);
+    try { localStorage.setItem(SORT_KEY, JSON.stringify(next)); } catch { /* private mode / blocked storage — the session still sorts */ }
+  };
+  const rows = useMemo(() => childrenOf(files, dir, virtualFolders, sort), [files, dir, virtualFolders, sort]);
 
   // ── navigation resets transient state ──
   const resetTransient = (): void => {
@@ -580,15 +592,18 @@ export const MyFilesView = ({
       return;
     }
     let preview: DepositPreviewItem[];
+    let notUploaded: DepositPreview["skipped"] = [];
     // The drop is now visibly working. Until this landed, everything between the drop and the first
     // optimistic row — a full recursive walk of the dropped folder — drew nothing at all.
     const label = opts.kind === "photos" ? "photos" : names(opts.fallback);
     setPreparing(label);
     try {
-      preview = await api.request(
+      const previewed = await api.request(
         "previewDeposit",
         opts.kind === "files" ? { dest: opts.dest, src: opts.wire } : { dest: opts.dest, assetIds: opts.wire },
       );
+      preview = previewed.items;
+      notUploaded = previewed.skipped;
     } catch (e) {
       // Photos: the picker already told us the names, so a resolver hiccup shouldn't cancel the deposit.
       // Files: there is no such second source of truth. Fabricating one used to hide the failure AND feed
@@ -599,6 +614,16 @@ export const MyFilesView = ({
       preview = opts.fallback.map((relativePath) => ({ relativePath, size: 0, exists: false, suggestedPack: null }));
     } finally {
       setPreparing(null);
+    }
+    // What the drop contained that ColdStorage doesn't back up — today, symlinks. Said out loud, once, up
+    // front: the alternative is an item that was dropped and simply never appears (PILLAR5).
+    if (notUploaded.length > 0) {
+      const n = notUploaded.length;
+      toast.error(
+        n === 1
+          ? `${baseName(notUploaded[0]?.relativePath ?? "")} is a symlink, so it won't be uploaded — ColdStorage backs up files, not links to them.`
+          : `${n} items in this drop are symlinks and won't be uploaded — ColdStorage backs up files, not links to them.`,
+      );
     }
     // ── suggested skips ──
     // The daemon tagged every previewed file that one of its opt-in packs would have caught. If that adds
@@ -839,6 +864,23 @@ export const MyFilesView = ({
           <Icon name="grid_view" size={20} />
         </button>
       </div>
+      <IconButton
+        icon="swap_vert"
+        label="Sort"
+        title={`Sorted by ${SORT_LABEL[sort.key]}, ${sort.dir === "asc" ? "ascending" : "descending"}`}
+        onClick={(e) =>
+          setMenu({
+            x: e.clientX,
+            y: e.clientY,
+            items: (["name", "size", "date"] as const).map((key) => ({
+              label: SORT_LABEL[key],
+              // the active column shows which way it points; clicking it flips it, like the header does
+              ...(sort.key === key ? { icon: sort.dir === "asc" ? "arrow_upward" : "arrow_downward" } : {}),
+              onClick: () => sortBy(key),
+            })),
+          })
+        }
+      />
       <IconButton icon="create_new_folder" label="New folder" onClick={doNewFolder} />
       <Button variant="primary" icon="add" onClick={addUploads}>
         Add
@@ -935,6 +977,8 @@ export const MyFilesView = ({
                     onCommitRename={commitRename}
                     onCancelRename={() => setRenaming(null)}
                     onClearSelection={clearSelection}
+                    sort={sort}
+                    onSort={sortBy}
                   />
                 ) : (
                   <Gallery
@@ -1097,11 +1141,15 @@ const FileList = ({
   onCommitRename,
   onCancelRename,
   onClearSelection,
+  sort,
+  onSort,
 }: {
   rows: Row[];
   selected: Set<string>;
   renaming: string | null;
   drag: MoveDrag;
+  sort: SortSpec;
+  onSort: (key: SortKey) => void;
   onRowClick: (e: React.MouseEvent, row: Row, index: number) => void;
   onRowOpen: (row: Row) => void;
   /** Right-click handler — pass a row for a row menu, omit it for the empty-area (Upload / New folder) menu. */
@@ -1157,10 +1205,10 @@ const FileList = ({
     onClick={(e) => isBlankArea(e, ".cs-fl-row, .cs-fl-head") && onClearSelection()}
     onContextMenu={(e) => isBlankArea(e, ".cs-fl-row, .cs-fl-head") && onRowContext(e)}
   >
-    <div className="cs-fl-grid cs-fl-head">
-      <span>Name</span>
-      <span>Size</span>
-      <span>Date</span>
+    <div className="cs-fl-grid cs-fl-head" role="row">
+      <SortHeader label="Name" col="name" sort={sort} onSort={onSort} />
+      <SortHeader label="Size" col="size" sort={sort} onSort={onSort} />
+      <SortHeader label="Date" col="date" sort={sort} onSort={onSort} />
       <span />
     </div>
     {/* the scroll runway: as tall as every row would be, with only the visible ones placed inside it */}
@@ -1255,6 +1303,36 @@ const FileList = ({
     />
   </div>
   );
+};
+
+/** A column header that sorts — Finder's: click to sort by it, click again to flip. The caret shows only on
+ * the active column. */
+const SortHeader = ({ label, col, sort, onSort }: { label: string; col: SortKey; sort: SortSpec; onSort: (key: SortKey) => void }): React.JSX.Element => {
+  const active = sort.key === col;
+  return (
+    <button
+      type="button"
+      className={active ? "cs-fl-sort cs-fl-sort--active" : "cs-fl-sort"}
+      aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
+      onClick={() => onSort(col)}
+    >
+      {label}
+      {active && <Icon name={sort.dir === "asc" ? "arrow_upward" : "arrow_downward"} size={14} />}
+    </button>
+  );
+};
+
+/** localStorage key for the sort order — `cs-` namespaced, like the sidebar width and density. */
+const SORT_KEY = "cs-files-sort";
+const readSort = (): SortSpec => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SORT_KEY) ?? "null") as unknown;
+    if (raw && typeof raw === "object" && "key" in raw && "dir" in raw) {
+      const { key, dir } = raw as { key: unknown; dir: unknown };
+      if ((key === "name" || key === "size" || key === "date") && (dir === "asc" || dir === "desc")) return { key, dir };
+    }
+  } catch { /* nothing stored, or storage unavailable */ }
+  return DEFAULT_SORT;
 };
 
 /** Row-height estimate for the virtualizer, before a row is measured: `--cs-row-h` (`--control-md`). */

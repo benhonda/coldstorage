@@ -176,6 +176,8 @@ export const useFiles = (
       status: "uploading",
       kind: kindFromName(it.name),
       date: null,
+      modifiedAt: null,
+      createdAt: null,
       // Nothing has tried this yet — it was dropped a moment ago and the deposit command is still in
       // flight. `null` is exactly right and is exactly why `uploadStall` treats a null attempt as "queued",
       // not "abandoned": otherwise every fresh drop would flag itself the instant it appeared.

@@ -75,7 +75,10 @@ export const InfoModal = ({
             {/* The daemon's own detail for the fault — an S3 code, a thrown message. Developer-grade, which
                 is exactly why it lives here and nowhere louder. */}
             {sel.file.status === "failed" && sel.file.error && <KeyValueRow label="Details" value={sel.file.error} />}
-            <KeyValueRow label="Uploaded" value={formatDate(sel.file.date)} />
+            {/* The file's OWN dates, from its captured metadata — put back on it when it's restored. A photo
+                has only a capture date (shown as Created). */}
+            {sel.file.modifiedAt && <KeyValueRow label="Modified" value={formatDate(sel.file.modifiedAt)} />}
+            {sel.file.createdAt && <KeyValueRow label="Created" value={formatDate(sel.file.createdAt)} />}
             {/* A "Ready by" row used to sit here, reading `file.readyBy` — a field nothing ever wrote, so
                 it never rendered once. The honest version points at where a download actually lives now. */}
             {(sel.file.status === "pending" || sel.file.status === "transferring") && (

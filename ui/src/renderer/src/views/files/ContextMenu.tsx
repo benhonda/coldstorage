@@ -8,7 +8,8 @@ import { Icon } from "../../ui/primitives.tsx";
 
 export interface MenuItem {
   label: string;
-  icon: string;
+  /** Omit for a text-only entry (the icon column is kept, so labels stay aligned). */
+  icon?: string;
   onClick: () => void;
   danger?: boolean;
   disabled?: boolean;
@@ -91,7 +92,7 @@ export const ContextMenu = ({
               onClose();
             }}
           >
-            <Icon name={it.icon} size={20} />
+            {it.icon ? <Icon name={it.icon} size={20} /> : <span className="csf-icon" aria-hidden="true" />}
             {it.label}
           </button>
         ),

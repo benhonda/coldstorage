@@ -19,6 +19,7 @@ export type {
   DaemonEventName,
   DaemonEvents,
   Deposit,
+  DepositPreview,
   DepositPreviewItem,
   ExcludeSuggestion,
   FileFailureKind,

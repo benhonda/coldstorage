@@ -14,8 +14,8 @@ import Foundation
 
     private func item(_ path: String, size: Int, ageDays: Int) -> IngestItem {
         IngestItem(id: path, relativePath: path, size: size, content: .sha256("h-\(path)"),
-                   createdAt: Date(timeIntervalSince1970: 1_700_000_000 - Double(ageDays) * 86_400),
                    isFavorite: false,
+                   metadata: FileMetadata(modifiedAt: 1_700_000_000 - ageDays * 86_400),
                    open: { AsyncThrowingStream { $0.finish() } })
     }
 

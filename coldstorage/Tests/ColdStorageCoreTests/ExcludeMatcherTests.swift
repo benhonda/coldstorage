@@ -115,8 +115,8 @@ import Foundation
         try "vm".write(to: root.appendingPathComponent("box.vmdk"), atomically: true, encoding: .utf8)
 
         let suggest = ExcludeMatcher(patterns: ExcludeSuggestion.allPatterns)
-        let tagged = try LocalDirSource(root: root, suggest: suggest).walk()
-        let plain = try LocalDirSource(root: root).walk()
+        let tagged = try LocalDirSource(root: root, suggest: suggest).walk().entries
+        let plain = try LocalDirSource(root: root).walk().entries
         #expect(tagged.map(\.relativePath).sorted() == plain.map(\.relativePath).sorted())  // same file set
 
         let by = Dictionary(uniqueKeysWithValues: tagged.map { ($0.relativePath, $0.suggestedBy) })
@@ -137,7 +137,7 @@ import Foundation
         let src = ExplicitPathsSource(entries: [.init(url: root, destDir: "Drop")],
                                       suggest: ExcludeMatcher(patterns: ExcludeSuggestion.allPatterns))
         let preview = try await src.previewPaths()
-        let by = Dictionary(uniqueKeysWithValues: preview.map { ($0.relativePath, $0.suggestedBy) })
+        let by = Dictionary(uniqueKeysWithValues: preview.paths.map { ($0.relativePath, $0.suggestedBy) })
         #expect(by["Drop/\(root.lastPathComponent)/notes.txt"] == .some(nil))
         #expect(by["Drop/\(root.lastPathComponent)/build/app.o"] == "build")
     }

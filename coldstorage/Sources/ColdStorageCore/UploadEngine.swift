@@ -60,7 +60,10 @@ actor RunProgressReporter {
     /// The opening 0-of-N tick, so the UI has a denominator the instant the run starts.
     func begin() async { await emit(snapshot) }
     func itemStarted(_ path: String) async { currentPath = path; await emit(snapshot) }
-    func bytesShipped(_ n: Int) async { bytesUploaded += n; await emit(snapshot) }
+    /// Clamped to `bytesTotal`: every blob also ships a trailer (`BlobManifest`) whose size isn't known when
+    /// the denominator is fixed, and those bytes aren't the user's files. The bar measures THEIR bytes; it
+    /// reaches exactly 100% when the last file's part lands and stays there while the trailer goes up.
+    func bytesShipped(_ n: Int) async { bytesUploaded = min(bytesUploaded + n, bytesTotal); await emit(snapshot) }
     func fileArchived() async { filesArchived += 1; await emit(snapshot) }
 }
 
@@ -95,6 +98,14 @@ public actor UploadEngine {
     let store: any BlobStore
     let keys: KeyProvider
     let cipher = EnvelopeCipher()
+    /// Bytes actually PUT to S3 during the current `run` + the blobs that sent any — the run-throughput line's
+    /// inputs (see `run`). Actor state rather than a return value so `archive`'s return keeps its one meaning
+    /// (ciphertext stored, for quota).
+    private var uploadedThisRun = 0
+    private var blobsUploadedThisRun = 0
+    /// What the last `run` actually moved — the run-throughput log line's source, and the value a test (or a
+    /// future status surface) reads instead of parsing logs. `nil` until a run has sent bytes.
+    public private(set) var lastRunThroughput: RunThroughput?
 
     public init(journal: Journal, store: any BlobStore, keys: KeyProvider) {
         self.journal = journal; self.store = store; self.keys = keys
@@ -234,6 +245,12 @@ public actor UploadEngine {
         // its true size), so the crossing blob's real bytes only land in `used` AFTER it archives — bounding
         // any overshoot to that one blob, still authoritatively, which the client gate can't do at all.
         var used = quota?.usedBytes ?? 0
+        // Run-level throughput. Counts only bytes actually PUT this run (`uploadedThisRun`) — NOT `archive`'s
+        // return value, which is quota accounting and includes parts a resumed blob skipped because S3 already
+        // held them. A resume that re-sent 1 of 4 parts must report the speed of 1 part, or the number lies in
+        // precisely the case someone is staring at the log.
+        let runStart = ContinuousClock.now
+        uploadedThisRun = 0; blobsUploadedThisRun = 0
         for blob in planned {
             // Stop (`cancelRun`) cancels the Task this runs in. Once that's happened, every blob still ahead of
             // us is reported `.stopped` — not silently dropped — so its files get journal truth (see
@@ -265,6 +282,12 @@ public actor UploadEngine {
             }
         }
         await reapDeleted()
+        if uploadedThisRun > 0 {
+            let t = RunThroughput(uploadedBytes: uploadedThisRun, blobsUploaded: blobsUploadedThisRun,
+                                  wall: runStart.duration(to: .now))
+            lastRunThroughput = t
+            log("UploadEngine: run throughput — \(t.description)")
+        }
         log("UploadEngine: run finished — RSS \(ProcessMemory.resident)")
         return failures
     }
@@ -331,13 +354,16 @@ public actor UploadEngine {
         // byte-identical ciphertext (matching the parts already on S3). Only mint fresh for a new blob.
         let dek: SymmetricKey
         let prefix: Data
+        let wrappedDEK: Data   // also written into the blob's own trailer, so the object is readable without the journal
         if let stored = try journal.blobCrypto(blob.id) {
             prefix = stored.noncePrefix
-            dek = try cipher.unwrap(stored.wrappedDEK, kek: kek)
+            wrappedDEK = stored.wrappedDEK
+            dek = try cipher.unwrap(wrappedDEK, kek: kek)
         } else {
             dek = cipher.newDEK()
             prefix = cipher.randomPrefix()
-            try journal.ensureBlob(blob, noncePrefix: prefix, wrappedDEK: try cipher.wrap(dek, kek: kek))
+            wrappedDEK = try cipher.wrap(dek, kek: kek)
+            try journal.ensureBlob(blob, noncePrefix: prefix, wrappedDEK: wrappedDEK)
         }
 
         // Resume has to know which parts already landed BEFORE we stream: we must still *generate* their
@@ -364,6 +390,8 @@ public actor UploadEngine {
         let solo = blob.items.count == 1 ? blob.items[0] : nil
         let encryptedTotal = solo.map { EnvelopeCipher.encryptedSize(ofPlaintext: $0.size) } ?? 0
 
+        let blobStart = ContinuousClock.now
+        var phases = ProducerPhases()
         var frame: UInt64 = 0
         var offset = 0        // encrypted bytes emitted so far — the coordinate system spans are recorded in
         var spans: [(id: String, off: Int, len: Int, firstFrame: UInt64, sha: String, size: Int)] = []
@@ -393,19 +421,27 @@ public actor UploadEngine {
             }
             log("UploadEngine: → uploading item [\(i + 1)/\(blob.items.count)] \(item.relativePath)")
             await reporter?.itemStarted(item.relativePath)   // the "now uploading …" line
-            for try await chunk in item.open() {
+            // Hand-rolled iteration (not `for try await`) so each phase of the producer can be timed
+            // separately — see `ProducerPhases` for why the split is the point.
+            var chunks = item.open().makeAsyncIterator()
+            while true {
+                let chunk = try await phases.timed(\.read) { try await chunks.next() }
+                guard let chunk else { break }
                 // Stop lands here, between frames: the in-flight parts are cancelled by the catch below and
                 // the blob is reported `.stopped`. The blob's open multipart upload survives on S3, so a
                 // later run resumes it part-for-part (`existingParts`) rather than starting over.
                 try Task.checkCancellation()
-                hasher.update(data: chunk); carry.append(chunk); plaintextBytes += chunk.count
+                phases.timedSync(\.encrypt) { hasher.update(data: chunk); carry.append(chunk); plaintextBytes += chunk.count }
                 while carry.count >= EnvelopeCipher.frameSize {
-                    let sealed = try sealFrame(Data(carry.prefix(EnvelopeCipher.frameSize)))
+                    let sealed = try phases.timedSync(\.encrypt) { try sealFrame(Data(carry.prefix(EnvelopeCipher.frameSize))) }
                     carry.removeFirst(EnvelopeCipher.frameSize)
-                    try await shipper.push(sealed)   // ships any part this frame completed — memory stays flat
+                    try await phases.timed(\.wait) { try await shipper.push(sealed) }   // ships any part this frame completed — memory stays flat
                 }
             }
-            if !carry.isEmpty { try await shipper.push(try sealFrame(carry)) }
+            if !carry.isEmpty {
+                let sealed = try phases.timedSync(\.encrypt) { try sealFrame(carry) }
+                try await phases.timed(\.wait) { try await shipper.push(sealed) }
+            }
 
             // THE DRIFT GUARD. The bytes we just encrypted must be the bytes this blob was PLANNED from. If the
             // file changed under us, they aren't — and everything downstream would still look healthy: the
@@ -429,7 +465,24 @@ public actor UploadEngine {
             log("UploadEngine: ✓ uploaded item [\(i + 1)/\(blob.items.count)] \(plaintextBytes) byte(s)")
             spans.append((item.id, start, offset - start, itemFirstFrame, sha, plaintextBytes))
         }
-        try await shipper.finish()
+        // THE TRAILER — the blob describes itself (see `BlobManifest`): every file's span + metadata, sealed
+        // under the blob's DEK, then a plaintext footer with the wrapped DEK. It comes AFTER every file's
+        // frames, so no span above moves; it continues the frame counter, so no nonce repeats. Skipped
+        // when nothing was sealed: a blob of empty files has no object to carry it (see `finish` below).
+        // Deterministic (sorted-key JSON, the same key + prefix): a resume reproduces it byte for byte unless
+        // a file's metadata changed in between — then only the trailer's part differs, and it is re-sent
+        // (a part is skipped only when S3 AND the journal agree it landed), so the object stays whole.
+        if offset > 0 {
+            let manifest = BlobManifest(blobId: blob.id, files: zip(blob.items, spans).map { item, s in
+                BlobManifest.Entry(id: s.id, relativePath: item.relativePath, size: s.size, offset: s.off,
+                                   length: s.len, firstFrame: Int(s.firstFrame), sha256: s.sha, metadata: item.metadata)
+            })
+            let trailer = try BlobTrailer.encode(manifest, cipher: cipher, dek: dek, prefix: prefix,
+                                                 firstFrame: frame, wrappedDEK: wrappedDEK)
+            frame += UInt64(trailer.frames); offset += trailer.bytes.count
+            try await shipper.push(trailer.bytes)
+        }
+        try await phases.timed(\.wait) { try await shipper.finish() }
         } catch {
             await shipper.cancelInFlight()
             throw error
@@ -467,10 +520,76 @@ public actor UploadEngine {
             await reporter?.fileArchived()
         }
         log("UploadEngine: ✓ blob \(blob.id) — \(spans.count) file(s) \(alreadyVerified ? "re-linked" : "archived")")
+        let uploaded = await shipper.uploadedBytes
+        if uploaded > 0 {
+            uploadedThisRun += uploaded; blobsUploadedThisRun += 1
+            let resumed = offset - uploaded
+            log("UploadEngine: blob \(blob.id) throughput — \(Throughput.describe(bytes: uploaded, wall: blobStart.duration(to: .now)))\(resumed > 0 ? " (+\(resumed / 1_048_576) MiB already on S3, not re-sent)" : ""); producer: \(phases.summary)")
+        }
         // NEW ciphertext stored this pass = `offset` for a fresh blob; a relink re-encrypted but uploaded
         // nothing (its bytes are already counted in the run's starting usage), so it adds nothing.
         return alreadyVerified ? 0 : offset
     }
+}
+
+/// Where the producer's time went, so a slow deposit can be blamed on the right thing from the log alone.
+///
+/// The encrypt loop is strictly sequential (read a chunk → hash + seal → hand to the shipper), so its wall
+/// time is exactly the sum of three waits — and which one dominates says which resource is the ceiling:
+///   • `read` high    → the source is slow (an external disk, an iCloud download);
+///   • `encrypt` high → CPU-bound: this one thread of SHA-256 + AES-GCM is the limit (only plausible on a
+///                      multi-gigabit link);
+///   • `wait` high    → the producer sat in `push`/`finish` backpressure: `maxPartsInFlight` parts were up
+///                      and S3 hadn't taken them yet — the NETWORK is the ceiling, and more concurrency
+///                      (cross-blob, or a higher in-flight cap) can't help unless the link has headroom.
+/// The question this exists to answer is "is the uplink actually full?" — `wait` ≈ 100% says yes.
+struct ProducerPhases {
+    var read: Duration = .zero
+    var encrypt: Duration = .zero
+    var wait: Duration = .zero
+
+    mutating func timed<T>(_ phase: WritableKeyPath<Self, Duration>, _ body: () async throws -> T) async rethrows -> T {
+        let t = ContinuousClock.now
+        defer { self[keyPath: phase] += t.duration(to: .now) }
+        return try await body()
+    }
+    mutating func timedSync<T>(_ phase: WritableKeyPath<Self, Duration>, _ body: () throws -> T) rethrows -> T {
+        let t = ContinuousClock.now
+        defer { self[keyPath: phase] += t.duration(to: .now) }
+        return try body()
+    }
+
+    var summary: String {
+        let total = read.seconds + encrypt.seconds + wait.seconds
+        guard total > 0 else { return "no time recorded" }
+        let pct = { (d: Duration) in String(format: "%.0f%%", d.seconds / total * 100) }
+        return "read \(pct(read)), encrypt \(pct(encrypt)), waiting on S3 \(pct(wait))"
+    }
+}
+
+/// One run's upload work, measured: only bytes actually PUT (resumed/skipped parts excluded), the blobs that
+/// sent any, and the wall time of the whole run.
+public struct RunThroughput: Sendable, Equatable, CustomStringConvertible {
+    public let uploadedBytes: Int
+    public let blobsUploaded: Int
+    public let wall: Duration
+    public var description: String {
+        "\(Throughput.describe(bytes: uploadedBytes, wall: wall)) across \(blobsUploaded) blob(s)"
+    }
+}
+
+/// "N MiB in T s → X MB/s (Y Mbps)" — one place, so the blob line and the run line agree on units.
+/// Megabits are the unit an ISP plan and a speed test use, so that number is the one to compare against.
+enum Throughput {
+    static func describe(bytes: Int, wall: Duration) -> String {
+        let s = max(wall.seconds, 0.001)
+        let mbps = Double(bytes) / s / 1_000_000
+        return String(format: "%.0f MiB in %.1f s → %.1f MB/s (%.0f Mbps)", Double(bytes) / 1_048_576, s, mbps, mbps * 8)
+    }
+}
+
+extension Duration {
+    var seconds: Double { Double(components.seconds) + Double(components.attoseconds) / 1e18 }
 }
 
 /// Turns the blob's ciphertext stream into S3 multipart parts, uploading **up to `maxInFlight` parts
@@ -529,6 +648,10 @@ private actor PartShipper {
     /// Cumulative encrypted bytes actually DONE — monotonic even though parts finish out of order, so the
     /// solo determinate bar never jumps backwards.
     private var shippedBytes = 0
+    /// Ciphertext bytes this run actually PUT — excludes parts skipped on resume and the relink pass (which
+    /// sends nothing). What the throughput lines divide by wall time; `shippedBytes` (progress) would
+    /// overstate a resumed blob's speed.
+    private(set) var uploadedBytes = 0
 
     init(blob: BlobPlan, store: any BlobStore, journal: Journal,
          uploads: Bool, existingUploadId: String?, alreadyOnS3: Set<Int>, alreadyRecorded: Set<Int>,
@@ -614,6 +737,7 @@ private actor PartShipper {
                 return r
             }
             inFlight[number] = (task, bytes.count)
+            uploadedBytes += bytes.count
         }
     }
 

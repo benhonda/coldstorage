@@ -790,7 +790,6 @@ public actor DaemonService {
         let size: Int
         let status: String
         let blobId: String?
-        let date: Int?
         let lastAttemptAt: Int?
         let error: String?
         /// Where the bytes live on this Mac, or null — what the app keys "Try again" vs "Locate…" off.
@@ -799,9 +798,14 @@ public actor DaemonService {
         let depositId: String?
         /// Why a `failed` row failed (`FileFailureKind` raw value), or null — the app's copy key.
         let failureKind: String?
+        /// The file's own dates (Unix seconds) from its captured metadata: mtime for a file, capture date for
+        /// a photo (`createdAt` only). Null where unknown.
+        let modifiedAt: Int?
+        let createdAt: Int?
 
         enum CodingKeys: String, CodingKey {
-            case id, relativePath, size, status, blobId, date, lastAttemptAt, error, sourcePath, depositId, failureKind
+            case id, relativePath, size, status, blobId, lastAttemptAt, error, sourcePath, depositId, failureKind,
+                 modifiedAt, createdAt
         }
 
         func encode(to encoder: Encoder) throws {
@@ -811,12 +815,13 @@ public actor DaemonService {
             try c.encode(size, forKey: .size)
             try c.encode(status, forKey: .status)
             try c.encode(blobId, forKey: .blobId)              // `encode`, not `encodeIfPresent` — emits null
-            try c.encode(date, forKey: .date)
             try c.encode(lastAttemptAt, forKey: .lastAttemptAt)
             try c.encode(error, forKey: .error)
             try c.encode(sourcePath, forKey: .sourcePath)
             try c.encode(depositId, forKey: .depositId)
             try c.encode(failureKind, forKey: .failureKind)
+            try c.encode(modifiedAt, forKey: .modifiedAt)
+            try c.encode(createdAt, forKey: .createdAt)
         }
     }
     /// One batch on the Uploads page (`listDeposits`). Counts are NOT here: the app derives them from the
@@ -994,6 +999,10 @@ public actor DaemonService {
     private struct DepositPreviewItemDTO: Encodable {
         let relativePath: String; let size: Int; let exists: Bool; let suggestedPack: String?
     }
+    /// Something the drop contained that WON'T be uploaded, and why (`LocalDirSource.Skipped.Reason`).
+    private struct DepositSkippedDTO: Encodable { let relativePath: String; let reason: String }
+    /// `previewDeposit`'s answer: what lands, and what the walk passed over on purpose.
+    private struct DepositPreviewDTO: Encodable { let items: [DepositPreviewItemDTO]; let skipped: [DepositSkippedDTO] }
     /// One idempotent restore step's outcome. `state` ∈ restored | thawRequested | thawInProgress —
     /// re-issue `restore` until it's `restored`. `out` is set only when bytes landed; `tier`/`typicalWait`
     /// only while thawing, so the UI can show the quoted wait.
@@ -1267,8 +1276,9 @@ public actor DaemonService {
             guard let session else { return AnyEncodable([FileDTO]()) }
             return AnyEncodable(try session.journal.listFiles().map {
                 FileDTO(id: $0.id, relativePath: $0.relativePath, size: $0.size, status: $0.status.rawValue, blobId: $0.blobId,
-                        date: $0.createdAt, lastAttemptAt: $0.lastAttemptAt, error: $0.error, sourcePath: $0.sourcePath,
-                        depositId: $0.depositId, failureKind: $0.failureKind?.rawValue)
+                        lastAttemptAt: $0.lastAttemptAt, error: $0.error, sourcePath: $0.sourcePath,
+                        depositId: $0.depositId, failureKind: $0.failureKind?.rawValue,
+                        modifiedAt: $0.metadata?.modifiedAt, createdAt: $0.metadata?.createdAt)
             })
         case "listDeposits":
             // Every batch the user has dropped or picked, newest first — the Uploads page's list. Signed
@@ -1495,23 +1505,26 @@ public actor DaemonService {
             // the drop — and the preview throws all of that away, keeping only the names. On a 1000-file
             // deposit that read is minutes of work in front of a UI that gives up after 10 seconds, so the
             // whole thing looked hung before a single row appeared. The preview is now a stat-only walk.
-            let previews: [DepositPreviewPath]
+            let preview: DepositPreview
             if let raw = p["src"], !raw.isEmpty {
                 let entries = raw.split(separator: "\n").map { ExplicitPathsSource.Entry(url: URL(fileURLWithPath: String($0)), destDir: dest) }
-                previews = try await ExplicitPathsSource(entries: entries, exclude: excludeMatcher(session),
-                                                         suggest: suggestionMatcher(session)).previewPaths()
+                preview = try await ExplicitPathsSource(entries: entries, exclude: excludeMatcher(session),
+                                                        suggest: suggestionMatcher(session)).previewPaths()
             } else if let raw = p["assetIds"], !raw.isEmpty {
                 guard let resolver = photoResolver else { throw ColdStorageError.invalidRequest("previewDeposit: Photos ingest is unavailable on this platform") }
-                previews = try await PhotoDepositSource(resolver: resolver, assetIds: raw.split(separator: "\n").map(String.init),
-                                                        destDir: dest, scratchDir: session.scratchDir).previewPaths()
+                preview = try await PhotoDepositSource(resolver: resolver, assetIds: raw.split(separator: "\n").map(String.init),
+                                                       destDir: dest, scratchDir: session.scratchDir).previewPaths()
             } else {
                 throw ColdStorageError.invalidRequest("previewDeposit requires params.src (paths) or params.assetIds")
             }
             let live = try session.journal.livePaths()
-            return AnyEncodable(previews.map {
-                DepositPreviewItemDTO(relativePath: $0.relativePath, size: $0.size, exists: live.contains($0.relativePath),
-                                      suggestedPack: $0.suggestedBy.flatMap(ExcludeSuggestion.packId(forPattern:)))
-            })
+            return AnyEncodable(DepositPreviewDTO(
+                items: preview.paths.map {
+                    DepositPreviewItemDTO(relativePath: $0.relativePath, size: $0.size, exists: live.contains($0.relativePath),
+                                          suggestedPack: $0.suggestedBy.flatMap(ExcludeSuggestion.packId(forPattern:)))
+                },
+                skipped: preview.skipped.map { DepositSkippedDTO(relativePath: $0.relativePath, reason: $0.reason.rawValue) }
+            ))
         case "movePath":
             let session = try requireSession("movePath")
             // Reorganize: relocate the subtree at `from` → `to` (a file/folder move OR rename). A cheap

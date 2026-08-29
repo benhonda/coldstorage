@@ -803,6 +803,20 @@ button.cs-kv:hover { background: var(--surface-hover); }
    font-size the component sets on the stack, so it tracks the badge size instead of assuming one. */
 .cs-statusbadges > .cs-statusicon:first-child { z-index: 2; }
 .cs-statusbadges > .cs-statusicon + .cs-statusicon { z-index: 1; margin-left: -0.45em; }
+/* sortable column header: a text button that keeps the header's look; the caret marks the active column */
+.cs-fl-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  justify-self: start;
+}
+.cs-fl-sort:hover, .cs-fl-sort--active { color: var(--text-primary); }
 .cs-fl-head {
   position: sticky;
   top: 0;

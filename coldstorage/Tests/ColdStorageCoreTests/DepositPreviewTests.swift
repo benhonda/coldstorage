@@ -40,7 +40,7 @@ import Foundation
         // Reading the bytes is impossible…
         await #expect(throws: (any Error).self) { try await source.enumerate() }
         // …yet the preview answers fine, because it only ever stats.
-        let paths = try await source.previewPaths().map(\.relativePath)
+        let paths = try await source.previewPaths().paths.map(\.relativePath)
         #expect(paths.sorted() == ["Photos/Trip/a.txt", "Photos/Trip/b.txt", "Photos/Trip/nested/c.txt"])
     }
 
@@ -52,7 +52,7 @@ import Foundation
         defer { try? FileManager.default.removeItem(at: d.base) }
 
         let source = ExplicitPathsSource(entries: [.init(url: d.root, destDir: "Photos")])
-        let previewed = try await source.previewPaths().sorted { $0.relativePath < $1.relativePath }
+        let previewed = try await source.previewPaths().paths.sorted { $0.relativePath < $1.relativePath }
         let archived = try await source.enumerate().sorted { $0.relativePath < $1.relativePath }
 
         #expect(previewed.map(\.relativePath) == archived.map(\.relativePath))
@@ -68,6 +68,6 @@ import Foundation
 
         let source = ExplicitPathsSource(entries: [.init(url: d.root, destDir: "")],
                                          exclude: ExcludeMatcher(patterns: ["nested"]))
-        #expect(try await source.previewPaths().map(\.relativePath).sorted() == ["Trip/a.txt", "Trip/b.txt"])
+        #expect(try await source.previewPaths().paths.map(\.relativePath).sorted() == ["Trip/a.txt", "Trip/b.txt"])
     }
 }

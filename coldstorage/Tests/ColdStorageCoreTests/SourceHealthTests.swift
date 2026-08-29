@@ -25,7 +25,7 @@ import Foundation
         let dir = tempDir()
         try Data("hi".utf8).write(to: dir.appendingPathComponent("a.txt"))
         let source = LocalDirSource(root: dir)
-        #expect(try source.walk().count == 1, "sanity: it works while the folder is there")
+        #expect(try source.walk().entries.count == 1, "sanity: it works while the folder is there")
 
         try FileManager.default.removeItem(at: dir)   // the unplugged drive
 

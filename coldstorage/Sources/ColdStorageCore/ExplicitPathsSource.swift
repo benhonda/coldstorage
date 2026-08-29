@@ -4,6 +4,16 @@ import Foundation
 /// bytes. The size is a free stat field from the placement walk (no bytes are read), and it lets the UI
 /// run its pre-flight quota check against the EXACT incoming size — for a folder deposit as much as a loose
 /// file — instead of guessing. `exists` (the collision flag) is added at the daemon seam against the journal.
+/// A deposit's dry run: what lands (`paths`) and what the walk passed over on purpose (`skipped`) — the
+/// latter so the app can SAY "2 symlinks won't be uploaded" rather than have them vanish from the drop.
+public struct DepositPreview: Sendable {
+    public let paths: [DepositPreviewPath]
+    public let skipped: [LocalDirSource.Skipped]
+    public init(paths: [DepositPreviewPath], skipped: [LocalDirSource.Skipped] = []) {
+        self.paths = paths; self.skipped = skipped
+    }
+}
+
 public struct DepositPreviewPath: Sendable {
     public let relativePath: String
     public let size: Int
@@ -48,6 +58,10 @@ public struct ExplicitPathsSource: IngestSource {
         let fm = FileManager.default
         var items: [IngestItem] = []
         for e in entries {
+            // Checked FIRST: `fileExists(isDirectory:)` follows links, so a symlink to a folder would
+            // otherwise walk the target as if it were the drop. Not archived (see LocalDirSource.walk) —
+            // the preview already told the user.
+            if Self.isSymlink(e.url) { continue }
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: e.url.path, isDirectory: &isDir) else { continue }  // skip a vanished drop
             if isDir.boolValue {
@@ -58,18 +72,19 @@ public struct ExplicitPathsSource: IngestSource {
                 for it in try await LocalDirSource(root: e.url, exclude: exclude).enumerate() {
                     let rel = Self.join(e.destDir, "\(base)/\(it.relativePath)")
                     items.append(IngestItem(id: rel, relativePath: rel, size: it.size, content: it.content,
-                                            createdAt: it.createdAt, isFavorite: it.isFavorite,
+                                            isFavorite: it.isFavorite,
                                             metadata: it.metadata, sourcePath: it.sourcePath, open: it.open))
                 }
             } else {
                 let rel = Self.join(e.destDir, e.url.lastPathComponent)
                 let url = e.url
-                let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
                 let sha = try LocalDirSource.sha256Hex(of: url)
                 items.append(IngestItem(
-                    id: rel, relativePath: rel, size: v?.fileSize ?? 0,
+                    id: rel, relativePath: rel, size: size,
                     content: .sha256(sha),
-                    createdAt: v?.contentModificationDate, isFavorite: false, sourcePath: url.path,
+                    isFavorite: false,
+                    metadata: FileMetadata.capture(at: url), sourcePath: url.path,
                     open: { LocalDirSource.stream(url) }))
             }
         }
@@ -84,26 +99,41 @@ public struct ExplicitPathsSource: IngestSource {
     ///
     /// It reuses the SAME placement arithmetic as `enumerate` (`LocalDirSource.walk` + `join`), so a preview
     /// can never disagree with the deposit it is previewing.
-    public func previewPaths() async throws -> [DepositPreviewPath] {
+    public func previewPaths() async throws -> DepositPreview {
         let fm = FileManager.default
         var paths: [DepositPreviewPath] = []
+        var skipped: [LocalDirSource.Skipped] = []
         for e in entries {
+            // Before `fileExists`, which follows links — same rule as a symlink inside a folder, same honesty.
+            if Self.isSymlink(e.url) {
+                skipped.append(.init(relativePath: Self.join(e.destDir, e.url.lastPathComponent), reason: .symlink))
+                continue
+            }
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: e.url.path, isDirectory: &isDir) else { continue }
             if isDir.boolValue {
                 // The walk already stats `size` (a byte count, no content read) — carry it through so the
                 // preview can price the deposit, rather than throwing it away and re-statting later.
                 let base = e.url.lastPathComponent
-                for entry in try LocalDirSource(root: e.url, exclude: exclude, suggest: suggest).walk() {
+                let walk = try LocalDirSource(root: e.url, exclude: exclude, suggest: suggest).walk()
+                for entry in walk.entries {
                     paths.append(DepositPreviewPath(relativePath: Self.join(e.destDir, "\(base)/\(entry.relativePath)"),
                                                     size: entry.size, suggestedBy: entry.suggestedBy))
+                }
+                for s in walk.skipped {
+                    skipped.append(.init(relativePath: Self.join(e.destDir, "\(base)/\(s.relativePath)"), reason: s.reason))
                 }
             } else {
                 let size = (try? e.url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
                 paths.append(DepositPreviewPath(relativePath: Self.join(e.destDir, e.url.lastPathComponent), size: size))
             }
         }
-        return paths
+        return DepositPreview(paths: paths, skipped: skipped)
+    }
+
+    /// The path itself (not what it points at) is a symlink.
+    static func isSymlink(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
     }
 
     /// Join a vault dir + a sub-path ("" + "a/b" → "a/b"; "x" + "a/b" → "x/a/b").
@@ -137,7 +167,7 @@ public struct RetryFilesSource: IngestSource {
             for (asset, row) in photoRows {
                 guard let it = byAsset[asset] else { continue }
                 items.append(IngestItem(id: row.id, relativePath: row.relativePath, size: it.size, content: it.content,
-                                        createdAt: it.createdAt, isFavorite: it.isFavorite, metadata: it.metadata,
+                                        isFavorite: it.isFavorite, metadata: it.metadata,
                                         sourcePath: row.sourcePath, open: it.open))
             }
         }
@@ -146,12 +176,13 @@ public struct RetryFilesSource: IngestSource {
             let url = URL(fileURLWithPath: src)
             var isDir: ObjCBool = false
             guard FileManager.default.fileExists(atPath: src, isDirectory: &isDir), !isDir.boolValue else { continue }
-            let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
             let sha = try LocalDirSource.sha256Hex(of: url)
             items.append(IngestItem(
-                id: row.id, relativePath: row.relativePath, size: v?.fileSize ?? 0,
+                id: row.id, relativePath: row.relativePath, size: size,
                 content: .sha256(sha),
-                createdAt: v?.contentModificationDate, isFavorite: false, sourcePath: src,
+                isFavorite: false,
+                metadata: FileMetadata.capture(at: url), sourcePath: src,
                 open: { LocalDirSource.stream(url) }))
         }
         return items

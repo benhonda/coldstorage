@@ -99,8 +99,13 @@ export interface ArchivedFile {
   size: number;
   status: FileStatus;
   kind: FileKind;
-  /** Archived/modified instant (ISO), or null if the journal doesn't expose one. */
+  /** The file's own date (ISO) — modified if known, else created — or null. Derived from the two below;
+   * what the Date column shows and sorts on. */
   date: string | null;
+  /** Last modified / created (ISO) from the file's captured metadata, each null when unknown. A photo has
+   * only `createdAt` (its capture date). Shown by name under Get info. */
+  modifiedAt: string | null;
+  createdAt: string | null;
   /** Unix seconds the upload path last tried this file; null if it never has. Feeds {@link uploadStall}. */
   lastAttemptAt: number | null;
   /** Developer-facing detail of the last upload fault (an S3 code, a thrown message), or null. NOT user
@@ -131,6 +136,8 @@ export interface FolderRow {
   size: number;
   /** Descendant file count. */
   count: number;
+  /** The newest descendant's {@link ArchivedFile.date} (ISO), or null — what a folder sorts by on Date. */
+  date: string | null;
   /** What this folder's badge says — see {@link rollupBadges}. Two facts, because a folder is not one
    * file: what it IS, and what's happening to PART of it. */
   badges: RowBadges;
@@ -359,18 +366,51 @@ const rollupBadges = (counts: ReadonlyMap<FileStatus, number>, total: number): R
   };
 };
 
+/** How the browser orders rows: by which column, which way. Folders always come before files. */
+export type SortKey = "name" | "size" | "date";
+export interface SortSpec {
+  key: SortKey;
+  dir: "asc" | "desc";
+}
+export const DEFAULT_SORT: SortSpec = { key: "name", dir: "asc" };
+/** Finder's rule: clicking the active column flips it; clicking another starts it the way people expect
+ * (names A–Z, but sizes and dates biggest/newest first). */
+export const toggleSort = (cur: SortSpec, key: SortKey): SortSpec =>
+  cur.key === key ? { key, dir: cur.dir === "asc" ? "desc" : "asc" } : { key, dir: key === "name" ? "asc" : "desc" };
+
+const rowSize = (r: Row): number => (r.type === "folder" ? r.size : r.file.size);
+const rowDate = (r: Row): string | null => (r.type === "folder" ? r.date : r.file.date);
+/** Order rows by `sort`, names breaking every tie so the order is stable. A row with no date sorts after
+ * every dated one whichever way the column points — "unknown" isn't older OR newer than anything. */
+const compareRows = (sort: SortSpec) => (a: Row, b: Row): number => {
+  const byName = a.name.localeCompare(b.name);
+  const sign = sort.dir === "asc" ? 1 : -1;
+  if (sort.key === "name") return sign * byName;
+  if (sort.key === "size") return sign * (rowSize(a) - rowSize(b)) || byName;
+  const da = rowDate(a);
+  const db = rowDate(b);
+  if (da === db) return byName;
+  if (da === null) return 1;
+  if (db === null) return -1;
+  return sign * da.localeCompare(db) || byName; // ISO strings order chronologically
+};
+
+/** The newer of two ISO dates (null = unknown, and never wins). */
+const newer = (a: string | null, b: string | null): string | null => (a === null ? b : b === null ? a : a > b ? a : b);
+
 /**
  * The rows shown at directory `dir` (root = ""): immediate subfolders (aggregated) then files, each
- * sorted A–Z. `extraFolders` are virtual (just-created, still-empty) folder paths to surface even
- * though no file lives under them yet — the Finder "new folder" affordance.
+ * ordered by `sort` (A–Z by default). `extraFolders` are virtual (just-created, still-empty) folder paths
+ * to surface even though no file lives under them yet — the Finder "new folder" affordance.
  */
 export const childrenOf = (
   files: readonly ArchivedFile[],
   dir: string,
   extraFolders: readonly string[] = [],
+  sort: SortSpec = DEFAULT_SORT,
 ): Row[] => {
   const base = segments(dir);
-  const folders = new Map<string, { size: number; count: number; statuses: Map<FileStatus, number> }>();
+  const folders = new Map<string, { size: number; count: number; date: string | null; statuses: Map<FileStatus, number> }>();
   const fileRows: FileLeafRow[] = [];
 
   for (const f of files) {
@@ -384,9 +424,10 @@ export const childrenOf = (
     if (rest.length === 1) {
       fileRows.push({ type: "file", name: head, file: f });
     } else {
-      const agg = folders.get(head) ?? { size: 0, count: 0, statuses: new Map<FileStatus, number>() };
+      const agg = folders.get(head) ?? { size: 0, count: 0, date: null, statuses: new Map<FileStatus, number>() };
       agg.size += f.size;
       agg.count += 1;
+      agg.date = newer(agg.date, f.date);
       agg.statuses.set(f.status, (agg.statuses.get(f.status) ?? 0) + 1);
       folders.set(head, agg);
     }
@@ -396,7 +437,7 @@ export const childrenOf = (
   for (const vf of extraFolders) {
     if (parentOf(vf) !== dir) continue;
     const name = segments(vf).at(-1);
-    if (name && !folders.has(name)) folders.set(name, { size: 0, count: 0, statuses: new Map() });
+    if (name && !folders.has(name)) folders.set(name, { size: 0, count: 0, date: null, statuses: new Map() });
   }
 
   const folderRows: FolderRow[] = [...folders.entries()]
@@ -406,12 +447,13 @@ export const childrenOf = (
       path: joinPath(dir, name),
       size: agg.size,
       count: agg.count,
+      date: agg.date,
       badges: rollupBadges(agg.statuses, agg.count),
       empty: agg.count === 0,
     }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort(compareRows(sort));
 
-  fileRows.sort((a, b) => a.name.localeCompare(b.name));
+  fileRows.sort(compareRows(sort));
   return [...folderRows, ...fileRows];
 };
 
@@ -587,10 +629,14 @@ const STATUS_FROM_JOURNAL: Record<string, FileStatus> = {
  */
 export const isFolderMarker = (row: ListedFile): boolean => row.status === "folder";
 
+const iso = (epochSeconds: number | null): string | null =>
+  epochSeconds != null ? new Date(epochSeconds * 1000).toISOString() : null;
+
 /**
- * Map a raw `listFiles` row to the {@link ArchivedFile} the browser draws. `date` is the journal's capture
- * time (epoch seconds) rendered to an ISO string for {@link formatDate}; null when the journal has none
- * (legacy rows predating the column → "—"). `kind` is derived from the name.
+ * Map a raw `listFiles` row to the {@link ArchivedFile} the browser draws. Dates are epoch seconds rendered
+ * to ISO strings for {@link formatDate}: `modifiedAt`/`createdAt` straight from the file's metadata, and
+ * `date` — the one the column shows — the modified date if known, else created, else null → "—". `kind`
+ * is derived from the name.
  */
 export const fileFromJournal = (row: ListedFile): ArchivedFile => ({
   id: row.id,
@@ -598,7 +644,9 @@ export const fileFromJournal = (row: ListedFile): ArchivedFile => ({
   size: row.size,
   status: STATUS_FROM_JOURNAL[row.status] ?? "uploading",
   kind: kindFromName(row.relativePath),
-  date: row.date != null ? new Date(row.date * 1000).toISOString() : null,
+  date: iso(row.modifiedAt ?? row.createdAt),
+  modifiedAt: iso(row.modifiedAt),
+  createdAt: iso(row.createdAt),
   lastAttemptAt: row.lastAttemptAt,
   error: row.error,
   failureKind: row.failureKind,

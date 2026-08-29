@@ -20,7 +20,7 @@ import Foundation
 
     private func seed(_ j: Journal, id: String = "f1") throws {
         try j.upsert([IngestItem(id: id, relativePath: "Photos/beach.jpg", size: 2048,
-                                 content: .sha256("hash-\(id)"), createdAt: nil, isFavorite: false,
+                                 content: .sha256("hash-\(id)"), isFavorite: false,
                                  open: { AsyncThrowingStream { $0.finish() } })])
     }
 

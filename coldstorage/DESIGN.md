@@ -81,7 +81,7 @@ engines. `DaemonService` holds a single `private var session: UserSession?` and 
 
 | Level | What | Why |
 |---|---|---|
-| **Logical file** | one user file/photo + metadata (path, EXIF, content hash) | what the user thinks they archived; the restore unit |
+| **Logical file** | one user file/photo + metadata (path, content hash, `FileMetadata`: dates, mode, flags, xattrs/Finder tags, Photos facts) | what the user thinks they archived; the restore unit — metadata is put back on the restored file |
 | **Blob** | one-or-more files' encrypted frames = **one S3 object** | batching small files kills per-PUT + metadata overhead |
 | **Frame** | fixed 4 MiB plaintext chunk, AEAD-sealed individually | the **integrity + encryption granularity** |
 | **Part** | S3 multipart part (64 MiB = 16 frames) | the **upload + resume + ETag granularity** |
@@ -152,8 +152,15 @@ objects carrying them.
   concurrency-safe, so each part's `recordPart` is drained back ON the `PartShipper` actor, serialised. The
   producer (`archive`'s encrypt loop) awaits each `push`, so it's strictly sequential and backpressures
   naturally: at the cap, `flush` drains one before dispatching the next, which suspends the producer. Override
-  with `COLDSTORE_MAX_PARTS_INFLIGHT` (1 = the old sequential behaviour). *(Whether it speeds a given deposit
+  with `COLDSTORE_MAX_PARTS_INFLIGHT` (1 = the old sequential behaviour; `task daemon:mac:install
+  COLDSTORE_MAX_PARTS_INFLIGHT=8` plumbs it into the LaunchAgent). *(Whether it speeds a given deposit
   depends on the link: a slow saturated uplink sees little; a link with spare capacity sees up to ~Nx.)*
+  **The log says which it is.** Every blob that ships logs a `throughput —` line (MiB, seconds, MB/s and
+  Mbps — the speed-test unit) plus a `producer:` split of where the encrypt loop's time went: `read` (the
+  source is slow), `encrypt` (CPU-bound — this one thread of SHA-256 + AES-GCM), or `waiting on S3`
+  (backpressure: the in-flight cap was full — the uplink is the ceiling). The run logs a total too. The
+  deferred cross-blob concurrency (§8) is worth building only when a run shows Mbps well under the link's
+  speed test AND `waiting on S3` well under 100%; `ProducerPhases` in `UploadEngine.swift` is the SSOT.
   **Byte progress (`runProgress`) is reported the instant each part's PUT confirms — inside the part's own
   task — NOT when it's later drained for the journal.** Draining is lazy: a blob with ≤ `maxPartsInFlight`
   parts never drains until `finish`, so reporting at drain time meant a whole small-to-mid file uploaded in
@@ -187,9 +194,14 @@ objects carrying them.
   minimal instead). This *is* the resumability guarantee.
 - **Durability rule:** every state transition is a committed transaction. A crash at any instant leaves
   a consistent, resumable state; the §5 reconcile closes the "uploaded but unrecorded" window.
-- **The journal is the metadata-index SPOF** — losing it makes the opaque-ciphertext archive
-  unrecoverable. First-class durability (hot, versioned, replicated) + a cross-device story is the
-  R2/portability work, load-bearing for multi-user (see `../PROD.md`).
+- **The journal is the index, but no longer the only copy of it.** Every blob ends in a **trailer** (SSOT:
+  `BlobManifest.swift`): an encrypted manifest of the files inside — path, size, hash, ciphertext span,
+  `FileMetadata` — plus a plaintext footer carrying the nonce prefix and the DEK wrapped under the user's
+  KEK. So the objects + the KEK are sufficient to recover everything (`BlobManifestTests` proves a blob
+  decodes from raw bytes alone); the trailer sits AFTER every file's frames, so spans and restore are
+  untouched by it. What's still missing is the *tool* that walks a bucket and rebuilds a journal from
+  trailers — until it exists, journal loss is a recovery job, not an automatic one. Hot/replicated journal
+  durability + the cross-device story remain the R2/portability work (see `../PROD.md`).
 - Schema SSOT is `Journal.swift` (`sources` / `files` / `blobs` / `parts` / `blob_members` / `excludes` /
   `restores`); file and part
   state machines are independent.

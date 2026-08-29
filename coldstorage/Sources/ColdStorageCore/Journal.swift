@@ -28,9 +28,6 @@ public struct FileRow: Sendable {
     public let size: Int
     public let status: FileStatus
     public let blobId: String?
-    /// Capture/creation date as Unix epoch seconds; nil when unknown (legacy rows, or a source that
-    /// carries no date). The daemon renders it to an ISO-8601 string at the IPC boundary.
-    public let createdAt: Int?
     /// When the upload path last actually TRIED this file — every outcome, success or fault. `nil` means no
     /// attempt has been made yet, which is the honest reading of a file that was scanned into the journal
     /// while the daemon was idle. The upload twin of `RestoreRow.lastStepAt`, and for the same reason: the
@@ -52,13 +49,16 @@ public struct FileRow: Sendable {
     /// WHY a `failed` row failed — the closed set the app renders copy from (see `FileFailureKind`). Nil
     /// on every other status, and cleared the moment the row is re-planned or archived.
     public let failureKind: FileFailureKind?
+    /// The file beyond its bytes (dates, mode, flags, xattrs, Photos facts) as captured at ingest — what
+    /// restore puts back. Nil for a row from before the column existed.
+    public let metadata: FileMetadata?
     public init(id: String, relativePath: String, size: Int, status: FileStatus, blobId: String?,
-                createdAt: Int?, lastAttemptAt: Int? = nil, error: String? = nil, sourcePath: String? = nil,
-                depositId: String? = nil, failureKind: FileFailureKind? = nil) {
+                lastAttemptAt: Int? = nil, error: String? = nil, sourcePath: String? = nil,
+                depositId: String? = nil, failureKind: FileFailureKind? = nil, metadata: FileMetadata? = nil) {
         self.id = id; self.relativePath = relativePath; self.size = size
-        self.status = status; self.blobId = blobId; self.createdAt = createdAt
+        self.status = status; self.blobId = blobId
         self.lastAttemptAt = lastAttemptAt; self.error = error; self.sourcePath = sourcePath
-        self.depositId = depositId; self.failureKind = failureKind
+        self.depositId = depositId; self.failureKind = failureKind; self.metadata = metadata
     }
 }
 
@@ -136,7 +136,7 @@ public final class Journal: @unchecked Sendable {
               id TEXT PRIMARY KEY, relativePath TEXT NOT NULL, size INTEGER NOT NULL,
               contentHash TEXT NOT NULL, status TEXT NOT NULL, blobId TEXT,
               "offset" INTEGER, length INTEGER, firstFrame INTEGER, plaintextSha256 TEXT, error TEXT,
-              createdAt INTEGER, deletedAt INTEGER, lastAttemptAt INTEGER);
+              deletedAt INTEGER, lastAttemptAt INTEGER, metadata TEXT);
             CREATE TABLE IF NOT EXISTS blobs(
               id TEXT PRIMARY KEY, s3Key TEXT NOT NULL, uploadId TEXT,
               noncePrefix BLOB, wrappedDEK BLOB, status TEXT NOT NULL);
@@ -200,13 +200,7 @@ public final class Journal: @unchecked Sendable {
         if !sourceCols.contains("error") {
             try exec("ALTER TABLE sources ADD COLUMN error TEXT")
         }
-        // Idempotent column add for journals created before `createdAt` existed. Nullable (no DEFAULT): a
-        // legacy row's true capture date is unknown, so it stays NULL → "—" in the UI rather than a faked
-        // value. New/re-scanned rows get the real `IngestItem.createdAt` via `upsert`.
         let fileCols = try run("PRAGMA table_info(files)").compactMap { $0["name"] as? String }
-        if !fileCols.contains("createdAt") {
-            try exec("ALTER TABLE files ADD COLUMN createdAt INTEGER")
-        }
         // The upload half of the freshness clock `restores.lastStepAt` is for a download. Nullable and NOT
         // backfilled, for the same reason: a legacy row has no record of when the upload path last tried it,
         // and "planned" alone cannot tell a queued file apart from an abandoned one.
@@ -218,6 +212,16 @@ public final class Journal: @unchecked Sendable {
         // "Locate…" for exactly that case rather than us guessing a path.
         if !fileCols.contains("sourcePath") {
             try exec("ALTER TABLE files ADD COLUMN sourcePath TEXT")
+        }
+        // `metadata`: the file's dates/mode/flags/xattrs as JSON (`FileMetadata`) — the ONE home for the file's
+        // own date. Journals from before it existed carried a single `createdAt` column (mtime for a file,
+        // capture date for a photo); that is folded into `metadata` under its honest name and the column
+        // dropped, so no second copy of the date survives to drift from the first.
+        if !fileCols.contains("metadata") {
+            try exec("ALTER TABLE files ADD COLUMN metadata TEXT")
+        }
+        if fileCols.contains("createdAt") {
+            try migrateCreatedAtIntoMetadata()
         }
         // Deletion as its OWN column, so tombstoning stops destroying the row's kind + lifecycle. Not a bare
         // column add — it carries existing tombstones over and repairs what the old scheme corrupted.
@@ -500,15 +504,16 @@ public final class Journal: @unchecked Sendable {
             // verdict about an attempt that hasn't happened. (`error` is deliberately kept — a transient
             // snag's detail stays legible on a still-queued row; see `recordFileFault`.)
             try run("""
-                INSERT INTO files(id, relativePath, size, contentHash, status, createdAt, sourcePath, depositId)
+                INSERT INTO files(id, relativePath, size, contentHash, status, sourcePath, depositId, metadata)
                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
                 ON CONFLICT(id) DO UPDATE SET relativePath=excluded.relativePath, size=excluded.size,
-                    contentHash=excluded.contentHash, status=excluded.status, createdAt=excluded.createdAt,
+                    contentHash=excluded.contentHash, status=excluded.status,
                     sourcePath=COALESCE(excluded.sourcePath, files.sourcePath),
-                    depositId=COALESCE(excluded.depositId, files.depositId), failureKind=NULL
+                    depositId=COALESCE(excluded.depositId, files.depositId), failureKind=NULL,
+                    metadata=excluded.metadata
                 """, [.text(it.id), .text(it.relativePath), .int(it.size), .text(it.content.planKey), .text(FileStatus.planned.rawValue),
-                      it.createdAt.map { .int(Int($0.timeIntervalSince1970)) } ?? .null,
-                      it.sourcePath.map { .text($0) } ?? .null, depositId.map { .text($0) } ?? .null])
+                      it.sourcePath.map { .text($0) } ?? .null, depositId.map { .text($0) } ?? .null,
+                      .text(try it.metadata.json())])
         }
         }
     }
@@ -1016,19 +1021,42 @@ public final class Journal: @unchecked Sendable {
     }
     private static func marks(_ chunk: [String]) -> String { chunk.map { _ in "?" }.joined(separator: ",") }
 
-    private static let fileRowColumns = "id, relativePath, size, status, blobId, createdAt, lastAttemptAt, error, sourcePath, depositId, failureKind"
+    private static let fileRowColumns = "id, relativePath, size, status, blobId, lastAttemptAt, error, sourcePath, depositId, failureKind, metadata"
     private static func fileRow(_ r: [String: Any]) -> FileRow {
         FileRow(id: r["id"] as? String ?? "",
                 relativePath: r["relativePath"] as? String ?? "",
                 size: r["size"] as? Int ?? 0,
                 status: FileStatus(rawValue: r["status"] as? String ?? "") ?? .discovered,
                 blobId: r["blobId"] as? String,
-                createdAt: r["createdAt"] as? Int,
                 lastAttemptAt: r["lastAttemptAt"] as? Int,
                 error: r["error"] as? String,
                 sourcePath: r["sourcePath"] as? String,
                 depositId: r["depositId"] as? String,
-                failureKind: (r["failureKind"] as? String).flatMap(FileFailureKind.init(rawValue:)))
+                failureKind: (r["failureKind"] as? String).flatMap(FileFailureKind.init(rawValue:)),
+                metadata: FileMetadata.from(json: r["metadata"] as? String))
+    }
+
+    /// One-time: fold the pre-metadata `files.createdAt` column into `metadata`, then drop it. The column held
+    /// ONE date whose meaning depended on the source — a file's mtime, a photo's capture date — so it lands
+    /// under the name that was always true for that row (`sourcePath` says which). A row that already has
+    /// metadata (re-scanned since) keeps it; only its missing date is filled in.
+    private func migrateCreatedAtIntoMetadata() throws {
+        try transaction {
+            for r in try run("SELECT id, createdAt, sourcePath, metadata FROM files WHERE createdAt IS NOT NULL") {
+                guard let id = r["id"] as? String, let when = r["createdAt"] as? Int else { continue }
+                var m = FileMetadata.from(json: r["metadata"] as? String) ?? FileMetadata()
+                let isPhoto = (r["sourcePath"] as? String).flatMap(IngestItem.photoAssetId(fromSource:)) != nil
+                if isPhoto { m.createdAt = m.createdAt ?? when } else { m.modifiedAt = m.modifiedAt ?? when }
+                try run("UPDATE files SET metadata=?1 WHERE id=?2", [.text(try m.json()), .text(id)])
+            }
+            try exec("ALTER TABLE files DROP COLUMN createdAt")
+        }
+    }
+
+    /// The metadata restore puts back on a file, or nil for a row captured before it was recorded.
+    public func fileMetadata(_ id: String) throws -> FileMetadata? {
+        lock.lock(); defer { lock.unlock() }
+        return FileMetadata.from(json: try run("SELECT metadata FROM files WHERE id=?1", [.text(id)]).first?["metadata"] as? String)
     }
 
     /// The user's "Try again": put `failed` rows back in the queue as a fresh claim — `planned`, no recorded

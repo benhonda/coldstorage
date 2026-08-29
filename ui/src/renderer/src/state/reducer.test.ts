@@ -82,7 +82,7 @@ describe("account switch clears vault-derived state", () => {
   const withVaultState = (...pre: Parameters<typeof reducer>[1][]): AppState =>
     run(...pre, { type: "statusLoaded", status }, {
       type: "filesLoaded",
-      files: [{ id: "f1", relativePath: "Taxes/2025.pdf", size: 4096, status: "archived", blobId: "b1", date: null }],
+      files: [{ id: "f1", relativePath: "Taxes/2025.pdf", size: 4096, status: "archived", blobId: "b1", modifiedAt: null, createdAt: null }],
     }, { type: "excludesLoaded", excludes: ["*.secret"] });
 
   test("signing out drops the previous account's files, sources and excludes", () => {

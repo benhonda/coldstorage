@@ -19,7 +19,7 @@ import Foundation
         let sessions = SessionFactory(dataRoot: root, store: store, canSelfThaw: false)
         let session = try sessions.make(.user(sub: "sub-ben", identityId: "ca-central-1:ben"))
         try session.journal.upsert([IngestItem(id: "f1", relativePath: "Photos/beach.jpg", size: 2048,
-                                               content: .sha256("hash-f1"), createdAt: nil, isFavorite: false,
+                                               content: .sha256("hash-f1"), isFavorite: false,
                                                open: { AsyncThrowingStream { $0.finish() } })])
         try session.journal.ensureBlob(BlobPlan(id: "b1", items: [], prefix: session.prefix),
                                        noncePrefix: Data(repeating: 1, count: 8),
