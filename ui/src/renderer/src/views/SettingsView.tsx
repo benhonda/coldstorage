@@ -3,7 +3,8 @@
  * folders, exclude patterns, the encryption fact) and **Account** (who's signed in and what they pay
  * for — profile, plan + quota, subscription, billing). The split is the ownership line — *"would this
  * setting follow me to a second Mac?"* — so every future setting has an unambiguous home
- * (notification prefs → General; recovery code / devices → a Security tab the day that content
+ * (notification prefs → General; the recovery code → Account, since a reissue rewrites the account's
+ * server-side key-blob and so reaches every Mac; a device list → a Security tab the day that content
  * exists). General also carries **Preferences** — how the app looks on this Mac (spacing today), last on
  * the page because nothing in it can put a file at risk. Billing is its own panel ({@link BillingPanel}) — a status-first state machine. Dogfood mode
  * (unconfigured) has no account: no tab strip, General's content IS the page, and the storage figure
@@ -145,6 +146,27 @@ export const SettingsView = ({
   const [removing, setRemoving] = useState<Source | null>(null);
   const [changingPlan, setChangingPlan] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  // The recovery-code reissue: confirm → mint. The new code itself never lands here — main pushes it
+  // via vault status and App's full-window `RecoveryCodeShow` gate takes over, so this only owns the
+  // confirm dialog, the in-flight state, and a failure (the old code still works then; say so).
+  const [reissuing, setReissuing] = useState(false);
+  const [reissueBusy, setReissueBusy] = useState(false);
+  const [reissueError, setReissueError] = useState<string | null>(null);
+  const reissue = (): void => {
+    if (reissueBusy) return;
+    setReissueBusy(true);
+    setReissueError(null);
+    api.reissueRecoveryCode().then(
+      () => {
+        setReissueBusy(false);
+        setReissuing(false);
+      },
+      (e: unknown) => {
+        setReissueError(e instanceof Error ? e.message : String(e));
+        setReissueBusy(false);
+      },
+    );
+  };
   // How many suggested packs are doing something right now — `partial` counts, because a pack with some of
   // its patterns live IS affecting what gets backed up, and rounding that down to "off" would understate
   // what the app is skipping. Derived, like every other pack fact (see `state/excludeSuggestions.ts`).
@@ -446,6 +468,25 @@ export const SettingsView = ({
         <KeyValueRow label="Signed in as" value={auth.email ?? "—"} />
       </Card>
 
+      {/* Lost the code but still signed in here? This Mac holds the unlocked key, so a new code is one
+          re-wrap away — nothing is re-encrypted, and the old code stops working the moment the new
+          one is stored. Without this, "I lost my recovery code" had no answer short of never resetting
+          this Mac. */}
+      <Card
+        title="Recovery code"
+        description="Your recovery code is how you get into your files on another computer. If you've lost it, get a new one here — it's shown once, and the old code stops working."
+        action={
+          <Button size="sm" icon="key" onClick={() => setReissuing(true)}>
+            Get a new code
+          </Button>
+        }
+      >
+        <KeyValueRow
+          label="Saved"
+          value={account.recoveryCodeConfirmed ? "You confirmed saving it" : "Not confirmed yet"}
+        />
+      </Card>
+
       <BillingPanel
         api={api}
         exec={exec}
@@ -485,6 +526,35 @@ export const SettingsView = ({
       )}
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
+
+      {reissuing && (
+        <Modal
+          title="Get a new recovery code?"
+          icon="key"
+          onClose={() => !reissueBusy && setReissuing(false)}
+          footer={
+            <>
+              <Button variant="ghost" disabled={reissueBusy} onClick={() => setReissuing(false)}>
+                Keep my current code
+              </Button>
+              <Button variant="primary" icon="key" disabled={reissueBusy} onClick={reissue}>
+                {reissueBusy ? "Preparing…" : "Get a new code"}
+              </Button>
+            </>
+          }
+        >
+          <p className="cs-quote-lead">
+            Your current code stops working right away and can&apos;t be brought back. Your files aren&apos;t
+            touched, and this Mac stays signed in. You&apos;ll see the new code next — save it before you
+            continue.
+          </p>
+          {reissueError && (
+            <p className="cs-signin-error">
+              Couldn&apos;t get a new code: {reissueError} Your current code still works.
+            </p>
+          )}
+        </Modal>
+      )}
 
       {removing && (
         <Modal

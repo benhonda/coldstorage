@@ -527,13 +527,20 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
         />
       );
     }
-    // Fallback (account facts unknown — e.g. the account server was unreachable while a fresh mint
-    // still produced a one-time code): the pre-wizard behavior, so the code is never lost unseen.
+    // A one-time code outside the wizard: either a Settings › Account reissue (the account already
+    // confirmed a code — this replaces it), or the fallback for account facts unknown (the account
+    // server was unreachable while a fresh mint still produced a code), so it's never lost unseen.
     if (v.recoveryCode) {
       return (
         <RecoveryCodeShow
           code={v.recoveryCode}
           email={email}
+          {...(state.account.recoveryCodeConfirmed
+            ? {
+                intro:
+                  "Here's your new recovery code. Your old one no longer works. This is how you get back into your files on another computer — keep it somewhere you won't lose it.",
+              }
+            : {})}
           onAcknowledge={() => {
             void api.acknowledgeRecoveryCode();
             void api.confirmRecoveryCode().catch(() => undefined);

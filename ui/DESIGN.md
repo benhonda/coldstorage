@@ -349,8 +349,11 @@ drop the instant it appeared.
 **One door, two subpages (2026-07-17).** The nav has a single Settings entry; inside, a small
 text-forward tab strip (`Tabs` primitive, a real `tablist`) splits it into **General** and
 **Account**. The cut is the ownership line — *"would this setting follow me to a second Mac?"* —
-so every future setting has an unambiguous home: notification prefs → General; recovery code /
-device list → a **Security** tab added the day that content exists (never an empty pane as an IOU).
+so every future setting has an unambiguous home: notification prefs → General; the recovery code →
+Account (a reissue rewrites the account's server-side key-blob, so it reaches every Mac — see
+`views/SettingsView.tsx`, Recovery code card: confirm → `reissueRecoveryCode` → the new code arrives
+through vault status and App's full-window `RecoveryCodeShow` gate shows it once, with reissue copy);
+a device list → a **Security** tab added the day that content exists (never an empty pane as an IOU).
 The tab is App-owned state: last-visited is remembered across a trip to My Files, and the sidebar
 identity chip's popover deep-links to Settings › Account. **Dogfood mode (unconfigured) shows no
 tab strip at all** — General's content IS the page, byte-identical shape either way; the
