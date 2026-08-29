@@ -141,7 +141,7 @@ public struct PhotoKitResolver: PhotoResolver {
                 size: 0,                                    // unknown until streamed; real hash computed at archive time
                 content: .opaque(assetId),                  // an identity, NOT a hash — nothing to verify against
                 isFavorite: asset.isFavorite,
-                metadata: Self.metadata(for: asset, resource: res),
+                metadata: PhotoKitSource.metadata(for: asset, resource: res),
                 open: { PhotoKitSource.stream(assetId: assetId, scratch: scratch) }))
         }
         // Observability: a count mismatch points at stale picks or (more likely) an id the daemon can't see.
