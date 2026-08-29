@@ -616,15 +616,20 @@ tasks:
           exit 1
         fi
         # Same reason as the codesign step: resolve the REAL bin dir, never the shared `.build/release` symlink.
+        # Upload tuning: how many 64 MiB parts go up at once (default 4). An experiment knob — try
+        # `task daemon:mac:install COLDSTORE_MAX_PARTS_INFLIGHT=8` and compare the daemon log's "throughput —"
+        # lines (`task daemon:mac:logs`) against a speed test on the same Mac.
+        parts_inflight="${COLDSTORE_MAX_PARTS_INFLIGHT:-4}"
         sed -e "s#__BINARY__#$(swift build -c release --show-bin-path)/coldstored#g" \
             -e "s#__DATA_DIR__#{{.DATA_DIR}}#g" \
+            -e "s#__MAX_PARTS_INFLIGHT__#${parts_inflight}#g" \
             -e "s#__SOCKET__#{{.DATA_DIR}}/coldstored.sock#g" \
             -e "s#__BUCKET__#${bucket}#g" \
             -e "s#__REGION__#${region}#g" \
             -e "s#__COGNITO_IDENTITY_POOL_ID__#${cognito_pool_id}#g" \
             -e "s#__COGNITO_USER_POOL_PROVIDER__#${cognito_provider}#g" \
             launchd/com.theadpharm.coldstored.plist.template > "{{.PLIST}}"
-        echo "wired: bucket=${bucket} region=${region} cognito=${cognito_pool_id:+configured}${cognito_pool_id:-not configured}"
+        echo "wired: bucket=${bucket} region=${region} parts-in-flight=${parts_inflight} cognito=${cognito_pool_id:+configured}${cognito_pool_id:-not configured}"
       # `bootout` is ASYNCHRONOUS — it returns before launchd has finished tearing the job down, and with
       # KeepAlive set the old instance may still be respawning. Bootstrapping into that window fails with
       # launchd's famously unhelpful `Bootstrap failed: 5: Input/output error`. So: ask it to go, then WAIT

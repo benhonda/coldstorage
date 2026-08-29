@@ -43,6 +43,9 @@
         <key>COLDSTORE_DATA_DIR</key> <string>__DATA_DIR__</string>
         <key>COLDSTORE_SOCKET</key>   <string>__SOCKET__</string>
         <key>COLDSTORE_INTERVAL</key> <string>300</string>
+        <!-- Parts of one blob uploaded at once (UploadTuning). A throughput dial for experiments — compare the
+             daemon's "throughput —" log lines against a speed test before and after changing it. -->
+        <key>COLDSTORE_MAX_PARTS_INFLIGHT</key> <string>__MAX_PARTS_INFLIGHT__</string>
         <key>AWS_REGION</key>        <string>__REGION__</string>
         <key>COLDSTORE_COGNITO_IDENTITY_POOL_ID</key>   <string>__COGNITO_IDENTITY_POOL_ID__</string>
         <key>COLDSTORE_COGNITO_USER_POOL_PROVIDER</key> <string>__COGNITO_USER_POOL_PROVIDER__</string>
