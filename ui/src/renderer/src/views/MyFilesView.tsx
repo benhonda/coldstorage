@@ -1266,7 +1266,11 @@ const FileList = ({
             )}
           </span>
           <span className="cs-fl-size">{row.type === "folder" ? (row.empty ? "—" : formatBytes(row.size)) : formatBytes(row.file.size)}</span>
-          <span className="cs-fl-date">{row.type === "file" ? formatDate(row.file.date) : `${row.count} items`}</span>
+          {/* A folder's date is its newest descendant's — the same value the Date sort uses (model.ts
+              `FolderRow.date`) — so what the column shows and what it orders by never disagree. Files
+              archived before they carried metadata have no date at all and show "—" either way. The
+              folder's item count lives in Get info, not here: it's not a date. */}
+          <span className="cs-fl-date">{formatDate(row.type === "file" ? row.file.date : row.date)}</span>
           <span className="cs-fl-actions">
             {/* A quiet spinner rides beside the status icon while this row is in flight — just a "this one's
                 going" cue. The quantitative progress (bytes, %, ETA) lives in the deposit banner up top, so

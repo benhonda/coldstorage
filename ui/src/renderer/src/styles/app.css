@@ -295,6 +295,9 @@
   border-radius: var(--radius-pill);
   font: var(--type-mono);
   letter-spacing: var(--tracking-mono);
+  /* A pill is atomic: it never wraps ("Didn't / finish") or gets squeezed when a sibling name ellipsizes. */
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 .cs-badge--neutral  { background: var(--surface-active); color: var(--text-secondary); }
 .cs-badge--accent   { background: var(--accent-subtle); color: var(--accent-text); }
@@ -880,7 +883,6 @@ button.cs-kv:hover { background: var(--surface-hover); }
 /* user-select: none so a press-and-hold-to-rename doesn't paint a text selection during the hold. */
 .cs-fl-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-body); user-select: none; }
 /* active/local status badge sits inline by the name (frozen shows none) */
-.cs-fl-name .cs-badge { flex: 0 0 auto; }
 .cs-fl-size, .cs-fl-date { font: var(--type-mono); color: var(--text-tertiary); letter-spacing: var(--tracking-mono); }
 .cs-fl-rename {
   border: 0;
