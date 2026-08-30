@@ -68,10 +68,10 @@ public struct BlobPlanner: Sendable {
     /// what prevents that. Do not "fix" it here by making ids order-independent: the id IS the resume key.
     ///
     /// Orphaned objects count against the user's quota (`used` is seeded from a live S3 listing) and bill for
-    /// Deep Archive's 180-day minimum regardless, so they are not harmless. `UploadEngine.reapDeleted` now
-    /// reclaims them — but only once EVERY file in a blob is deleted, so an orphan produced by re-grouping
-    /// (whose members are still live in their new blob) is never reclaimed. Not re-planning archived files is
-    /// what stops those existing in the first place; see `IncrementalDepositTests`.
+    /// Deep Archive's 180-day minimum regardless, so they are not harmless. `UploadEngine.reapDeleted`
+    /// reclaims them once no live file depends on them — every member deleted, or re-archived into a
+    /// different blob (`Journal.reclaimableBlobIds`). Not re-planning archived files is still what stops
+    /// most of them existing in the first place; see `IncrementalDepositTests` and `ReclaimTests`.
     ///
     /// `prefix` namespaces every produced blob's S3 key (a signed-in user's `blobs/<identity-id>`). It does
     /// NOT affect the content-derived blob `id` — only where the object lands — so the same files

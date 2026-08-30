@@ -49,6 +49,11 @@ final class FakeVault: Vault, @unchecked Sendable {
     // What the store was ASKED to do.
     var createdKeys: [String] { lock.withLock { _created } }
     var uploadedPartNumbers: [Int] { lock.withLock { _parts.values.flatMap(\.keys).sorted() } }
+    /// Every `uploadPart` CALL — `uploadedPartNumbers` is keyed by (key, number), so a re-upload of the
+    /// same part lands on the same slot and is invisible there. A test proving bytes were re-SENT (not
+    /// re-linked, which uploads nothing) needs the call count.
+    var uploadPartCalls: Int { lock.withLock { _partCalls } }
+    private var _partCalls = 0
     var completedKeys: [String] { lock.withLock { _completed.sorted() } }
     /// Every byte it was handed, blob by blob and part by part in order — what S3 would have assembled.
     var uploaded: Data {
@@ -66,7 +71,7 @@ final class FakeVault: Vault, @unchecked Sendable {
     func existingParts(key: String, uploadId: String) async throws -> Set<Int>? { uploadGone ? nil : alreadyOnS3 }
     func uploadPart(key: String, uploadId: String, number: Int, data: Data) async throws -> (etag: String, sha: String) {
         if failKeys.contains(key) { throw ColdStorageError.s3("InvalidStorageClass (simulated permanent)") }
-        lock.withLock { _current += 1; maxConcurrentParts = max(maxConcurrentParts, _current) }
+        lock.withLock { _current += 1; _partCalls += 1; maxConcurrentParts = max(maxConcurrentParts, _current) }
         // **Hold each part until `gateUntilConcurrent` of them are in flight together.** A fixed sleep only
         // *probably* overlaps: the engine has to encrypt the next part within the delay window, and on a
         // loaded machine it sometimes doesn't — so the high-water mark reads 1 and a real, working

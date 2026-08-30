@@ -86,14 +86,14 @@ import Foundation
         try j.upsert([item("Photos/a.jpg"), item("Photos/b.jpg")])
         try archive(j, ["Photos/a.jpg", "Photos/b.jpg"], blobId: "blobAB")
         try j.deletePath("Photos")
-        #expect(try j.fullyDeletedBlobIds() == ["blobAB"])
+        #expect(try j.reclaimableBlobIds() == ["blobAB"])
 
         // Re-drop only a.jpg, under a NEW blob (its old one is shared with the still-deleted b.jpg).
         try j.upsert([item("Photos/a.jpg")], reviving: true)
-        #expect(try j.fullyDeletedBlobIds().isEmpty,
+        #expect(try j.reclaimableBlobIds().isEmpty,
                 "a blob with a live member was offered for reclamation")
         try j.deletePath("Photos/a.jpg")
-        #expect(try j.fullyDeletedBlobIds() == ["blobAB"],
+        #expect(try j.reclaimableBlobIds() == ["blobAB"],
                 "the blob never became reclaimable again — those bytes bill for ever with nothing pointing at them")
     }
 

@@ -88,7 +88,7 @@ import Csqlite3
         #expect(try j.listFiles().map(\.relativePath) == ["Photos/a.jpg"],
                 "phantom rows survived — they'd sit on 'uploading' for ever, since nothing on disk feeds them")
         #expect(try j.summary().total == 1, "the file count still includes rows that can never be archived")
-        #expect(try j.fullyDeletedBlobIds() == ["b2"],
+        #expect(try j.reclaimableBlobIds() == ["b2"],
                 "the phantoms' blob is still not reclaimable — those bytes bill for ever with nothing pointing at them")
     }
 

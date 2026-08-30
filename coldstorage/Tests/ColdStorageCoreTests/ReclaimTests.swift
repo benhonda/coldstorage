@@ -78,7 +78,7 @@ import Foundation
         for row in try f.journal.listFiles() { try f.journal.deletePath(row.relativePath) }
 
         await f.engine.reapDeleted()
-        #expect(try f.journal.fullyDeletedBlobIds().isEmpty, "a reclaimed blob is still being offered for reclamation — the next pass will tag it again")
+        #expect(try f.journal.reclaimableBlobIds().isEmpty, "a reclaimed blob is still being offered for reclamation — the next pass will tag it again")
         await f.engine.reapDeleted()   // must be a clean no-op
         // CALLS, not distinct keys: a Set would hide a second tag on the same object entirely.
         #expect(f.store.reclaimCalls.count == 1, "the blob was tagged again on the next pass")
@@ -271,6 +271,96 @@ import Foundation
         try f.journal.ensureBlob(BlobPlan(id: blobId, items: [ghost], prefix: .dev),
                                  noncePrefix: Data(), wrappedDEK: Data())
 
-        #expect(try f.journal.fullyDeletedBlobIds().isEmpty, "a blob with an unaccounted-for member was cleared for reclamation — that is a guess, and reaping is irreversible")
+        #expect(try f.journal.reclaimableBlobIds().isEmpty, "a blob with an unaccounted-for member was cleared for reclamation — that is a guess, and reaping is irreversible")
+    }
+
+    /// **The superseded blob — the second way bytes go dead.** Editing an already-archived file re-plans it
+    /// (its content hash changed, so the repair pass rightly refuses to re-link), and it re-uploads into a
+    /// NEW blob. Restore reads `files.blobId`, so nothing can ever read the old object again — yet it stays
+    /// in the S3 listing, eating the user's quota. This was the one leak `reapDeleted` couldn't see: the
+    /// member isn't deleted, it just lives elsewhere now.
+    @Test func editingAnArchivedFileReclaimsItsSupersededBlob() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.base) }
+        let source = LocalDirSource(root: f.root)
+
+        try write("a.jpg", to: f.root)
+        _ = try await f.engine.run(source: source, prefix: .dev)
+        let oldBlob = try #require(try f.journal.listFiles().first?.blobId)
+        let oldKey = try #require(try f.journal.blobS3Key(oldBlob))
+
+        try Data(String(repeating: "edited in place, never deleted. ", count: 40).utf8)
+            .write(to: f.root.appendingPathComponent("a.jpg"))
+        _ = try await f.engine.run(source: source, prefix: .dev)
+
+        let row = try #require(try f.journal.listFiles().first)
+        #expect(row.status == .archived)
+        #expect(row.blobId != oldBlob, "the edited file was re-linked to the blob sealed from its OLD bytes")
+        #expect(f.store.reclaimableKeys.contains(oldKey),
+                "the superseded blob was never reclaimed — its bytes count against the user's quota forever")
+        #expect(try f.journal.isBlobVerified(oldBlob) == false)   // moved to `reaped`
+        #expect(try f.journal.isBlobVerified(try #require(row.blobId)) == true,
+                "the blob actually holding the file must never be touched by the reap")
+    }
+
+    /// **The crash window, superseded flavour.** Die between tagging a superseded blob and `markBlobReaped`
+    /// and the blob is `verified` + tagged while its member — live, but archived in a DIFFERENT blob — no
+    /// longer needs its bytes. The untag pass must read that as "nothing depends on this" and leave the tag
+    /// alone for `reapDeleted` to finish, not un-tag and re-tag the same object in one run.
+    @Test func aSupersededBlobCaughtMidReclaimIsNotUntagged() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.base) }
+        let source = LocalDirSource(root: f.root)
+
+        try write("a.jpg", to: f.root)
+        _ = try await f.engine.run(source: source, prefix: .dev)
+        let oldBlob = try #require(try f.journal.listFiles().first?.blobId)
+        try Data(String(repeating: "edited in place. ", count: 40).utf8)
+            .write(to: f.root.appendingPathComponent("a.jpg"))
+        _ = try await f.engine.run(source: source, prefix: .dev)   // supersedes + reaps oldBlob
+
+        // Re-create the exact crash state: tag intent recorded and tag on S3 (both already true), but the
+        // journal never advanced past `verified`.
+        try f.journal.markBlobVerified(oldBlob)
+        _ = try await f.engine.run(source: source, prefix: .dev)
+
+        #expect(f.store.untagCalls.isEmpty,
+                "a superseded blob was un-tagged — its live member is archived elsewhere and does not need these bytes")
+        #expect(try f.journal.isBlobVerified(oldBlob) == false, "the interrupted reclaim was never finished")
+    }
+
+    /// **Reaping can outrun the 180-day clock.** A superseded blob may already be past Deep Archive's
+    /// minimum when it is tagged, so S3 can physically delete it within a day. Re-depositing the ORIGINAL
+    /// content mints the same content-derived blob id — and the engine must treat the reaped row as "not
+    /// stored" and upload fresh bytes (which also clears the queued expiry), never re-link to an object on
+    /// its way out.
+    @Test func reDepositingOldContentAfterItsBlobWasReapedReUploads() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.base) }
+        let source = LocalDirSource(root: f.root)
+
+        try write("a.jpg", to: f.root)
+        _ = try await f.engine.run(source: source, prefix: .dev)
+        let oldBlob = try #require(try f.journal.listFiles().first?.blobId)
+        let oldKey = try #require(try f.journal.blobS3Key(oldBlob))
+        try Data(String(repeating: "edited in place. ", count: 40).utf8)
+            .write(to: f.root.appendingPathComponent("a.jpg"))
+        _ = try await f.engine.run(source: source, prefix: .dev)   // oldBlob reaped, file lives in a new blob
+        let partsSoFar = f.store.uploadPartCalls
+
+        try write("a.jpg", to: f.root)                             // the ORIGINAL bytes come back
+        _ = try await f.engine.run(source: source, prefix: .dev)
+
+        let row = try #require(try f.journal.listFiles().first)
+        #expect(row.status == .archived)
+        #expect(row.blobId == oldBlob, "the original content re-derives the original blob id — that IS the resume key")
+        // A relink uploads NOTHING — so fresh parts landing is the proof this was a real re-upload that
+        // rewrote the object (and with it, dropped the queued expiry tag), not a re-link to doomed bytes.
+        #expect(f.store.uploadPartCalls > partsSoFar,
+                "the returning content was re-linked to a reaped object instead of re-uploaded — S3 will sweep those bytes")
+        #expect(f.store.object(oldKey) != nil)
+        #expect(try f.journal.isBlobVerified(oldBlob) == true)
+        #expect(try f.journal.blobsNeedingUntag().isEmpty,
+                "the rewritten object carries no tags, so no untag should be pending")
     }
 }

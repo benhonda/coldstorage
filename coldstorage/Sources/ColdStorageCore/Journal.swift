@@ -360,7 +360,7 @@ public final class Journal: @unchecked Sendable {
     /// writes it — it is otherwise just `listFiles`' decode fallback), so every persisted `discovered` row is
     /// a phantom from that bug. They are re-tombstoned, which is what the user asked for when they deleted
     /// them, and re-linked to their blob where it is still verified so those bytes become reclaimable again —
-    /// the old revive nulled `blobId`, which is what stopped `fullyDeletedBlobIds` from ever seeing them.
+    /// the old revive nulled `blobId`, which is what stopped `reclaimableBlobIds` from ever seeing them.
     /// Files the user genuinely re-deposited are untouched: `upsert` moved those to `planned` immediately.
     private func migrateDeletionOffStatus() throws {
         try exec("ALTER TABLE files ADD COLUMN deletedAt INTEGER")
@@ -581,6 +581,11 @@ public final class Journal: @unchecked Sendable {
     /// `reaped` blobs are deliberately excluded: their members were ALL deleted, so a revived one is
     /// re-planned onto fresh bytes (`reviveFiles`) and the old object is genuinely dead. Un-tagging it would
     /// resurrect garbage nothing references — and that the user has already been credited for.
+    ///
+    /// "Points at" means DEPENDS ON — the mirror of `reclaimableBlobIds`. A live member that is archived in
+    /// a DIFFERENT blob (edited file, re-uploaded elsewhere) does not need this blob's bytes, so a
+    /// superseded blob caught mid-reclaim (tagged, then crashed before `markBlobReaped`) is left tagged for
+    /// the reap pass to finish, not un-tagged and re-tagged in the same run.
     public func blobsNeedingUntag() throws -> [MistaggedBlob] {
         lock.lock(); defer { lock.unlock() }
         return try run("""
@@ -588,7 +593,8 @@ public final class Journal: @unchecked Sendable {
               JOIN blob_members m ON m.blobId = b.id
               JOIN files f ON f.id = m.fileId
              WHERE b.status = ?1 AND b.reapTaggedAt IS NOT NULL AND f.deletedAt IS NULL
-            """, [.text(BlobStatus.verified.rawValue)]).compactMap {
+               AND (f.blobId = b.id OR f.status != ?2)
+            """, [.text(BlobStatus.verified.rawValue), .text(FileStatus.archived.rawValue)]).compactMap {
             guard let id = $0["id"] as? String, let key = $0["s3Key"] as? String else { return nil }
             return MistaggedBlob(id: id, s3Key: key)
         }
@@ -1114,7 +1120,7 @@ public final class Journal: @unchecked Sendable {
     /// delete. The row and its blob mapping are KEPT, not removed: the encrypted bytes stay in S3 until every file sharing
     /// their blob is deleted too, at which point `UploadEngine.reapDeleted` tags the object for lifecycle
     /// expiry (deep storage's 180-day minimum makes eager deletion pointless, and the kept mapping is how
-    /// `fullyDeletedBlobIds` finds them). Tombstoned files drop out of `listFiles` + the file
+    /// `reclaimableBlobIds` finds them). Tombstoned files drop out of `listFiles` + the file
     /// count. Sweeps `path` and every descendant; already-tombstoned rows keep their original `deletedAt`
     /// (idempotent, and the timestamp stays the moment the user actually deleted it).
     ///
@@ -1174,29 +1180,41 @@ public final class Journal: @unchecked Sendable {
             .compactMap { $0["blobId"] as? String }
     }
 
-    /// Verified blobs whose members are **all** tombstoned — the only bytes that can be reclaimed at object
-    /// granularity, and the reap pass's whole input.
+    /// Verified blobs that **no live file depends on** — the only bytes that can be reclaimed at object
+    /// granularity, and the reap pass's whole input. A member stops depending on its blob two ways:
     ///
-    /// **Why this catches most real deletions.** A blob holds one folder's files (`BlobPlanner` buckets by
-    /// folder), and people delete folders — "I don't need the 2019 shoot any more". That deletion shape lines
-    /// up with blob boundaries, so whole blobs go dead together. Scattered deletes inside a folder that's
-    /// still live reclaim nothing, because a blob is one S3 object and its live members are in it; that
-    /// residue needs a repack, which Deep Archive makes uneconomic (reading the bytes back to rewrite them
-    /// costs ~90× a year of storing them). So: reap what the shape gives us, and be honest about the rest.
+    /// - **Tombstoned** — the user deleted it. This catches most real deletions: a blob holds one folder's
+    ///   files (`BlobPlanner` buckets by folder), and people delete folders — "I don't need the 2019 shoot
+    ///   any more" — so whole blobs go dead together. Scattered deletes inside a folder that's still live
+    ///   reclaim nothing, because a blob is one S3 object and its live members are in it; that residue needs
+    ///   a repack, which Deep Archive makes uneconomic (reading the bytes back to rewrite them costs ~90× a
+    ///   year of storing them). So: reap what the shape gives us, and be honest about the rest.
+    /// - **Archived elsewhere** — the file was edited after its blob sealed, so the repair pass refused to
+    ///   re-link it (`UploadEngine.archive`'s stable-id check) and it re-uploaded into a NEW blob. Restore
+    ///   reads `files.blobId` (the file's one and only mapping), so nothing can ever read the superseded
+    ///   object again — yet it stays in `ListObjectsV2` and eats the user's quota forever unless reaped here.
+    ///   Any edit to an already-archived file in a watched folder produces one of these.
     ///
-    /// Deliberately conservative — a member with NO file row at all counts as alive, so a journal that has
-    /// lost track of a file can never cause its bytes to be reclaimed. Reaping is irreversible; guessing isn't
-    /// allowed.
-    public func fullyDeletedBlobIds() throws -> [String] {
+    /// Deliberately conservative — a member with NO file row at all counts as depending, so a journal that
+    /// has lost track of a file can never cause its bytes to be reclaimed; likewise a member mid-edit (back
+    /// to `planned`, `blobId` still pointing here) keeps its blob until the new bytes are safely verified.
+    /// Reaping is irreversible; guessing isn't allowed.
+    public func reclaimableBlobIds() throws -> [String] {
         lock.lock(); defer { lock.unlock() }
+        // A member DEPENDS on this blob unless its row proves otherwise: tombstoned, or archived with its
+        // `blobId` pointing at a different blob. `f.blobId IS NOT NULL` guards the NULL comparison — an
+        // archived row with no blobId is a state this schema shouldn't produce, and it counts as depending.
         return try run("""
             SELECT m.blobId FROM blob_members m
               JOIN blobs b ON b.id = m.blobId
               LEFT JOIN files f ON f.id = m.fileId
              WHERE b.status = ?1
              GROUP BY m.blobId
-            HAVING SUM(CASE WHEN f.deletedAt IS NULL THEN 1 ELSE 0 END) = 0
-            """, [.text(BlobStatus.verified.rawValue)])
+            HAVING SUM(CASE WHEN f.id IS NULL
+                              OR (f.deletedAt IS NULL
+                                  AND NOT (f.status = ?2 AND f.blobId IS NOT NULL AND f.blobId != m.blobId))
+                            THEN 1 ELSE 0 END) = 0
+            """, [.text(BlobStatus.verified.rawValue), .text(FileStatus.archived.rawValue)])
             .compactMap { $0["blobId"] as? String }
     }
 
@@ -1211,7 +1229,7 @@ public final class Journal: @unchecked Sendable {
     }
 
     /// Record that a blob's object has been tagged for lifecycle expiry. Moves it out of `verified`, so
-    /// `fullyDeletedBlobIds` won't hand it back and the next pass won't re-tag it.
+    /// `reclaimableBlobIds` won't hand it back and the next pass won't re-tag it.
     public func markBlobReaped(_ blobId: String) throws {
         lock.lock(); defer { lock.unlock() }
         try run("UPDATE blobs SET status=?1 WHERE id=?2", [.text(BlobStatus.reaped.rawValue), .text(blobId)])

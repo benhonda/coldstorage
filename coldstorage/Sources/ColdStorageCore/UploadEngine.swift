@@ -294,7 +294,8 @@ public actor UploadEngine {
         return failures
     }
 
-    /// Reclaim blobs whose every file has been deleted, by tagging their objects for lifecycle expiry.
+    /// Reclaim blobs no live file depends on — every member deleted, or archived into a different blob
+    /// (an edited file's superseded original) — by tagging their objects for lifecycle expiry.
     ///
     /// **Why this has to exist.** Quota is measured from a live S3 listing, so bytes that no file references
     /// still consume the user's plan. Without reclamation a deleted file frees nothing, ever — a vault
@@ -305,7 +306,7 @@ public actor UploadEngine {
     /// run that is otherwise archiving files correctly. Anything that fails is simply retried next pass —
     /// the journal only advances a blob to `reaped` once its tag is actually written.
     func reapDeleted() async {
-        let dead = (try? journal.fullyDeletedBlobIds()) ?? []
+        let dead = (try? journal.reclaimableBlobIds()) ?? []
         guard !dead.isEmpty else { return }
         var reaped = 0
         for blobId in dead {
@@ -327,7 +328,7 @@ public actor UploadEngine {
                 log("UploadEngine: blob \(blobId) reclaim FAILED (will retry next pass): \(error)")
             }
         }
-        log("UploadEngine: reclaimed \(reaped) of \(dead.count) fully-deleted blob(s) — tagged for lifecycle expiry")
+        log("UploadEngine: reclaimed \(reaped) of \(dead.count) dead blob(s) — tagged for lifecycle expiry")
     }
 
     /// `onProgress` reports resumable-multipart progress as a determinate fraction of the *encrypted* blob —
