@@ -30,12 +30,14 @@ import {
   formatBytes,
   formatDate,
   isEmptyFolder,
+  indexByPrefix,
   isUnder,
   isUploadingRow,
   joinPath,
   names,
   parentOf,
   planDeposit,
+  renameSelectionEnd,
   reparent,
   restoreBase,
   rewritePrefix,
@@ -199,7 +201,16 @@ export const MyFilesView = ({
     dragDepth.current = 0;
     setDropActive(false);
   };
-  const lastIndex = useRef<number | null>(null);
+  /** The keyboard cursor — the row arrows move from, shift-click ranges anchor to, and the lists keep in
+   * view. Held as a row KEY, not an index, so a re-sort or a row arriving/leaving can't strand it; the
+   * index is derived per render. A click sets it; navigation clears it. */
+  const [cursorKey, setCursorKey] = useState<string | null>(null);
+  /** Tiles across in the gallery, reported by it — so ↑/↓ can step a whole tile row there. */
+  const [gridCols, setGridCols] = useState(1);
+  /** The list's / gallery's scroll box — for PageUp/PageDown, which scroll without moving the selection. */
+  const scrollRef = useRef<HTMLDivElement>(null);
+  /** Type-to-select buffer: letters typed within {@link TYPEAHEAD_MS} of each other form one prefix. */
+  const typeahead = useRef<{ text: string; at: number }>({ text: "", at: 0 });
 
   // Sort order — a per-screen preference (localStorage, like the sidebar width), never an account setting.
   const [sort, setSort] = useState<SortSpec>(readSort);
@@ -209,12 +220,21 @@ export const MyFilesView = ({
     try { localStorage.setItem(SORT_KEY, JSON.stringify(next)); } catch { /* private mode / blocked storage — the session still sorts */ }
   };
   const rows = useMemo(() => childrenOf(files, dir, virtualFolders, sort), [files, dir, virtualFolders, sort]);
+  /** Where the cursor sits in today's `rows`, or null when its row is gone (deleted, or never set). */
+  const cursor = useMemo(() => {
+    const i = cursorKey === null ? -1 : rows.findIndex((r) => rowKey(r) === cursorKey);
+    return i < 0 ? null : i;
+  }, [rows, cursorKey]);
+  const setCursor = (index: number): void => {
+    const row = rows[index];
+    setCursorKey(row ? rowKey(row) : null);
+  };
 
   // ── navigation resets transient state ──
   const resetTransient = (): void => {
     setSelected(new Set());
     setRenaming(null);
-    lastIndex.current = null;
+    setCursorKey(null);
   };
   const goTo = (next: string): void => {
     setHistory((h) => historyPush(h, next));
@@ -241,14 +261,12 @@ export const MyFilesView = ({
       const next = new Set(selected);
       next.has(key) ? next.delete(key) : next.add(key);
       setSelected(next);
-    } else if (e.shiftKey && lastIndex.current !== null) {
-      const lo = Math.min(lastIndex.current, index);
-      const hi = Math.max(lastIndex.current, index);
-      setSelected(new Set(rows.slice(lo, hi + 1).map(rowKey)));
+    } else if (e.shiftKey && cursor !== null) {
+      setSelected(new Set(rows.slice(Math.min(cursor, index), Math.max(cursor, index) + 1).map(rowKey)));
     } else {
       setSelected(new Set([key]));
     }
-    lastIndex.current = index;
+    setCursor(index);
   };
 
   const openRow = (row: Row): void => {
@@ -812,32 +830,100 @@ export const MyFilesView = ({
     if (dragDepth.current === 0) setDropActive(false);
   };
 
-  // SEAM: `Show in Finder` needs a main-process reveal (shell.showItemInFolder via IPC) — polish item.
-  const onOpen = (_file: ArchivedFile): void => {};
+  /** Reveal a restored copy in Finder — the Get-info button only exists when the file has a local path. */
+  const onShowInFinder = (path: string): void => void api.revealInFinder(path);
 
-  // Keyboard: Escape closes the detail view (deselect); Delete/Backspace removes the selection.
+  // ── keyboard: Finder's bindings ──
+  // One handler on the window; every binding below is Finder's own, so a Finder hand lands here without
+  // relearning. Bails while typing (rename input) or while any modal / context menu owns the keys.
+  const moveCursor = (e: KeyboardEvent, to: number): void => {
+    if (rows.length === 0) return;
+    const next = Math.max(0, Math.min(rows.length - 1, to));
+    e.preventDefault();
+    if (e.shiftKey && cursor !== null) {
+      // shift+arrow extends the selection from the cursor, as Finder does
+      setSelected(new Set(rows.slice(Math.min(cursor, next), Math.max(cursor, next) + 1).map(rowKey)));
+    } else {
+      const row = rows[next];
+      if (row) setSelected(new Set([rowKey(row)]));
+    }
+    setCursor(next);
+  };
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (document.activeElement instanceof HTMLInputElement) return; // don't hijack rename/typing
-      if ((e.metaKey || e.ctrlKey) && (e.key === "[" || e.key === "]")) {
-        // Finder's ⌘[ / ⌘] — Back / Forward.
-        e.preventDefault();
+      const active = document.activeElement;
+      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
+      if (menu || document.querySelector('[aria-modal="true"]')) return;
+      const cmd = e.metaKey || e.ctrlKey;
+      const sr = rows.filter((r) => selected.has(rowKey(r)));
+      const single = sr.length === 1 ? sr[0] : undefined;
+      // where arrows start from: the cursor, else the first selected row, else before the top
+      const from = cursor ?? (sr[0] ? rows.indexOf(sr[0]) : -1);
+      const step = view === "grid" ? gridCols : 1;
+
+      if (cmd && (e.key === "[" || e.key === "]")) {
+        e.preventDefault(); // ⌘[ / ⌘] — Back / Forward
         if (e.key === "[") goBack();
         else goForward();
-      } else if (e.key === "Escape") {
-        clearSelection();
-        setRenaming(null);
-      } else if (e.key === "Delete" || e.key === "Backspace") {
-        const sr = rows.filter((r) => selected.has(rowKey(r)));
+      } else if (cmd && e.key === "ArrowUp") {
+        e.preventDefault(); // ⌘↑ — up to the enclosing folder
+        if (dir !== "") goTo(parentOf(dir));
+      } else if ((cmd && (e.key === "ArrowDown" || e.key.toLowerCase() === "o")) && sr.length > 0) {
+        e.preventDefault(); // ⌘↓ / ⌘O — open: a folder drills in, files show Get info
+        if (single) openRow(single);
+        else setInfoOpen(true);
+      } else if (cmd && e.key.toLowerCase() === "a") {
+        e.preventDefault(); // ⌘A — select all
+        setSelected(new Set(rows.map(rowKey)));
+      } else if (cmd && e.shiftKey && e.key.toLowerCase() === "n") {
+        e.preventDefault(); // ⌘⇧N — new folder
+        doNewFolder();
+      } else if (cmd && e.key.toLowerCase() === "i" && sr.length > 0) {
+        e.preventDefault(); // ⌘I — Get info
+        setInfoOpen(true);
+      } else if (cmd && e.key === "Backspace") {
+        // ⌘⌫ — delete. A bare ⌫ does nothing, as in Finder: deleting must be a two-hand gesture.
         if (sr.length > 0) {
           e.preventDefault();
           requestDelete(sr.map(targetOf));
         }
+      } else if (cmd || e.altKey) {
+        return; // any other chord isn't ours (⌘C, ⌘W, …) — let the app / OS have it
+      } else if (e.key === "Escape") {
+        clearSelection();
+        setRenaming(null);
+        typeahead.current = { text: "", at: 0 };
+      } else if (e.key === "Enter" && single) {
+        e.preventDefault(); // Return — rename (Finder's; opening is ⌘↓ / ⌘O)
+        startRename(rowKey(single));
+      } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        moveCursor(e, from + (e.key === "ArrowDown" ? step : -step));
+      } else if (view === "grid" && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
+        moveCursor(e, from + (e.key === "ArrowRight" ? 1 : -1));
+      } else if (e.key === "Home" || e.key === "End") {
+        moveCursor(e, e.key === "Home" ? 0 : rows.length - 1);
+      } else if (e.key === "PageDown" || e.key === "PageUp") {
+        // page keys scroll the view and leave the selection alone — Finder's behaviour, not a spreadsheet's
+        const el = scrollRef.current;
+        if (el) {
+          e.preventDefault();
+          el.scrollBy({ top: (e.key === "PageDown" ? 1 : -1) * el.clientHeight, behavior: "smooth" });
+        }
+      } else if (e.key.length === 1 && e.key !== " ") {
+        // type-to-select: letters typed close together form a prefix; the first matching name (from the
+        // cursor onward, wrapping) becomes the selection. Space is reserved (Quick Look, one day).
+        const now = Date.now();
+        const t = typeahead.current;
+        const text = now - t.at < TYPEAHEAD_MS ? t.text + e.key : e.key;
+        typeahead.current = { text, at: now };
+        // a fresh prefix searches from the row AFTER the cursor, so repeated "b" walks the b's
+        const hit = indexByPrefix(rows, text, text.length === 1 ? from + 1 : Math.max(0, from));
+        if (hit >= 0) moveCursor(e, hit);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rows, selected, files]);
+  }, [rows, selected, cursor, view, gridCols, dir, menu]);
 
   // ── selection summary — drives the Get-info modal + menu enablement ──
   const sel: SelectionSummary | null = (() => {
@@ -979,6 +1065,8 @@ export const MyFilesView = ({
                     onClearSelection={clearSelection}
                     sort={sort}
                     onSort={sortBy}
+                    scrollRef={scrollRef}
+                    revealIndex={cursor}
                   />
                 ) : (
                   <Gallery
@@ -989,6 +1077,9 @@ export const MyFilesView = ({
                     onRowOpen={openRow}
                     onRowContext={openMenu}
                     onClearSelection={clearSelection}
+                    scrollRef={scrollRef}
+                    revealIndex={cursor}
+                    onColumns={setGridCols}
                   />
                 )}
               </div>
@@ -1008,7 +1099,7 @@ export const MyFilesView = ({
             // the copy lands as a folder. `openRequest` filters to what's actually restorable itself.
             openRequest(selectedRows.map(targetOf));
           }}
-          onShowInFinder={onOpen}
+          onShowInFinder={onShowInFinder}
           onClose={() => setInfoOpen(false)}
         />
       )}
@@ -1126,6 +1217,8 @@ export const MyFilesView = ({
 // in, file shows Get-info). Like macOS/iOS: press-and-hold the name to rename; or use the ⋯ / right-click
 // menu. A hold this long can't be confused with a click or a double-click (both release immediately).
 const RENAME_LONG_PRESS_MS = 500;
+/** Type-to-select: letters this close together form one prefix; a pause starts over (Finder's feel). */
+const TYPEAHEAD_MS = 1000;
 // A pointer drift past this (px) cancels the press — it was a drag/scroll, not a hold-to-rename.
 const PRESS_DRIFT_PX = 8;
 
@@ -1143,6 +1236,8 @@ const FileList = ({
   onClearSelection,
   sort,
   onSort,
+  scrollRef,
+  revealIndex,
 }: {
   rows: Row[];
   selected: Set<string>;
@@ -1150,6 +1245,10 @@ const FileList = ({
   drag: MoveDrag;
   sort: SortSpec;
   onSort: (key: SortKey) => void;
+  /** The scroll box, owned by the parent so its keyboard handler can page it. */
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  /** Row index to keep in view (the keyboard cursor); null = leave the scroll alone. */
+  revealIndex: number | null;
   onRowClick: (e: React.MouseEvent, row: Row, index: number) => void;
   onRowOpen: (row: Row) => void;
   /** Right-click handler — pass a row for a row menu, omit it for the empty-area (Upload / New folder) menu. */
@@ -1184,7 +1283,6 @@ const FileList = ({
   // Virtualized: only the rows in (and just around) the viewport exist in the DOM. A 5k-file folder used
   // to be 5k live rows, re-rendered on every daemon event — the lag a big drop was felt as. Heights are
   // measured (`measureElement`), so the estimate only has to be close; `--cs-row-h` is the real one.
-  const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
@@ -1195,6 +1293,10 @@ const FileList = ({
       return row ? rowKey(row) : i;
     },
   });
+  // keep the cursor's row in view as arrows move it — virtualized, so the row may not exist yet to scroll to
+  useEffect(() => {
+    if (revealIndex !== null) virtualizer.scrollToIndex(revealIndex, { align: "auto" });
+  }, [revealIndex]);
 
   return (
   // Finder-style: a click that lands on the list's blank area (the card itself, the header, or the filler
@@ -1251,7 +1353,7 @@ const FileList = ({
           <span className={isFolder ? "cs-fl-name cs-fl-folder" : "cs-fl-name"}>
             {isFolder ? <Icon name="folder" size={22} /> : <KindIcon kind={row.file.kind} />}
             {renaming === key ? (
-              <RenameInput initial={row.name} onCommit={(v) => onCommitRename(row, v)} onCancel={onCancelRename} />
+              <RenameInput initial={row.name} selectTo={renameSelectionEnd(row.name, !isFolder)} onCommit={(v) => onCommitRename(row, v)} onCancel={onCancelRename} />
             ) : (
               <span
                 className="cs-fl-label"
@@ -1352,17 +1454,23 @@ const isBlankArea = (e: React.MouseEvent, rowSelector: string): boolean =>
 
 const RenameInput = ({
   initial,
+  selectTo,
   onCommit,
   onCancel,
 }: {
   initial: string;
+  /** How much of the name starts selected — the stem for a file, all of it for a folder ({@link renameSelectionEnd}). */
+  selectTo: number;
   onCommit: (value: string) => void;
   onCancel: () => void;
 }): React.JSX.Element => {
   const [value, setValue] = useState(initial);
   const inputRef = useRef<HTMLInputElement>(null);
-  // focus AND select the whole name on mount so it's highlighted, ready to replace (Finder "new folder" behaviour)
-  useEffect(() => inputRef.current?.select(), []);
+  // focus with the stem highlighted, ready to replace — typing renames "photo.jpg" without eating ".jpg"
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.setSelectionRange(0, selectTo);
+  }, []);
   return (
     <input
       ref={inputRef}
@@ -1402,6 +1510,9 @@ const Gallery = ({
   onRowOpen,
   onRowContext,
   onClearSelection,
+  scrollRef,
+  revealIndex,
+  onColumns,
 }: {
   rows: Row[];
   selected: Set<string>;
@@ -1411,10 +1522,15 @@ const Gallery = ({
   /** Right-click handler — pass a tile's row for a row menu, omit it for the empty-area menu. */
   onRowContext: (e: React.MouseEvent, row?: Row) => void;
   onClearSelection: () => void;
+  /** The scroll box, owned by the parent so its keyboard handler can page it. */
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  /** Tile index to keep in view (the keyboard cursor); null = leave the scroll alone. */
+  revealIndex: number | null;
+  /** Reports the measured column count, so ↑/↓ upstairs can step a whole tile row. */
+  onColumns: (cols: number) => void;
 }): React.JSX.Element => {
   // Virtualized by ROW of tiles (same reason as the list — see FileList). The column count follows the
   // container's width, read through the gallery's own CSS so the tile size has one SSOT.
-  const scrollRef = useRef<HTMLDivElement>(null);
   const [cols, setCols] = useState(1);
   useEffect(() => {
     const el = scrollRef.current;
@@ -1425,6 +1541,7 @@ const Gallery = ({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+  useEffect(() => onColumns(cols), [cols]);
   const rowCount = Math.ceil(rows.length / cols);
   const virtualizer = useVirtualizer({
     count: rowCount,
@@ -1432,6 +1549,9 @@ const Gallery = ({
     estimateSize: () => TILE_ROW_ESTIMATE_PX,
     overscan: 3,
   });
+  useEffect(() => {
+    if (revealIndex !== null) virtualizer.scrollToIndex(Math.floor(revealIndex / cols), { align: "auto" });
+  }, [revealIndex, cols]);
 
   return (
   // click / right-click on the blank grid area (not a tile) clears the selection / opens the empty menu

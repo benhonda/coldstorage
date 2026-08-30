@@ -12,7 +12,7 @@ import {
   canMoveInto,
   crumbsFor,
   ROOT_CRUMB,
-  childrenOf,
+  childrenOf, indexByPrefix, renameSelectionEnd,
   toggleSort,
   moveIsNoop,
   fileFromJournal,
@@ -55,7 +55,7 @@ const sample: ArchivedFile[] = [
 ];
 
 describe("childrenOf", () => {
-  test("root lists immediate folders then files, A–Z", () => {
+  test("root lists immediate folders and files together, A–Z", () => {
     const rows = childrenOf(sample, "");
     expect(rows.map((r) => (r.type === "folder" ? `📁${r.name}` : r.name))).toEqual(["📁Photos", "readme.txt"]);
   });
@@ -72,17 +72,42 @@ describe("childrenOf", () => {
     ];
     const names = (rows: ReturnType<typeof childrenOf>): string[] => rows.map((r) => r.name);
 
-    test("folders stay ahead of files whatever the sort", () => {
+    test("folders and files interleave, like Finder — a folder is just another row", () => {
+      // Old (1) and New (2) sit among the files by size, not pinned to the top
       expect(names(childrenOf(set, "", [], { key: "size", dir: "asc" }))).toEqual(["Old", "New", "b.txt", "c.txt", "a.txt"]);
+      expect(names(childrenOf(set, "", [], { key: "name", dir: "asc" }))).toEqual(["a.txt", "b.txt", "c.txt", "New", "Old"]);
+    });
+
+    test("names sort like Finder: case-insensitive and numeric-aware", () => {
+      const rows = childrenOf(["file 10.txt", "file 2.txt", "banana.txt", "Apple.txt"].map((n) => file(n, 1)), "");
+      expect(names(rows)).toEqual(["Apple.txt", "banana.txt", "file 2.txt", "file 10.txt"]);
+    });
+
+    test("indexByPrefix finds the first name starting with what was typed, case-blind, wrapping", () => {
+      const rows = childrenOf(["Apple.txt", "banana.txt", "Berry/x.txt", "cherry.txt"].map((n) => file(n, 1)), "");
+      expect(indexByPrefix(rows, "b")).toBe(1);
+      expect(indexByPrefix(rows, "BE")).toBe(2);
+      expect(indexByPrefix(rows, "b", 2)).toBe(2); // from the cursor onward…
+      expect(indexByPrefix(rows, "a", 3)).toBe(0); // …and wraps
+      expect(indexByPrefix(rows, "zzz")).toBe(-1);
+      expect(indexByPrefix(rows, "")).toBe(-1);
+    });
+
+    test("renameSelectionEnd keeps the extension out of a file's initial selection", () => {
+      expect(renameSelectionEnd("photo.jpg", true)).toBe(5);
+      expect(renameSelectionEnd("archive.tar.gz", true)).toBe(11);
+      expect(renameSelectionEnd(".zshrc", true)).toBe(6);
+      expect(renameSelectionEnd("README", true)).toBe(6);
+      expect(renameSelectionEnd("v2.final", false)).toBe(8); // folders: whole name
     });
 
     test("by size, descending", () => {
-      expect(names(childrenOf(set, "", [], { key: "size", dir: "desc" }))).toEqual(["New", "Old", "a.txt", "c.txt", "b.txt"]);
+      expect(names(childrenOf(set, "", [], { key: "size", dir: "desc" }))).toEqual(["a.txt", "c.txt", "b.txt", "New", "Old"]);
     });
 
     test("by date: a folder carries its newest descendant, and undated rows sink either way", () => {
-      expect(names(childrenOf(set, "", [], { key: "date", dir: "desc" }))).toEqual(["New", "Old", "b.txt", "a.txt", "c.txt"]);
-      expect(names(childrenOf(set, "", [], { key: "date", dir: "asc" }))).toEqual(["Old", "New", "a.txt", "b.txt", "c.txt"]);
+      expect(names(childrenOf(set, "", [], { key: "date", dir: "desc" }))).toEqual(["New", "b.txt", "a.txt", "Old", "c.txt"]);
+      expect(names(childrenOf(set, "", [], { key: "date", dir: "asc" }))).toEqual(["Old", "a.txt", "b.txt", "New", "c.txt"]);
       const folder = childrenOf(set, "", [], { key: "date", dir: "desc" })[0];
       expect(folder?.type === "folder" && folder.date).toBe("2025-01-01T00:00:00.000Z");
     });

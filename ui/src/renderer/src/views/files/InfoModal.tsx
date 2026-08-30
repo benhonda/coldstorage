@@ -33,17 +33,19 @@ export const InfoModal = ({
 }: {
   sel: SelectionSummary;
   onDownload: () => void;
-  onShowInFinder: (file: ArchivedFile) => void;
+  /** Reveal the saved copy at this local path. */
+  onShowInFinder: (path: string) => void;
   onClose: () => void;
 }): React.JSX.Element => {
-  const localFile = sel.file && sel.file.status === "here" ? sel.file : null;
+  // the button exists only when there is a path to reveal — never a button that does nothing
+  const localPath = sel.file?.status === "here" ? (sel.file.localPath ?? null) : null;
   const footer = (
     <>
       <Button variant="ghost" onClick={onClose}>
         Close
       </Button>
-      {localFile && (
-        <Button variant="secondary" icon="folder_open" onClick={() => onShowInFinder(localFile)}>
+      {localPath && (
+        <Button variant="secondary" icon="folder_open" onClick={() => onShowInFinder(localPath)}>
           Show in Finder
         </Button>
       )}

@@ -380,10 +380,26 @@ export const toggleSort = (cur: SortSpec, key: SortKey): SortSpec =>
 
 const rowSize = (r: Row): number => (r.type === "folder" ? r.size : r.file.size);
 const rowDate = (r: Row): string | null => (r.type === "folder" ? r.date : r.file.date);
-/** Order rows by `sort`, names breaking every tie so the order is stable. A row with no date sorts after
- * every dated one whichever way the column points — "unknown" isn't older OR newer than anything. */
+/** Finder's name order: case-insensitive and numeric-aware, so "file 2" lands before "file 10" and
+ * "apple" beside "Banana". Built once — `Intl.Collator` is costly to construct, cheap to call. */
+const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+/** Finder's type-to-select: the first row (from `from`, wrapping) whose name STARTS with what was typed,
+ * compared the way names sort (case-insensitive, accents folded). -1 when nothing matches. */
+export const indexByPrefix = (rows: readonly Row[], prefix: string, from = 0): number => {
+  if (prefix.length === 0 || rows.length === 0) return -1;
+  for (let k = 0; k < rows.length; k++) {
+    const i = (from + k) % rows.length;
+    const name = rows[i]?.name ?? "";
+    if (nameCollator.compare(name.slice(0, prefix.length), prefix) === 0) return i;
+  }
+  return -1;
+};
+/** Order rows by `sort`, names breaking every tie so the order is stable. Folders and files are ordered
+ * TOGETHER, as Finder does — a folder is just another row with a name, size and date, not a separate
+ * band pinned to the top. A row with no date sorts after every dated one whichever way the column
+ * points — "unknown" isn't older OR newer than anything. */
 const compareRows = (sort: SortSpec) => (a: Row, b: Row): number => {
-  const byName = a.name.localeCompare(b.name);
+  const byName = nameCollator.compare(a.name, b.name);
   const sign = sort.dir === "asc" ? 1 : -1;
   if (sort.key === "name") return sign * byName;
   if (sort.key === "size") return sign * (rowSize(a) - rowSize(b)) || byName;
@@ -399,8 +415,8 @@ const compareRows = (sort: SortSpec) => (a: Row, b: Row): number => {
 const newer = (a: string | null, b: string | null): string | null => (a === null ? b : b === null ? a : a > b ? a : b);
 
 /**
- * The rows shown at directory `dir` (root = ""): immediate subfolders (aggregated) then files, each
- * ordered by `sort` (A–Z by default). `extraFolders` are virtual (just-created, still-empty) folder paths
+ * The rows shown at directory `dir` (root = ""): immediate subfolders (aggregated) and files, ordered
+ * together by `sort` (A–Z by default) — Finder's order, not folders-first. `extraFolders` are virtual (just-created, still-empty) folder paths
  * to surface even though no file lives under them yet — the Finder "new folder" affordance.
  */
 export const childrenOf = (
@@ -440,21 +456,18 @@ export const childrenOf = (
     if (name && !folders.has(name)) folders.set(name, { size: 0, count: 0, date: null, statuses: new Map() });
   }
 
-  const folderRows: FolderRow[] = [...folders.entries()]
-    .map(([name, agg]) => ({
-      type: "folder" as const,
-      name,
-      path: joinPath(dir, name),
-      size: agg.size,
-      count: agg.count,
-      date: agg.date,
-      badges: rollupBadges(agg.statuses, agg.count),
-      empty: agg.count === 0,
-    }))
-    .sort(compareRows(sort));
+  const folderRows: FolderRow[] = [...folders.entries()].map(([name, agg]) => ({
+    type: "folder" as const,
+    name,
+    path: joinPath(dir, name),
+    size: agg.size,
+    count: agg.count,
+    date: agg.date,
+    badges: rollupBadges(agg.statuses, agg.count),
+    empty: agg.count === 0,
+  }));
 
-  fileRows.sort(compareRows(sort));
-  return [...folderRows, ...fileRows];
+  return [...folderRows, ...fileRows].sort(compareRows(sort));
 };
 
 /** Files at or beneath `dir` (root = all) — for whole-folder select / request-back / delete. */
@@ -563,6 +576,13 @@ export const formatDate = (iso: string | null): string => {
   return Number.isNaN(d.getTime())
     ? "—"
     : d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+};
+
+/** How much of a name to pre-select when renaming: Finder selects the stem of "photo.jpg" (so typing
+ * replaces the name and keeps the extension) but the WHOLE of a folder name or a dotfile. */
+export const renameSelectionEnd = (name: string, isFile: boolean): number => {
+  const dot = name.lastIndexOf(".");
+  return isFile && dot > 0 ? dot : name.length;
 };
 
 /** Best-guess {@link FileKind} from a filename extension. */

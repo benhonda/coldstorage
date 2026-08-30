@@ -147,9 +147,12 @@ it had worked.
 - **Empty/first-run:** a bounded, clickable drop-zone card (*"Drop files or folders to upload"* + one
   factual line "encrypted on your Mac before upload" + a "Choose files or folders" CTA). Delete-empty-folder
   skips the confirm (no bytes at stake).
-- **Manipulation = standard Finder gestures:** rename (press-and-hold the name → inline edit, or the
-  menu — NOT double-click, which opens), new folder, drag-to-move (spring-loaded: hold over a
-  folder/crumb and it opens under the drag), delete (⌫ → confirm). **Delete =
+- **Manipulation = standard Finder gestures:** rename (Return, press-and-hold the name, or the menu →
+  inline edit with the stem pre-selected — NOT double-click, which opens), new folder (⌘⇧N), drag-to-move
+  (spring-loaded: hold over a folder/crumb and it opens under the drag), delete (⌘⌫ → confirm; a bare ⌫
+  does nothing, as in Finder). **Keyboard is Finder's too:** ↑/↓ (±shift extends), ⌘↑ up a folder,
+  ⌘↓/⌘O open, ⌘A, ⌘I, Home/End, PageUp/Down scroll only, ⌘[ / ⌘] back/forward, type-to-select. Folders
+  and files sort **together** (no folders-first band), names case-blind + numeric-aware. **Delete =
   instant tombstone**, and it sticks — a rescan can never resurrect it, only an explicit re-deposit.
   Honest copy: *"Space comes back once the bytes pass 180 days in deep storage — right away for anything
   you've had a while"* (Deep Archive minimum-duration; never imply delete-to-save-money). If the target is
