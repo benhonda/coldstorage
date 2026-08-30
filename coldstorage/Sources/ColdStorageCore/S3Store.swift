@@ -9,7 +9,10 @@ import Crypto
 /// `S3Store` is the production conformer.
 public protocol BlobStore: Sendable {
     func createUpload(key: String) async throws -> String
-    func existingParts(key: String, uploadId: String) async throws -> Set<Int>
+    /// Part numbers S3 holds for an open multipart upload — or **nil when S3 no longer has that upload at
+    /// all** (aborted, reaped by the bucket's abort-incomplete lifecycle rule, or already completed). Nil is
+    /// a state, not a fault: the engine answers it by forgetting the stale id and opening a fresh upload.
+    func existingParts(key: String, uploadId: String) async throws -> Set<Int>?
     func uploadPart(key: String, uploadId: String, number: Int, data: Data) async throws -> (etag: String, sha: String)
     func complete(key: String, uploadId: String, parts: [PartRow]) async throws
     func verify(key: String) async throws
@@ -80,10 +83,16 @@ public struct S3Store: Vault {
         return id
     }
 
-    /// Part numbers already on S3 (truth) — the crash-window closer for resume.
-    public func existingParts(key: String, uploadId: String) async throws -> Set<Int> {
-        let out = try await client.listParts(input: .init(bucket: bucket, key: key, uploadId: uploadId))
-        return Set((out.parts ?? []).compactMap { $0.partNumber })
+    /// Part numbers already on S3 (truth) — the crash-window closer for resume. `NoSuchUpload` means the id
+    /// the journal remembers is dead on S3's side; that is the one error here that is an answer (nil), not a
+    /// throw — see the protocol doc.
+    public func existingParts(key: String, uploadId: String) async throws -> Set<Int>? {
+        do {
+            let out = try await client.listParts(input: .init(bucket: bucket, key: key, uploadId: uploadId))
+            return Set((out.parts ?? []).compactMap { $0.partNumber })
+        } catch let e as AWSServiceError where e.errorCode == "NoSuchUpload" {
+            return nil
+        }
     }
 
     public func uploadPart(key: String, uploadId: String, number: Int, data: Data) async throws -> (etag: String, sha: String) {

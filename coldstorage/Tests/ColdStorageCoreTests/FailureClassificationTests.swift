@@ -12,7 +12,9 @@ import Testing
 
     @Test func unknownS3CodesAreTransient() {
         // throttling / 5xx that escaped the SDK's own retry — worth another pass later, not terminal.
-        for code in ["SlowDown", "RequestTimeout", "InternalError", "ServiceUnavailable", "MadeUpCode"] {
+        // `NoSuchUpload` belongs here on purpose: a dead upload id self-heals on the next pass (the engine
+        // forgets it and starts a fresh upload), so condemning it would strand a perfectly retryable file.
+        for code in ["SlowDown", "RequestTimeout", "InternalError", "ServiceUnavailable", "MadeUpCode", "NoSuchUpload"] {
             #expect(!FailureKind.classify(s3Code: code).isPermanent, "\(code) should be transient")
         }
     }

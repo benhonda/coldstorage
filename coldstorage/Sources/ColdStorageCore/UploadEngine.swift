@@ -278,7 +278,9 @@ public actor UploadEngine {
                 log("UploadEngine: blob \(blob.id) FAILED (\(kind.isPermanent ? "permanent" : "transient")): \(error) — \(files.count) file(s): \(files.map(\.path).joined(separator: ", "))")
                 failures.append(BlobFailure(blobId: blob.id, kind: kind, files: files))
                 // Nothing local to clean up — the engine writes no scratch. A failed blob leaves only its
-                // open multipart upload on S3, which the bucket's 14-day abort lifecycle reaps (see DESIGN.md).
+                // open multipart upload on S3, which the bucket's abort-incomplete lifecycle rule reaps
+                // (`abort_incomplete_multipart_days`, infra/coldstorage) — and which `archive` starts over from if
+                // the user retries after that.
             }
         }
         await reapDeleted()
@@ -377,9 +379,24 @@ public actor UploadEngine {
         // call, and `CompleteMultipartUpload` assembles ONLY the parts it is given: the object silently comes
         // back 64 MiB short, every later byte shifted, `verify` (a HEAD) none the wiser. So a part is skipped
         // only when BOTH agree it is done; otherwise we re-upload it, which S3 treats as an overwrite.
-        let existingUploadId = alreadyVerified ? nil : try journal.uploadId(of: blob.id)
-        let alreadyOnS3 = existingUploadId == nil ? []
-            : try await store.existingParts(key: blob.s3Key, uploadId: existingUploadId!)
+        //
+        // **The upload can also be gone.** The journal remembers an upload id, but S3 has aborted it — the
+        // bucket's abort-incomplete lifecycle rule (`abort_incomplete_multipart_days`, infra/coldstorage)
+        // reaps any upload left open long enough, and a completed-or-aborted id is equally dead. Resuming
+        // against it can only ever fail (`NoSuchUpload` on every call), and the user's "Try again" would be
+        // condemned before a byte moved. So a dead id is forgotten — stale id and stale part rows both — and
+        // the blob starts over from a fresh upload, exactly as if it had never been attempted.
+        var existingUploadId = alreadyVerified ? nil : try journal.uploadId(of: blob.id)
+        var alreadyOnS3: Set<Int> = []
+        if let uid = existingUploadId {
+            if let parts = try await store.existingParts(key: blob.s3Key, uploadId: uid) {
+                alreadyOnS3 = parts
+            } else {
+                log("UploadEngine: blob \(blob.id) — S3 no longer has upload \(uid); forgetting it and starting a fresh upload")
+                try journal.clearUpload(blob.id)
+                existingUploadId = nil
+            }
+        }
         let alreadyRecorded = Set(try journal.completedParts(blob.id).map(\.partNumber))
 
         // The determinate progress bar needs a denominator, which staging used to supply by encrypting the

@@ -71,9 +71,11 @@ public enum FailureKind: Sendable, Equatable {
 
     /// S3/Glacier error codes that won't self-heal — re-attempting just burns cycles. Conservative on
     /// purpose: anything *not* listed defaults to `.transient` (keep trying) rather than silently giving
-    /// up on something recoverable. SSOT for the permanent set.
+    /// up on something recoverable. SSOT for the permanent set. `NoSuchUpload` is deliberately absent: a
+    /// dead upload id DOES self-heal — the next pass sees it gone (`existingParts` → nil), forgets it and
+    /// starts a fresh upload (`UploadEngine.archive`).
     static let permanentS3Codes: Set<String> = [
-        "InvalidStorageClass", "AccessDenied", "AllAccessDisabled", "NoSuchBucket", "NoSuchUpload",
+        "InvalidStorageClass", "AccessDenied", "AllAccessDisabled", "NoSuchBucket",
         "InvalidAccessKeyId", "SignatureDoesNotMatch", "AuthorizationHeaderMalformed", "InvalidArgument",
         "InvalidRequest", "MalformedXML", "EntityTooLarge", "KMS.DisabledException", "KMS.AccessDeniedException",
     ]

@@ -22,7 +22,7 @@ import Crypto
         func requestThaw(key: String, days: Int, tier: RestoreTier) async throws { try await inner.requestThaw(key: key, days: days, tier: tier) }
         func getRange(key: String, offset: Int, length: Int) async throws -> AsyncThrowingStream<Data, Error> { try await inner.getRange(key: key, offset: offset, length: length) }
         func createUpload(key: String) async throws -> String { try await inner.createUpload(key: key) }
-        func existingParts(key: String, uploadId: String) async throws -> Set<Int> { try await inner.existingParts(key: key, uploadId: uploadId) }
+        func existingParts(key: String, uploadId: String) async throws -> Set<Int>? { try await inner.existingParts(key: key, uploadId: uploadId) }
         func uploadPart(key: String, uploadId: String, number: Int, data: Data) async throws -> (etag: String, sha: String) { try await inner.uploadPart(key: key, uploadId: uploadId, number: number, data: data) }
         func complete(key: String, uploadId: String, parts: [PartRow]) async throws { try await inner.complete(key: key, uploadId: uploadId, parts: parts) }
         func verify(key: String) async throws { try await inner.verify(key: key) }

@@ -23,7 +23,7 @@ import Foundation
     }
 
     private func fixture(fileBytes: Data = Data("hello streaming world".utf8),
-                         alreadyOnS3: Set<Int> = []) throws -> Fixture {
+                         alreadyOnS3: Set<Int> = [], uploadGone: Bool = false) throws -> Fixture {
         let fm = FileManager.default
         let base = fm.temporaryDirectory.appendingPathComponent("cs-stream-\(UUID().uuidString)")
         let root = base.appendingPathComponent("data")
@@ -31,7 +31,7 @@ import Foundation
         try fileBytes.write(to: root.appendingPathComponent("f.bin"))
         let journal = try Journal(path: base.appendingPathComponent("j.sqlite").path)
         let keys = LocalFileKEK(path: base.appendingPathComponent("kek.bin").path)
-        let store = FakeVault(alreadyOnS3: alreadyOnS3)
+        let store = FakeVault(alreadyOnS3: alreadyOnS3, uploadGone: uploadGone)
         return Fixture(engine: UploadEngine(journal: journal, store: store, keys: keys),
                        journal: journal, keys: keys, store: store,
                        source: LocalDirSource(root: root), root: root, base: base)
@@ -103,6 +103,37 @@ import Foundation
         #expect(throughput.uploadedBytes == f.store.uploaded.count)
         #expect(throughput.uploadedBytes < EnvelopeCipher.encryptedSize(ofPlaintext: plaintext.count))
         #expect(throughput.blobsUploaded == 1)
+    }
+
+    /// **RESUME AGAINST AN UPLOAD S3 NO LONGER HAS.** The journal remembers an upload id and a landed part,
+    /// but S3 has aborted that upload (the bucket's abort-incomplete lifecycle rule, or an explicit abort).
+    /// Every call against the id answers `NoSuchUpload`; before this was handled, "Try again" condemned the
+    /// files as permanently failed without moving a byte. The engine must forget the dead id AND its part
+    /// rows, open a fresh upload and send everything — the recorded part 1 belonged to an upload that no
+    /// longer exists, so skipping it would hand `complete` a part the new upload never received.
+    @Test func resumeStartsOverWhenS3NoLongerHasTheUpload() async throws {
+        let plaintext = Data(repeating: 0x37, count: S3Store.partSize + (8 << 20))
+        let f = try fixture(fileBytes: plaintext, uploadGone: true)
+        defer { try? FileManager.default.removeItem(at: f.base) }
+
+        let items = try await f.source.enumerate()
+        try f.journal.upsert(items)
+        let blob = BlobPlanner().plan(items, prefix: .dev)[0]
+        let cipher = EnvelopeCipher()
+        try f.journal.ensureBlob(blob, noncePrefix: cipher.randomPrefix(),
+                                 wrappedDEK: try cipher.wrap(cipher.newDEK(), kek: f.keys.userKEK()))
+        try f.journal.setUploadId(blob.id, "u-reaped-by-lifecycle")
+        try f.journal.recordPart(PartRow(blobId: blob.id, partNumber: 1, eTag: "etag-1", sha256: "sha-1", status: .uploaded))
+
+        let failures = try await f.engine.run(source: f.source, prefix: .dev)
+
+        #expect(failures.isEmpty)
+        #expect(f.store.createdKeys.count == 1)                // a FRESH upload, not the dead one
+        #expect(f.store.uploadedPartNumbers == [1, 2])         // nothing skipped — the old part 1 is gone with its upload
+        #expect(try f.journal.uploadId(of: blob.id) == "upload-\(blob.s3Key)")   // the journal now holds the new id
+        #expect(try f.journal.completedParts(blob.id).map(\.partNumber).sorted() == [1, 2])
+        #expect(f.store.completedKeys.count == 1)
+        #expect(try f.journal.isFileArchived(items[0].id) == true)
     }
 
     /// **RESUME WHERE S3 AND THE JOURNAL DISAGREE.** `uploadPart` returns for part 1, then the process dies

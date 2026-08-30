@@ -25,6 +25,7 @@ final class FakeVault: Vault, @unchecked Sendable {
     let failKeys: Set<String>
     /// Parts S3 already holds for a resumed blob: the engine must generate their bytes but not re-send them.
     let alreadyOnS3: Set<Int>
+    let uploadGone: Bool
     /// Keep the uploaded bytes? Off when a test is measuring the engine's OWN memory.
     let retainParts: Bool
     /// Hold each `uploadPart` this long, so uploads genuinely overlap in flight — the knob the concurrency
@@ -38,10 +39,10 @@ final class FakeVault: Vault, @unchecked Sendable {
     /// and stays within the cap, without timing.
     private(set) var maxConcurrentParts = 0
 
-    init(failKeys: Set<String> = [], alreadyOnS3: Set<Int> = [], retainParts: Bool = true, delayMs: Int = 0,
-         gateUntilConcurrent: Int = 0) {
+    init(failKeys: Set<String> = [], alreadyOnS3: Set<Int> = [], uploadGone: Bool = false, retainParts: Bool = true,
+         delayMs: Int = 0, gateUntilConcurrent: Int = 0) {
         self.gateUntilConcurrent = gateUntilConcurrent
-        self.failKeys = failKeys; self.alreadyOnS3 = alreadyOnS3
+        self.failKeys = failKeys; self.alreadyOnS3 = alreadyOnS3; self.uploadGone = uploadGone
         self.retainParts = retainParts; self.delayMs = delayMs
     }
 
@@ -61,7 +62,8 @@ final class FakeVault: Vault, @unchecked Sendable {
 
     // MARK: BlobStore — the upload half
     func createUpload(key: String) async throws -> String { lock.withLock { _created.append(key) }; return "upload-\(key)" }
-    func existingParts(key: String, uploadId: String) async throws -> Set<Int> { alreadyOnS3 }
+    /// `uploadGone`: S3 has aborted whatever upload the journal remembers — `ListParts` answers NoSuchUpload.
+    func existingParts(key: String, uploadId: String) async throws -> Set<Int>? { uploadGone ? nil : alreadyOnS3 }
     func uploadPart(key: String, uploadId: String, number: Int, data: Data) async throws -> (etag: String, sha: String) {
         if failKeys.contains(key) { throw ColdStorageError.s3("InvalidStorageClass (simulated permanent)") }
         lock.withLock { _current += 1; maxConcurrentParts = max(maxConcurrentParts, _current) }
@@ -187,7 +189,7 @@ final class StuckVault: Vault, @unchecked Sendable {
     func usageBytes(prefix: VaultPrefix) async throws -> Int { try await inner.usageBytes(prefix: prefix) }
     // The upload half is irrelevant to a stuck thaw — forward it so the fake stays one implementation.
     func createUpload(key: String) async throws -> String { try await inner.createUpload(key: key) }
-    func existingParts(key: String, uploadId: String) async throws -> Set<Int> {
+    func existingParts(key: String, uploadId: String) async throws -> Set<Int>? {
         try await inner.existingParts(key: key, uploadId: uploadId)
     }
     func uploadPart(key: String, uploadId: String, number: Int, data: Data) async throws -> (etag: String, sha: String) {

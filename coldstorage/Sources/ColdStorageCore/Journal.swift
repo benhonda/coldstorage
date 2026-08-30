@@ -1342,6 +1342,18 @@ public final class Journal: @unchecked Sendable {
                 [.text(uploadId), .text(BlobStatus.uploading.rawValue), .text(blobId)])
     }
 
+    /// Forget a blob's S3 multipart upload — id and every recorded part — because S3 no longer has it (see
+    /// `UploadEngine.archive`). The blob's key, crypto and membership stay; only the resume state goes, so
+    /// the next attempt opens a fresh upload and re-sends everything. One transaction: an id without its
+    /// parts (or the reverse) would be a resume that skips parts a new upload never received.
+    public func clearUpload(_ blobId: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try transaction {
+            try run("DELETE FROM parts WHERE blobId=?1", [.text(blobId)])
+            try run("UPDATE blobs SET uploadId=NULL WHERE id=?1", [.text(blobId)])
+        }
+    }
+
     public func completedParts(_ blobId: String) throws -> [PartRow] {
         lock.lock(); defer { lock.unlock() }
         return try run("SELECT blobId, partNumber, eTag, sha256, status FROM parts WHERE blobId=?1 ORDER BY partNumber",
