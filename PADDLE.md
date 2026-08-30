@@ -25,13 +25,13 @@ SSOT) / `site/app/lib/marketing/content.ts` (marketing display — **upstream-ow
 not in scope for the reshape below; see "Site marketing copy" note). Quantity capped at 1; no
 trial (the 14-day money-back guarantee is a refund, not a Paddle trial).
 
-| Size | Amount | Price id |
-|---|---|---|
-| 500 GB | $9.99 | `pri_01kx2h5hb2w0vmc2ppb8e6gvkr` (existing, unchanged) |
-| 1 TB | $18.99 | `pri_01kx2h5hx31s3b9rvb5mq71ryf` (existing, unchanged) |
-| 2 TB | $36.99 | `pri_01kx2h5jf1sp2n5bxx8dt521yv` (existing, unchanged) |
-| 5 TB | $90.99 | *(not yet created — run the seed with `--apply` to get the real id)* |
-| 10 TB | $180.99 | *(not yet created — run the seed with `--apply` to get the real id)* |
+| Size   | Amount  | Price id                                                             |
+| ------ | ------- | -------------------------------------------------------------------- |
+| 500 GB | $9.99   | `pri_01kx2h5hb2w0vmc2ppb8e6gvkr` (existing, unchanged)               |
+| 1 TB   | $18.99  | `pri_01kx2h5hx31s3b9rvb5mq71ryf` (existing, unchanged)               |
+| 2 TB   | $36.99  | `pri_01kx2h5jf1sp2n5bxx8dt521yv` (existing, unchanged)               |
+| 5 TB   | $90.99  | _(not yet created — run the seed with `--apply` to get the real id)_ |
+| 10 TB  | $180.99 | _(not yet created — run the seed with `--apply` to get the real id)_ |
 
 > Sandbox has its own separate catalog with **different** price ids (created the same way).
 
@@ -129,6 +129,7 @@ NOT in the list above. `task backend:billing:inspect` is the view that settled i
 
 Nothing else (webhook verification is local HMAC — no permission). If the key was created with an
 expiry, note the rotation date here when it's known.
+
 ## Managing a subscription — BUILT ✅ (2026-07-10, widened 2026-08-24)
 
 The account card's manage surface (sidebar bottom-left → Settings ▸ Account). Split of
@@ -147,7 +148,7 @@ responsibilities:
   default, pinned explicitly): an upgrade whose prorated charge fails does NOT apply — no
   upgrade-without-paying. Price ids are catalog-validated like checkout.
 - **Un-cancel → in-app** (`POST /subscription/resume` → `subscriptions.update(id, {scheduledChange:
-  null})`, the only write Paddle permits to that field). A scheduled cancellation is the one state
+null})`, the only write Paddle permits to that field). A scheduled cancellation is the one state
   where sending someone to a hosted page to change their mind loses them.
 - **Current plan** → `GET /subscription`: live `subscriptions.get(..., {include: ['next_transaction']})`
   summarized against the catalog (status, plan, nextBilledAt, cancelsAt, next charge amount +
@@ -175,6 +176,7 @@ real on 2026-08-24 — live card, live catalog, packaged `.dmg` ([`PROD.md`](./P
 The decided spec, kept for reference (what's built matches it):
 
 **UX** (in `ui/.../SubscribeModal.tsx` → shared `PlanPicker.tsx`, DS-bound):
+
 - **Size** = five cards (the only choice now — no term axis), each showing size + annual price
   (`1 TB · $18.99/yr`). No usage-based nudge (decided: neutral pick). Default-select **1 TB**.
 - **Live price** below = annual total + per-month equivalent (`$18.99 · $1.58/mo`).
@@ -183,6 +185,7 @@ The decided spec, kept for reference (what's built matches it):
   the existing "already-stored stays restorable" reassurance.
 
 **Backend** (`account-backend/src`):
+
 - `GET /catalog` — fetch live via `paddle.prices.list()` (active prices under our products), map to
   `{ size, years, priceId, amountCents, perMonth }`, cache in-memory with a short TTL. This is the
   SSOT the app renders (no hardcoded id map — stays DRY, works sandbox + prod, self-updates). The
