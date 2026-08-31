@@ -54,6 +54,19 @@ export const schemeRedirectUri = (scheme: string): string => `${scheme}://auth/c
 /** The prod default redirect — kept for tests and as the fallback scheme. */
 export const SCHEME_REDIRECT_URI = schemeRedirectUri("coldstorage");
 
+/** The packaged app's OAuth redirect: the site's relay page for this lane (site route
+ * `desktop.auth.($variant).tsx`), which hands ?code&state off to the lane's custom scheme and
+ * leaves the user on a real "you're signed in" page — a direct scheme redirect stranded them on a
+ * dead IdP tab. Must byte-match a registered Cognito callback URL (infra `app_oauth_callback_urls`)
+ * — the token exchange sends this same string as `redirect_uri`. */
+export const relayRedirectUri = (scheme: string): string =>
+  scheme === "coldstorage" ? "https://coldstorage.sh/desktop/auth" : "https://coldstorage.sh/desktop/auth/staging";
+
+/** Where Cognito's /logout lands — the site's "you're signed out" page, every lane (dev included:
+ * unlike sign-in there's nothing to route back to the app, so no loopback needed). Must byte-match
+ * a registered logout URL (infra `app_signout_url`). */
+export const SIGNED_OUT_URI = "https://coldstorage.sh/desktop/auth/signed-out";
+
 /** True if `raw` is a sign-in redirect (either shape). Other deep links (`<scheme>://checkout-complete`
  * and future routes) parse to null and are ignored by the auth layer. */
 export const parseCallbackUrl = (raw: string): CallbackResult | null => {
@@ -119,11 +132,10 @@ export const buildAuthorizeUrl = (
 
 /** The /logout URL to open in the SYSTEM browser on sign-out — kills the managed-login session
  * cookie at `cfg.domain`, which /oauth2/revoke does NOT touch. Without this, "sign out" leaves the
- * browser session alive and the next sign-in sails through without ever prompting. `logout_uri`
- * must byte-match a registered logout URL (cognito.tf sets `logout_urls` = the callback URLs). */
+ * browser session alive and the next sign-in sails through without ever prompting. */
 export const buildLogoutUrl = (cfg: OAuthConfig): string => {
   const url = new URL(`https://${cfg.domain}/logout`);
-  url.search = new URLSearchParams({ client_id: cfg.clientId, logout_uri: cfg.redirectUri }).toString();
+  url.search = new URLSearchParams({ client_id: cfg.clientId, logout_uri: SIGNED_OUT_URI }).toString();
   return url.toString();
 };
 

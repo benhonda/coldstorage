@@ -71,9 +71,6 @@ export class AuthManager {
   private settled = false;
   /** The in-flight email-OTP flow between {@link startEmailSignIn} and {@link submitEmailCode}. */
   private emailFlow: EmailFlow | null = null;
-  /** Dev only: closes the one-shot loopback serving the /logout redirect's farewell page — a new
-   * sign-in must reclaim the port from it (they share LOOPBACK_PORT). */
-  private stopLogoutListener: (() => void) | null = null;
   private readonly statusListeners = new Set<(s: AuthStatus) => void>();
   private readonly idTokenListeners = new Set<(idToken: string) => void>();
 
@@ -166,9 +163,6 @@ export class AuthManager {
     const { verifier, challenge, state } = createPkce();
     const pending: PendingSignIn = { state, verifier, expiresAt: Date.now() + PENDING_TTL_MS, stopLoopback: null };
     if (this.useLoopback) {
-      // Reclaim the port from a logout farewell listener still waiting on its redirect.
-      this.stopLogoutListener?.();
-      this.stopLogoutListener = null;
       // Bind BEFORE opening the browser — an unbindable port must fail here, visibly, not as a
       // browser redirect hanging against whatever process owns it (see loopback.ts).
       const { stop, ready } = awaitLoopbackCallback((url) => void this.handleCallbackUrl(url));
@@ -330,42 +324,14 @@ export class AuthManager {
         console.error("token revoke failed (already signed out locally):", e);
       }
     }
-    // Email-lane sessions never created a browser session — no logout tab for them.
-    if (lane === "oauth") await this.openBrowserLogout();
-  }
-
-  /** Open Cognito's /logout in the system browser. Its `logout_uri` redirect lands back on the
-   * callback URL with no code/state — handleCallbackUrl drops that silently (no pending attempt).
-   * In dev the callback is the loopback, so bind the one-shot listener first purely to serve the
-   * "you can close this tab" page; if the port's taken, log out anyway and let the tab 404 — the
-   * cookie dying matters more than the tab's farewell. */
-  private async openBrowserLogout(): Promise<void> {
-    if (!this.cfg) return;
-    if (this.useLoopback) {
-      const { stop, ready } = awaitLoopbackCallback(() => {
-        this.stopLogoutListener = null;
-      });
-      try {
-        await ready;
-        this.stopLogoutListener = stop;
-        // The server closes itself when the redirect lands; this backstop reaps it if the user
-        // closes the tab first (same deadline as a pending sign-in).
-        setTimeout(() => {
-          stop();
-          if (this.stopLogoutListener === stop) this.stopLogoutListener = null;
-        }, PENDING_TTL_MS);
-      } catch {
-        stop();
-      }
-    }
-    await shell.openExternal(buildLogoutUrl(this.cfg));
+    // Email-lane sessions never created a browser session — no logout tab for them. The redirect
+    // lands on the site's "you're signed out" page (every mode — nothing routes back to the app).
+    if (lane === "oauth") await shell.openExternal(buildLogoutUrl(this.cfg));
   }
 
   /** Detach timers/listeners at quit. */
   dispose(): void {
     this.clearPending();
-    this.stopLogoutListener?.();
-    this.stopLogoutListener = null;
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
     this.statusListeners.clear();

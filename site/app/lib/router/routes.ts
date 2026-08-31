@@ -29,6 +29,8 @@ export const routePaths = [
   "/checkout",
   "/compare",
   "/contact",
+  "/desktop/auth",
+  "/desktop/auth/:variant",
   "/download",
   "/download[/]dmg",
   "/faq",
@@ -63,6 +65,7 @@ export type Params = {
   "/:lang/releases": { lang: string };
   "/:lang/source": { lang: string };
   "/:lang/terms": { lang: string };
+  "/desktop/auth/:variant": { variant: string };
 };
 
 // Utility type to extract the leaf nodes of Params

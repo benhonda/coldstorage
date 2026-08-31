@@ -10,7 +10,7 @@
 import { app } from "electron";
 import { appIdentity, dataDir, readAppConfig } from "../daemon.ts";
 import { LOOPBACK_REDIRECT_URI } from "./loopback.ts";
-import { schemeRedirectUri, type OAuthConfig } from "./oauth.ts";
+import { relayRedirectUri, type OAuthConfig } from "./oauth.ts";
 
 const nonEmpty = (v: string | undefined): string | undefined => (v && v.length > 0 ? v : undefined);
 
@@ -23,10 +23,10 @@ export const resolveOAuthConfig = (): OAuthConfig | null => {
   return {
     domain,
     clientId,
-    // Packaged: this lane's own scheme (coldstorage:// or coldstorage-staging://), so a staging sign-in
-    // callback routes back to the staging app, not prod. Must be a registered Cognito callback URL (infra
-    // `app_oauth_callback_urls`). Dev: the loopback listener (unpackaged Electron can't receive deep links).
-    redirectUri: packaged ? schemeRedirectUri(appIdentity().scheme) : LOOPBACK_REDIRECT_URI,
+    // Packaged: this lane's relay page on the site, which hands off to the lane's own scheme
+    // (coldstorage:// or coldstorage-staging://) so a staging sign-in routes back to the staging
+    // app, not prod. Dev: the loopback listener (unpackaged Electron can't receive deep links).
+    redirectUri: packaged ? relayRedirectUri(appIdentity().scheme) : LOOPBACK_REDIRECT_URI,
     // The pool's region, taken from the SAME field the daemon and the bucket use — it is one infra
     // output (`aws_region`), already carried by config.json and the dev handoff, so there is exactly
     // one spelling of it (PILLAR3). It used to be REGEXED BACK OUT of the managed-login hostname,

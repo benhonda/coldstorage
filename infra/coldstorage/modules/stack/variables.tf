@@ -102,11 +102,15 @@ variable "apple_private_key" {
 variable "app_oauth_callback_urls" {
   type = list(string)
   default = [
-    # Packaged app: the custom scheme electron-builder registers in the app's Info.plist (Phase 5).
+    # Packaged apps redirect to the site's relay pages (site route `desktop.auth.($variant).tsx`),
+    # which hand ?code/&state off to the lane's custom scheme and leave the user on a real "you're
+    # signed in" page instead of a stranded IdP tab. Must byte-match ui `relayRedirectUri`.
+    "https://coldstorage.sh/desktop/auth",
+    "https://coldstorage.sh/desktop/auth/staging",
+    # The custom schemes electron-builder registers in each lane's Info.plist (ui/identity.json) —
+    # the relay's hand-off target. Kept registered so app builds from before the relay (direct
+    # scheme redirect) can still sign in.
     "coldstorage://auth/callback",
-    # Staging dogfood build (ui/identity.json): its own scheme so it installs alongside prod and its sign-in
-    # callback routes to the staging install, not prod. Cognito is shared across lanes, so this must be an
-    # allowed callback here for staging sign-in to work; additive, no effect on the prod app's flow.
     "coldstorage-staging://auth/callback",
     # Dev (`task ui:mac:dev`): custom-scheme deep links can't reach an unpackaged Electron on macOS (the
     # running Electron.app's Info.plist has no `coldstorage` scheme — Electron docs are explicit), so
@@ -114,7 +118,15 @@ variable "app_oauth_callback_urls" {
     # plain http for localhost only; the port is fixed because Cognito exact-matches the URL.
     "http://localhost:53682/auth/callback",
   ]
-  description = "Redirect URIs for the desktop app's hosted-UI OAuth (Google/Apple) flow: the packaged app's custom scheme + the dev-mode loopback. Only used when a federated IdP is enabled."
+  description = "Redirect URIs for the desktop app's hosted-UI OAuth (Google/Apple) flow: the site relay pages + the packaged apps' custom schemes + the dev-mode loopback. Only used when a federated IdP is enabled."
+}
+
+variable "app_signout_url" {
+  type = string
+  # The site's post-logout landing page (site route `desktop.auth.($variant).tsx`) — every lane,
+  # dev included, sends `logout_uri` here (ui `buildLogoutUrl` must byte-match).
+  default     = "https://coldstorage.sh/desktop/auth/signed-out"
+  description = "Where Cognito's /logout redirects after killing the managed-login session."
 }
 
 variable "mail_from" {

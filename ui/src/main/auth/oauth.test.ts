@@ -1,6 +1,6 @@
 /** OAuth URL building/parsing — the pure halves of the sign-in flow (no fetch, no Electron). */
 import { describe, expect, test } from "bun:test";
-import { buildAuthorizeUrl, buildLogoutUrl, decodeJwtClaims, isFirstLinkError, parseCallbackUrl, SCHEME_REDIRECT_URI, schemeRedirectUri, type OAuthConfig } from "./oauth.ts";
+import { buildAuthorizeUrl, buildLogoutUrl, decodeJwtClaims, isFirstLinkError, parseCallbackUrl, relayRedirectUri, SCHEME_REDIRECT_URI, schemeRedirectUri, type OAuthConfig } from "./oauth.ts";
 
 const cfg: OAuthConfig = {
   domain: "example.auth.ca-central-1.amazoncognito.com",
@@ -33,14 +33,21 @@ describe("buildAuthorizeUrl", () => {
 });
 
 describe("buildLogoutUrl", () => {
-  test("targets /logout with the client id and a registered logout_uri (kills the managed-login cookie)", () => {
+  test("targets /logout with the client id and the signed-out landing page (kills the managed-login cookie)", () => {
     const url = new URL(buildLogoutUrl(cfg));
     expect(url.origin).toBe("https://example.auth.ca-central-1.amazoncognito.com");
     expect(url.pathname).toBe("/logout");
     expect(Object.fromEntries(url.searchParams)).toEqual({
       client_id: "client123",
-      logout_uri: "coldstorage://auth/callback",
+      logout_uri: "https://coldstorage.sh/desktop/auth/signed-out",
     });
+  });
+});
+
+describe("relayRedirectUri", () => {
+  test("routes each lane's scheme to its own relay page — these strings must match the registered Cognito callbacks", () => {
+    expect(relayRedirectUri("coldstorage")).toBe("https://coldstorage.sh/desktop/auth");
+    expect(relayRedirectUri("coldstorage-staging")).toBe("https://coldstorage.sh/desktop/auth/staging");
   });
 });
 

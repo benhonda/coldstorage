@@ -177,8 +177,11 @@ resource "aws_cognito_user_pool_client" "app" {
   allowed_oauth_flows_user_pool_client = local.oauth_enabled
   allowed_oauth_flows                  = local.oauth_enabled ? ["code"] : []
   allowed_oauth_scopes                 = local.oauth_enabled ? ["email", "openid", "profile"] : []
-  callback_urls                        = local.oauth_enabled ? var.app_oauth_callback_urls : []
-  logout_urls                          = local.oauth_enabled ? var.app_oauth_callback_urls : []
+  callback_urls = local.oauth_enabled ? var.app_oauth_callback_urls : []
+  # Sign-out lands on the site's "you're signed out" page (ui `buildLogoutUrl` sends it as
+  # `logout_uri`). The callback URLs stay registered too — app builds from before the signed-out
+  # page pointed `logout_uri` at their callback URL.
+  logout_urls = local.oauth_enabled ? concat(var.app_oauth_callback_urls, [var.app_signout_url]) : []
 
   token_validity_units {
     access_token  = "hours"
