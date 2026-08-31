@@ -7,7 +7,28 @@
  */
 import { useState } from "react";
 import { Button, Field } from "../ui/primitives.tsx";
+import { BrandMark } from "../ui/brand-mark.tsx";
 import type { AuthStatus } from "../../../shared/ipc.ts";
+
+/** Google's four-color "G", per their sign-in branding guidelines — only ever rendered inside the
+ * Continue-with-Google button, so it lives here rather than in the DS primitives. */
+const GoogleGlyph = (): React.JSX.Element => (
+  <svg className="cs-google-glyph" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+    <path
+      fill="#4285F4"
+      d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"
+    />
+    <path
+      fill="#34A853"
+      d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"
+    />
+    <path fill="#FBBC05" d="M3.97 10.72a5.4 5.4 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1l3.01-2.33z" />
+    <path
+      fill="#EA4335"
+      d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.59A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"
+    />
+  </svg>
+);
 
 interface Props {
   auth: AuthStatus;
@@ -155,9 +176,10 @@ export const SignInView = ({
     return (
       <>
         <p className="cs-signin-text">Sign in to get started.</p>
-        <Button variant="primary" full onClick={onSignIn}>
+        <button type="button" className="cs-btn cs-btn--full cs-btn--google" onClick={onSignIn}>
+          <GoogleGlyph />
           Continue with Google
-        </Button>
+        </button>
         {auth.emailAvailable && (
           <button type="button" className="cs-linkbtn" onClick={() => setStep("email")}>
             Use an email code instead
@@ -170,26 +192,30 @@ export const SignInView = ({
 
   return (
     <div className="cs-signin">
-      <div className="cs-signin-card">
-        <h1 className="cs-signin-title">ColdStorage</h1>
+      {/* Cardless "open ice" gate: the cube + wordmark float directly on the shell glow, the same
+          transparent-over-glow treatment as the sidebar — sign-in is the first frame of the app,
+          not a card in front of it. (Recovery/onboarding keep the .cs-signin-card frame.) */}
+      <div className="cs-signin-gate">
+        <BrandMark />
+        <h1 className="cs-signin-word">coldstorage</h1>
         {body()}
-        {/* Sign-in-wrap agreement: continuing IS the acceptance (recorded server-side, versioned —
-            see account-backend TERMS_VERSION). Shown on every step of the card so it always sits
-            with the action it governs; links open the site in the system browser. */}
-        {!checking && (
-          <p className="cs-signin-legal">
-            By continuing, you agree to the{" "}
-            <a href="https://www.coldstorage.sh/terms" target="_blank" rel="noreferrer">
-              Terms of Service
-            </a>{" "}
-            and{" "}
-            <a href="https://www.coldstorage.sh/privacy" target="_blank" rel="noreferrer">
-              Privacy Policy
-            </a>
-            .
-          </p>
-        )}
       </div>
+      {/* Sign-in-wrap agreement: continuing IS the acceptance (recorded server-side, versioned —
+          see account-backend TERMS_VERSION). Anchored to the window edge so it sits under every
+          step of the gate; links open the site in the system browser. */}
+      {!checking && (
+        <p className="cs-signin-legal">
+          By continuing, you agree to the{" "}
+          <a href="https://www.coldstorage.sh/terms" target="_blank" rel="noreferrer">
+            Terms of Service
+          </a>{" "}
+          and{" "}
+          <a href="https://www.coldstorage.sh/privacy" target="_blank" rel="noreferrer">
+            Privacy Policy
+          </a>
+          .
+        </p>
+      )}
     </div>
   );
 };

@@ -1315,7 +1315,56 @@ button.cs-kv:hover { background: var(--surface-hover); }
 }
 
 /* ── Sign-in gate (Phase 5) — full-window, replaces the shell until a user is signed in. ── */
-.cs-signin { display: grid; place-items: center; height: 100vh; background: var(--bg-app); }
+/* The full-window gate frame. Carries the same iceberg glow as the shell so the gate screens
+   (sign-in, recovery, onboarding) read as the first frames of the app, not a separate world.
+   position: relative anchors the sign-in legal line to the window edge. */
+.cs-signin {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 100vh;
+  background: var(--bg-glow), var(--bg-app);
+  background-repeat: no-repeat;
+}
+/* ── "open ice" sign-in gate: cardless, directly on the glow (sidebar treatment) ── */
+.cs-signin-gate {
+  display: flex;
+  flex-direction: column;
+  /* stretch for the same reason as the card below: DS Field/Button have no intrinsic width */
+  align-items: stretch;
+  width: min(320px, 80vw);
+  gap: var(--space-3);
+  text-align: center;
+}
+.cs-signin-gate .cs-brandmark {
+  height: 72px;
+  align-self: center;
+  margin-bottom: var(--space-1);
+  filter: drop-shadow(0 10px 22px rgba(46, 141, 204, 0.28));
+}
+.cs-signin-word {
+  font: 600 var(--text-2xl) / 1.2 var(--font-ui);
+  letter-spacing: var(--tracking-tight);
+  /* the wordmark is always lowercase */
+  text-transform: lowercase;
+  color: var(--text-primary);
+  margin: 0 0 var(--space-2);
+}
+/* No card behind the gate, so the filled DS Field (designed to sit on white) gets a card-white
+   surface + hairline of its own — without this it vanishes against the glow/app-bg. */
+.cs-signin-gate .cs-field {
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+}
+/* Google's sign-in branding: white, hairline, the four-color G. Only the gate renders it. */
+.cs-btn--google {
+  background: var(--surface-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  box-shadow: 0 1px 2px rgba(16, 34, 52, 0.06);
+}
+.cs-btn--google:not(:disabled):hover { background: var(--surface-raised); }
+.cs-google-glyph { width: 17px; height: 17px; flex: none; }
 .cs-signin-card {
   display: flex;
   flex-direction: column;
@@ -1429,7 +1478,20 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-qrow .csf-icon { flex: none; }
 
 /* Sign-in-wrap agreement line under the sign-in card's actions. Quiet (tertiary), links accent. */
-.cs-signin-legal { font: var(--type-label); font-size: var(--text-xs); color: var(--text-tertiary); margin: 0; }
+/* Anchored to the window's bottom edge (the gate is cardless, so the agreement sits with the
+   window rather than a surface), under every step of the gate. */
+.cs-signin-legal {
+  position: absolute;
+  bottom: var(--space-6);
+  left: 0;
+  right: 0;
+  text-align: center;
+  font: var(--type-label);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  margin: 0;
+  padding: 0 var(--space-6);
+}
 .cs-signin-legal a { color: var(--accent-text); text-decoration: underline; }
 .cs-signin-legal a:hover { color: var(--text-primary); }
 
