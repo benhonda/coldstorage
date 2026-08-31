@@ -287,6 +287,18 @@ export class AuthManager {
     return this.tokens?.idToken ?? null;
   }
 
+  /** Wake-from-sleep hook (index.ts wires powerMonitor `resume` here). The refresh timer is a
+   * `setTimeout`, which doesn't run while the machine sleeps — after a long sleep it fires late,
+   * AFTER the daemon has already tried S3 with the expired token. Refresh now if the token is inside
+   * the skew window so the daemon's re-`authenticate` lands before its first post-wake call. A refresh
+   * failure here is the normal path (the network is often not back yet at `resume`) — {@link refreshNow}
+   * already retries on its own cadence. */
+  onWake(): void {
+    if (!this.tokens?.refreshToken) return;
+    if (this.tokens.expiresAt - Date.now() > REFRESH_SKEW_MS) return;
+    void this.refreshNow();
+  }
+
   /** Sign out: drop local state + the stored session first (always succeeds), then best-effort
    * revoke the refresh token server-side (kills derived tokens too). NOTE the daemon keeps its
    * short-lived STS creds until they expire (~1h) — a daemon-side sign-out command rides with 5b. */

@@ -17,7 +17,7 @@
  * ESM main (package.json `type: module`): use `import.meta.dirname`, not `__dirname`.
  */
 import { join } from "node:path";
-import { app, BrowserWindow, dialog, shell } from "electron";
+import { app, BrowserWindow, dialog, powerMonitor, shell } from "electron";
 import electronUpdater from "electron-updater";
 import updaterLog from "electron-log/main";
 import { DaemonClient } from "../daemon/client.ts";
@@ -371,6 +371,11 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+
+  // Wake from sleep: refresh a token that expired while the lid was closed BEFORE the daemon's first
+  // post-wake S3 call fails on it (the refresh setTimeout can't fire during sleep). powerMonitor is
+  // only usable after `ready`.
+  powerMonitor.on("resume", () => auth.onWake());
 
   // macOS: re-create a window when the dock icon is clicked and none are open.
   app.on("activate", () => {

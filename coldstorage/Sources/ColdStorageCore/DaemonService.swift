@@ -1,5 +1,6 @@
 import Foundation
 import Crypto   // SymmetricKey — the vault commands (Phase 5b) decode/return the MasterKey
+import AWSCognitoIdentity   // NotAuthorizedException — recognized as self-healing in the usage refresh
 
 /// Run `body`, but give up after `seconds` — a network call on a flaky link can otherwise hang a task
 /// indefinitely (the AWS SDK retries under the hood). Whichever finishes first wins; the loser is
@@ -925,8 +926,28 @@ public actor DaemonService {
         // UI, rather than leave anyone staring at an unexplained blank (PILLAR5). The next getStatus retries.
         catch {
             log("DaemonService: usage refresh failed — \(error)")
+            // Wake-from-sleep transients — no network route yet, an ID token that expired while the lid
+            // was closed, a link that wedged past the 30 s cap — all heal without the user doing anything:
+            // the network comes back, the app re-mints the token within moments (`authenticate` re-runs on
+            // its refresh timer), and the next `getStatus` retries the listing. Meanwhile the meter keeps
+            // its last figure. Toasting these dumped raw NSURLError/NotAuthorized internals at the user
+            // about a state already fixing itself; the err log above keeps the trail for devs.
+            guard !Self.isSelfHealingUsageError(error) else { return }
             bus.publish(DaemonEvent("error", ["message": "reading how much is stored: \(error)"]))
         }
+    }
+
+    /// True for usage-refresh failures that resolve on their own — offline (the URL-loading layer's
+    /// domain covers no-route, DNS, connection-lost, timeouts), a Cognito token the app is already about
+    /// to replace, or our own listing timeout. Anything else (AccessDenied, a real service error) still
+    /// toasts, verbatim, because it won't fix itself and someone needs to see exactly what it said.
+    static func isSelfHealingUsageError(_ error: Error) -> Bool {
+        if error is TimedOutError { return true }
+        if error is AWSCognitoIdentity.NotAuthorizedException { return true }
+        #if canImport(Darwin)
+        if (error as NSError).domain == NSURLErrorDomain { return true }
+        #endif
+        return false
     }
 
     /// The actual listing + credit math, cached on success. Separate from `currentUsageBytes` so the
