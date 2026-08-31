@@ -435,6 +435,28 @@ tasks:
               fi
             done
 
+  daemon:mac:throughput:
+    desc: "Is the upload as fast as it can be? Prints just the engine's `throughput —` lines (per-blob MB/s + Mbps with the producer time-split, and the run total) from BOTH daemons' logs — recent history first, then live. Read it against your uplink's speed test: `waiting on S3` near 100% = the link is the ceiling (nothing to build); low `waiting on S3` + Mbps well under the link = the pipeline is the ceiling (encrypt = CPU, read = slow source) — that's the signal cross-blob concurrency (DESIGN.md §8) was deferred FOR. Quick knob either way: COLDSTORE_MAX_PARTS_INFLIGHT=8 via daemon:mac:install."
+    dir: coldstorage
+    vars:
+      DATA_DIR: "{{.HOME}}/Library/Application Support/ColdStorage"
+    cmds:
+      - |
+        echo "── upload throughput (per blob + per run) ────────────────────────────"
+        echo "   producer split:  waiting on S3 ≈100%  → your uplink is the ceiling"
+        echo "                    encrypt dominates    → CPU-bound (one thread of SHA-256 + AES-GCM)"
+        echo "                    read dominates       → the source disk/PhotoKit is slow"
+        echo "   compare Mbps to your link's speed test — well under it AND low"
+        echo "   'waiting on S3' is the case cross-blob concurrency exists to fix"
+        echo "──────────────────────────────────────────────────────────────────────"
+        cd "{{.DATA_DIR}}" || exit 1
+        files=$(ls coldstored.out.log coldstored.err.log coldstored.app.out.log coldstored.app.err.log 2>/dev/null)
+        [ -n "$files" ] || { echo "no daemon logs found in {{.DATA_DIR}}"; exit 1; }
+        echo "-- recent --"
+        grep -h "throughput —" $files 2>/dev/null | tail -20
+        echo "-- live (Ctrl-C to stop) --"
+        tail -n 0 -f $files | grep --line-buffered "throughput —"
+
   daemon:mac:logs:clear:
     desc: "Truncate the installed daemon's logs in place — a clean slate before reproducing an issue, WITHOUT reinstalling. (daemon:mac:install also resets them.) The daemon keeps writing to the same files."
     dir: coldstorage
