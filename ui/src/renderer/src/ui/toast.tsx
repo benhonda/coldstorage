@@ -144,8 +144,11 @@ export const ToastProvider = ({ children }: { children: ReactNode }): React.JSX.
       {/* Each toast is its own live region — `role="alert"` (assertive) for a failure, `role="status"`
           (polite) otherwise. Deliberately NOT an `aria-live` on this container as well: nesting live
           regions makes screen readers announce the same toast twice. */}
+      {/* Newest first in the DOM — the stack is a `column-reverse` scroller (see .cs-toasts in app.css),
+          which puts the newest toast at the bottom edge exactly as before, but keeps it on-screen and the
+          older overflow scrollable when the pile outgrows the window. */}
       <div className="cs-toasts">
-        {toasts.map((t) => {
+        {toasts.toReversed().map((t) => {
           // Bound out here so the handler closes over a definite `ToastAction` — narrowing `t.action`
           // inside the JSX doesn't reach into a deferred callback.
           const action = t.action;

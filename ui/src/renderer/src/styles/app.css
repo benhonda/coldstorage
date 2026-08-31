@@ -439,11 +439,23 @@ button.cs-kv:hover { background: var(--surface-hover); }
   bottom: var(--space-8);
   transform: translateX(-50%);
   display: flex;
-  flex-direction: column;
+  /* Reversed, with the DOM listing newest first (toast.tsx renders the reverse of the stack): visually
+     identical to the old column (oldest on top, newest at the bottom edge), but when the pile is taller
+     than the window a column-reverse scroller starts anchored at its bottom — so the NEWEST toasts are
+     the visible ones and the older overflow is a wheel-scroll up, instead of the top of the stack
+     rendering off-screen and unreachable. */
+  flex-direction: column-reverse;
   align-items: center;
   gap: var(--space-2);
+  max-height: calc(100dvh - 2 * var(--space-8));
+  overflow-y: auto;
+  /* Reaching the end of the toast backlog must not start scrolling the page underneath. */
+  overscroll-behavior: contain;
   z-index: 20;
-  /* The gaps between toasts must not eat clicks on the page underneath. */
+  /* The gaps between toasts must not eat clicks on the page underneath. Wheel/trackpad scrolling still
+     works: the events hit-test the toasts themselves (pointer-events: auto) and scroll this ancestor.
+     The one casualty is dragging the scrollbar track — it isn't hit-testable — which trackpad-first
+     macOS can live with in exchange for not blocking clicks. */
   pointer-events: none;
 }
 .cs-toast {
