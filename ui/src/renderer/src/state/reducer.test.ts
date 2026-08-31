@@ -16,6 +16,7 @@ const status: AppState["status"] = {
   filesArchived: 4,
   blobsVerified: 4,
   running: false,
+  uploadsPaused: false,
   permanentlyFailedBlobs: 0,
   sources: [{ id: "s1", kind: "folder", path: "/a", mountPath: "a", paused: false, lastScanAt: null, error: null }],
   bytesStored: 4096,
@@ -279,6 +280,16 @@ describe("failures, pause, restore, error", () => {
   test("sourcesChanged is a no-op in the reducer (controller refetches)", () => {
     const base = run({ type: "statusLoaded", status });
     expect(reducer(base, { type: "event", name: "sourcesChanged", data: { added: "/c" } })).toBe(base);
+  });
+
+  test("uploadsPausedChanged folds into the status snapshot (and is held until one exists)", () => {
+    const base = run({ type: "statusLoaded", status });
+    const paused = reducer(base, { type: "event", name: "uploadsPausedChanged", data: { paused: "true" } });
+    expect(paused.status?.uploadsPaused).toBe(true);
+    const resumed = reducer(paused, { type: "event", name: "uploadsPausedChanged", data: { paused: "false" } });
+    expect(resumed.status?.uploadsPaused).toBe(false);
+    // No snapshot yet ⇒ nothing to fold; the first getStatus carries the same truth.
+    expect(run({ type: "event", name: "uploadsPausedChanged", data: { paused: "true" } }).status).toBeNull();
   });
 });
 

@@ -92,6 +92,9 @@ interface Props {
   /** The whole run, for the aggregate deposit banner at the top of the browser (files done, bytes,
    * throughput, ETA). `null` when no run has happened yet. */
   run: RunProgress | null;
+  /** The daemon-level upload pause (`Status.uploadsPaused`, PAUSE.md) — swaps the run banner for the
+   * persistent "Uploads paused" one, whose Resume fires `resumeUploads`. */
+  uploadsPaused: boolean;
   /** Would depositing `incomingBytes` more still fit under the quota? (Phase 5c, size-aware.) The gate
    * weighs what's already stored PLUS what's mid-upload PLUS this deposit's own size, so one oversized
    * drop can't slip past a stored total that hasn't caught up yet. A blocked deposit calls
@@ -133,6 +136,7 @@ export const MyFilesView = ({
   filesApi,
   suggestions,
   run,
+  uploadsPaused,
   hasRoomFor,
   onDepositBlocked,
   onRetryUploads,
@@ -602,6 +606,13 @@ export const MyFilesView = ({
     srcByPath: Map<string, string>; // previewed vault path → local source path (top-level picks only) so a failed upload can retry
     fallback: string[]; // target relativePaths — names the drop in the UI, and stands in for an unavailable photo preview
   }): Promise<void> => {
+    // Pause gate, up front: the daemon refuses a deposit while uploads are paused (PAUSE.md), so say it
+    // NOW — before walking the drop, prompting about skips and collisions, and adding optimistic rows,
+    // only for the final command to bounce. The daemon stays the enforcer; this is the same courtesy
+    // shape as the quota gate below. Thrown (not toasted here) so `exec` at the call site surfaces it.
+    if (uploadsPaused) {
+      throw new Error("Uploads are paused. Resume uploads to back this up.");
+    }
     // Quota gate, pass 1 (Phase 5c): if the vault is already full, bail to the paywall before any
     // preview/optimistic rows so a blocked drop leaves the tree untouched. The size-aware pass 2 (below,
     // once we know which files land and how big they are) is what stops a single drop that would overflow.
@@ -1004,7 +1015,9 @@ export const MyFilesView = ({
           <DepositProgress
             run={run}
             preparing={preparing}
+            paused={uploadsPaused}
             onStop={() => exec(() => api.request("cancelRun"))}
+            onResume={() => exec(() => api.request("resumeUploads"))}
           />
           {/* FirstRun (the drop-zone hero) is the onboarding state for a genuinely empty vault — root with
               nothing in it. A drilled-into empty folder just shows the empty file list, not the hero. And

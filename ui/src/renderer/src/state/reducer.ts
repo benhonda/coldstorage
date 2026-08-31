@@ -545,6 +545,14 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
     case "error":
       return { ...state, lastError: action.data.message, lastErrorCode: action.data.code ?? null };
 
+    case "uploadsPausedChanged": {
+      // Fold the toggle into the status snapshot — the SSOT the UI reads `uploadsPaused` from — so a live
+      // window flips the moment the daemon confirms, not on the next getStatus poll. No snapshot yet ⇒
+      // nothing to fold; the first getStatus carries the same truth.
+      if (!state.status) return state;
+      return { ...state, status: { ...state.status, uploadsPaused: action.data.paused === "true" } };
+    }
+
     case "sourcesChanged":
       // Authoritative refresh is the controller's job (it re-issues listSources); no fold here.
       return state;

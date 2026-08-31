@@ -609,6 +609,7 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
           filesApi={filesApi}
           suggestions={state.excludeSuggestions}
           run={state.run}
+          uploadsPaused={state.status?.uploadsPaused ?? false}
           tree={treeState}
           onRetryTree={() => exec(retryFiles)}
           hasRoomFor={hasRoomFor}
@@ -656,6 +657,7 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
           exec={exec}
           sources={state.status?.sources ?? []}
           running={state.run?.active ?? false}
+          uploadsPaused={state.status?.uploadsPaused ?? false}
           settings={settings}
           bytesStored={bytesStored}
           bytesStoredPending={storageFigurePending}

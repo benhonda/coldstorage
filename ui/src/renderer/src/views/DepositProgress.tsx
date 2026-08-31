@@ -27,24 +27,62 @@ import { Button } from "../ui/primitives.tsx";
 export function DepositProgress({
   run,
   preparing,
+  paused,
   onStop,
+  onResume,
 }: {
   run: RunProgress | null;
   /** What a just-accepted drop is being read for (“Videos”), while the daemon resolves where it
    *  lands — the window before any run exists. Null when nothing is being read. */
   preparing?: string | null;
+  /** The daemon-level upload pause (`Status.uploadsPaused`, PAUSE.md). While true, the run banner is
+   *  replaced by {@link PausedBanner}: a parked run streams no progress, and a frozen "Uploading…" bar
+   *  reads as stalled — the one thing pause must never look like. */
+  paused: boolean;
   /** Stop the run in flight (the daemon's `cancelRun`, through the view's `exec`, which owns the error
    *  toast). Firing it is not the run stopping — that arrives as `runFinished`; "Stopping…" covers the gap. */
   onStop: () => void;
+  /** `resumeUploads`, through the view's `exec`. The banner leaves when `uploadsPausedChanged` folds the
+   *  new state into the status snapshot — "Resuming…" covers the gap. */
+  onResume: () => void;
 }): React.JSX.Element {
   // Two INDEPENDENT facts, so two banners, not a winner: a drop can be read while an earlier one is still
-  // uploading, and neither state may hide the other.
+  // uploading, and neither state may hide the other. Pause replaces only the RUN banner — a drop still
+  // being read keeps its own state (the daemon will refuse the deposit with its own words if it lands
+  // while paused, and that toast beats a silently vanished banner).
   return (
     <>
       {preparing && <PreparingBanner what={preparing} />}
-      <RunBanner run={run} onStop={onStop} />
+      {paused ? <PausedBanner onResume={onResume} /> : <RunBanner run={run} onStop={onStop} />}
       <StoppedBanner run={run} />
     </>
+  );
+}
+
+/** Uploads are paused — a persistent state, not a moment, so it stays until the user resumes (here, or in
+ *  Settings). Calm on purpose: paused is something the user chose, not something wrong. */
+function PausedBanner({ onResume }: { onResume: () => void }): React.JSX.Element {
+  // Honest pending state (PILLAR5), same shape as Stop: the command acks instantly but the banner only
+  // leaves when the daemon's `uploadsPausedChanged` flips the snapshot — "Resuming…" covers that gap.
+  // No reset effect needed: the whole banner unmounts when `paused` flips.
+  const [resuming, setResuming] = useState(false);
+  const resume = (): void => {
+    setResuming(true);
+    onResume();
+  };
+  return (
+    <div className="cs-deposit" role="status" aria-live="polite">
+      <div className="cs-deposit-head">
+        <span className="cs-deposit-title">Uploads paused</span>
+        <Button variant="ghost" size="sm" onClick={resume} disabled={resuming}>
+          {resuming ? "Resuming…" : "Resume"}
+        </Button>
+      </div>
+      <div className="cs-bar-meta">
+        Nothing is using your connection. Everything already stored is safe, and backing up picks up right
+        where it left off when you resume.
+      </div>
+    </div>
   );
 }
 

@@ -83,6 +83,7 @@ export const SettingsView = ({
   exec,
   sources,
   running,
+  uploadsPaused,
   settings,
   bytesStored,
   bytesStoredPending,
@@ -119,6 +120,9 @@ export const SettingsView = ({
   /** A scan is in flight — the LIVE run state (`state.run.active`), folded from runStarted/runFinished.
    * NOT `status.running`, which only updates on a getStatus poll and so never flips during a quick run. */
   running: boolean;
+  /** The daemon-level upload pause (`Status.uploadsPaused`, PAUSE.md) — the header Pause/Resume button's
+   * state, and what keeps a parked run's folders from claiming "Syncing". */
+  uploadsPaused: boolean;
   settings: SettingsApi;
   /** The vault total: a live S3 listing under this user's own prefix — every device, and the figure the
    * plan quota is enforced against. Drives the quota row AND the downgrade warning, so they can never
@@ -197,8 +201,10 @@ export const SettingsView = ({
   // Precedence: the user's own choice first (a paused folder isn't broken, it's off), then whether we can
   // actually reach it, and only then the live/idle split. `error` outranks `running` deliberately — a run
   // being in progress elsewhere says nothing about the folder that just failed to scan.
+  // (`!uploadsPaused`: a run parked behind the global pause is still `active`, but nothing is moving —
+  // "Syncing" would be a lie; the header's Resume button carries the paused fact.)
   const folderState = (s: Source): FolderState =>
-    s.paused ? "paused" : s.error ? "broken" : running ? "syncing" : "current";
+    s.paused ? "paused" : s.error ? "broken" : running && !uploadsPaused ? "syncing" : "current";
 
   // Two distinct ideas, both behind the row's ⋯ (not bare buttons — neither should be a one-misclick):
   //   · Stop/Start watching — a reversible pause. The folder stays in the list and its uploaded files stay
@@ -238,14 +244,25 @@ export const SettingsView = ({
     setPattern("");
   };
 
-  // Header action stays global to *catching up* (scan everything now); pause/resume is per-folder (on
-  // each row) — there's no global pause. Compact (sm) so the card header row isn't inflated.
+  // Header actions are global: catch up now (scan everything), and the daemon-level upload pause
+  // (PAUSE.md) — "stop spending bandwidth", distinct from the per-folder Stop watching on each row.
+  // Compact (sm) so the card header row isn't inflated.
   const watchActions = (
     <div className="cs-cluster">
       <Button
         size="sm"
+        icon={uploadsPaused ? "play_arrow" : "pause"}
+        onClick={() => exec(() => api.request(uploadsPaused ? "resumeUploads" : "pauseUploads"))}
+      >
+        {uploadsPaused ? "Resume uploads" : "Pause uploads"}
+      </Button>
+      <Button
+        size="sm"
         icon="sync"
-        disabled={running || sources.length === 0}
+        // While paused, a sync would only scan and then hold — the button would look ignored. The pause
+        // button beside this one says why it's off.
+        disabled={running || uploadsPaused || sources.length === 0}
+        title={uploadsPaused ? "Uploads are paused" : undefined}
         onClick={() => exec(() => api.request("triggerNow"))}
       >
         {running ? "Syncing…" : "Sync now"}

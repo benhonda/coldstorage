@@ -351,10 +351,10 @@ Secrets live in Keychain, never in the UI.
   listRestores · cancelRestore · resumeRestore · forgetRestore ·
   deposit · depositPhotos · previewDeposit · retryFiles · movePath · createFolder · deletePath · authenticate ·
   deauthenticate · setQuota · mintVault · unlockVault · unlockVaultWithRecoveryCode · lockVault ·
-  triggerNow · cancelRun · pauseSource · resumeSource`.
+  triggerNow · cancelRun · pauseSource · resumeSource · pauseUploads · resumeUploads`.
 - **Events — SSOT is the `DaemonEvent(...)` call sites:** `runStarted · fileArchived · uploadProgress ·
   runProgress · runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged ·
-  restoresChanged · restoreProgress · restoreCompleted · usageChanged · error`.
+  restoresChanged · restoreProgress · restoreCompleted · usageChanged · uploadsPausedChanged · error`.
 - **Every command is session-scoped** (§2): signed out, the four reads answer empty and everything else
   throws *"not signed in"*. `getStatus` says so explicitly — `signedIn: bool` — and its `bytesStored`
   (the S3-derived storage-quota usage figure) is non-null whenever signed in, `null` only when not.
@@ -366,7 +366,9 @@ Secrets live in Keychain, never in the UI.
   `{moved,to}` / `{created}` / `{deleted}` — plus `{signedIn}` / `{signedOut}`, the cue that the whole
   tree just changed owner; `authenticate idToken=…` / `deauthenticate` open and close the session
   (per-user prefix isolation, `../PROD.md`); per-source pause lives on the source rows (`pauseSource`/`resumeSource` emit
-  `sourcesChanged` — there are no global pause events).
+  `sourcesChanged`); the daemon-level pause is `pauseUploads`/`resumeUploads` (`../PAUSE.md`) — a persistent
+  `PauseGate` the engine parks on between blobs/parts, so a run drains its in-flight parts and holds in place,
+  re-sending nothing on resume (`uploadsPausedChanged` + `getStatus.uploadsPaused` carry the state).
 
 ## 11. Decisions (as built)
 

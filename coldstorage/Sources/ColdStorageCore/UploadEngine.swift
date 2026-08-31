@@ -126,6 +126,7 @@ public actor UploadEngine {
                     quota: QuotaLimit? = nil,
                     explicitDeposit: Bool = false,
                     depositId: String? = nil,
+                    gate: PauseGate? = nil,
                     onFileArchived: (@Sendable (String, String) async -> Void)? = nil,
                     onProgress: (@Sendable (UploadProgress) async -> Void)? = nil,
                     onRunProgress: (@Sendable (RunProgress) async -> Void)? = nil) async throws -> [BlobFailure] {
@@ -252,6 +253,11 @@ public actor UploadEngine {
         let runStart = ContinuousClock.now
         uploadedThisRun = 0; blobsUploadedThisRun = 0
         for blob in planned {
+            // Pause parks the run HERE, between blobs (and inside `PartShipper.flush`, between parts) — the
+            // run holds in place with its journal/S3 state intact and continues where it stood on resume
+            // (see PauseGate / PAUSE.md). A cancel while parked throws `CancellationError`; `try?` swallows
+            // it, and the `isCancelled` check below turns the rest of the run into `.stopped` as usual.
+            try? await gate?.waitIfPaused()
             // Stop (`cancelRun`) cancels the Task this runs in. Once that's happened, every blob still ahead of
             // us is reported `.stopped` — not silently dropped — so its files get journal truth (see
             // `FailureKind.stopped`) and the run returns promptly instead of streaming on to the end.
@@ -269,7 +275,7 @@ public actor UploadEngine {
                     continue
                 }
             }
-            do { used += try await archive(blob, onFileArchived: onFileArchived, onProgress: onProgress, reporter: reporter) }
+            do { used += try await archive(blob, gate: gate, onFileArchived: onFileArchived, onProgress: onProgress, reporter: reporter) }
             catch {
                 let files = blob.items.map { BlobFailure.File(id: $0.id, path: $0.relativePath) }
                 let kind = FailureKind.classify(error)
@@ -338,6 +344,7 @@ public actor UploadEngine {
     /// Returns the ciphertext bytes it NEWLY stored — what the caller adds to the running quota total. Zero
     /// on a no-op (already verified + linked), a relink (bytes already on S3), or an all-empty blob.
     private func archive(_ blob: BlobPlan,
+                         gate: PauseGate? = nil,
                          onFileArchived: (@Sendable (String, String) async -> Void)?,
                          onProgress: (@Sendable (UploadProgress) async -> Void)? = nil,
                          reporter: RunProgressReporter? = nil) async throws -> Int {
@@ -413,7 +420,7 @@ public actor UploadEngine {
         var frame: UInt64 = 0
         var offset = 0        // encrypted bytes emitted so far — the coordinate system spans are recorded in
         var spans: [(id: String, off: Int, len: Int, firstFrame: UInt64, sha: String, size: Int)] = []
-        let shipper = PartShipper(blob: blob, store: store, journal: journal,
+        let shipper = PartShipper(blob: blob, store: store, journal: journal, gate: gate,
                                   uploads: !alreadyVerified, existingUploadId: existingUploadId,
                                   alreadyOnS3: alreadyOnS3, alreadyRecorded: alreadyRecorded,
                                   solo: solo, encryptedTotal: encryptedTotal,
@@ -637,6 +644,9 @@ private actor PartShipper {
     let blob: BlobPlan
     let store: any BlobStore
     let journal: Journal
+    /// The daemon's pause latch (nil in tests/CLI runs without one). `flush` parks on it before dispatching
+    /// each part — the between-parts half of pause's drain-then-hold (see PAUSE.md).
+    let gate: PauseGate?
     /// `false` ⇒ generate the ciphertext but upload nothing (the orphan-relink pass, which exists only to
     /// recompute spans against a blob whose bytes are already on S3).
     let uploads: Bool
@@ -671,11 +681,11 @@ private actor PartShipper {
     /// overstate a resumed blob's speed.
     private(set) var uploadedBytes = 0
 
-    init(blob: BlobPlan, store: any BlobStore, journal: Journal,
+    init(blob: BlobPlan, store: any BlobStore, journal: Journal, gate: PauseGate? = nil,
          uploads: Bool, existingUploadId: String?, alreadyOnS3: Set<Int>, alreadyRecorded: Set<Int>,
          solo: IngestItem?, encryptedTotal: Int, onProgress: (@Sendable (UploadProgress) async -> Void)?,
          reporter: RunProgressReporter?) {
-        self.blob = blob; self.store = store; self.journal = journal
+        self.blob = blob; self.store = store; self.journal = journal; self.gate = gate
         self.uploads = uploads; self.openUploadId = existingUploadId
         self.alreadyOnS3 = alreadyOnS3; self.alreadyRecorded = alreadyRecorded
         self.solo = solo; self.encryptedTotal = encryptedTotal; self.onProgress = onProgress
@@ -716,6 +726,13 @@ private actor PartShipper {
             // so nothing is dispatched, but they ARE done, and counting them keeps the aggregate bar honest
             // (bytesTotal includes this blob, so not counting it would leave the bar short for a relink pass).
             guard uploads else { await reportShipped(number: number, bytes: bytes.count); continue }
+
+            // Pause holds HERE, before the next part is dispatched — never mid-part. Parts already in
+            // flight run to completion on their own Tasks (drain, don't kill: their bytes are transferred
+            // and journaled, nothing is re-sent on resume), and suspending this method suspends `push` and
+            // therefore the whole producer, so nothing piles up while parked. A cancel while parked throws
+            // out through `push` → `archive`'s catch → `.stopped`, exactly like any other abandonment.
+            try await gate?.waitIfPaused()
 
             // First real part → open the upload (resume reuses the one the journal already holds).
             if openUploadId == nil {

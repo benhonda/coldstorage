@@ -174,6 +174,10 @@ public final class Journal: @unchecked Sendable {
               conflicts TEXT NOT NULL DEFAULT '{}', excludeExtra TEXT NOT NULL DEFAULT '',
               createdAt INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'pending',
               mode TEXT NOT NULL DEFAULT 'ingest', finishedAt INTEGER);
+            -- Daemon-level user settings that must survive restart (key/value; currently just
+            -- `uploadsPaused` — see PAUSE.md). Per-user by construction: the journal is per-user.
+            CREATE TABLE IF NOT EXISTS settings(
+              key TEXT PRIMARY KEY, value TEXT NOT NULL);
             """)
         if excludesIsNew {
             for p in Self.defaultExcludes {
@@ -769,6 +773,23 @@ public final class Journal: @unchecked Sendable {
     public func setSourcePaused(_ id: String, _ paused: Bool) throws {
         lock.lock(); defer { lock.unlock() }
         try run("UPDATE sources SET paused=?2 WHERE id=?1", [.text(id), .int(paused ? 1 : 0)])
+    }
+
+    /// The persisted daemon-level pause latch (see PAUSE.md): whether this user paused uploads. Read once
+    /// at session start to seed the live `PauseGate`; the gate is the in-flight truth, this is what
+    /// survives a restart.
+    public func uploadsPaused() throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return try run("SELECT value FROM settings WHERE key='uploadsPaused'")
+            .first?["value"] as? String == "1"
+    }
+
+    public func setUploadsPaused(_ paused: Bool) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("""
+            INSERT INTO settings(key, value) VALUES('uploadsPaused', ?1)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """, [.text(paused ? "1" : "0")])
     }
 
     public func listSources() throws -> [SourceRow] {

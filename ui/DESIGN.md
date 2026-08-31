@@ -545,7 +545,7 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   deposit · depositPhotos · previewDeposit · retryFiles · listDeposits · removeFailedFiles · forgetDeposit ·
   movePath · createFolder · deletePath · pathIsWatched · authenticate ·
   deauthenticate · mintVault · unlockVault · unlockVaultWithRecoveryCode · lockVault · triggerNow ·
-  cancelRun · pauseSource · resumeSource`. (`authenticate`/`deauthenticate` = the **session** opened/closed —
+  cancelRun · pauseSource · resumeSource · pauseUploads · resumeUploads`. (`authenticate`/`deauthenticate` = the **session** opened/closed —
   per-user S3 creds plus the user's journal, staging dir and key holder; the `*Vault*` four = the
   zero-knowledge encryption key, loaded/cleared over the local socket — all multi-user only.)
 - **Session lifecycle — the daemon serves ONE user, or none.** `authenticate` builds the session

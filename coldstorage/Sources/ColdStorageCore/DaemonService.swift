@@ -49,6 +49,15 @@ public actor DaemonService {
     // dragged in would be a bug). `running` + a waiter queue gives both — see `withRunLock`.
     private var running = false
     private var runWaiters: [CheckedContinuation<Void, Never>] = []
+    /// The daemon-level "uploads paused" latch (PAUSE.md): the engine parks on it between blobs and between
+    /// parts, so a pause drains what's in flight and then holds — nothing is cancelled, nothing re-sent.
+    /// One gate for the daemon's lifetime; sessions seed it from THEIR journal (`uploadsPaused`), so the
+    /// state is per-user and survives restart without ever leaking across accounts.
+    let pauseGate = PauseGate()
+    /// Synchronous mirror of `pauseGate.paused` for the `getStatus` hot path and the deposit refusals —
+    /// reading the gate is an actor hop, and status must answer without one. Written only alongside the
+    /// gate (pause/resume commands, session begin/end), so the two cannot drift.
+    private var uploadsPaused = false
     /// Guards `restorePass` against running twice at once. The actor suspends at every network await, so a
     /// pass kicked off by `requestRestore`/`resumeRestore` can interleave with the scheduled one — both
     /// would see the same row active and both would download it. That is a duplicated ranged GET: egress
@@ -98,6 +107,15 @@ public actor DaemonService {
         return session
     }
 
+    /// The clean refusal for upload-starting commands while the user has uploads paused (PAUSE.md): the
+    /// message is what the app surfaces, so it names the fix. Scans, restores and reads are never gated.
+    private func refuseIfUploadsPaused(_ command: String) throws {
+        guard !uploadsPaused else {
+            // No command prefix: this string IS the user-facing toast (the app relays the daemon's words).
+            throw ColdStorageError.invalidRequest("Uploads are paused. Resume uploads to back this up.")
+        }
+    }
+
     /// Install `new` as the current session, tearing down whatever preceded it. This is the body of
     /// `authenticate` past the Cognito exchange, and `endSession` is the body of `deauthenticate` past the
     /// credential drop — factored out because the session LIFECYCLE is the thing that leaked, and it must be
@@ -105,12 +123,16 @@ public actor DaemonService {
     ///
     /// Everything derived from the previous user goes with them: the cached usage total (whose bytes belong
     /// to their prefix) and the permanently-failed blob set (whose ids mean nothing in another vault).
-    func beginSession(_ new: UserSession) {
+    func beginSession(_ new: UserSession) async {
         session?.close()
         session = new
         cachedUsage = nil
         permanentlyFailedBlobs = []
         quotaBytes = nil   // the app re-pushes this user's quota right after authenticate; never inherit the last user's
+        // Seed the pause latch from THIS user's journal — pause is per-user, persisted state (PAUSE.md).
+        // `try?` fails open (unpaused): a settings read hiccup must not silently freeze someone's backup.
+        uploadsPaused = (try? new.journal.uploadsPaused()) ?? false
+        if uploadsPaused { await pauseGate.pause() } else { await pauseGate.resume() }
         bus.publish(DaemonEvent("filesChanged", ["signedIn": new.identity.directoryName]))
         // Anything this user's last session still owed (`Deposit`, still pending) resumes on the next pass — make
         // that now, not up to an interval away: a restart mid-deposit should pick up within seconds.
@@ -123,12 +145,19 @@ public actor DaemonService {
     func setQuota(_ bytes: Int?) { quotaBytes = bytes }
 
     /// Sign-out: release the session. The journal handle, the staging dir and the MasterKey all go with it.
-    func endSession() {
+    func endSession() async {
+        // A run parked on the pause gate can never finish on its own, and its session is about to go — so a
+        // paused sign-out cancels it (its blobs close out `.stopped`, resumable next sign-in) rather than
+        // leaving a zombie holding the run lock. An UNPAUSED in-flight run is left alone, as before.
+        if uploadsPaused { runTask?.cancel() }
         session?.close()
         session = nil
         cachedUsage = nil
         permanentlyFailedBlobs = []
         quotaBytes = nil
+        // The gate resets with the session; the next sign-in re-seeds it from that user's own journal.
+        uploadsPaused = false
+        await pauseGate.resume()
         bus.publish(DaemonEvent("filesChanged", ["signedOut": "true"]))
     }
 
@@ -510,9 +539,10 @@ public actor DaemonService {
         let engine = session.engine
         let skip = permanentlyFailedBlobs
         let prefix = session.prefix
+        let gate = pauseGate
         let task = Task {
             try await engine.run(source: source, skipBlobIds: skip, prefix: prefix, quota: quota,
-                                 explicitDeposit: explicitDeposit, depositId: depositId,
+                                 explicitDeposit: explicitDeposit, depositId: depositId, gate: gate,
                                  onFileArchived: onFile, onProgress: onProgress, onRunProgress: onRunProgress)
         }
         runTask = task
@@ -599,17 +629,36 @@ public actor DaemonService {
         // Seed status.json so the UI has something on first connect — only when signed in; a signed-out
         // daemon has no user whose status it could write.
         if let session { try writeStatus(session) }
+        // Restores get their OWN beat, in a child task — not a turn after the upload pass in this loop.
+        // Sharing the loop meant a stuck-or-slow upload pass delayed every restore tick by its own
+        // duration, and the daemon-level pause (PAUSE.md) turned that delay unbounded: a run parked on the
+        // gate holds `runOnce` captive for as long as the user stays paused, and a paid-for restore must
+        // never stop progressing over that. A plain sleep, not `wakeableSleep`: the transfer commands
+        // (`requestRestore`/`resumeRestore`/`authenticate`) already kick `restorePass` directly when
+        // something shouldn't wait, and `restoring` serialises the passes. Non-throwing by construction —
+        // faults land on the row, never here.
+        let restoreLoop = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.restoreTick()
+                try? await Task.sleep(for: .seconds(intervalSeconds))
+            }
+        }
+        defer { restoreLoop.cancel() }
         while !Task.isCancelled {
-            // Pause is per-source now (paused folders are filtered out of `currentSource`), so the loop
-            // always runs — a pass over zero unpaused folders is just a cheap no-op.
+            // Per-source pause filters paused folders out of `currentSource`, so a pass over zero unpaused
+            // folders is a cheap no-op. The daemon-level pause parks INSIDE the run (scan + plan, then hold
+            // at the first blob — see PAUSE.md), so a paused daemon sits captive here until resume; the
+            // scheduled ticks it would have taken were `skipIfBusy` skips anyway.
             do { try await runOnce() }
             catch { bus.publish(DaemonEvent("error", ["message": "\(error)"])) }   // surface, never crash the loop
-            // Push in-flight transfers along on the same beat. Deliberately OUTSIDE the upload pass and
-            // after it: a stuck or busy upload run must never be the reason a paid-for restore stops
-            // progressing. Non-throwing by construction — it records faults on the row, never here.
-            if let session { await restorePass(session) }
             await wakeableSleep(seconds: intervalSeconds)
         }
+    }
+
+    /// One beat of the restore loop: push in-flight transfers along for whoever is signed in right now.
+    private func restoreTick() async {
+        guard let session else { return }
+        await restorePass(session)
     }
 
     /// The exclude patterns to scope a scan/deposit by, loaded fresh from the journal so an add/removeExclude
@@ -729,6 +778,9 @@ public actor DaemonService {
         let signedIn: Bool
         let filesTotal, filesArchived, blobsVerified: Int
         let running: Bool
+        /// Whether the user has paused uploads (PAUSE.md) — on the snapshot so a freshly connected app
+        /// renders "Paused" cold, without waiting for an `uploadsPausedChanged` event. False when signed out.
+        let uploadsPaused: Bool
         let permanentlyFailedBlobs: Int   // >0 ⇒ a blob is stuck on a config/logic fault the operator must fix
         let sources: [SourceDTO]
         /// Bytes currently stored in S3 under this user's prefix (storage-quota enforcement's usage
@@ -1264,7 +1316,8 @@ public actor DaemonService {
         case "getStatus":
             guard let session else {
                 return AnyEncodable(StatusDTO(signedIn: false, filesTotal: 0, filesArchived: 0, blobsVerified: 0,
-                                              running: false, permanentlyFailedBlobs: 0, sources: [], bytesStored: nil,
+                                              running: false, uploadsPaused: false,
+                                              permanentlyFailedBlobs: 0, sources: [], bytesStored: nil,
                                               staleAfterSeconds: RestoreRow.staleAfter(intervalSeconds: intervalSeconds)))
             }
             let s = try session.journal.summary()
@@ -1273,6 +1326,7 @@ public actor DaemonService {
             if cachedUsageIfFresh(session.prefix) == nil { refreshUsageInBackground(session) }
             return AnyEncodable(StatusDTO(signedIn: true, filesTotal: s.total, filesArchived: s.archived,
                                           blobsVerified: s.blobsVerified, running: running,
+                                          uploadsPaused: uploadsPaused,
                                           permanentlyFailedBlobs: permanentlyFailedBlobs.count,
                                           sources: try sourceDTOs(session),
                                           // **Never a network call on this path.** `bytesStored` is the one
@@ -1467,6 +1521,9 @@ public actor DaemonService {
             return AnyEncodable(try restoreRowDTOs(session))
         case "deposit":
             _ = try requireSession("deposit")
+            // Paused ⇒ refuse with a clear cause rather than fire-and-forget into a run that would park
+            // silently behind the gate — a deposit that just hangs is the invisible-work bug (PAUSE.md).
+            try refuseIfUploadsPaused("deposit")
             // Ad-hoc drop-to-upload: archive these paths once, under the browser folder `dest` ("" = root).
             // `src` is newline-joined absolute paths (one deposit covers a whole multi-file/folder drop).
             guard let raw = p["src"], !raw.isEmpty else { throw ColdStorageError.invalidRequest("deposit requires params.src (newline-joined absolute paths)") }
@@ -1503,6 +1560,7 @@ public actor DaemonService {
             return AnyEncodable(try retryFiles(scope, sourcePath: p["sourcePath"]))
         case "depositPhotos":
             _ = try requireSession("depositPhotos")
+            try refuseIfUploadsPaused("depositPhotos")
             // Explicit photo deposit (the photo analogue of `deposit`): archive these PICKED Photos assets
             // once, under browser folder `dest` ("" = root). `assetIds` is newline-joined Photos
             // localIdentifiers. Only the picked assets are read — never the whole library (product decision
@@ -1619,7 +1677,7 @@ public actor DaemonService {
                 active = current
             } else {
                 active = try sessions.make(.user(sub: sub, identityId: identityId))
-                beginSession(active)
+                await beginSession(active)
             }
             // Fresh credentials just landed — push in-flight transfers NOW rather than waiting out the
             // run loop's beat. This is the recovery half of the post-sleep story: the wake-up pass fails
@@ -1638,7 +1696,7 @@ public actor DaemonService {
             // its own. Now there is no such journal to leave behind.
             guard let auth = cognitoAuth else { throw ColdStorageError.invalidRequest("deauthenticate: this daemon has no Cognito identity pool configured") }
             await auth.deauthenticate()
-            endSession()
+            await endSession()
             return AnyEncodable(AckDTO(ok: true))
         case "setQuota":
             // The app pushes the signed-in account's storage quota here (from its `/entitlement` fetch),
@@ -1732,6 +1790,28 @@ public actor DaemonService {
             try session.journal.setSourcePaused(id, false)
             bus.publish(DaemonEvent("sourcesChanged", ["resumed": id]))
             trigger()   // sync the just-resumed folder soon, don't wait for the next interval
+            return AnyEncodable(AckDTO(ok: true))
+        case "pauseUploads":
+            // Daemon-level pause (PAUSE.md) — distinct from `pauseSource` ("stop watching this folder"):
+            // this means "stop spending bandwidth". A run in flight drains its in-flight parts and parks in
+            // place, journal/S3 state intact; nothing is cancelled and nothing re-sent on resume. Persisted
+            // in the user's journal, so it survives restart. Journal write FIRST: if it fails, the gate is
+            // untouched and the command errors honestly instead of pausing only until the next restart.
+            let session = try requireSession("pauseUploads")
+            try session.journal.setUploadsPaused(true)
+            uploadsPaused = true
+            await pauseGate.pause()
+            bus.publish(DaemonEvent("uploadsPausedChanged", ["paused": "true"]))
+            return AnyEncodable(AckDTO(ok: true))
+        case "resumeUploads":
+            let session = try requireSession("resumeUploads")
+            try session.journal.setUploadsPaused(false)
+            uploadsPaused = false
+            // Releasing the gate resumes a parked run exactly where it held; the trigger covers the other
+            // case — nothing parked, work owed — without waiting out the interval.
+            await pauseGate.resume()
+            bus.publish(DaemonEvent("uploadsPausedChanged", ["paused": "false"]))
+            trigger()
             return AnyEncodable(AckDTO(ok: true))
         default:
             throw ColdStorageError.invalidRequest("unknown method: \(method)")

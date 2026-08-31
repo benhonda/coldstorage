@@ -210,6 +210,9 @@ export interface Status {
   filesArchived: number;
   blobsVerified: number;
   running: boolean;
+  /** Whether the user has paused uploads (`pauseUploads`) — on the snapshot so a fresh connect renders
+   * "Paused" without waiting for an `uploadsPausedChanged` event. Always false when signed out. */
+  uploadsPaused: boolean;
   permanentlyFailedBlobs: number;
   sources: Source[];
   /** Total bytes stored in S3 under this identity's own prefix — a live listing, so it is the figure the
@@ -540,9 +543,17 @@ export interface Commands {
    * soon as this one ends — the banner comes back with its own Stop. */
   cancelRun: { params: Record<string, never>; result: Ack };
   /** Per-source pause/resume — stop/resume auto-syncing one watched folder (it stays registered).
-   * Persisted in the journal; both emit `sourcesChanged` so the UI refetches. (There is no global pause.) */
+   * Persisted in the journal; both emit `sourcesChanged` so the UI refetches. */
   pauseSource: { params: { id: string }; result: Ack };
   resumeSource: { params: { id: string }; result: Ack };
+  /** Daemon-level pause/resume for ALL uploads (PAUSE.md) — "stop spending bandwidth", distinct from
+   * `pauseSource`'s "stop watching this folder". A run in flight drains its in-flight parts and parks in
+   * place — nothing cancelled, nothing re-sent on resume, no `.stopped` rows; `resumeUploads` releases it
+   * exactly where it held. Persisted per-user in the journal (survives daemon restart); read the current
+   * state from `Status.uploadsPaused`, change notifications arrive as `uploadsPausedChanged`. While
+   * paused, `deposit`/`depositPhotos` are refused with a clear error; scans and restores are unaffected. */
+  pauseUploads: { params: Record<string, never>; result: Ack };
+  resumeUploads: { params: Record<string, never>; result: Ack };
   /** Exchange a Cognito User Pool ID token for real per-user AWS credentials — every upload/restore after
    * this signs as the returned identity, whose uploads land under `blobs/<identityId>`. Errors on a daemon
    * with no Cognito identity pool configured (today's single-operator dogfood mode). The sign-in UI itself
@@ -651,6 +662,9 @@ export interface DaemonEvents {
    * status in the journal, so the ⚠ survives the next `listFiles` read. */
   blobFailed: { blob: string; kind: "permanent" | "transient" | "overQuota"; message: string; paths: string };
   sourcesChanged: { added?: string; removed?: string; paused?: string; resumed?: string };
+  /** The daemon-level upload pause toggled (`pauseUploads`/`resumeUploads`). `paused` is the NEW state as
+   * a string bool; `Status.uploadsPaused` carries the same truth for cold reads. */
+  uploadsPausedChanged: { paused: "true" | "false" };
   /** The exclude registry changed via add/removeExclude (carries the affected pattern for logging). The
    * controller's response is to re-read `listExcludes`; it also means the *next* scan applies the change. */
   excludesChanged: { added?: string; removed?: string };
