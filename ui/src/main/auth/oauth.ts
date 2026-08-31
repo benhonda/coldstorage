@@ -94,7 +94,10 @@ export const isFirstLinkError = (result: CallbackResult): boolean =>
   result.kind === "error" && /already found an entry for username/i.test(result.description ?? "");
 
 /** The /oauth2/authorize URL to open in the SYSTEM browser (Google blocks embedded webviews).
- * `identityProvider: "Google"` skips the managed-login chooser and goes straight to Google. */
+ * `identityProvider: "Google"` skips the managed-login chooser and goes straight to Google.
+ * `prompt=select_account` is forwarded by Cognito to the IdP (all values but `none` are), forcing
+ * Google's account chooser every time — without it a live Google browser session silently
+ * re-authenticates as whoever's already signed in, with no way to pick a different account. */
 export const buildAuthorizeUrl = (
   cfg: OAuthConfig,
   opts: { state: string; challenge: string; identityProvider?: string },
@@ -108,8 +111,19 @@ export const buildAuthorizeUrl = (
     state: opts.state,
     code_challenge_method: "S256",
     code_challenge: opts.challenge,
+    prompt: "select_account",
     ...(opts.identityProvider ? { identity_provider: opts.identityProvider } : {}),
   }).toString();
+  return url.toString();
+};
+
+/** The /logout URL to open in the SYSTEM browser on sign-out — kills the managed-login session
+ * cookie at `cfg.domain`, which /oauth2/revoke does NOT touch. Without this, "sign out" leaves the
+ * browser session alive and the next sign-in sails through without ever prompting. `logout_uri`
+ * must byte-match a registered logout URL (cognito.tf sets `logout_urls` = the callback URLs). */
+export const buildLogoutUrl = (cfg: OAuthConfig): string => {
+  const url = new URL(`https://${cfg.domain}/logout`);
+  url.search = new URLSearchParams({ client_id: cfg.clientId, logout_uri: cfg.redirectUri }).toString();
   return url.toString();
 };
 
