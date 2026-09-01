@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import AWSCognitoIdentity
+import protocol ClientRuntime.ServiceError
 @testable import ColdStorageCore
 
 /// The usage-refresh toast gate: wake-from-sleep transients (offline, a token the app is about to
@@ -14,12 +15,25 @@ import AWSCognitoIdentity
         let offline = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
         #expect(DaemonService.isSelfHealingUsageError(offline))
         #endif
+        // Clock skew right after wake, before NTP resync — S3 answers 403 RequestTimeTooSkewed and the
+        // clock fixes itself moments later. Shaped like the SDK's UnknownAWSHTTPServiceError (ServiceError
+        // with a typeName) — that type is @_spi-gated, so a stub stands in.
+        #expect(DaemonService.isSelfHealingUsageError(StubServiceError(typeName: "RequestTimeTooSkewed")))
+        #expect(DaemonService.isSelfHealingUsageError(StubServiceError(typeName: "RequestExpired")))
+        #expect(DaemonService.isSelfHealingUsageError(StubServiceError(typeName: "RequestInTheFuture")))
     }
 
     @Test func realFaultsStillSurface() {
         // AccessDenied/config/logic errors won't fix themselves — the toast must still happen.
         #expect(!DaemonService.isSelfHealingUsageError(ColdStorageError.s3("AccessDenied")))
+        #expect(!DaemonService.isSelfHealingUsageError(StubServiceError(typeName: "AccessDenied")))
         struct SomeOtherError: Error {}
         #expect(!DaemonService.isSelfHealingUsageError(SomeOtherError()))
     }
+}
+
+private struct StubServiceError: ServiceError, Error {
+    let typeName: String?
+    var message: String?
+    init(typeName: String) { self.typeName = typeName }
 }

@@ -1,6 +1,7 @@
 import Foundation
 import Crypto   // SymmetricKey — the vault commands (Phase 5b) decode/return the MasterKey
 import AWSCognitoIdentity   // NotAuthorizedException — recognized as self-healing in the usage refresh
+import protocol ClientRuntime.ServiceError   // typeName — recognizes clock-skew errors as self-healing
 
 /// Run `body`, but give up after `seconds` — a network call on a flaky link can otherwise hang a task
 /// indefinitely (the AWS SDK retries under the hood). Whichever finishes first wins; the loser is
@@ -996,6 +997,14 @@ public actor DaemonService {
     static func isSelfHealingUsageError(_ error: Error) -> Bool {
         if error is TimedOutError { return true }
         if error is AWSCognitoIdentity.NotAuthorizedException { return true }
+        // Clock skew after wake-from-sleep: the lid opens, a request signs with a stale timestamp
+        // before macOS has NTP-resynced, S3 answers 403 RequestTimeTooSkewed. The clock corrects
+        // itself within moments and the next refresh succeeds. Same code set the AWS SDK's own
+        // AWSClockSkewProvider treats as definitely-skew.
+        if let typeName = (error as? ServiceError)?.typeName,
+           ["RequestTimeTooSkewed", "RequestExpired", "RequestInTheFuture"].contains(typeName) {
+            return true
+        }
         #if canImport(Darwin)
         if (error as NSError).domain == NSURLErrorDomain { return true }
         #endif
