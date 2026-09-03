@@ -277,7 +277,8 @@ import Crypto
                                         metadata: FileMetadata(modifiedAt: 1_700_000_000, createdAt: 1_600_000_000),
                                         open: { AsyncThrowingStream { $0.finish() } })])
         let line = await f.daemon.respond(to: ControlRequest(id: 1, method: "listFiles", params: [:]))
-        let rows = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(line.result)) as? [[String: Any]])
+        let listed = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(line.result)) as? [String: Any])
+        let rows = try #require(listed["files"] as? [[String: Any]])
         let row = try #require(rows.first)
         #expect(row["modifiedAt"] as? Int == 1_700_000_000)
         #expect(row["createdAt"] as? Int == 1_600_000_000)

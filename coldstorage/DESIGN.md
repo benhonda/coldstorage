@@ -357,14 +357,22 @@ Secrets live in Keychain, never in the UI.
   restoresChanged · restoreProgress · restoreCompleted · usageChanged · uploadsPausedChanged · error`.
 - **Every command is session-scoped** (§2): signed out, the four reads answer empty and everything else
   throws *"not signed in"*. `getStatus` says so explicitly — `signedIn: bool` — and its `bytesStored`
-  (the S3-derived storage-quota usage figure) is non-null whenever signed in, `null` only when not.
+  (the S3-derived storage-quota usage figure) is the LAST LISTED total, however old (stale-while-
+  revalidate: a stale cache kicks a background listing and `usageChanged` announces the new number);
+  `null` only when signed out or nothing has been listed yet.
+- **Tree revision (`DaemonService.treeRevision`):** bumped in the same actor turn as every journal edit
+  that changes `listFiles`; `listFiles` answers `{revision, files}`, tree-editing acks (`movePath` /
+  `createFolder` / `deletePath` / `removeFailedFiles` / `retryFiles`) carry `revision`, `deposit` /
+  `depositPhotos` ack the minted `depositId`, and `runStarted` / `runFinished` carry `depositId` (+
+  `revision` at the finish). The app reconciles its optimistic edits against this, not arrival order
+  (replies are per-request Tasks and don't arrive in execution order) — see `../ui/DESIGN.md`.
 - Semantics worth knowing: `movePath {from,to}` is the single primitive behind move AND rename (a
   journal `relativePath` prefix-sweep — no S3, no thaw, stable `id` preserved); `deletePath`
   tombstones (`files.deletedAt`, rows kept for a deferred repack/GC — deletion is its own column, NOT a
   `status`, so it doesn't clobber the row's kind/lifecycle and a re-deposit restores exactly what was
   there; only the ids actually re-deposited are revived); `filesChanged` carries
-  `{moved,to}` / `{created}` / `{deleted}` — plus `{signedIn}` / `{signedOut}`, the cue that the whole
-  tree just changed owner; `authenticate idToken=…` / `deauthenticate` open and close the session
+  `{moved,to}` / `{created}` / `{deleted}` (+ `{revision}`, always) — plus `{signedIn}` / `{signedOut}`,
+  the cue that the whole tree just changed owner; `authenticate idToken=…` / `deauthenticate` open and close the session
   (per-user prefix isolation, `../PROD.md`); per-source pause lives on the source rows (`pauseSource`/`resumeSource` emit
   `sourcesChanged`); the daemon-level pause is `pauseUploads`/`resumeUploads` (`../PAUSE.md`) — a persistent
   `PauseGate` the engine parks on between blobs/parts, so a run drains its in-flight parts and holds in place,

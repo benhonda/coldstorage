@@ -80,6 +80,31 @@ public actor DaemonService {
     // identity) never serves a stale total for the wrong user.
     private var cachedUsage: (prefix: VaultPrefix, bytes: Int, at: Date)?
     private var usageRefreshing = false
+    /// **The tree's revision** — bumped inside the same actor turn as every journal edit that changes what
+    /// `listFiles` returns, and stamped onto every `listFiles` answer and every tree-editing command's ack.
+    /// It is what lets the app's optimistic edits reconcile PRECISELY: an edit is held on top of the tree
+    /// until a read arrives whose revision is at or past the ack's, and a read older than one already shown
+    /// is discarded. Without it the app could only guess from arrival order — and replies do not arrive in
+    /// execution order (each request is its own Task, and a 140k-row `listFiles` encodes long after a
+    /// one-line `movePath` ack has gone out), so a stale read landing after an edit put moved folders back
+    /// where they came from for a beat, and wiped in-flight upload rows outright (2026-09-03).
+    /// Process-local and monotonic: the app resets what it holds on every (re)connect, so a restart cannot
+    /// leave it waiting for a number this process will never reach.
+    private var treeRevision = 0
+    /// Record a tree edit: bump the revision and tell live watchers to re-read (`filesChanged`, with the
+    /// revision on it). Returns the revision, for the ack of whatever command made the edit.
+    @discardableResult
+    private func treeChanged(_ data: [String: String]) -> Int {
+        var d = data
+        d["revision"] = "\(nextTreeRevision())"
+        bus.publish(DaemonEvent("filesChanged", d))
+        return treeRevision
+    }
+    /// A tree edit that announces itself some other way (`runFinished`): bump only, and return the new revision.
+    private func nextTreeRevision() -> Int {
+        treeRevision += 1
+        return treeRevision
+    }
     private let usageCacheTTL: TimeInterval = 60
     // The storage quota this account is allowed, pushed down by the app from its entitlement fetch
     // (`setQuota`). `nil` ⇒ DON'T enforce — dogfood mode, or an entitlement the app hasn't resolved — which
@@ -134,7 +159,7 @@ public actor DaemonService {
         // `try?` fails open (unpaused): a settings read hiccup must not silently freeze someone's backup.
         uploadsPaused = (try? new.journal.uploadsPaused()) ?? false
         if uploadsPaused { await pauseGate.pause() } else { await pauseGate.resume() }
-        bus.publish(DaemonEvent("filesChanged", ["signedIn": new.identity.directoryName]))
+        treeChanged(["signedIn": new.identity.directoryName])
         // Anything this user's last session still owed (`Deposit`, still pending) resumes on the next pass — make
         // that now, not up to an interval away: a restart mid-deposit should pick up within seconds.
         trigger()
@@ -159,7 +184,7 @@ public actor DaemonService {
         // The gate resets with the session; the next sign-in re-seeds it from that user's own journal.
         uploadsPaused = false
         await pauseGate.resume()
-        bus.publish(DaemonEvent("filesChanged", ["signedOut": "true"]))
+        treeChanged(["signedOut": "true"])
     }
 
     /// The folders FSEvents should watch (active, non-paused) — same predicate the run loop scans by. Empty
@@ -215,8 +240,8 @@ public actor DaemonService {
     /// once" at the drop-time suggestion prompt. They're unioned with the registry for the run and then
     /// forgotten; nothing persists unless the app separately calls `addExclude`.
     func deposit(paths: [String], into dir: String, conflicts: [String: ConflictPolicy] = [:],
-                 excludeExtra: [String] = []) async {
-        await depositExplicit(kind: .files, src: paths, into: dir, conflicts: conflicts, excludeExtra: excludeExtra)
+                 excludeExtra: [String] = [], id: String = UUID().uuidString) async {
+        await depositExplicit(id: id, kind: .files, src: paths, into: dir, conflicts: conflicts, excludeExtra: excludeExtra)
     }
 
     /// Archive an explicit set of picked Photos-library assets once — the photo analogue of `deposit`
@@ -226,12 +251,13 @@ public actor DaemonService {
     /// archive ONLY the picked assets, never the whole library. Non-throwing so the command can
     /// fire-and-forget; a missing resolver (off macOS) or setup error surfaces as an `error` event, while
     /// per-blob upload failures surface as `blobFailed` (same as any run).
-    func depositPhotos(assetIds: [String], into dir: String, conflicts: [String: ConflictPolicy] = [:]) async {
+    func depositPhotos(assetIds: [String], into dir: String, conflicts: [String: ConflictPolicy] = [:],
+                       id: String = UUID().uuidString) async {
         guard photoResolver != nil else {
             bus.publish(DaemonEvent("error", ["message": "depositPhotos: Photos ingest is unavailable on this platform"]))
             return
         }
-        await depositExplicit(kind: .photos, src: assetIds, into: dir, conflicts: conflicts, excludeExtra: [])
+        await depositExplicit(id: id, kind: .photos, src: assetIds, into: dir, conflicts: conflicts, excludeExtra: [])
     }
 
     /// The one explicit-deposit path (drop OR photo pick). **Recorded before it runs** (`Deposit`),
@@ -239,11 +265,13 @@ public actor DaemonService {
     /// next pass (`replayPendingDeposits`). WAITS for any run in flight, then goes — a deposit is the user's
     /// explicit action and must not be dropped, but it also must not race a concurrent pass over the same
     /// journal. Any setup error surfaces as an `error` event; the row stays, so the next pass retries.
-    private func depositExplicit(kind: Deposit.Kind, src: [String], into dir: String,
+    /// `id` is minted by the CALLER (the wire handler acks it before this runs) so the app can match its
+    /// optimistic rows to this batch's `runStarted`/`runFinished`.
+    private func depositExplicit(id: String, kind: Deposit.Kind, src: [String], into dir: String,
                                  conflicts: [String: ConflictPolicy], excludeExtra: [String]) async {
         do {
             let session = try requireSession(Self.commandName(for: kind))
-            let pending = Deposit(id: UUID().uuidString, kind: kind, src: src, dest: dir,
+            let pending = Deposit(id: id, kind: kind, src: src, dest: dir,
                                   conflicts: conflicts.mapValues(\.rawValue), excludeExtra: excludeExtra,
                                   createdAt: Int(Date().timeIntervalSince1970))
             try session.journal.addDeposit(pending)
@@ -334,9 +362,9 @@ public actor DaemonService {
         let queuedSet = Set(queued)
         let missing = rows.map(\.id).filter { !queuedSet.contains($0) }
         try session.journal.markFilesFailed(missing, kind: .missingSource)
-        if !missing.isEmpty { bus.publish(DaemonEvent("filesChanged", ["missingSource": "\(missing.count)"])) }
+        if !missing.isEmpty { treeChanged(["missingSource": "\(missing.count)"]) }
         if !queued.isEmpty {
-            bus.publish(DaemonEvent("filesChanged", ["retried": "\(queued.count)"]))
+            treeChanged(["retried": "\(queued.count)"])
             // Reopen each SETTLED batch the requeued rows belong to (in the order they were dropped) and run
             // them back to back. Everything else rides the next pass, brought forward: a watched folder's
             // rows (its scan re-plans them), a batch still `pending` (already owed — reopening it would
@@ -363,7 +391,9 @@ public actor DaemonService {
                 }
             }
         }
-        return RetryFilesResultDTO(queued: queued.count, missing: missing.count)
+        // The revision after BOTH edits above (requeue + missing-source verdicts), so the app's optimistic
+        // "uploading" flip on these rows holds until a read that reflects them.
+        return RetryFilesResultDTO(queued: queued.count, missing: missing.count, revision: treeRevision)
     }
 
     /// Run one recorded deposit and settle its row. **Must be called under `withRunLock`.** The row is
@@ -449,7 +479,7 @@ public actor DaemonService {
             let adopted = try session.journal.adoptOrphanedFailures(notUnder: registered, now: now)
             if n > 0 || adopted > 0 {
                 log("DaemonService: \(n) interrupted upload(s) marked needs-attention, \(adopted) orphaned failure(s) given a batch")
-                bus.publish(DaemonEvent("filesChanged", ["interruptedUploads": "\(n)"]))
+                treeChanged(["interruptedUploads": "\(n)"])
                 bus.publish(DaemonEvent("depositsChanged"))
             }
         } catch { log("DaemonService: orphan reconcile failed — \(error)") }
@@ -492,7 +522,10 @@ public actor DaemonService {
     @discardableResult
     private func performRun(session: UserSession, source: IngestSource,
                             explicitDeposit: Bool = false, depositId: String? = nil) async throws -> [BlobFailure] {
-        bus.publish(DaemonEvent("runStarted"))
+        // `depositId` rides on runStarted/runFinished ("" for a scan): it is how the app tells a deposit's run
+        // from a scan pass — a deposit's banner shows from the moment its run begins (the hash walk inside
+        // `engine.run` is real work with nothing to count yet), where a scan's would only flash "0 of N".
+        bus.publish(DaemonEvent("runStarted", ["depositId": depositId ?? ""]))
         let bus = self.bus
         let onFile: @Sendable (String, String) async -> Void = { id, blob in
             bus.publish(DaemonEvent("fileArchived", ["file": id, "blob": blob]))
@@ -552,8 +585,10 @@ public actor DaemonService {
             failures = try await task.value
         } catch {
             let s = try? session.journal.summary()
+            // The run may have planned rows before it threw — a read must reflect them.
             bus.publish(DaemonEvent("runFinished", ["filesArchived": "\(s?.archived ?? 0)",
-                                                    "filesTotal": "\(s?.total ?? 0)", "blobsFailed": "0"]))
+                                                    "filesTotal": "\(s?.total ?? 0)", "blobsFailed": "0",
+                                                    "depositId": depositId ?? "", "revision": "\(nextTreeRevision())"]))
             throw error
         }
         for f in failures {
@@ -595,17 +630,22 @@ public actor DaemonService {
             }
         }
         try writeStatus(session)
-        // A run just changed what's in S3, so the cached usage total is now stale — drop it. The next read
-        // (a getStatus poll, or the NEXT run's quota ceiling) then does a fresh listing rather than enforcing
-        // against, or showing, a pre-deposit number for up to the cache TTL.
-        cachedUsage = nil
+        // A run just changed what's in S3, so the cached usage total is now stale — EXPIRE it, don't drop
+        // it. The next read (a getStatus poll, or the NEXT run's quota ceiling) then does a fresh listing
+        // rather than enforcing against a pre-deposit number; meanwhile `getStatus` keeps serving the last
+        // figure (see `cachedUsageBytes`) instead of blanking the storage meter after every run.
+        expireCachedUsage()
         let s = try session.journal.summary()
         // `blobsFailed` counts FAULTS; a Stop is reported separately so the UI can say "stopped" rather than
         // "N couldn't upload" about work the user ended on purpose.
         let stopped = failures.filter(\.kind.isStopped)
+        // The run rewrote rows (planned → archived/failed), so it is a tree edit like any other: bump the
+        // revision and send it along, so the app's optimistic rows for THIS deposit hold until a read that
+        // has the run's outcome in it — and not a moment longer.
         bus.publish(DaemonEvent("runFinished", ["filesArchived": "\(s.archived)", "filesTotal": "\(s.total)",
                                                 "blobsFailed": "\(failures.count - stopped.count)",
-                                                "filesStopped": "\(stopped.reduce(0) { $0 + $1.files.count })"]))
+                                                "filesStopped": "\(stopped.reduce(0) { $0 + $1.files.count })",
+                                                "depositId": depositId ?? "", "revision": "\(nextTreeRevision())"]))
         return failures
     }
 
@@ -896,15 +936,23 @@ public actor DaemonService {
         }
     }
     private struct AckDTO: Encodable { let ok: Bool }
+    /// The ack of a command that EDITED THE TREE — carries the revision the edit landed at, so the app knows
+    /// which `listFiles` read is the first that reflects it (see `treeRevision`).
+    private struct TreeAckDTO: Encodable { let ok: Bool; let revision: Int }
+    /// `listFiles`' answer: the rows, and the revision they were read at (taken in the same actor turn).
+    private struct FilesDTO: Encodable { let revision: Int; let files: [FileDTO] }
+    /// `deposit`/`depositPhotos`' ack. The batch id is minted BEFORE the fire-and-forget run so the app can
+    /// tie its optimistic rows to the `runStarted`/`runFinished` that will carry the same id.
+    private struct DepositAckDTO: Encodable { let ok: Bool; let depositId: String }
     /// `retryFiles`' answer: how many rows are back in the queue, and how many we could not retry (no source
     /// on disk — those rows are now `failed` as `.missingSource`). Counts, not ids: the rows themselves are
     /// the record, and a mass retry must not echo 56k ids back over the wire.
-    struct RetryFilesResultDTO: Encodable { let queued: Int; let missing: Int }
+    struct RetryFilesResultDTO: Encodable { let queued: Int; let missing: Int; let revision: Int }
 
     /// The answer to "will this come back?", so the client can say so instead of letting the user find out.
     /// `isWatched` = the file is still on disk inside a watched folder, so the folder would keep re-finding
     /// it; `ignored` = we also added the exclude, so it won't.
-    private struct DeleteResultDTO: Encodable { let ok: Bool; let isWatched: Bool; let ignored: Bool }
+    private struct DeleteResultDTO: Encodable { let ok: Bool; let isWatched: Bool; let ignored: Bool; let revision: Int }
 
     /// Answer to `pathIsWatched` — "would a scan find this again tomorrow?"
     private struct WatchedDTO: Encodable { let isWatched: Bool }
@@ -958,6 +1006,22 @@ public actor DaemonService {
     private func cachedUsageIfFresh(_ prefix: VaultPrefix) -> Int? {
         guard let c = cachedUsage, c.prefix == prefix, Date().timeIntervalSince(c.at) < usageCacheTTL else { return nil }
         return c.bytes
+    }
+    /// The last usage total listed for `prefix`, HOWEVER OLD — what `getStatus` reports. Stale-while-
+    /// revalidate: a figure a minute past its TTL is still the truth to within whatever has uploaded
+    /// since, and the app adds its own in-flight bytes on top. Reporting `nil` instead (which this did until
+    /// 2026-09-03) turned the storage meter into a loading skeleton on every status re-read past the TTL —
+    /// i.e. every folder create, move or delete — and the refresh it kicked off ran while the user typed.
+    /// `nil` only when NOTHING has been listed for this prefix yet, which is the one honest "pending".
+    private func cachedUsageBytes(_ prefix: VaultPrefix) -> Int? {
+        guard let c = cachedUsage, c.prefix == prefix else { return nil }
+        return c.bytes
+    }
+    /// Mark the cached total stale without forgetting it: the next `getStatus` still serves the figure,
+    /// but kicks a background listing; the next quota read (`currentUsageBytes`) lists fresh.
+    private func expireCachedUsage() {
+        guard let c = cachedUsage else { return }
+        cachedUsage = (prefix: c.prefix, bytes: c.bytes, at: .distantPast)
     }
 
     /// Kick a usage refresh that updates `cachedUsage` when it lands — WITHOUT blocking whoever asked. At
@@ -1346,24 +1410,27 @@ public actor DaemonService {
                                           // because every command shares this actor, a status stuck on S3
                                           // dragged listFiles/authenticate/setQuota down with it. The daemon
                                           // sampled IDLE in a URLSession read while the app timed out on
-                                          // everything (2026-08-25). So: serve the CACHED usage, or `nil`
-                                          // immediately if there is none, and refresh it in the BACKGROUND
-                                          // (off the request, off this actor's critical path). The UI already
+                                          // everything (2026-08-25). So: serve the CACHED usage — the last
+                                          // figure listed, however old (`cachedUsageBytes`) — or `nil` only
+                                          // if none has ever been listed, and refresh it in the BACKGROUND
+                                          // (off the request, off this actor's critical path). The UI
                                           // treats a null `bytesStored` as "pending", not "empty".
-                                          bytesStored: cachedUsageIfFresh(session.prefix),
+                                          bytesStored: cachedUsageBytes(session.prefix),
                                           staleAfterSeconds: RestoreRow.staleAfter(intervalSeconds: intervalSeconds)))
         case "listSources":
             guard let session else { return AnyEncodable([SourceDTO]()) }
             return AnyEncodable(try sourceDTOs(session))
         case "listFiles":
             // The browsable tree, straight from THIS USER'S journal — paths/sizes/status, no S3, no thaw.
-            guard let session else { return AnyEncodable([FileDTO]()) }
-            return AnyEncodable(try session.journal.listFiles().map {
+            // Rows + the revision they were read at, in ONE actor turn — so the revision is exactly the
+            // tree's state these rows describe (see `treeRevision`). Signed out ⇒ empty, revision still real.
+            guard let session else { return AnyEncodable(FilesDTO(revision: treeRevision, files: [])) }
+            return AnyEncodable(FilesDTO(revision: treeRevision, files: try session.journal.listFiles().map {
                 FileDTO(id: $0.id, relativePath: $0.relativePath, size: $0.size, status: $0.status.rawValue, blobId: $0.blobId,
                         lastAttemptAt: $0.lastAttemptAt, error: $0.error, sourcePath: $0.sourcePath,
                         depositId: $0.depositId, failureKind: $0.failureKind?.rawValue,
                         modifiedAt: $0.metadata?.modifiedAt, createdAt: $0.metadata?.createdAt)
-            })
+            }))
         case "listDeposits":
             // Every batch the user has dropped or picked, newest first — the Uploads page's list. Signed
             // out ⇒ empty, like every other read here.
@@ -1377,8 +1444,8 @@ public actor DaemonService {
             let session = try requireSession("removeFailedFiles")
             guard let id = p["depositId"], !id.isEmpty else { throw ColdStorageError.invalidRequest("removeFailedFiles requires params.depositId") }
             let n = try session.journal.removeFailedFiles(inDeposit: id)
-            bus.publish(DaemonEvent("filesChanged", ["deleted": "\(n) failed file(s) of deposit \(id)"]))
-            return AnyEncodable(AckDTO(ok: true))
+            let revision = treeChanged(["deleted": "\(n) failed file(s) of deposit \(id)"])
+            return AnyEncodable(TreeAckDTO(ok: true, revision: revision))
         case "forgetDeposit":
             // Drop a settled, fully-stored batch from the history (its files stay in the tree). The journal
             // refuses while the batch is owed or still has a failed file — see `Journal.forgetDeposit`.
@@ -1548,8 +1615,11 @@ public actor DaemonService {
             let extra = (p["excludeExtra"] ?? "").split(separator: "\n").map(String.init).filter { !$0.isEmpty }
             // Fire-and-forget: archiving can be slow, so don't block the reply. Progress + outcome flow as
             // runStarted/fileArchived/blobFailed/runFinished events (exactly like a scheduled run).
-            Task { await self.deposit(paths: paths, into: dest, conflicts: conflicts, excludeExtra: extra) }
-            return AnyEncodable(AckDTO(ok: true))
+            // The batch id is minted HERE and acked, so the app can tie its optimistic rows to the run
+            // events (`runStarted`/`runFinished` carry it) that will settle them.
+            let depositId = UUID().uuidString
+            Task { await self.deposit(paths: paths, into: dest, conflicts: conflicts, excludeExtra: extra, id: depositId) }
+            return AnyEncodable(DepositAckDTO(ok: true, depositId: depositId))
         case "retryFiles":
             // The user's Try again / Locate… on failed rows. ONE of: `ids` (newline-joined journal file
             // ids), `all: "true"` (every failed row), `depositId` (a batch), `sourceMount` (a watched
@@ -1578,8 +1648,9 @@ public actor DaemonService {
             let assetIds = raw.split(separator: "\n").map(String.init)
             let dest = p["dest"] ?? ""
             let conflicts = parseConflicts(p["conflicts"])
-            Task { await self.depositPhotos(assetIds: assetIds, into: dest, conflicts: conflicts) }
-            return AnyEncodable(AckDTO(ok: true))
+            let depositId = UUID().uuidString
+            Task { await self.depositPhotos(assetIds: assetIds, into: dest, conflicts: conflicts, id: depositId) }
+            return AnyEncodable(DepositAckDTO(ok: true, depositId: depositId))
         case "previewDeposit":
             let session = try requireSession("previewDeposit")
             // Dry-run a deposit's PLACEMENT (no upload): resolve the target paths the same way the real
@@ -1621,8 +1692,8 @@ public actor DaemonService {
             guard let from = p["from"] else { throw ColdStorageError.invalidRequest("movePath requires params.from (a vault-relative path)") }
             guard let to = p["to"] else { throw ColdStorageError.invalidRequest("movePath requires params.to (the new vault-relative path)") }
             try session.journal.movePath(from: from, to: to)
-            bus.publish(DaemonEvent("filesChanged", ["moved": from, "to": to]))
-            return AnyEncodable(AckDTO(ok: true))
+            let revision = treeChanged(["moved": from, "to": to])
+            return AnyEncodable(TreeAckDTO(ok: true, revision: revision))
         case "createFolder":
             let session = try requireSession("createFolder")
             // Anchor an empty folder so it survives a reload (the tree is derived from file paths, so an
@@ -1630,8 +1701,8 @@ public actor DaemonService {
             // Idempotent on the path. `filesChanged` tells a live watcher to re-read the tree.
             guard let path = p["path"], !path.isEmpty else { throw ColdStorageError.invalidRequest("createFolder requires params.path (a vault-relative folder path)") }
             try session.journal.createFolder(path: path)
-            bus.publish(DaemonEvent("filesChanged", ["created": path]))
-            return AnyEncodable(AckDTO(ok: true))
+            let revision = treeChanged(["created": path])
+            return AnyEncodable(TreeAckDTO(ok: true, revision: revision))
         case "pathIsWatched":
             // Asked BEFORE the delete, so the confirm dialog can state the consequence up front and offer
             // the fix in the same breath — rather than deleting first and explaining afterwards, which is
@@ -1663,8 +1734,8 @@ public actor DaemonService {
                 // refresh piggybacking on `filesChanged`.
                 bus.publish(DaemonEvent("excludesChanged", ["added": path]))
             }
-            bus.publish(DaemonEvent("filesChanged", ["deleted": path]))
-            return AnyEncodable(DeleteResultDTO(ok: true, isWatched: watched, ignored: watched && p["alsoIgnore"] == "true"))
+            let revision = treeChanged(["deleted": path])
+            return AnyEncodable(DeleteResultDTO(ok: true, isWatched: watched, ignored: watched && p["alsoIgnore"] == "true", revision: revision))
         case "authenticate":
             // **Sign-in: where a session is born.** Exchange a Cognito User Pool ID token for real per-user
             // AWS credentials + the identity id our uploads are scoped under, then OPEN THAT USER'S STATE —

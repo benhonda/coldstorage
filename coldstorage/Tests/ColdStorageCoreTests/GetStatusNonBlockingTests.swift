@@ -86,5 +86,13 @@ import Crypto
         let second = await daemon.respond(to: ControlRequest(id: 2, method: "getStatus", params: [:]))
         let secondStatus = try JSONSerialization.jsonObject(with: JSONEncoder().encode(second.result)) as? [String: Any]
         #expect(secondStatus?["bytesStored"] as? Int == 0)
+
+        // Stale-while-revalidate: a run just EXPIRED the cache (what's in S3 changed), and the figure must
+        // still be served — never `nil` — while the background listing catches up. Reporting `nil` here
+        // blanked the storage meter after every run and every status re-read past the TTL (2026-09-03).
+        try await daemon.runOnce()
+        let third = await daemon.respond(to: ControlRequest(id: 3, method: "getStatus", params: [:]))
+        let thirdStatus = try JSONSerialization.jsonObject(with: JSONEncoder().encode(third.result)) as? [String: Any]
+        #expect(thirdStatus?["bytesStored"] as? Int == 0)
     }
 }

@@ -53,21 +53,21 @@ import Foundation
                                          content: .sha256("hash-a1"), isFavorite: false,
                                          open: { AsyncThrowingStream { $0.finish() } })])
 
-        let aFiles = try await reply(f.daemon, "listFiles").result as? [[String: Any]]
+        let aFiles = (try await reply(f.daemon, "listFiles").result as? [String: Any])?["files"] as? [[String: Any]]
         #expect(aFiles?.count == 1)
         #expect(aFiles?.first?["relativePath"] as? String == "Taxes/2025-return.pdf")
 
         // ── A signs out. This is the moment that used to leave everything behind.
         await f.daemon.endSession()
 
-        let signedOut = try await reply(f.daemon, "listFiles").result as? [Any]
+        let signedOut = (try await reply(f.daemon, "listFiles").result as? [String: Any])?["files"] as? [Any]
         #expect(signedOut?.isEmpty == true)   // signed out ⇒ nothing to read, not "A's stuff"
 
         // ── Account B signs in on the SAME machine.
         let b = try f.sessions.make(.user(sub: "sub-bob", identityId: "ca-central-1:bob"))
         await f.daemon.beginSession(b)
 
-        let bFiles = try await reply(f.daemon, "listFiles").result as? [Any]
+        let bFiles = (try await reply(f.daemon, "listFiles").result as? [String: Any])?["files"] as? [Any]
         #expect(bFiles?.isEmpty == true)      // ← the leak. B must see an EMPTY vault.
 
         // A's row is not gone — it is still safely in A's own journal, where it belongs.
