@@ -27,7 +27,8 @@ import type { Exec } from "./views/types.ts";
 import { useAppState } from "./useStore.ts";
 import { useResizable } from "./ui/useResizable.ts";
 import { baseName, fileFromJournal, isFolderMarker, isUploadOutstanding, parentOf, type ArchivedFile } from "./views/files/model.ts";
-import { isOptimisticId, useFiles } from "./views/files/useFiles.ts";
+import { isOptimisticId, settleWith, useFiles } from "./views/files/useFiles.ts";
+import { usePendingDrops } from "./views/uploads/pendingDrops.ts";
 import { UploadsView } from "./views/UploadsView.tsx";
 import { buildUploads, type UploadBatch, type WatchedFolder } from "./views/uploads/model.ts";
 import { eventAction } from "./state/reducer.ts";
@@ -96,7 +97,10 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
   // dropped connection): with no idea how often the daemon promised to look, silence proves nothing, so
   // nothing gets called stale on the strength of not having asked.
   const staleAfter = state.status?.staleAfterSeconds ?? Infinity;
-  const filesApi = useFiles(daemonFiles, persistedFolders, state.restores, staleAfter);
+  const filesApi = useFiles(daemonFiles, persistedFolders, state.restores, staleAfter, state.filesRevision, state.depositRuns);
+  // Drops taken but not yet running — the "Reading…" banner's list. Held HERE so a trip to another page
+  // mid-drop doesn't lose it (the file browser unmounts on route change).
+  const drops = usePendingDrops(state.run, state.depositRuns, state.lastError);
 
   // THE deposit gate — is there room for what's being deposited? (see `state/entitlement.ts`). "No
   // subscription" stopped being a reason to refuse a deposit when the free tier landed; only a FULL vault
@@ -313,27 +317,28 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
     }
     const optimistic = withSource.filter((f) => isOptimisticId(f.id));
     const journal = withSource.filter((f) => !isOptimisticId(f.id));
-    // Flip optimistically; if the command itself is refused, put the rows back AS THEY WERE (their real
-    // failure kind included) — the retry didn't happen, which is not the same as a fresh failure.
-    filesApi.setDepositStatus(withSource.map((f) => f.id), "uploading");
+    // Flip optimistically, one edit per command; a refused command rolls ITS edit back, so the rows read
+    // exactly as they did (their real failure kind included) — the retry didn't happen, which is not the
+    // same as a fresh failure.
     for (const f of optimistic) {
       const src = f.sourcePath;
       if (src === null) continue; // filtered above; narrows the type without a cast
-      exec(() =>
-        api.request("deposit", { src, dest: parentOf(f.relativePath) }).catch((e: unknown) => {
-          filesApi.restoreRows([f]);
+      const flip = filesApi.setDepositStatus([f.id], "uploading");
+      exec(async () => {
+        const ack = await api.request("deposit", { src, dest: parentOf(f.relativePath) }).catch((e: unknown) => {
+          flip.rollback();
           throw e;
-        }),
-      );
+        });
+        // No revision to wait for — the row exists nowhere but here; the flip folds into it, and the row
+        // itself now rides the new batch to its run's end.
+        flip.settle();
+        filesApi.depositAccepted([f.id], ack.depositId);
+      });
     }
     if (journal.length > 0) {
+      const flip = filesApi.setDepositStatus(journal.map((f) => f.id), "uploading");
       exec(async () => {
-        const r = await api
-          .request("retryFiles", retryParams(scope, journal))
-          .catch((e: unknown) => {
-            filesApi.restoreRows(journal);
-            throw e;
-          });
+        const r = await settleWith(flip, api.request("retryFiles", retryParams(scope, journal)));
         reportMissing(r.missing); // the rows themselves re-read with the daemon's verdict (`filesChanged`)
       });
     }
@@ -345,18 +350,17 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
     exec(async () => {
       const picked = await api.chooseFile(baseName(file.relativePath));
       if (!picked) return;
-      filesApi.setDepositStatus([file.id], "uploading");
+      const flip = filesApi.setDepositStatus([file.id], "uploading");
       if (isOptimisticId(file.id)) {
-        await api.request("deposit", { src: picked, dest: parentOf(file.relativePath) }).catch((e: unknown) => {
-          filesApi.restoreRows([file]);
+        const ack = await api.request("deposit", { src: picked, dest: parentOf(file.relativePath) }).catch((e: unknown) => {
+          flip.rollback();
           throw e;
         });
+        flip.settle();
+        filesApi.depositAccepted([file.id], ack.depositId);
         return;
       }
-      const r = await api.request("retryFiles", { ids: file.id, sourcePath: picked }).catch((e: unknown) => {
-        filesApi.restoreRows([file]);
-        throw e;
-      });
+      const r = await settleWith(flip, api.request("retryFiles", { ids: file.id, sourcePath: picked }));
       reportMissing(r.missing); // only a folder pick or a race with the disk can land here
     });
   };
@@ -365,18 +369,21 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
    * (instant), then the journal (one command — never a per-file loop over 56k rows). */
   const removeFailedBatch = (b: UploadBatch): void => {
     const failed = b.failures.flatMap((g) => g.files);
-    filesApi.remove(failed.map((f) => ({ kind: "file", id: f.id, path: f.relativePath })));
-    exec(() => api.request("removeFailedFiles", { depositId: b.id }));
+    const edit = filesApi.remove(failed.map((f) => ({ kind: "file", id: f.id, path: f.relativePath })));
+    exec(() => settleWith(edit, api.request("removeFailedFiles", { depositId: b.id })));
   };
 
   /** "Remove" on one failed row: take the file out of the backup. No bytes are at stake (nothing landed),
    * so no confirm — but a file inside a watched folder WILL be found again by the next scan, and the
    * daemon tells us so; we pass that on rather than let it silently reappear. */
   const removeUpload = (file: ArchivedFile): void => {
-    filesApi.remove([{ kind: "file", id: file.id, path: file.relativePath }]);
-    if (isOptimisticId(file.id)) return; // never reached the daemon — nothing to delete there
+    const edit = filesApi.remove([{ kind: "file", id: file.id, path: file.relativePath }]);
+    if (isOptimisticId(file.id)) {
+      edit.settle(); // never reached the daemon — nothing to delete there; the row just goes
+      return;
+    }
     exec(async () => {
-      const r = await api.request("deletePath", { path: file.relativePath });
+      const r = await settleWith(edit, api.request("deletePath", { path: file.relativePath }));
       if (r.isWatched) {
         // An error toast, deliberately: it waits to be read, and "this will come back" is something the
         // user has to act on.
@@ -609,6 +616,7 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
           filesApi={filesApi}
           suggestions={state.excludeSuggestions}
           run={state.run}
+          drops={drops}
           uploadsPaused={state.status?.uploadsPaused ?? false}
           tree={treeState}
           onRetryTree={() => exec(retryFiles)}

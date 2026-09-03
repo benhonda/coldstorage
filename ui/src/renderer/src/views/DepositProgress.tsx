@@ -3,6 +3,7 @@ import { etaSeconds, throughput, type RunProgress } from "../state/reducer.ts";
 import { baseName, formatBytes } from "./files/model.ts";
 import { timeLeft } from "../ui/duration.ts";
 import { Button } from "../ui/primitives.tsx";
+import type { PendingDrop } from "./uploads/pendingDrops.ts";
 
 /**
  * The live deposit banner — the answer to "what's happening and how long will it take".
@@ -12,9 +13,11 @@ import { Button } from "../ui/primitives.tsx";
  * then a burst of green (2026-07-14). The daemon now streams `runProgress`; this renders it.
  *
  * A deposit has a life BEFORE it has a byte count, so there are two banners here, not one:
- *   - {@link PreparingBanner} — accepted, and the daemon is still walking what was dropped. This drew
- *     nothing at all until 2026-08-24: a 30 GB folder sat silent through its whole recursive stat, which
- *     reads exactly like the app ignored you.
+ *   - {@link PreparingBanner} — taken, and not yet running: the daemon is walking what was dropped, the
+ *     user is answering a prompt, or the deposit is queued behind an upload already in flight. This drew
+ *     nothing at all until 2026-08-24 (a 30 GB folder sat silent through its whole recursive stat, which
+ *     reads exactly like the app ignored you), and until 2026-09-03 it left again the moment the deposit
+ *     command was acked — seconds to minutes before the run banner had anything to show.
  *   - {@link RunBanner} — bytes moving, in one of two modes, because the two kinds of deposit carry
  *     different information: a **byte bar** (files — `bytesTotal` known, so a determinate bar + a real
  *     ETA) or a **count bar** (photos — sizes unknown until streamed, so "N of M files" and an
@@ -26,15 +29,15 @@ import { Button } from "../ui/primitives.tsx";
  */
 export function DepositProgress({
   run,
-  preparing,
+  drops,
   paused,
   onStop,
   onResume,
 }: {
   run: RunProgress | null;
-  /** What a just-accepted drop is being read for (“Videos”), while the daemon resolves where it
-   *  lands — the window before any run exists. Null when nothing is being read. */
-  preparing?: string | null;
+  /** The drops taken but not yet running (`usePendingDrops`) — one banner each, from release to
+   *  `runStarted`. Empty when nothing is waiting. */
+  drops: readonly PendingDrop[];
   /** The daemon-level upload pause (`Status.uploadsPaused`, PAUSE.md). While true, the run banner is
    *  replaced by {@link PausedBanner}: a parked run streams no progress, and a frozen "Uploading…" bar
    *  reads as stalled — the one thing pause must never look like. */
@@ -50,9 +53,15 @@ export function DepositProgress({
   // uploading, and neither state may hide the other. Pause replaces only the RUN banner — a drop still
   // being read keeps its own state (the daemon will refuse the deposit with its own words if it lands
   // while paused, and that toast beats a silently vanished banner).
+  // A drop waits on a run in flight (the daemon runs one at a time) — say so, rather than "Reading…" for
+  // as long as someone else's upload takes. Its own run has started once `run.depositId` names it, and
+  // the drop has left this list by then, so "the run in flight" here is always another one.
+  const waiting = run?.active === true;
   return (
     <>
-      {preparing && <PreparingBanner what={preparing} />}
+      {drops.map((d) => (
+        <PreparingBanner key={d.id} what={d.label} waiting={waiting && d.depositId !== null} />
+      ))}
       {paused ? <PausedBanner onResume={onResume} /> : <RunBanner run={run} onStop={onStop} />}
       <StoppedBanner run={run} />
     </>
@@ -109,17 +118,20 @@ function StoppedBanner({ run }: { run: RunProgress | null }): React.JSX.Element 
   );
 }
 
-/** A drop the daemon is still reading — accepted, walking, nothing to count yet. */
-function PreparingBanner({ what }: { what: string }): React.JSX.Element {
+/** A drop taken but not yet running — being read, being asked about, or queued behind the upload in
+ *  flight (`waiting`). Nothing to count yet either way. */
+function PreparingBanner({ what, waiting }: { what: string; waiting: boolean }): React.JSX.Element {
   return (
     <div className="cs-deposit" role="status" aria-live="polite">
       <div className="cs-deposit-head">
-        <span className="cs-deposit-title">Reading {what}…</span>
+        <span className="cs-deposit-title">{waiting ? `${what} is next` : `Reading ${what}…`}</span>
       </div>
       <div className="cs-bar-track cs-bar-track--indeterminate" role="progressbar">
         <div className="cs-bar-fill" />
       </div>
-      <div className="cs-bar-meta">Working out what to upload</div>
+      <div className="cs-bar-meta">
+        {waiting ? "Waiting for the upload in progress to finish" : "Working out what to upload"}
+      </div>
     </div>
   );
 }
@@ -138,12 +150,13 @@ function RunBanner({ run, onStop }: { run: RunProgress | null; onStop: () => voi
     onStop();
   };
 
-  // Show ONLY while something is actually being uploaded — not merely because a run is `active`. A periodic
-  // scan of an already-archived vault runs (active=true) and reports the whole vault as `filesTotal`, but
-  // does no work: no file streams, no bytes ship. Gating on real activity (a current file, or bytes moving)
-  // keeps the banner from flashing "0 of N files" every scan interval; a real deposit sets `currentPath` on
-  // its first item, so it appears promptly.
-  if (!run?.active || (!run.currentPath && run.bytesUploaded === 0)) return null;
+  // A DEPOSIT's run shows from `runStarted`: its first stretch — hashing every dropped byte, planning the
+  // blobs — is real work with nothing to count yet, and a banner that only appeared at the first progress
+  // tick left a visible gap after the drop was taken (2026-09-03). A SCAN's run shows only while something
+  // is actually being uploaded — not merely because it's `active`: a periodic pass over an already-archived
+  // vault runs, reports the whole vault as `filesTotal`, and does no work, so gating on real activity keeps
+  // it from flashing "0 of N files" every scan interval.
+  if (!run?.active || (!run.depositId && !run.currentPath && run.bytesUploaded === 0)) return null;
 
   const { filesArchived, filesTotal, bytesUploaded, bytesTotal, currentPath, samples } = run;
   const knowBytes = bytesTotal != null && bytesTotal > 0;
@@ -161,7 +174,7 @@ function RunBanner({ run, onStop }: { run: RunProgress | null; onStop: () => voi
   // The one-line summary. Only state what we actually know — no invented precision.
   const parts: string[] = [];
   if (beforeFirstPart) {
-    parts.push("Preparing…");
+    parts.push("Reading and encrypting — the bar moves once the first piece lands");
   } else {
     if (filesTotal != null) parts.push(`${Math.min(filesArchived, filesTotal)} of ${filesTotal} files`);
     else if (filesArchived > 0) parts.push(`${filesArchived} files`);
@@ -175,7 +188,7 @@ function RunBanner({ run, onStop }: { run: RunProgress | null; onStop: () => voi
     <div className="cs-deposit" role="status" aria-live="polite">
       <div className="cs-deposit-head">
         <span className="cs-deposit-title">
-          {stopping ? "Stopping…" : currentPath ? `Uploading ${baseName(currentPath)}` : "Uploading…"}
+          {stopping ? "Stopping…" : currentPath ? `Uploading ${baseName(currentPath)}` : "Preparing to upload…"}
         </span>
         <span className="cs-deposit-side">
           {!indeterminate && fraction != null && (

@@ -9,7 +9,7 @@ describe("store — coalesced dispatch", () => {
     const store = createStore();
     let notified = 0;
     store.subscribe(() => notified++);
-    store.dispatchCoalesced(eventAction("runStarted", {}));
+    store.dispatchCoalesced(eventAction("runStarted", { depositId: "" }));
     for (let i = 0; i < 100; i++) store.dispatchCoalesced(eventAction("fileArchived", { file: `f${i}`, blob: `b${i}` }));
     expect(notified).toBe(0); // nothing yet — the frame hasn't elapsed
     await frame();
@@ -19,7 +19,7 @@ describe("store — coalesced dispatch", () => {
 
   test("a direct dispatch drains the queue first, so folds keep arrival order", () => {
     const store = createStore();
-    store.dispatchCoalesced(eventAction("runStarted", {}));
+    store.dispatchCoalesced(eventAction("runStarted", { depositId: "" }));
     store.dispatchCoalesced(eventAction("fileArchived", { file: "a", blob: "b" }));
     store.dispatch({ type: "connection", state: "connected" });
     expect(store.getState().run?.filesArchived).toBe(1);

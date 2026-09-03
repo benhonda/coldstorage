@@ -65,8 +65,11 @@ log(
 );
 
 // 2 — listFiles round-trips: the journal-backed browse tree (paths/sizes/status, no S3/no thaw).
-const files = await client.request("listFiles");
-if (!Array.isArray(files)) fail(`listFiles shape unexpected: ${JSON.stringify(files)}`);
+const listed = await client.request("listFiles");
+// `revision` is the app's reconciliation clock (see `ListedFiles`) — its absence would silently leave every
+// optimistic edit held forever, so it is proven here, not assumed.
+if (typeof listed.revision !== "number" || !Array.isArray(listed.files)) fail(`listFiles shape unexpected: ${JSON.stringify(listed)}`);
+const files = listed.files;
 for (const f of files) {
   if (typeof f.id !== "string" || typeof f.relativePath !== "string" || typeof f.size !== "number") {
     fail(`listFiles row malformed: ${JSON.stringify(f)}`);
@@ -79,7 +82,7 @@ for (const f of files) {
     if (!(k in f)) fail(`listFiles row is missing '${k}' — protocol.ts and the daemon DTO have drifted`);
   }
 }
-log(`listFiles → ${files.length} file(s)${files[0] ? ` (e.g. ${files[0].relativePath} ${files[0].status})` : ""}`);
+log(`listFiles → ${files.length} file(s) at revision ${listed.revision}${files[0] ? ` (e.g. ${files[0].relativePath} ${files[0].status})` : ""}`);
 
 // 3 — watch the event stream, then triggerNow; expect runStarted … runFinished.
 const seen = new Set<DaemonEventName>();

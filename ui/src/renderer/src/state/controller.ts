@@ -50,7 +50,7 @@ export const connectController = (api: ColdstoreApi, store: Store): Controller =
   const refreshFiles = (): Promise<void> =>
     syncing("files", async () => {
       try {
-        store.dispatch({ type: "filesLoaded", files: await api.request("listFiles") });
+        store.dispatch({ type: "filesLoaded", listed: await api.request("listFiles") });
       } catch (e) {
         store.dispatch({ type: "filesLoadFailed", error: e instanceof Error ? e.message : String(e) });
         throw e; // `syncing` still logs it
@@ -107,13 +107,21 @@ export const connectController = (api: ColdstoreApi, store: Store): Controller =
     else if (name === "filesChanged") {
       void refreshStatus();
       void refreshFiles();
-      void refreshExcludes();
-      // Downloads too — and this line is the fix for a real bug. `beginSession` publishes `filesChanged`,
-      // so this is the sign-in resync: sign out and back in, and the in-flight downloads must come BACK.
-      // They used to vanish for good (renderer-held, cleared by `authChanged`), leaving a file the user had
-      // paid to retrieve showing a plain green "Stored" ✓.
-      void refreshRestores();
-      void refreshDeposits(); // same sign-in resync: the batches come back with the files
+      // The FULL resync only when the tree changed OWNER (`beginSession`/`endSession` publish this with
+      // `signedIn`/`signedOut`). A plain tree edit — a folder created, a move, a delete — touches none of
+      // the excludes/downloads/batches, and re-reading all of them on every keystroke-adjacent edit was
+      // five reads and five renders for one (2026-09-03: creating a folder made the rename lag).
+      const e = eventAction(name, data);
+      const ownerChanged = e.type === "event" && e.name === "filesChanged" && (e.data.signedIn != null || e.data.signedOut != null);
+      if (ownerChanged) {
+        void refreshExcludes();
+        // Downloads too — and this line is the fix for a real bug. `beginSession` publishes `filesChanged`,
+        // so this is the sign-in resync: sign out and back in, and the in-flight downloads must come BACK.
+        // They used to vanish for good (renderer-held, cleared by `authChanged`), leaving a file the user
+        // had paid to retrieve showing a plain green "Stored" ✓.
+        void refreshRestores();
+        void refreshDeposits(); // same sign-in resync: the batches come back with the files
+      }
     }
     // A finished run may have archived new files / changed their status — re-read both the counts
     // (getStatus) and the tree (listFiles). Not the batches: the daemon publishes `depositsChanged`

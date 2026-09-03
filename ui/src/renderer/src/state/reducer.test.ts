@@ -83,7 +83,7 @@ describe("account switch clears vault-derived state", () => {
   const withVaultState = (...pre: Parameters<typeof reducer>[1][]): AppState =>
     run(...pre, { type: "statusLoaded", status }, {
       type: "filesLoaded",
-      files: [{ id: "f1", relativePath: "Taxes/2025.pdf", size: 4096, status: "archived", blobId: "b1", modifiedAt: null, createdAt: null }],
+      listed: { revision: 1, files: [{ id: "f1", relativePath: "Taxes/2025.pdf", size: 4096, status: "archived", blobId: "b1", modifiedAt: null, createdAt: null }] },
     }, { type: "excludesLoaded", excludes: ["*.secret"] });
 
   test("signing out drops the previous account's files, sources and excludes", () => {
@@ -119,10 +119,10 @@ describe("account switch clears vault-derived state", () => {
 describe("run progress fold", () => {
   test("runStarted → fileArchived×2 → runFinished tallies and parses string counts", () => {
     const s = run(
-      { type: "event", name: "runStarted", data: {} },
+      { type: "event", name: "runStarted", data: { depositId: "" } },
       { type: "event", name: "fileArchived", data: { file: "a.jpg", blob: "b1" } },
       { type: "event", name: "fileArchived", data: { file: "b.jpg", blob: "b2" } },
-      { type: "event", name: "runFinished", data: { filesArchived: "2", filesTotal: "10", blobsFailed: "1" } },
+      { type: "event", name: "runFinished", data: { filesArchived: "2", filesTotal: "10", blobsFailed: "1", depositId: "", revision: "1" } },
     );
     expect(s.run).toMatchObject({ active: false, filesArchived: 2, filesTotal: 10, blobsFailed: 1 });
     // recent feed is most-recent-first and survives runFinished
@@ -139,14 +139,14 @@ describe("run progress fold", () => {
     const s = run({
       type: "event",
       name: "runFinished",
-      data: { filesArchived: "", filesTotal: "nope", blobsFailed: "3" },
+      data: { filesArchived: "", filesTotal: "nope", blobsFailed: "3", depositId: "", revision: "1" },
     });
     expect(s.run).toMatchObject({ filesArchived: 0, filesTotal: 0, blobsFailed: 3 });
   });
 
   test("uploadProgress folds per-file (id-keyed, parses bytes), latest wins", () => {
     const s = run(
-      { type: "event", name: "runStarted", data: {} },
+      { type: "event", name: "runStarted", data: { depositId: "" } },
       { type: "event", name: "uploadProgress", data: { file: "big.mov", path: "v/big.mov", bytes: "64", totalBytes: "200" } },
       { type: "event", name: "uploadProgress", data: { file: "big.mov", path: "v/big.mov", bytes: "128", totalBytes: "200" } },
     );
@@ -155,7 +155,7 @@ describe("run progress fold", () => {
 
   test("fileArchived drops the file's live progress entry; runFinished clears all", () => {
     const mid = run(
-      { type: "event", name: "runStarted", data: {} },
+      { type: "event", name: "runStarted", data: { depositId: "" } },
       { type: "event", name: "uploadProgress", data: { file: "big.mov", path: "v/big.mov", bytes: "128", totalBytes: "200" } },
     );
     const archived = reducer(mid, { type: "event", name: "fileArchived", data: { file: "big.mov", blob: "b1" } });
@@ -163,7 +163,7 @@ describe("run progress fold", () => {
     const finished = reducer(mid, {
       type: "event",
       name: "runFinished",
-      data: { filesArchived: "1", filesTotal: "1", blobsFailed: "0" },
+      data: { filesArchived: "1", filesTotal: "1", blobsFailed: "0", depositId: "", revision: "1" },
     });
     expect(finished.run?.uploadProgress).toEqual({});
   });
@@ -317,7 +317,7 @@ describe("run progress (the deposit bar / throughput / ETA)", () => {
     expect(mid.run?.currentPath).toBe("Photos/IMG_1.jpg");
     const done = reducer(mid, {
       type: "event", name: "runFinished",
-      data: { filesArchived: "3", filesTotal: "3", blobsFailed: "0" },
+      data: { filesArchived: "3", filesTotal: "3", blobsFailed: "0", depositId: "", revision: "1" },
     });
     expect(done.run?.currentPath).toBeNull();
     expect(done.run?.active).toBe(false);
@@ -328,12 +328,12 @@ describe("run progress (the deposit bar / throughput / ETA)", () => {
     expect(mid.run?.filesStopped).toBeNull(); // unknown while active
     const stopped = reducer(mid, {
       type: "event", name: "runFinished",
-      data: { filesArchived: "3", filesTotal: "30", blobsFailed: "0", filesStopped: "27" },
+      data: { filesArchived: "3", filesTotal: "30", blobsFailed: "0", filesStopped: "27", depositId: "", revision: "1" },
     });
     expect(stopped.run?.filesStopped).toBe(27);
     const early = reducer(mid, {
       type: "event", name: "runFinished",
-      data: { filesArchived: "0", filesTotal: "0", blobsFailed: "0" },
+      data: { filesArchived: "0", filesTotal: "0", blobsFailed: "0", depositId: "", revision: "1" },
     });
     expect(early.run?.filesStopped).toBe(0);
   });
@@ -342,7 +342,7 @@ describe("run progress (the deposit bar / throughput / ETA)", () => {
     const mid = run(progress({ bytesTotal: "1000", bytesUploaded: "640", filesTotal: "3" }));
     const done = reducer(mid, {
       type: "event", name: "runFinished",
-      data: { filesArchived: "3", filesTotal: "3", blobsFailed: "0" },
+      data: { filesArchived: "3", filesTotal: "3", blobsFailed: "0", depositId: "", revision: "1" },
     });
     expect(done.run?.bytesUploaded).toBe(1000);
     expect(done.run?.bytesTotal).toBe(1000);
@@ -450,5 +450,37 @@ describe("download progress fold (the transferring row's bar)", () => {
   test("sign-out clears the slice with the rest of the vault-derived state", () => {
     const s = run(signedIn("a@b.com"), tick("t1", "100"));
     expect(reducer(s, signedOut).restoreProgress).toEqual({});
+  });
+});
+
+describe("the tree revision — stale reads never regress the tree", () => {
+  const listed = (revision: number, path: string) => ({
+    type: "filesLoaded" as const,
+    listed: { revision, files: [{ id: "f", relativePath: path, size: 1, status: "archived", blobId: "b", modifiedAt: null, createdAt: null }] },
+  });
+
+  test("a listFiles older than the one shown is discarded (replies don't arrive in execution order)", () => {
+    const fresh = run(listed(5, "Archive/a.jpg"));
+    const late = reducer(fresh, listed(4, "Old/a.jpg"));
+    expect(late).toBe(fresh);
+    expect(reducer(fresh, listed(5, "Archive/a.jpg")).filesRevision).toBe(5); // equal is fine
+    expect(reducer(fresh, listed(6, "Archive/b.jpg")).files[0]?.relativePath).toBe("Archive/b.jpg");
+  });
+
+  test("a (re)connect zeroes it — the revision counts per daemon process", () => {
+    const s = run(listed(9, "a"), { type: "connection", state: "disconnected" }, { type: "connection", state: "connected" });
+    expect(s.filesRevision).toBe(0);
+    expect(reducer(s, listed(1, "b")).files[0]?.relativePath).toBe("b");
+  });
+
+  test("runFinished records the revision a deposit's rows are final at, keyed by its batch", () => {
+    const s = run(
+      { type: "event", name: "runStarted", data: { depositId: "batch-1" } },
+      { type: "event", name: "runFinished", data: { filesArchived: "1", filesTotal: "1", blobsFailed: "0", depositId: "batch-1", revision: "12" } },
+      { type: "event", name: "runStarted", data: { depositId: "" } },
+      { type: "event", name: "runFinished", data: { filesArchived: "1", filesTotal: "1", blobsFailed: "0", depositId: "", revision: "13" } },
+    );
+    expect(s.depositRuns).toEqual({ "batch-1": 12 }); // a scan's run has no batch to record
+    expect(s.run?.depositId).toBeNull();
   });
 });

@@ -42,6 +42,7 @@ const makeApi = (initial: ConnectionState) => {
   let connectionState = initial;
   let sources: Source[] = [{ id: "s1", kind: "folder", path: "/a", mountPath: "a", paused: false, lastScanAt: null, error: null }];
   let statusOverride: Status | null = null;
+  let revision = 0; // the daemon's tree revision, ticking per read like the real one
   let files: ListedFile[] = [{ id: "f1", relativePath: "a/b.jpg", size: 10, status: "archived", blobId: "blob-1", modifiedAt: null, createdAt: null }];
   // Seeded defaults, as a signed-IN daemon answers. Signed out it answers `[]` — successfully — which is
   // the whole trap the excludes regression test below covers.
@@ -60,7 +61,7 @@ const makeApi = (initial: ConnectionState) => {
       calls.push(method);
       if (method === "getStatus") return Promise.resolve(statusOverride ?? status(sources));
       if (method === "listSources") return Promise.resolve(sources);
-      if (method === "listFiles") return Promise.resolve(files);
+      if (method === "listFiles") return Promise.resolve({ revision: ++revision, files });
       if (method === "listExcludes") return Promise.resolve(excludes);
       // The real daemon answers list reads with an ARRAY (empty when signed out) — an `{ok:true}` here
       // would be a wire shape that cannot occur, and the reducer rightly chokes on it.
@@ -200,10 +201,30 @@ describe("controller sync policy", () => {
       { id: "f1", relativePath: "a/b.jpg", size: 10, status: "archived", blobId: "blob-1", modifiedAt: null, createdAt: null },
       { id: "f2", relativePath: "a/c.jpg", size: 20, status: "archived", blobId: "blob-2", modifiedAt: null, createdAt: null },
     ]);
-    f.fireEvent("runFinished", { filesArchived: "2", filesTotal: "2", blobsFailed: "0" });
+    f.fireEvent("runFinished", { filesArchived: "2", filesTotal: "2", blobsFailed: "0", depositId: "", revision: "1" });
     await tick();
     expect(f.calls.filter((c) => c === "listFiles").length).toBe(before + 1);
     expect(store.getState().files).toHaveLength(2);
+  });
+
+  test("a plain tree edit re-reads status + files ONLY; the owner change is the full resync", async () => {
+    const f = makeApi("connected");
+    const store = createStore();
+    connectController(f.api, store);
+    await tick();
+    const counts = (): Record<string, number> =>
+      Object.fromEntries(["getStatus", "listFiles", "listExcludes", "listRestores", "listDeposits"].map((m) => [m, f.calls.filter((c) => c === m).length]));
+    const before = counts();
+    f.fireEvent("filesChanged", { created: "New folder", revision: "2" });
+    await tick();
+    const afterEdit = counts();
+    expect(afterEdit).toEqual({ ...before, getStatus: (before.getStatus ?? 0) + 1, listFiles: (before.listFiles ?? 0) + 1 });
+    f.fireEvent("filesChanged", { signedIn: "true", revision: "3" });
+    await tick();
+    const afterOwner = counts();
+    for (const m of ["getStatus", "listFiles", "listExcludes", "listRestores", "listDeposits"]) {
+      expect(afterOwner[m]).toBe((afterEdit[m] ?? 0) + 1);
+    }
   });
 
   test("filesChanged refetches the file tree (a reorganize/delete rewrote it)", async () => {
@@ -214,7 +235,7 @@ describe("controller sync policy", () => {
     const before = f.calls.filter((c) => c === "listFiles").length;
 
     f.setFiles([{ id: "f1", relativePath: "moved/b.jpg", size: 10, status: "archived", blobId: "blob-1", modifiedAt: null, createdAt: null }]);
-    f.fireEvent("filesChanged", { moved: "a/b.jpg", to: "moved/b.jpg" });
+    f.fireEvent("filesChanged", { moved: "a/b.jpg", to: "moved/b.jpg", revision: "1" });
     await tick();
     expect(f.calls.filter((c) => c === "listFiles").length).toBe(before + 1);
     expect(store.getState().files[0]?.relativePath).toBe("moved/b.jpg");
@@ -238,7 +259,7 @@ describe("controller sync policy", () => {
 
     // `authenticate` completes; the daemon establishes the session and publishes filesChanged.
     f.setStatus(null);
-    f.fireEvent("filesChanged", { signedIn: "true" });
+    f.fireEvent("filesChanged", { signedIn: "true", revision: "1" });
     await tick();
     expect(store.getState().status?.signedIn).toBe(true);
     expect(store.getState().status?.bytesStored).toBe(1000);
@@ -264,7 +285,7 @@ describe("controller sync policy", () => {
     // `authenticate` completes; the daemon establishes the session and publishes filesChanged.
     f.setStatus(null);
     f.setExcludes(["node_modules", ".DS_Store"]);
-    f.fireEvent("filesChanged", { signedIn: "true" });
+    f.fireEvent("filesChanged", { signedIn: "true", revision: "1" });
     await tick();
     expect(store.getState().excludes).toEqual(["node_modules", ".DS_Store"]);
   });
@@ -304,7 +325,7 @@ describe("controller sync policy", () => {
     await tick();
     const before = f.calls.filter((c) => c === "getStatus").length;
 
-    f.fireEvent("runFinished", { filesArchived: "2", filesTotal: "2", blobsFailed: "0" });
+    f.fireEvent("runFinished", { filesArchived: "2", filesTotal: "2", blobsFailed: "0", depositId: "", revision: "1" });
     await tick();
     expect(f.calls.filter((c) => c === "getStatus").length).toBe(before + 1);
   });

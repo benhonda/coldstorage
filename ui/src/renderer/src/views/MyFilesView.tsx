@@ -12,8 +12,9 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ColdstoreApi, ConflictPolicy, DepositPreview, DepositPreviewItem, ExcludeSuggestion, RetrievalQuote } from "../../../shared/ipc.ts";
 import { RECLAIM } from "../../../shared/reclaim-constants.ts";
 import type { Exec } from "./types.ts";
-import type { FilesApi } from "./files/useFiles.ts";
+import { type FilesApi, settleWith } from "./files/useFiles.ts";
 import type { RunProgress } from "../state/reducer.ts";
+import type { PendingDrops } from "./uploads/pendingDrops.ts";
 import { DepositProgress } from "./DepositProgress.tsx";
 import {
   type ArchivedFile,
@@ -92,6 +93,9 @@ interface Props {
   /** The whole run, for the aggregate deposit banner at the top of the browser (files done, bytes,
    * throughput, ETA). `null` when no run has happened yet. */
   run: RunProgress | null;
+  /** The drops taken but not yet running (App-owned, so a page change mid-drop keeps them) — this view
+   * begins/accepts/cancels them through the deposit flow and shows them as "Reading…" banners. */
+  drops: PendingDrops;
   /** The daemon-level upload pause (`Status.uploadsPaused`, PAUSE.md) — swaps the run banner for the
    * persistent "Uploads paused" one, whose Resume fires `resumeUploads`. */
   uploadsPaused: boolean;
@@ -136,6 +140,7 @@ export const MyFilesView = ({
   filesApi,
   suggestions,
   run,
+  drops,
   uploadsPaused,
   hasRoomFor,
   onDepositBlocked,
@@ -180,10 +185,6 @@ export const MyFilesView = ({
   const [moveTargets, setMoveTargets] = useState<RowTarget[] | null>(null);
   const [infoOpen, setInfoOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
-  // What a just-accepted drop is being read for, while the daemon walks it. The gap between releasing a
-  // folder and the first optimistic row is a full recursive stat of everything in it — on a big drop that
-  // is many seconds of an app that looked like it had ignored you (PILLAR5: no invisible work).
-  const [preparing, setPreparing] = useState<string | null>(null);
   // Finder-style deposit collision prompt. Promise-bridged: `promptCollisions` opens the modal and resolves
   // when the user picks (a policy map) or cancels (null), so the deposit flow can `await` the decision.
   const [collision, setCollision] = useState<{
@@ -433,33 +434,36 @@ export const MyFilesView = ({
     if (trimmed && trimmed !== row.name) {
       const target = targetOf(row);
       const to = withName(target.path, trimmed);
-      filesApi.rename(target, trimmed);
+      const edit = filesApi.rename(target, trimmed);
       if (target.kind === "folder") remapFolder(target.path, to);
-      exec(() => api.request("movePath", { from: target.path, to }));
+      exec(() => settleWith(edit, api.request("movePath", { from: target.path, to })));
     }
     setRenaming(null);
   };
   // New folder = an optimistic empty-folder row (instant inline-rename) + the REAL daemon `createFolder`,
-  // which writes a journal marker so the folder PERSISTS across a reload. Its `filesChanged` event
-  // reconciles the tree. The subsequent rename is a `movePath` (commitRename), which sweeps the marker too.
+  // which writes a journal marker so the folder PERSISTS across a reload. The row holds until the read past
+  // its ack. The subsequent rename is a `movePath` (commitRename), which sweeps the marker too.
   const doNewFolder = (): void => {
-    const path = filesApi.newFolder(dir);
-    exec(() => api.request("createFolder", { path }));
+    const { path, handle } = filesApi.newFolder(dir);
+    exec(() => settleWith(handle, api.request("createFolder", { path })));
     startRename(`folder:${path}`);
   };
   // Delete = tombstone each target's subtree in the journal. Bytes are reclaimed once every file sharing
   // their blob is deleted; the space returns when Deep Archive's 180-day minimum on them runs out.
   // Optimistic drop from the tree, then the REAL daemon `deletePath` per target.
   const doDelete = (targets: RowTarget[]): void => {
-    filesApi.remove(targets);
+    const edit = filesApi.remove(targets);
     targets.forEach((t) => t.kind === "folder" && remapFolder(t.path, null));
     // Send `alsoIgnore` ONLY when the checkbox was actually on screen. It defaults to true, and the daemon
     // evaluates watched-ness itself — so sending it unconditionally would add an exclude in the two windows
     // where the user never saw the choice: while the probe is still in flight, and when the probe failed.
     // An exclude is a lasting decision about what gets backed up; it needs to have been offered.
     const ignoreParam = deleteIsWatched === true ? ({ alsoIgnore: alsoIgnore ? "true" : "false" } as const) : {};
+    // Settled at the LAST ack's revision — one edit, several commands; the read that shows all of them
+    // is the one past the highest. A single refusal snaps the whole edit back: the others still landed
+    // in the journal, and the next read shows exactly which.
     exec(() =>
-      Promise.all(targets.map((t) => api.request("deletePath", { path: t.path, ...ignoreParam }))),
+      settleWith(edit, Promise.all(targets.map((t) => api.request("deletePath", { path: t.path, ...ignoreParam })))),
     );
     setSelected(new Set());
     closeDeleteConfirm();
@@ -503,9 +507,11 @@ export const MyFilesView = ({
     // move, so it never reaches the daemon (movePath from == to). All-put-back just settles the drag.
     const moving = targets.filter((t) => parentOf(t.path) !== toDir);
     if (moving.length > 0) {
-      filesApi.move(moving, toDir);
+      const edit = filesApi.move(moving, toDir);
       moving.forEach((t) => t.kind === "folder" && remapFolder(t.path, reparent(t.path, toDir)));
-      exec(() => Promise.all(moving.map((t) => api.request("movePath", { from: t.path, to: reparent(t.path, toDir) }))));
+      exec(() =>
+        settleWith(edit, Promise.all(moving.map((t) => api.request("movePath", { from: t.path, to: reparent(t.path, toDir) })))),
+      );
     }
     setSelected(new Set());
   };
@@ -595,17 +601,32 @@ export const MyFilesView = ({
 
   // The shared deposit pipeline for BOTH a file drop and a photo pick: preview placement (which target
   // names already exist) → prompt the user on any collisions (Keep Both / Replace / Skip) → add optimistic
-  // rows for what will actually land → issue the real deposit with the chosen resolutions. The daemon's
-  // runStarted→fileArchived→runFinished events then refetch listFiles and reconcile to journal truth.
+  // rows for what will actually land → issue the real deposit with the chosen resolutions. The rows hold
+  // until the read past that deposit's `runFinished` (see `files/overlay.ts`), which carries the truth.
   // Rethrows on command rejection so `exec` (at the call site) surfaces the toast. `fallback` seeds the
   // preview when the daemon can't dry-run it (off-Mac / resolver hiccup) so the deposit still proceeds.
-  const runDeposit = async (opts: {
+  interface DepositOpts {
     kind: "files" | "photos";
     wire: string; // newline-joined absolute paths (files) or Photos localIdentifiers (photos)
     dest: string;
     srcByPath: Map<string, string>; // previewed vault path → local source path (top-level picks only) so a failed upload can retry
     fallback: string[]; // target relativePaths — names the drop in the UI, and stands in for an unavailable photo preview
-  }): Promise<void> => {
+  }
+  const runDeposit = async (opts: DepositOpts): Promise<void> => {
+    // The drop is visibly taken from HERE — through the preview walk, the prompts, the command, and the
+    // wait for its run to begin — never a moment of nothing between release and the run banner (PILLAR5).
+    const label = opts.kind === "photos" ? "photos" : names(opts.fallback);
+    const drop = drops.begin(label);
+    let depositId: string | null = null;
+    try {
+      depositId = await depositSteps(opts, label);
+    } finally {
+      if (depositId) drops.accepted(drop, depositId);
+      else drops.cancel(drop); // gated, cancelled at a prompt, nothing to upload, or refused
+    }
+  };
+  /** The steps of a deposit, up to the daemon's ack: the accepted batch id, or null when nothing was sent. */
+  const depositSteps = async (opts: DepositOpts, label: string): Promise<string | null> => {
     // Pause gate, up front: the daemon refuses a deposit while uploads are paused (PAUSE.md), so say it
     // NOW — before walking the drop, prompting about skips and collisions, and adding optimistic rows,
     // only for the final command to bounce. The daemon stays the enforcer; this is the same courtesy
@@ -618,14 +639,10 @@ export const MyFilesView = ({
     // once we know which files land and how big they are) is what stops a single drop that would overflow.
     if (!hasRoomFor(0)) {
       onDepositBlocked(0);
-      return;
+      return null;
     }
     let preview: DepositPreviewItem[];
     let notUploaded: DepositPreview["skipped"] = [];
-    // The drop is now visibly working. Until this landed, everything between the drop and the first
-    // optimistic row — a full recursive walk of the dropped folder — drew nothing at all.
-    const label = opts.kind === "photos" ? "photos" : names(opts.fallback);
-    setPreparing(label);
     try {
       const previewed = await api.request(
         "previewDeposit",
@@ -641,8 +658,6 @@ export const MyFilesView = ({
       // `suggestedPack: null` isn't a guess — a photo pick has no filesystem junk in it to suggest,
       // which is the same reason the prompt below is files-only.
       preview = opts.fallback.map((relativePath) => ({ relativePath, size: 0, exists: false, suggestedPack: null }));
-    } finally {
-      setPreparing(null);
     }
     // What the drop contained that ColdStorage doesn't back up — today, symlinks. Said out loud, once, up
     // front: the alternative is an item that was dropped and simply never appears (PILLAR5).
@@ -670,7 +685,7 @@ export const MyFilesView = ({
       const matches = matchesInDrop(preview, suggestions);
       if (worthPrompting(matches)) {
         const decision = await promptSkips(opts.dest, matches);
-        if (!decision) return; // cancelled → abort the whole drop, no upload
+        if (!decision) return null; // cancelled → abort the whole drop, no upload
         const chosen = new Set(decision.packIds);
         excludeExtra = matches.filter((m) => chosen.has(m.pack.id)).flatMap((m) => m.pack.patterns);
         // Drop the skipped files from the preview so every downstream step — collisions, optimistic rows,
@@ -700,7 +715,7 @@ export const MyFilesView = ({
     let policies: Record<string, ConflictPolicy> = {};
     if (collisions.length > 0) {
       const chosen = await promptCollisions(opts.dest, collisions);
-      if (!chosen) return; // cancelled → abort the whole drop, no upload
+      if (!chosen) return null; // cancelled → abort the whole drop, no upload
       policies = chosen;
     }
     const { rows, conflicts } = planDeposit(preview, policies, new Set(files.map((f) => f.relativePath)));
@@ -712,13 +727,13 @@ export const MyFilesView = ({
       // Dropping a folder that turns out to be nothing BUT skippable junk is a complete, successful answer
       // to the question we just asked. Reporting it as "nothing in there is readable" would call the
       // user's own decision a fault.
-      if (emptiedBySkips) return;
+      if (emptiedBySkips) return null;
       if (preview.length === 0) {
         throw new Error(
           `Nothing to upload from ${label} — nothing in there is readable, or all of it is excluded.`,
         );
       }
-      return;
+      return null;
     }
     // Byte size per landing row, sourced from the daemon's preview (`original` is the previewed path each
     // row keys off). This is the SSOT for "how big is this deposit" — files, whole folders, and photos
@@ -730,7 +745,7 @@ export const MyFilesView = ({
     const incomingBytes = rows.reduce((sum, r) => sum + (sizeByOriginal.get(r.original) ?? 0), 0);
     if (!hasRoomFor(incomingBytes)) {
       onDepositBlocked(incomingBytes);
-      return;
+      return null;
     }
     // Optimistic "uploading" rows for what will land — names carry their full vault path (so intoDir is "").
     // Each carries its source path (for retry) and byte size (for the in-flight half of the quota gate).
@@ -751,12 +766,16 @@ export const MyFilesView = ({
       opts.kind === "files"
         ? api.request("deposit", { src: opts.wire, dest: opts.dest, ...extra, ...skipped })
         : api.request("depositPhotos", { assetIds: opts.wire, dest: opts.dest, ...extra });
-    await sent.catch((e: unknown) => {
+    const ack = await sent.catch((e: unknown) => {
       // Command rejected → ⚠ on the rows, don't strand them — and carry the daemon's reason onto the row,
-      // so the failure the user just caused is at least as explicable as a background one.
-      filesApi.setDepositStatus(optimisticIds, "failed", `${e}`);
+      // so the failure the user just caused is at least as explicable as a background one. Settled with no
+      // revision: these rows exist nowhere but here, so the flip folds straight into them.
+      filesApi.setDepositStatus(optimisticIds, "failed", `${e}`).settle();
       throw e;
     });
+    // Accepted: the rows now belong to this batch, and hold until the read past ITS run's end.
+    filesApi.depositAccepted(optimisticIds, ack.depositId);
+    return ack.depositId;
   };
 
   // ── deposit (hero) — REAL upload of chosen paths ──
@@ -790,7 +809,7 @@ export const MyFilesView = ({
     if (paths.length === 0) {
       // Couldn't resolve any local paths → show ⚠ rows rather than vanishing.
       const ids = filesApi.deposit(dropped.map((f) => ({ name: f.name })), dest);
-      filesApi.setDepositStatus(ids, "failed", "couldn't find these on disk to upload them");
+      filesApi.setDepositStatus(ids, "failed", "couldn't find these on disk to upload them").settle();
       return;
     }
     depositPaths(paths, dest);
@@ -1014,7 +1033,7 @@ export const MyFilesView = ({
         >
           <DepositProgress
             run={run}
-            preparing={preparing}
+            drops={drops.drops}
             paused={uploadsPaused}
             onStop={() => exec(() => api.request("cancelRun"))}
             onResume={() => exec(() => api.request("resumeUploads"))}

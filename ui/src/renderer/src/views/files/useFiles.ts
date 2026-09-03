@@ -1,13 +1,12 @@
 /**
  * The file-browser state + reorganize ops — the renderer's view of the vault tree.
  *
- * The flat tree is the daemon's `listFiles` (journal-backed), passed in as `daemonFiles` and held in
- * local state so the reorganize ops can edit it optimistically. deposit/move/rename/delete each apply an
- * OPTIMISTIC local edit here (instant feedback) while the view fires the REAL daemon command (`deposit` /
- * `movePath` / `deletePath`); the daemon's `filesChanged`/`runFinished` event then triggers a `listFiles`
- * refetch that reconciles this local copy to journal truth. The optimistic edit is exact (a move/rename
- * genuinely IS a cheap journal `relativePath` edit, no S3/no thaw), so the refetch is a no-op in the happy
- * path and the authoritative correction if anything diverged.
+ * The daemon's `listFiles` (journal-backed) is the truth, passed in as `daemonFiles` + `persistedFolders`
+ * with the tree `revision` they were read at. deposit/move/rename/delete/newFolder each add an OPTIMISTIC
+ * op (instant feedback) that is re-applied on top of every read until the daemon provably reflects it —
+ * the read at or past the revision its ack named — and then let go. The op's handle is how the view ties
+ * the two together: fire the REAL daemon command, `settle(ack.revision)` on success, `rollback()` on
+ * rejection. The semantics live in `overlay.ts`; this hook owns the state and the handles.
  *
  * Transfer status IS real: request-back calls the daemon's `requestRestore`, which writes a durable
  * journal row; the daemon's run loop drives it and the app READS the list (`listRestores`). We overlay
@@ -15,7 +14,7 @@
  * waking up) / `transferring` (bytes moving) / `here` (saved) in the tree. Pass the store's `restores` in.
  * A download that ISN'T moving — unpaid, or stalled — deliberately overlays nothing; see `applyRestore`.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RestoreRow } from "../../../../shared/ipc.ts";
 import { restoreStall } from "../../../../shared/ipc.ts";
 import {
@@ -26,18 +25,47 @@ import {
   joinPath,
   kindFromName,
   parentOf,
-  reparent,
-  rewritePrefix,
   uploadStall,
-  withName,
 } from "./model.ts";
+import { type PendingOp, type TreeOp, acceptDeposit, applyOps, prune, rollback, settle } from "./overlay.ts";
 
 let depositSeq = 0;
+let opSeq = 0;
 /** An optimistic row's id — one the daemon has never seen. A retry on such a row can't go through
  * `retryFiles` (no journal row to requeue); it re-issues the original `deposit` from the dropped path. */
 const OPTIMISTIC_PREFIX = "dep-";
 const optimisticId = (stamp: number, i: number): string => `${OPTIMISTIC_PREFIX}${stamp}-${i}`;
 export const isOptimisticId = (id: string): boolean => id.startsWith(OPTIMISTIC_PREFIX);
+
+/** The handle every optimistic edit hands back — the view's side of the bargain with the daemon. */
+export interface OpHandle {
+  /** The daemon did it: hold the edit until the read at or past `revision` (the ack's). No revision means
+   * the edit touched only optimistic rows (nothing daemon-side to wait for) — it folds into them and goes. */
+  settle: (revision?: number) => void;
+  /** The daemon refused: drop the edit, the tree snaps back to what the daemon has. */
+  rollback: () => void;
+}
+
+/**
+ * Tie an optimistic edit to the command that makes it real: settle it at the ack's revision (the highest,
+ * when one edit is several commands), or roll it back if the daemon refused. Returns the ack(s) so the
+ * caller can read anything else off them (`isWatched`, retry counts). Rejection propagates — the view's
+ * `exec` owns the toast.
+ */
+export const settleWith = async <R extends { revision: number } | { revision: number }[]>(
+  handle: OpHandle,
+  command: Promise<R>,
+): Promise<R> => {
+  let acked: R;
+  try {
+    acked = await command;
+  } catch (e) {
+    handle.rollback();
+    throw e;
+  }
+  handle.settle(Math.max(...(Array.isArray(acked) ? acked : [acked]).map((a) => a.revision)));
+  return acked;
+};
 
 export interface FilesApi {
   /** The flat file list with live restore status overlaid — the browser renders the tree from this. */
@@ -46,30 +74,32 @@ export interface FilesApi {
   virtualFolders: string[];
   /** Add optimistic "uploading" rows for dropped items in `intoDir` (each carrying its local `sourcePath` for
    * retry, and its byte `size` where known — file drops know it up front, photo picks don't until the
-   * daemon resolves them); returns their ids so the caller can flip status ({@link setDepositStatus}) as
-   * the real `deposit` command resolves. The `size` feeds the deposit gate's in-flight accounting, so an
-   * uploading row counts against the quota before its bytes ever land in S3 (see `state/entitlement.ts`). */
+   * daemon resolves them); returns their ids. The rows hold until the read past their deposit's run ends,
+   * which is why the caller MUST {@link depositAccepted} them with the ack's batch id — or flip them failed
+   * via {@link setDepositStatus} when the command is refused. The `size` feeds the deposit gate's in-flight
+   * accounting, so an uploading row counts against the quota before its bytes ever land (see
+   * `state/entitlement.ts`). */
   deposit: (items: { name: string; sourcePath?: string; size?: number }[], intoDir: string) => string[];
-  /** Set optimistic deposit rows' status (uploading ⇄ failed) by id — drives the retry cycle and keeps a
-   * failed upload visible ON the file (⚠ couldn't upload) rather than vanishing or stuck on "uploading".
+  /** The daemon accepted a deposit for these optimistic rows under `depositId`: they now settle on THAT
+   * run's `runFinished`. */
+  depositAccepted: (ids: string[], depositId: string) => void;
+  /** Flip rows' status (uploading ⇄ failed) by id — drives the retry cycle and keeps a failed upload visible
+   * ON the file (⚠ couldn't upload) rather than vanishing or stuck on "uploading". Works on journal rows
+   * (a retry's optimistic flip, settled by `retryFiles`' revision) and optimistic ones alike.
    *
    * `reason` rides along so the ⚠ can say WHY, the same as a journal-backed failure now does. Without it the
    * most immediate failure — the deposit you just asked for, rejected a second ago — would be the one with
    * no explanation, while a background fault from an hour ago had one. Passing `null` (a retry going back to
    * "uploading") clears it, for the reason every sibling clears on success. */
-  setDepositStatus: (ids: string[], status: FileStatus, reason?: string | null) => void;
-  /** Put rows back exactly as they were — the rollback for an optimistic flip whose command was refused.
-   * Not `setDepositStatus(…, "failed")`: that would relabel a row's real failure kind (`interrupted`,
-   * `missingSource`, …) as `permanent`, which is a lie about a retry that merely didn't get through. */
-  restoreRows: (rows: ArchivedFile[]) => void;
+  setDepositStatus: (ids: string[], status: FileStatus, reason?: string | null) => OpHandle;
   /** Rename a file or folder (journal basename edit / prefix sweep). */
-  rename: (target: RowTarget, newName: string) => void;
+  rename: (target: RowTarget, newName: string) => OpHandle;
   /** Move files/folders under `toDir` (journal re-parent / prefix sweep — no S3, no thaw). */
-  move: (targets: RowTarget[], toDir: string) => void;
+  move: (targets: RowTarget[], toDir: string) => OpHandle;
   /** Tombstone files/folders (drops from the tree; bytes aren't reclaimed — see delete copy). */
-  remove: (targets: RowTarget[]) => void;
-  /** Create an empty folder under `intoDir`; returns its path so the caller can inline-rename it. */
-  newFolder: (intoDir: string) => string;
+  remove: (targets: RowTarget[]) => OpHandle;
+  /** Create an empty folder under `intoDir`; returns its path (so the caller can inline-rename it) + handle. */
+  newFolder: (intoDir: string) => { path: string; handle: OpHandle };
 }
 
 /** The per-file status a download implies. Only the states that CHANGE how the file reads are mapped: a
@@ -124,25 +154,35 @@ export const useFiles = (
   restores: readonly RestoreRow[],
   /** The daemon's own silence window (`Status.staleAfterSeconds`); `Infinity` with no snapshot. */
   staleAfter: number,
+  /** The tree revision `daemonFiles` was read at (`AppState.filesRevision`) — the clock the ops settle by. */
+  revision: number,
+  /** Batch id → the revision its run finished at (`AppState.depositRuns`) — when a drop's rows may go. */
+  depositRuns: Readonly<Record<string, number>>,
 ): FilesApi => {
-  const [base, setBase] = useState<ArchivedFile[]>(daemonFiles);
-  // Empty folders, now journal-backed (status `folder` markers, fed in as `persistedFolders`). Held in
-  // local state so the reorganize ops can edit them optimistically; adopted from the daemon on each read.
-  const [virtualFolders, setVirtualFolders] = useState<string[]>(persistedFolders);
+  const [ops, setOps] = useState<PendingOp[]>([]);
 
-  // The daemon's `listFiles` is the source of truth — adopt each (re)read. Optimistic local ops
-  // (deposit/move/rename/delete) edit `base` until the daemon supports them, then are reconciled to
-  // this truth on the next read (a no-op once those commands persist their edits to the journal).
+  // The revision counts per daemon process, and the reducer zeroes it on every (re)connect. A revision
+  // that went BACKWARDS is that reset: whatever we were holding was for a daemon that's gone, and no ack
+  // from the new one will ever settle it. Let it all go — the new daemon's tree is the truth now.
+  const lastRevision = useRef(revision);
   useEffect(() => {
-    setBase(daemonFiles);
-  }, [daemonFiles]);
+    if (revision < lastRevision.current) setOps([]);
+    lastRevision.current = revision;
+  }, [revision]);
 
-  // Same adopt-on-read for empty folders: `newFolder` adds optimistically + fires the REAL `createFolder`,
-  // move/rename/delete edit optimistically + fire `movePath`/`deletePath` (which sweep the marker by path);
-  // the next `listFiles` reconciles to journal truth (now a no-op in the happy path — the folder persists).
+  // Keep only the ops the daemon hasn't provably reflected yet. Done in state (not just in the memo below)
+  // so settled ops don't pile up for the session.
   useEffect(() => {
-    setVirtualFolders(persistedFolders);
-  }, [persistedFolders]);
+    setOps((prev) => {
+      const next = prune(prev, revision, depositRuns);
+      return next.length === prev.length ? prev : next;
+    });
+  }, [revision, depositRuns]);
+
+  const overlaid = useMemo(
+    () => applyOps({ files: daemonFiles, folders: persistedFolders }, prune(ops, revision, depositRuns)),
+    [daemonFiles, persistedFolders, ops, revision, depositRuns],
+  );
 
   // Index the transfer list by file, keeping only the NEWEST per file: the list is history as well as
   // active work, so a file fetched back twice has several rows and only the latest describes it now.
@@ -161,119 +201,113 @@ export const useFiles = (
   // mount. A 15s interval here would buy nothing but renders.
   const files = useMemo(() => {
     const now = Math.floor(Date.now() / 1000);
-    return base.map((file) => applyUpload(applyRestore(file, newestByFile.get(file.id), now, staleAfter), now, staleAfter));
-  }, [base, newestByFile, staleAfter]);
+    return overlaid.files.map((file) =>
+      applyUpload(applyRestore(file, newestByFile.get(file.id), now, staleAfter), now, staleAfter),
+    );
+  }, [overlaid.files, newestByFile, staleAfter]);
 
-  const deposit = useCallback((items: { name: string; sourcePath?: string; size?: number }[], intoDir: string): string[] => {
-    const stamp = ++depositSeq;
-    const added: ArchivedFile[] = items.map((it, i) => ({
-      id: optimisticId(stamp, i),
-      relativePath: joinPath(intoDir, it.name),
-      // Real size where the caller knows it (a file drop) so this row counts against the quota while it
-      // uploads; 0 when unknown (a photo pick, resolved daemon-side) — the daemon's usage read catches
-      // those up on the next refresh. The authoritative size replaces this on the post-runFinished reread.
-      size: it.size ?? 0,
-      status: "uploading",
-      kind: kindFromName(it.name),
-      date: null,
-      modifiedAt: null,
-      createdAt: null,
-      // Nothing has tried this yet — it was dropped a moment ago and the deposit command is still in
-      // flight. `null` is exactly right and is exactly why `uploadStall` treats a null attempt as "queued",
-      // not "abandoned": otherwise every fresh drop would flag itself the instant it appeared.
-      lastAttemptAt: null,
-      error: null,
-      failureKind: null,
-      depositId: null, // the daemon mints the batch; the post-runFinished reread carries its id
-      sourcePath: it.sourcePath ?? null, // remembered so a failed upload can be retried
-    }));
-    if (added.length === 0) return [];
-    setBase((prev) => [...prev, ...added]);
-    // Optimistic only — instant `uploading` feedback. The caller fires the REAL daemon `deposit`; its
-    // events drive the truth: on runFinished the next `listFiles` replaces these rows with the archived
-    // files (✓) or a failure surfaces (blobFailed → the "couldn't upload" panel). If the deposit COMMAND
-    // itself rejects (e.g. a stale daemon), the caller rolls these back via `dropOptimistic` so we never
-    // leave a fake `uploading` row. We never fake-settle to `frozen` on a timer.
-    return added.map((a) => a.id);
+  /** Add an op; hand back its handle. */
+  const add = useCallback((op: TreeOp): { id: number; handle: OpHandle } => {
+    const id = ++opSeq;
+    setOps((prev) => [...prev, { id, op, until: null }]);
+    return {
+      id,
+      handle: {
+        settle: (rev = 0) => setOps((prev) => settle(prev, id, rev)),
+        rollback: () => setOps((prev) => rollback(prev, id)),
+      },
+    };
   }, []);
 
-  const setDepositStatus = useCallback((ids: string[], status: FileStatus, reason: string | null = null): void => {
+  const deposit = useCallback(
+    (items: { name: string; sourcePath?: string; size?: number }[], intoDir: string): string[] => {
+      const stamp = ++depositSeq;
+      const rows: ArchivedFile[] = items.map((it, i) => ({
+        id: optimisticId(stamp, i),
+        relativePath: joinPath(intoDir, it.name),
+        // Real size where the caller knows it (a file drop) so this row counts against the quota while it
+        // uploads; 0 when unknown (a photo pick, resolved daemon-side) — the daemon's usage read catches
+        // those up on the next refresh. The authoritative size replaces this on the post-runFinished reread.
+        size: it.size ?? 0,
+        status: "uploading",
+        kind: kindFromName(it.name),
+        date: null,
+        modifiedAt: null,
+        createdAt: null,
+        // Nothing has tried this yet — it was dropped a moment ago and the deposit command is still in
+        // flight. `null` is exactly right and is exactly why `uploadStall` treats a null attempt as "queued",
+        // not "abandoned": otherwise every fresh drop would flag itself the instant it appeared.
+        lastAttemptAt: null,
+        error: null,
+        failureKind: null,
+        depositId: null, // the daemon mints the batch; the post-runFinished reread carries its id
+        sourcePath: it.sourcePath ?? null, // remembered so a failed upload can be retried
+      }));
+      if (rows.length === 0) return [];
+      // Optimistic only — instant `uploading` feedback. The caller fires the REAL daemon `deposit`; its ack
+      // names the batch (`depositAccepted`) and its run's events drive the truth: on that run's runFinished
+      // the read past it carries the archived files (✓) or the failures, and these rows go. If the deposit
+      // COMMAND itself rejects (e.g. a stale daemon), the caller flips them ⚠ with the reason instead. We
+      // never fake-settle to `frozen` on a timer.
+      add({ kind: "deposit", rows, depositId: null });
+      return rows.map((r) => r.id);
+    },
+    [add],
+  );
+
+  const depositAccepted = useCallback((ids: string[], depositId: string): void => {
     if (ids.length === 0) return;
-    const set = new Set(ids);
-    // A row flipped to `failed` from here is a command the daemon refused outright — a fault that won't
-    // fix itself by retrying the same way, i.e. `permanent`, with the rejection as its detail.
-    const failureKind = status === "failed" ? "permanent" : null;
-    setBase((prev) => prev.map((f) => (set.has(f.id) ? { ...f, status, error: reason, failureKind } : f)));
+    setOps((prev) => acceptDeposit(prev, ids, depositId, () => ++opSeq));
   }, []);
 
-  const restoreRows = useCallback((rows: ArchivedFile[]): void => {
-    if (rows.length === 0) return;
-    const byId = new Map(rows.map((r) => [r.id, r]));
-    setBase((prev) => prev.map((f) => byId.get(f.id) ?? f));
-  }, []);
+  const setDepositStatus = useCallback(
+    (ids: string[], status: FileStatus, reason: string | null = null): OpHandle => {
+      // A row flipped to `failed` from here is a command the daemon refused outright — a fault that won't
+      // fix itself by retrying the same way, i.e. `permanent`, with the rejection as its detail.
+      const patch: Partial<ArchivedFile> = { status, error: reason, failureKind: status === "failed" ? "permanent" : null };
+      return add({ kind: "patch", byId: Object.fromEntries(ids.map((id) => [id, patch])) }).handle;
+    },
+    [add],
+  );
 
-  const rename = useCallback((target: RowTarget, newName: string): void => {
-    const trimmed = newName.trim();
-    if (!trimmed) return;
-    if (target.kind === "file") {
-      setBase((prev) =>
-        prev.map((f) => (f.id === target.id ? { ...f, relativePath: withName(f.relativePath, trimmed) } : f)),
-      );
-    } else {
-      const dest = withName(target.path, trimmed);
-      setBase((prev) => prev.map((f) => ({ ...f, relativePath: rewritePrefix(f.relativePath, target.path, dest) })));
-      setVirtualFolders((prev) => prev.map((p) => rewritePrefix(p, target.path, dest)));
-    }
-  }, []);
+  const rename = useCallback(
+    (target: RowTarget, newName: string): OpHandle => add({ kind: "rename", target, name: newName.trim() }).handle,
+    [add],
+  );
 
-  const move = useCallback((targets: RowTarget[], toDir: string): void => {
-    setBase((prev) =>
-      prev.map((f) => {
-        for (const t of targets) {
-          if (t.kind === "file" && f.id === t.id) return { ...f, relativePath: reparent(f.relativePath, toDir) };
-          if (t.kind === "folder") {
-            const dest = reparent(t.path, toDir);
-            if (f.relativePath === t.path || f.relativePath.startsWith(`${t.path}/`))
-              return { ...f, relativePath: rewritePrefix(f.relativePath, t.path, dest) };
-          }
-        }
-        return f;
-      }),
-    );
-    setVirtualFolders((prev) =>
-      prev.map((p) => {
-        for (const t of targets) if (t.kind === "folder") p = rewritePrefix(p, t.path, reparent(t.path, toDir));
-        return p;
-      }),
-    );
-  }, []);
+  const move = useCallback(
+    (targets: RowTarget[], toDir: string): OpHandle => add({ kind: "move", targets, toDir }).handle,
+    [add],
+  );
 
-  const remove = useCallback((targets: RowTarget[]): void => {
-    const fileIds = new Set(targets.filter((t) => t.kind === "file").map((t) => (t as { id: string }).id));
-    const folders = targets.filter((t) => t.kind === "folder").map((t) => t.path);
-    const underAFolder = (path: string): boolean =>
-      folders.some((dir) => path === dir || path.startsWith(`${dir}/`));
-    // Optimistic drop; the view fires the real `deletePath` (a journal tombstone — byte reclamation is
-    // deferred, 180-day min + repack). The next `listFiles` confirms it (tombstones are excluded there).
-    setBase((prev) => prev.filter((f) => !fileIds.has(f.id) && !underAFolder(f.relativePath)));
-    setVirtualFolders((prev) => prev.filter((p) => !folders.includes(p) && !underAFolder(p)));
-  }, []);
+  // Optimistic drop; the view fires the real `deletePath` (a journal tombstone — byte reclamation is
+  // deferred, 180-day min + repack). The read past its ack confirms it (tombstones are excluded there).
+  const remove = useCallback((targets: RowTarget[]): OpHandle => add({ kind: "remove", targets }).handle, [add]);
 
   const newFolder = useCallback(
-    (intoDir: string): string => {
+    (intoDir: string): { path: string; handle: OpHandle } => {
       // Pick a unique "untitled folder N" within intoDir.
       const siblings = new Set([
-        ...base.filter((f) => parentOf(f.relativePath) === intoDir).map((f) => baseName(f.relativePath)),
-        ...virtualFolders.filter((p) => parentOf(p) === intoDir).map(baseName),
+        ...overlaid.files.filter((f) => parentOf(f.relativePath) === intoDir).map((f) => baseName(f.relativePath)),
+        ...overlaid.folders.filter((p) => parentOf(p) === intoDir).map(baseName),
       ]);
       let name = "untitled folder";
       for (let i = 2; siblings.has(name); i++) name = `untitled folder ${i}`;
       const path = joinPath(intoDir, name);
-      setVirtualFolders((prev) => [...prev, path]);
-      return path;
+      return { path, handle: add({ kind: "newFolder", path }).handle };
     },
-    [base, virtualFolders],
+    [add, overlaid],
   );
 
-  return { files, virtualFolders, deposit, setDepositStatus, restoreRows, rename, move, remove, newFolder };
+  return {
+    files,
+    virtualFolders: overlaid.folders,
+    deposit,
+    depositAccepted,
+    setDepositStatus,
+    rename,
+    move,
+    remove,
+    newFolder,
+  };
 };

@@ -24,6 +24,7 @@ export type {
   ExcludeSuggestion,
   FileFailureKind,
   ListedFile,
+  ListedFiles,
   Method,
   RetryFilesResult,
   ParamsArg,

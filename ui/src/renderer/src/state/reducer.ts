@@ -18,6 +18,7 @@ import type {
   EntitlementStatus,
   ExcludeSuggestion,
   ListedFile,
+  ListedFiles,
   RestoreRow,
   Source,
   Status,
@@ -28,6 +29,10 @@ import type {
 /** Live progress of the current/most-recent run, folded from runStarted/fileArchived/runFinished. */
 export interface RunProgress {
   active: boolean;
+  /** The batch this run is for (`runStarted.depositId`) — `null` for a scheduled/watched-folder scan.
+   * What tells a deposit's run (banner from the first moment) from a scan pass (banner only once it
+   * actually uploads). */
+  depositId: string | null;
   /** Files archived so far (live count while active; final total when finished). */
   filesArchived: number;
   /** Total in scope. Known from the FIRST `runProgress` tick now (the daemon reports it at plan time), not
@@ -128,6 +133,13 @@ export interface AppState {
   /** The browsable tree, straight from the daemon's `listFiles` (journal-backed). Raw wire shape —
    * the file-browser maps it to its own model. Empty until the first read lands. */
   files: ListedFile[];
+  /** The tree revision `files` was read at (see `ListedFiles`). A `filesLoaded` carrying an OLDER revision
+   * is discarded — replies don't arrive in execution order, and a stale read must never regress the tree.
+   * Also the clock the file browser settles its optimistic edits against. Reset with the slice. */
+  filesRevision: number;
+  /** Tree revision at which each deposit's run finished, by batch id (`runFinished.depositId`/`revision`) —
+   * the moment a deposit's optimistic rows can go, once a read at or past it has landed. Bounded. */
+  depositRuns: Record<string, number>;
   /** Whether `files` is a real answer. `[]` alone cannot say: the slice STARTS empty, a signed-out daemon
    * answers `[]` successfully, and a failed read leaves whatever was there. All three rendered as "your
    * vault is empty, drop something" over a 140k-file vault (2026-08-25). So the load carries its own state
@@ -178,6 +190,8 @@ export const initialState: AppState = {
   appInfo: null,
   status: null,
   files: [],
+  filesRevision: 0,
+  depositRuns: {},
   filesLoad: { state: "pending" },
   excludes: [],
   excludeSuggestions: [],
@@ -208,7 +222,7 @@ export type Action =
   | { type: "appInfoLoaded"; appInfo: AppInfo }
   | { type: "statusLoaded"; status: Status }
   | { type: "sourcesLoaded"; sources: Source[] }
-  | { type: "filesLoaded"; files: ListedFile[] }
+  | { type: "filesLoaded"; listed: ListedFiles }
   | { type: "filesLoadFailed"; error: string }
   | { type: "excludesLoaded"; excludes: string[] }
   | { type: "excludeSuggestionsLoaded"; suggestions: ExcludeSuggestion[] }
@@ -228,6 +242,7 @@ export const eventAction = <E extends DaemonEventName>(name: E, data: DaemonEven
 
 const RECENT_CAP = 50;
 const FAILURE_CAP = 100;
+const DEPOSIT_RUN_CAP = 100;
 /** How far back the rate/ETA window looks, in ms. A TIME window, deliberately, over the tick-count window
  * it replaced (2026-08-24): the daemon ticks `runProgress` on every event — each file starting, each
  * file archived, each 64 MiB part shipped — and only the last kind moves bytes. On a 30 GB folder of tiny
@@ -261,8 +276,9 @@ export const foldSample = (
 
 /** A fresh run-progress record — used at `runStarted` and as a defensive fallback if a `fileArchived`
  * arrives before one (counts/total become known as events flow / at `runFinished`). */
-const startedRun = (): RunProgress => ({
+const startedRun = (depositId: string | null = null): RunProgress => ({
   active: true,
+  depositId,
   filesArchived: 0,
   filesTotal: null,
   bytesUploaded: 0,
@@ -319,7 +335,11 @@ const num = (s: string | undefined): number => {
 export const reducer = (state: AppState, action: Action): AppState => {
   switch (action.type) {
     case "connection":
-      return { ...state, connection: action.state };
+      // A (re)connect is a fresh daemon process as far as the tree revision goes — it counts from zero per
+      // process — so what we hold must not outrank the first read the new connection makes.
+      return action.state === "connected" && state.connection !== "connected"
+        ? { ...state, connection: action.state, filesRevision: 0, depositRuns: {} }
+        : { ...state, connection: action.state };
 
     case "initialized":
       return { ...state, initializing: false };
@@ -341,6 +361,8 @@ export const reducer = (state: AppState, action: Action): AppState => {
         auth: action.auth,
         status: null,
         files: [],
+        filesRevision: 0,
+        depositRuns: {},
         filesLoad: { state: "pending" },
         excludes: [],
         run: null,
@@ -376,8 +398,13 @@ export const reducer = (state: AppState, action: Action): AppState => {
       // Patch sources onto the snapshot; if no snapshot yet, hold them until getStatus lands.
       return state.status ? { ...state, status: { ...state.status, sources: action.sources } } : state;
 
-    case "filesLoaded":
-      return { ...state, files: action.files, filesLoad: { state: "loaded" } };
+    case "filesLoaded": {
+      // Monotonic: a read older than the one shown is a stale reply that overtook nothing — discard it.
+      // (Equal is accepted: the same revision read twice is the same tree, and the load state may need it.)
+      const { revision, files } = action.listed;
+      if (revision < state.filesRevision) return state;
+      return { ...state, files, filesRevision: revision, filesLoad: { state: "loaded" } };
+    }
     case "filesLoadFailed":
       // Keep the last good tree (stale beats blank); only the load state says it couldn't be refreshed.
       return { ...state, filesLoad: { state: "failed", error: action.error } };
@@ -416,7 +443,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
 const foldEvent = (state: AppState, action: EventAction): AppState => {
   switch (action.name) {
     case "runStarted":
-      return { ...state, run: startedRun() };
+      return { ...state, run: startedRun(action.data.depositId || null) };
 
     case "fileArchived": {
       const { file, blob } = action.data;
@@ -486,10 +513,17 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
     case "runFinished": {
       const d = action.data;
       const prev = state.run;
+      // A deposit's run is over: note the revision its rows are final at (bounded — a session's worth of
+      // drops, not a history). The browser drops that deposit's optimistic rows on the first read past it.
+      const depositRuns = d.depositId
+        ? Object.fromEntries([...Object.entries(state.depositRuns), [d.depositId, num(d.revision)]].slice(-DEPOSIT_RUN_CAP))
+        : state.depositRuns;
       return {
         ...state,
+        depositRuns,
         run: {
           active: false,
+          depositId: d.depositId || null,
           filesArchived: num(d.filesArchived),
           filesTotal: num(d.filesTotal),
           // Snap the bar to 100%: the run is done, so uploaded == total by definition (carry the known total).

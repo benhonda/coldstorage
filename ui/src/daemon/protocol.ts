@@ -52,6 +52,20 @@ export interface Ack {
   ok: boolean;
 }
 
+/** `TreeAckDTO` — the ack of a command that EDITED THE TREE (`movePath`/`createFolder`/…): `revision` is
+ *  the tree revision the edit landed at, so the app knows which `listFiles` read is the first that reflects
+ *  it. See {@link ListedFiles} for the scheme. */
+export interface TreeAck extends Ack {
+  revision: number;
+}
+
+/** `DepositAckDTO` — `deposit`/`depositPhotos`' ack. `depositId` is the batch id, minted BEFORE the
+ *  fire-and-forget run so the app can tie its optimistic rows to the `runStarted`/`runFinished` events that
+ *  will carry the same id (and settle those rows on the run's outcome). */
+export interface DepositAck extends Ack {
+  depositId: string;
+}
+
 /** `SourceDTO` — one registered ingest source. */
 export interface Source {
   id: string;
@@ -116,6 +130,19 @@ export interface ListedFile {
   failureKind: FileFailureKind | null;
 }
 
+/**
+ * `FilesDTO` — `listFiles`' answer: the rows and the tree `revision` they were read at (taken in one daemon
+ * actor turn, so it is exactly the state these rows describe). The revision is the app's reconciliation
+ * clock: a `listFiles` older than the one already shown is discarded, and an optimistic edit is held on top
+ * of the tree until a read at or past its ack's revision arrives. Replies don't arrive in execution order
+ * (a big `listFiles` encodes long after a one-line ack), so arrival order alone put moved folders back
+ * where they came from for a beat, and wiped in-flight upload rows (2026-09-03).
+ */
+export interface ListedFiles {
+  revision: number;
+  files: ListedFile[];
+}
+
 /** Why a file's upload failed — the closed set the app renders copy from (`views/uploads/failure.ts`).
  * The journal used to store the sentence itself, which froze last month's wording onto last month's rows;
  * now it stores the kind and the app owns the words. Mirrors Swift `FileFailureKind`. */
@@ -156,6 +183,9 @@ export interface Deposit {
 export interface RetryFilesResult {
   queued: number;
   missing: number;
+  /** The tree revision after the requeue — the app's optimistic "uploading" flip on these rows holds
+   *  until a read at or past it. */
+  revision: number;
 }
 
 /** How a deposit resolves a name-collision (the Finder-style prompt). Mirrors Swift `ConflictPolicy`.
@@ -407,7 +437,7 @@ export interface Commands {
   ping: { params: Record<string, never>; result: Ack };
   getStatus: { params: Record<string, never>; result: Status };
   listSources: { params: Record<string, never>; result: Source[] };
-  listFiles: { params: Record<string, never>; result: ListedFile[] };
+  listFiles: { params: Record<string, never>; result: ListedFiles };
   /** Register a watched folder. `mountPath` is the vault-relative destination its tree lands under in My
    * Files; omit/empty → the daemon defaults to the source's basename (never root, to keep mounts namespaced). */
   addSource: { params: { path: string; mountPath?: string }; result: Ack };
@@ -428,7 +458,7 @@ export interface Commands {
    * just this once" at the drop-time suggestion prompt. Deliberately not the excludes registry: *not this
    * time* and *never again* are different answers, and offering the first must never quietly do the
    * second. "Remember this" is a separate `addExclude` the app issues alongside. */
-  deposit: { params: { src: string; dest: string; conflicts?: string; excludeExtra?: string }; result: Ack };
+  deposit: { params: { src: string; dest: string; conflicts?: string; excludeExtra?: string }; result: DepositAck };
   /** The user's Try again / Locate… on FAILED rows: re-ingest exactly those journal rows (same id, same
    * vault path — never a second file beside the failed one) from each row's own `sourcePath`. ONE scope:
    * `ids` (newline-joined file ids), `all: "true"` (every failed row), `depositId` (a batch), or
@@ -445,7 +475,7 @@ export interface Commands {
   listDeposits: { params: Record<string, never>; result: Deposit[] };
   /** The Uploads page's "Remove these" on a batch that didn't finish: tombstone its `failed` rows (nothing
    * landed for them, so no bytes are at stake). Emits `filesChanged`. */
-  removeFailedFiles: { params: { depositId: string }; result: Ack };
+  removeFailedFiles: { params: { depositId: string }; result: TreeAck };
   /** Drop a settled batch from the history; its files stay in the tree, unowned. The daemon refuses while
    * the batch is still owed or any of its files is `failed` — remove those first. Emits `depositsChanged`. */
   forgetDeposit: { params: { depositId: string }; result: Ack };
@@ -454,7 +484,7 @@ export interface Commands {
    * localIdentifiers — only the picked assets are read, never the whole library. Mac-only (PhotoKit); off
    * macOS the daemon emits an `error` event. Fire-and-forget — the reply acks, progress/outcome arrive as
    * runStarted/fileArchived/blobFailed/runFinished events (exactly like `deposit`). */
-  depositPhotos: { params: { assetIds: string; dest: string; conflicts?: string }; result: Ack };
+  depositPhotos: { params: { assetIds: string; dest: string; conflicts?: string }; result: DepositAck };
   /** Dry-run a deposit's PLACEMENT (no upload): resolve where each dropped file / picked photo would land
    * (same logic as `deposit`/`depositPhotos`) and report which targets already exist — the collisions the UI
    * prompts on (Keep Both / Replace / Skip). Pass `src` (newline-joined absolute paths) OR `assetIds`
@@ -467,11 +497,11 @@ export interface Commands {
   /** Reorganize: relocate the subtree at `from` → `to` — a file/folder MOVE or RENAME (a rename is just a
    * move to a sibling path). A cheap journal `relativePath` edit (no S3, no thaw, the blob never moves);
    * the stable file id is unchanged. Emits `filesChanged`. */
-  movePath: { params: { from: string; to: string }; result: Ack };
+  movePath: { params: { from: string; to: string }; result: TreeAck };
   /** Anchor an empty folder so it survives a reload: writes a path-only journal marker (no S3, no thaw).
    * The tree is derived from file paths, so an empty folder otherwise has nothing to imply it. Idempotent
    * on `path` (a no-op if a real file already sits there). Emits `filesChanged`. */
-  createFolder: { params: { path: string }; result: Ack };
+  createFolder: { params: { path: string }; result: TreeAck };
   /** Would a scan find this path again tomorrow — i.e. is it still on disk inside a live watched folder?
    * Ask BEFORE deleting, so the confirm dialog can say so up front and offer `alsoIgnore` in the same
    * step. Answered by looking at the filesystem, not by guessing from source config. */
@@ -492,7 +522,7 @@ export interface Commands {
     params: { path: string; alsoIgnore?: "true" | "false" };
     /** `isWatched`: the file is still on disk inside a live watched folder, so a scan would find it again
      *  (`DeleteResultDTO`); `ignored`: we also added the exclude, so it won't. */
-    result: { ok: boolean; isWatched: boolean; ignored: boolean };
+    result: TreeAck & { isWatched: boolean; ignored: boolean };
   };
   /** What restoring these files would take to serve — the input to the backend's `POST /retrieval/quote`
    * (root RETRIEVAL.md). Ask this BEFORE showing any price: a restore is billed on the whole BLOBS that
@@ -632,7 +662,10 @@ type StringParams = Record<string, string | undefined>;
  * which command fired it; the controller's response to any of them is to refetch `listSources`.
  */
 export interface DaemonEvents {
-  runStarted: Record<string, never>;
+  /** `depositId` names the batch this run is for — "" for a scheduled/watched-folder scan. The app shows
+   *  a deposit's banner from this moment (the hash walk inside the run is real work with nothing to count
+   *  yet); a scan's only once it actually uploads something. */
+  runStarted: { depositId: string };
   fileArchived: { file: string; blob: string };
   /** Determinate per-file upload progress (bytes uploaded / encrypted total), emitted once per 64 MiB
    * part for a solo (large-file) blob. `file` is the journal id, `path` the relativePath — the UI matches
@@ -656,7 +689,16 @@ export interface DaemonEvents {
   /** `blobsFailed` counts FAULTS only. `filesStopped` is how many files a `cancelRun` left un-uploaded —
    * reported apart so the UI says "stopped", not "couldn't upload", about work the user ended on purpose.
    * Absent on the early-abort path (a run that threw before planning). */
-  runFinished: { filesArchived: string; filesTotal: string; blobsFailed: string; filesStopped?: string };
+  /** `depositId` as on `runStarted`; `revision` is the tree revision after the run's row edits — the read
+   *  that settles this deposit's optimistic rows is the first at or past it. */
+  runFinished: {
+    filesArchived: string;
+    filesTotal: string;
+    blobsFailed: string;
+    filesStopped?: string;
+    depositId: string;
+    revision: string;
+  };
   /** A blob that failed to archive this pass. `paths` is the newline-joined relativePaths of the files it
    * batched (used to flip their rows live); permanent failures are also persisted as a per-file `failed`
    * status in the journal, so the ⚠ survives the next `listFiles` read. */
@@ -671,7 +713,21 @@ export interface DaemonEvents {
   /** The journal tree changed via a reorganize/delete/new-folder (`movePath`/`deletePath`/`createFolder`).
    * Carries the affected path (`moved`+`to`, XOR `deleted`, XOR `created`) for logging; the controller's
    * response is to re-read `listFiles`. */
-  filesChanged: { moved?: string; to?: string; deleted?: string; created?: string };
+  filesChanged: {
+    moved?: string;
+    to?: string;
+    deleted?: string;
+    created?: string;
+    retried?: string;
+    missingSource?: string;
+    interruptedUploads?: string;
+    /** The tree just changed OWNER (sign-in / sign-out) — the controller's cue for a full resync, where any
+     *  other payload is a plain tree edit that needs only the tree (and the counts) re-read. */
+    signedIn?: string;
+    signedOut?: string;
+    /** The tree revision this edit landed at. */
+    revision: string;
+  };
   /** The transfer list moved — re-read `listRestores`. ONE event for the whole list, deliberately: a
    * per-state event carrying a fragment is what invited the renderer to fold its own parallel copy, and
    * that copy is what silently lost an in-flight transfer on sign-out. The journal is the SSOT; this event
