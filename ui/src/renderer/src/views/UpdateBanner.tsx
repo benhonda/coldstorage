@@ -4,9 +4,13 @@
  * update installs on the next quit regardless; this just lets the user apply it now. Checking/downloading
  * stay invisible (background, non-blocking), matching the calm, no-urgency voice.
  *
+ * Rendered above the sign-in/vault gates as well as the shell (see `App.tsx`): a ready build is a fact about
+ * the app, not about the page you happen to be on.
+ *
  * **Dismissable, because an offer you can't decline is a nag.** Nothing is lost by closing it: the update
- * still installs on quit, and Settings' {@link VersionFooter} keeps saying so for as long as it's true —
- * that footer, not this banner, is where the update machinery is permanently visible (PILLAR5). Dismissal
+ * still installs on quit, Settings' {@link VersionFooter} keeps saying so for as long as it's true, and the
+ * app menu's item reads "Restart to Update" until then (`main/menu.ts`) — those, not this banner, are where
+ * the update machinery is permanently visible (PILLAR5). Dismissal
  * is per VERSION, so a newer build that lands later gets to ask once too, and it deliberately doesn't
  * persist across launches: quitting is what applies the update, so there's nothing left to re-nag about.
  */

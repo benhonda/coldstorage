@@ -497,13 +497,22 @@ Below the cards on **both** tabs, quiet and rule-separated: `coldstorage <versio
 version, and a `development build` marker when unpackaged. Beside it, the auto-updater's live state and a
 **Check for updates** button (a **Restart to update** button instead once a build is `ready`).
 
-This is the only place the updater is visible when it isn't interrupting: `UpdateBanner` shows at `ready`
-alone, which left checking, downloading and — the expensive one — *failing* completely silent. So the
-footer names the error in the updater's own words. It also needs `UpdateStatus.lastCheckedAt`: without a
-stamp, a manual check that finds nothing lands back on `idle` and reads as a button that did nothing, and
-"nothing newer as of 3:42pm" is indistinguishable from "we have never had an answer". A dev build says
-auto-update is off rather than offering a check that can never succeed. Wording is tested
-(`VersionFooter.test.ts`), not eyeballed.
+This is the only place in the renderer where the updater is visible when it isn't interrupting:
+`UpdateBanner` shows at `ready` alone, which left checking, downloading and — the expensive one — *failing*
+completely silent. So the footer names the error in the updater's own words. It also needs
+`UpdateStatus.lastCheckedAt`: without a stamp, a manual check that finds nothing lands back on `idle` and
+reads as a button that did nothing, and "nothing newer as of 3:42pm" is indistinguishable from "we have
+never had an answer". A dev build says auto-update is off rather than offering a check that can never
+succeed. The sentence lives in `shared/updateLine.ts` and is tested (`updateLine.test.ts`), not eyeballed.
+
+**From any screen: the app menu** (`main/menu.ts`). The footer is three clicks away and the banner needs a
+downloaded build, so neither is reachable from the sign-in and vault gates or from under a modal. The
+platform answer is **coldstorage ▸ Check for Updates…** — owned by main, so it exists whatever the renderer
+is showing. The item IS the updater status as a verb: "Restart to Update" at `ready`, inert while a
+check/download is in flight, disabled where a check can't succeed (the same `packaged` + `signature` test
+as the footer); the menu is rebuilt on every status push. A menu-started check answers in a native dialog
+in the footer's own sentence — one wording, two doors. Background checks stay silent. The banner, for its
+part, now renders above the gates too (`App.tsx`), so a ready build is offered on every screen.
 
 Two fields, not one, decide whether a check is worth offering: `AppInfo.packaged` **and**
 `AppInfo.signature` (`main/updater/signature.ts` — a memoized `codesign` read). A build that isn't

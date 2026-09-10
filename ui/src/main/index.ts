@@ -38,6 +38,7 @@ import { AccountManager } from "./account/manager.ts";
 import { registerAccountIpc } from "./account/ipc.ts";
 import { UpdateManager, type UpdaterPort } from "./updater/manager.ts";
 import { registerUpdateIpc } from "./updater/ipc.ts";
+import { installAppMenu } from "./menu.ts";
 
 // The build's install identity (productName + deep-link scheme), from the baked config (ui/identity.json →
 // bake). Per lane, so a staging build is "ColdStorage Staging.app" with its own data dir + coldstorage-staging://
@@ -140,6 +141,8 @@ const updaterPort: UpdaterPort = app.isPackaged
     };
 const updater = new UpdateManager(updaterPort);
 const disposeUpdateIpc = registerUpdateIpc(updater);
+/** Set in `whenReady` — the menu needs `ready`; until then this is a no-op disposer. */
+let disposeMenu = (): void => {};
 
 // ── Deep links (macOS delivers them as open-url, launch AND while running). Registered before
 //    `ready` because a URL can be what LAUNCHES the app — those arrive pre-ready and are buffered.
@@ -360,6 +363,8 @@ app.whenReady().then(() => {
     // the renderer shows a quiet "Restart to update" affordance when one is ready (update-downloaded).
     updater.start();
   }
+  // The app menu carries "Check for Updates…" / "Restart to Update" on every screen (menu.ts).
+  disposeMenu = installAppMenu(updater);
 
   // Dial the daemon. If it's not up yet (the child is still binding its socket), autoReconnect keeps
   // retrying; the renderer shows "connecting" until a 'connect' lifecycle push arrives. Non-fatal.
@@ -404,6 +409,7 @@ app.on("will-quit", () => {
   disposeEntitlementIpc();
   disposeAccountIpc();
   disposeUpdateIpc();
+  disposeMenu();
   offIdToken();
   offEntitlementQuota();
   offClientConnect();

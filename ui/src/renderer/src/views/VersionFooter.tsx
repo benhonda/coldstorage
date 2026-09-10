@@ -3,73 +3,18 @@
  * content, on both tabs) because "which version am I running?" is a question about the app, not about one
  * subpage; it's the line a support conversation opens with.
  *
- * It's also the only place the update machinery is *visible* when it isn't demanding anything (PILLAR5).
- * {@link UpdateBanner} appears solely at `ready` — deliberate, it's an interruption — which leaves
- * checking, downloading and, most importantly, FAILING entirely invisible. A silent auto-updater that has
- * been erroring for weeks looks exactly like one that has nothing to do; here the two read differently,
- * and the manual check gives an answer instead of a button that seems to do nothing.
+ * It's also the only place in the renderer where the update machinery is *visible* when it isn't demanding
+ * anything (PILLAR5). {@link UpdateBanner} appears solely at `ready` — deliberate, it's an interruption —
+ * which leaves checking, downloading and, most importantly, FAILING entirely invisible. A silent
+ * auto-updater that has been erroring for weeks looks exactly like one that has nothing to do; here the two
+ * read differently, and the manual check gives an answer instead of a button that seems to do nothing.
+ *
+ * The same check is reachable from every screen via the app menu (`main/menu.ts`), which answers in a
+ * native dialog using the same `updateLine` sentence — one wording, two doors.
  */
 import type { AppInfo, UpdateStatus } from "../../../shared/ipc.ts";
+import { updateLine } from "../../../shared/updateLine.ts";
 import { Button, Icon } from "../ui/primitives.tsx";
-
-/** How the update line reads: its words, and whether it's a problem. `busy` disables the check button. */
-export interface UpdateLine {
-  text: string;
-  tone: "quiet" | "accent" | "bad";
-  busy: boolean;
-}
-
-/** "just now" inside a minute, else the clock time the answer came back. */
-const checkedAt = (at: number, now: number): string =>
-  now - at < 60_000 ? "just now" : `at ${new Date(at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
-
-/**
- * The update sentence for a given status. Pure (takes `now`) — the wording IS the feature here, so it's
- * tested rather than eyeballed. Takes the whole {@link AppInfo} because two of its fields, not one,
- * decide whether a check is even meaningful.
- *
- * Both short-circuits exist so the footer never offers a check that cannot succeed:
- *  - not packaged → a dev build, where the updater is an inert no-op port.
- *  - packaged but not Developer ID signed → the check and the download WILL work and the install will be
- *    refused by Squirrel.Mac. Saying "up to date" there would be the most misleading thing on the page,
- *    so this case is named before any status is consulted.
- */
-export const updateLine = (update: UpdateStatus, app: Pick<AppInfo, "packaged" | "signature">, now: number): UpdateLine => {
-  if (!app.packaged) return { text: "Auto-update is off in a development build.", tone: "quiet", busy: true };
-  if (app.signature === "other") {
-    // Not an error state — nothing has failed yet. It's a property of this install, and the only fix is
-    // a reinstall, so the sentence says that rather than leaving a dead "Check for updates" to press.
-    return { text: "This build isn't signed for distribution, so it can't auto-update. Reinstall from a release to fix it.", tone: "bad", busy: true };
-  }
-  switch (update.state) {
-    case "checking":
-      return { text: "Checking for updates…", tone: "quiet", busy: true };
-    case "available":
-      return { text: `Downloading ${update.version ? `version ${update.version}` : "a new version"}…`, tone: "accent", busy: true };
-    case "downloading":
-      return {
-        text: `Downloading ${update.version ? `version ${update.version}` : "a new version"}… ${update.percent ?? 0}%`,
-        tone: "accent",
-        busy: true,
-      };
-    case "ready":
-      return {
-        text: `${update.version ? `Version ${update.version}` : "A new version"} is ready — it installs when you quit.`,
-        tone: "accent",
-        busy: true,
-      };
-    case "error":
-      // Named, not swallowed: this is the state that otherwise rots silently. The daemon's own words come
-      // with it, since "couldn't check" and "couldn't download" want different fixes.
-      return { text: update.error ? `Couldn't check for updates — ${update.error}` : "Couldn't check for updates.", tone: "bad", busy: false };
-    case "idle":
-      // `idle` is two different facts. With a stamp it's a real answer ("we asked, nothing newer"); without
-      // one we've never had an answer, so it claims nothing.
-      return update.lastCheckedAt == null
-        ? { text: "Haven't checked for updates yet.", tone: "quiet", busy: false }
-        : { text: `Up to date — checked ${checkedAt(update.lastCheckedAt, now)}.`, tone: "quiet", busy: false };
-  }
-};
 
 /** `api-staging.coldstorage.sh` from `https://api-staging.coldstorage.sh`. The lane is a task-supplied URL
  * every fetch has already gone through; if it didn't parse, nothing else in the app would be working. */

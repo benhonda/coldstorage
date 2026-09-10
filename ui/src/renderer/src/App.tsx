@@ -528,104 +528,122 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
     [api, toast],
   );
 
-  // Startup: show a neutral "checking…" card until we actually know the sign-in state, rather than
-  // flashing the shell or the login screen and then correcting it. Two windows: `initializing` (before
-  // main's first status push arrives) and `auth.state === "restoring"` (main IS checking a saved session
-  // — a returning user must not flash past "Continue with Google"). After every hook above, so the hook
-  // order is identical across renders.
-  if (state.initializing || state.auth.state === "restoring") {
-    return (
-      <SignInView
-        auth={state.auth}
-        onSignIn={() => {}}
-        onEmailStart={() => Promise.resolve()}
-        onEmailSubmit={() => Promise.resolve()}
-        onEmailCancel={() => {}}
-        onCancelSignIn={() => {}}
-        checking
-      />
-    );
-  }
+  // "Restart to update" is an offer about the app, not about a page — so it floats over the gates (sign-in,
+  // recovery code, onboarding, vault) as well as the shell. Fixed-position, so it costs the gates nothing.
+  const banner = <UpdateBanner update={state.update} onRestart={() => void api.restartToUpdate()} />;
 
-  // Sign-in + vault gates (Phase 5): a configured (multi-user) install shows the shell only once the
-  // user is signed in AND the zero-knowledge vault is unlocked — uploads have no per-user prefix without
-  // a user, and no encryption key without an unlocked vault. Dogfood mode (unconfigured) never sees any
-  // of this. After every hook above, so the hook order is identical with and without a gate.
-  if (state.auth.configured) {
-    if (state.auth.state !== "signedIn") {
+  // The gate screens, evaluated in order; null once the shell may show. An IIFE so the early returns read
+  // as they always have while the banner still gets to render on top of whichever screen won.
+  const gate = ((): React.JSX.Element | null => {
+    // Startup: show a neutral "checking…" card until we actually know the sign-in state, rather than
+    // flashing the shell or the login screen and then correcting it. Two windows: `initializing` (before
+    // main's first status push arrives) and `auth.state === "restoring"` (main IS checking a saved session
+    // — a returning user must not flash past "Continue with Google"). After every hook above, so the hook
+    // order is identical across renders.
+    if (state.initializing || state.auth.state === "restoring") {
       return (
         <SignInView
           auth={state.auth}
-          onSignIn={() => void api.signIn()}
-          onEmailStart={(email) => api.startEmailSignIn(email)}
-          onEmailSubmit={(code) => api.submitEmailCode(code)}
-          onEmailCancel={() => void api.cancelEmailSignIn()}
-          onCancelSignIn={() => void api.cancelSignIn()}
+          onSignIn={() => {}}
+          onEmailStart={() => Promise.resolve()}
+          onEmailSubmit={() => Promise.resolve()}
+          onEmailCancel={() => {}}
+          onCancelSignIn={() => {}}
+          checking
         />
       );
     }
-    const v = state.vault;
-    const email = state.auth.email;
-    const signOut = (): void => void api.signOut();
-    // Existing account on a NEW device: recovery-code entry comes before anything else (the wizard is
-    // for first-run setup; a device handoff isn't one — though an unfinished account will still get
-    // the wizard's remaining steps right after this unlock).
-    if (v.state === "needsRecoveryCode") {
-      return <RecoveryCodeEnter email={email} onSubmit={(code) => api.submitRecoveryCode(code)} onSignOut={signOut} />;
+
+    // Sign-in + vault gates (Phase 5): a configured (multi-user) install shows the shell only once the
+    // user is signed in AND the zero-knowledge vault is unlocked — uploads have no per-user prefix without
+    // a user, and no encryption key without an unlocked vault. Dogfood mode (unconfigured) never sees any
+    // of this. After every hook above, so the hook order is identical with and without a gate.
+    if (state.auth.configured) {
+      if (state.auth.state !== "signedIn") {
+        return (
+          <SignInView
+            auth={state.auth}
+            onSignIn={() => void api.signIn()}
+            onEmailStart={(email) => api.startEmailSignIn(email)}
+            onEmailSubmit={(code) => api.submitEmailCode(code)}
+            onEmailCancel={() => void api.cancelEmailSignIn()}
+            onCancelSignIn={() => void api.cancelSignIn()}
+          />
+        );
+      }
+      const v = state.vault;
+      const email = state.auth.email;
+      const signOut = (): void => void api.signOut();
+      // Existing account on a NEW device: recovery-code entry comes before anything else (the wizard is
+      // for first-run setup; a device handoff isn't one — though an unfinished account will still get
+      // the wizard's remaining steps right after this unlock).
+      if (v.state === "needsRecoveryCode") {
+        return <RecoveryCodeEnter email={email} onSubmit={(code) => api.submitRecoveryCode(code)} onSignOut={signOut} />;
+      }
+      // The first-run wizard — active while the account still owes onboarding facts (name, tour,
+      // confirmed recovery code). Fails OPEN: if the account fetch never landed (`known: false`), the
+      // wizard stays out of the way and the plain vault gates below carry the session.
+      if (!onboardingDone && onboardingPending(state.account)) {
+        return (
+          <OnboardingWizard
+            api={api}
+            auth={state.auth}
+            vault={v}
+            account={state.account}
+            quotaBytes={state.entitlement.quotaBytes}
+            subscribed={subscribed}
+            onSignOut={signOut}
+            onDone={() => setOnboardingDone(true)}
+          />
+        );
+      }
+      // A one-time code outside the wizard: either a Settings › Account reissue (the account already
+      // confirmed a code — this replaces it), or the fallback for account facts unknown (the account
+      // server was unreachable while a fresh mint still produced a code), so it's never lost unseen.
+      if (v.recoveryCode) {
+        return (
+          <RecoveryCodeShow
+            code={v.recoveryCode}
+            email={email}
+            {...(state.account.recoveryCodeConfirmed
+              ? {
+                  intro:
+                    "Here's your new recovery code. Your old one no longer works. This is how you get back into your files on another computer — keep it somewhere you won't lose it.",
+                }
+              : {})}
+            onAcknowledge={() => {
+              void api.acknowledgeRecoveryCode();
+              void api.confirmRecoveryCode().catch(() => undefined);
+            }}
+            onSignOut={signOut}
+          />
+        );
+      }
+      if (v.state !== "unlocked") {
+        return (
+          <VaultGate
+            state={v.state}
+            error={v.error}
+            email={email}
+            connection={state.connection}
+            step={v.step}
+            stepSince={v.stepSince}
+            onSignOut={signOut}
+            onRetry={() => exec(() => api.retryVaultUnlock())}
+          />
+        );
+      }
     }
-    // The first-run wizard — active while the account still owes onboarding facts (name, tour,
-    // confirmed recovery code). Fails OPEN: if the account fetch never landed (`known: false`), the
-    // wizard stays out of the way and the plain vault gates below carry the session.
-    if (!onboardingDone && onboardingPending(state.account)) {
-      return (
-        <OnboardingWizard
-          api={api}
-          auth={state.auth}
-          vault={v}
-          account={state.account}
-          quotaBytes={state.entitlement.quotaBytes}
-          subscribed={subscribed}
-          onSignOut={signOut}
-          onDone={() => setOnboardingDone(true)}
-        />
-      );
-    }
-    // A one-time code outside the wizard: either a Settings › Account reissue (the account already
-    // confirmed a code — this replaces it), or the fallback for account facts unknown (the account
-    // server was unreachable while a fresh mint still produced a code), so it's never lost unseen.
-    if (v.recoveryCode) {
-      return (
-        <RecoveryCodeShow
-          code={v.recoveryCode}
-          email={email}
-          {...(state.account.recoveryCodeConfirmed
-            ? {
-                intro:
-                  "Here's your new recovery code. Your old one no longer works. This is how you get back into your files on another computer — keep it somewhere you won't lose it.",
-              }
-            : {})}
-          onAcknowledge={() => {
-            void api.acknowledgeRecoveryCode();
-            void api.confirmRecoveryCode().catch(() => undefined);
-          }}
-          onSignOut={signOut}
-        />
-      );
-    }
-    if (v.state !== "unlocked") {
-      return (
-        <VaultGate
-          state={v.state}
-          error={v.error}
-          email={email}
-          connection={state.connection}
-          step={v.step}
-          stepSince={v.stepSince}
-          onSignOut={signOut}
-          onRetry={() => exec(() => api.retryVaultUnlock())}
-        />
-      );
-    }
+
+    return null;
+  })();
+  if (gate) {
+    return (
+      <>
+        {gate}
+        {banner}
+      </>
+    );
   }
 
   return (
@@ -807,7 +825,7 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
         />
       )}
 
-      <UpdateBanner update={state.update} onRestart={() => void api.restartToUpdate()} />
+      {banner}
     </div>
   );
 };

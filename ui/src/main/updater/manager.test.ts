@@ -32,6 +32,23 @@ const CLOCK = 1_700_000_000_000;
 const clock = (): number => CLOCK;
 
 describe("UpdateManager", () => {
+  test("checkNow resolves with the folded outcome of that check", async () => {
+    const p = makePort();
+    const m = new UpdateManager(p.port, clock);
+    // The real port resolves its promise only after the outcome event fired; the fake mimics that order.
+    p.port.checkForUpdates = () => {
+      p.emit("update-not-available");
+      return Promise.resolve();
+    };
+    expect(await m.checkNow()).toEqual({ state: "idle", version: null, percent: null, error: null, lastCheckedAt: CLOCK });
+    // A rejected check is not an unhandled rejection — the `error` event is the channel for that.
+    p.port.checkForUpdates = () => {
+      p.emit("error", new Error("feed unreachable"));
+      return Promise.reject(new Error("feed unreachable"));
+    };
+    expect((await m.checkNow()).state).toBe("error");
+  });
+
   test("starts idle and turns on background auto-download", () => {
     const p = makePort();
     const m = new UpdateManager(p.port, clock);

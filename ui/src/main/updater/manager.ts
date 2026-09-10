@@ -104,6 +104,18 @@ export class UpdateManager {
     });
   }
 
+  /** A user-initiated check that wants an ANSWER, not just a kick — the app menu's "Check for Updates…"
+   * shows the outcome in a native dialog and has nothing else to watch. Resolves once electron-updater's
+   * check promise settles (after `update-available` / `update-not-available` / `error` has already folded
+   * into the status), with whatever the status is then. autoDownload means a found update is already on its
+   * way (`available`/`downloading`) by the time this resolves. */
+  async checkNow(): Promise<UpdateStatus> {
+    await this.#port.checkForUpdates().catch(() => {
+      /* surfaced as an `error` event → state "error" */
+    });
+    return this.#status;
+  }
+
   /** Quit-and-install a downloaded update. No-ops unless one is ready (electron-updater guards this too). */
   restart(): void {
     if (this.#status.state === "ready") this.#port.quitAndInstall();

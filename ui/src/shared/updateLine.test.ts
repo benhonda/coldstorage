@@ -1,11 +1,11 @@
 /**
- * The Settings footer's update sentence. This is copy that has to stay honest under states nobody looks
+ * The update sentence (Settings footer + the app menu's result dialog). This is copy that has to stay honest under states nobody looks
  * at by hand — a dev build that can't auto-update, a check that has never succeeded, and an updater
  * that's been failing quietly — so the wording is asserted rather than eyeballed.
  */
 import { describe, expect, test } from "bun:test";
-import type { AppInfo, UpdateStatus } from "../../../shared/ipc.ts";
-import { updateLine } from "./VersionFooter.tsx";
+import type { AppInfo, UpdateStatus } from "./ipc.ts";
+import { updateLine } from "./updateLine.ts";
 
 const NOW = 1_700_000_000_000;
 
