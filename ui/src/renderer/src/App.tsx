@@ -622,6 +622,7 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
           step={v.step}
           stepSince={v.stepSince}
           onSignOut={signOut}
+          onRetry={() => exec(() => api.retryVaultUnlock())}
         />
       );
     }

@@ -65,6 +65,7 @@ const api: ColdstoreApi = {
   },
 
   getVaultStatus: () => ipcRenderer.invoke(IPC.vaultStatus),
+  retryVaultUnlock: () => ipcRenderer.invoke(IPC.vaultRetry),
   submitRecoveryCode: (code: string) => ipcRenderer.invoke(IPC.vaultSubmitRecoveryCode, code),
   acknowledgeRecoveryCode: () => ipcRenderer.invoke(IPC.vaultAckRecoveryCode),
   reissueRecoveryCode: () => ipcRenderer.invoke(IPC.vaultReissueRecoveryCode),

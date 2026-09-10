@@ -92,6 +92,8 @@ export const IPC = {
   accountStatusChanged: "account:statusChanged",
   /** invoke: current {@link VaultStatus} — for first paint before any push arrives. */
   vaultStatus: "vault:status",
+  /** invoke: start a fresh handoff attempt now instead of waiting out the retry backoff. */
+  vaultRetry: "vault:retry",
   /** invoke: submit a recovery code to unlock the vault on a new device. */
   vaultSubmitRecoveryCode: "vault:submitRecoveryCode",
   /** invoke: acknowledge the one-time recovery code was saved (clears it from status). */
@@ -196,6 +198,8 @@ export interface VaultStatus {
   /** Set ONLY immediately after a fresh signup mint: the one-time recovery code to show the user once.
    * Never persisted, never re-derivable. Cleared as soon as the user acknowledges saving it. */
   recoveryCode: string | null;
+  /** The last failure, in the daemon's/backend's own words. In a waiting state it is what the retry in
+   * progress is retrying (shown under the step); in `error` it is why the handoff stopped. */
   error: string | null;
   /** What the handoff is doing RIGHT NOW, in words a user can read ("Signing the background service
    * in…", "Unlocking your encryption key…"), with when it started. The gate shows it and `main.log`
@@ -492,6 +496,9 @@ export interface ColdstoreApi {
   onAccount(listener: (status: AccountStatus) => void): () => void;
   /** Current vault status — for first paint before any {@link onVaultStatus} push arrives. */
   getVaultStatus(): Promise<VaultStatus>;
+  /** The gate's Try again: start a fresh sign-in + unlock handoff now, rather than waiting out the
+   * retry backoff. Resolves once the attempt is started (its outcome arrives via {@link onVaultStatus}). */
+  retryVaultUnlock(): Promise<void>;
   /** Submit a recovery code to unlock the vault on a new device. Rejects (with a message) on a wrong
    * code; a resolved promise means the vault is unlocking (watch {@link onVaultStatus}). */
   submitRecoveryCode(code: string): Promise<void>;

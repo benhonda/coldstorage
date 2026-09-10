@@ -60,6 +60,13 @@ export class VaultManager {
    * Provision the daemon's vault for the signed-in user. Called after `authenticate` succeeds (fresh
    * sign-in, hourly token refresh, and daemon reconnect). Idempotent: once a device has a cached MK,
    * every later call just re-sends `unlockVault` — which is exactly what a daemon reconnect needs.
+   *
+   * **Rejects on a retryable failure** (a daemon command that timed out or was refused, a backend that
+   * couldn't be reached) after recording it on the status, so the caller's retry loop (index.ts
+   * `provisionWithRetry`) actually runs. It used to swallow these into `state: "error"` and resolve —
+   * so the loop, which only retries a rejection, never fired, and the gate sat on "Couldn't unlock your
+   * encryption … it'll try again on its own" for the hour until the next token, retrying nothing
+   * (2026-09-10). Only a token with no account id is terminal: nothing about a retry changes it.
    */
   async provision(idToken: string): Promise<void> {
     // Serialize: a refresh and a reconnect can both fire; the second awaits the first rather than racing
@@ -109,7 +116,18 @@ export class VaultManager {
         this.setStatus({ state: "needsRecoveryCode", recoveryCode: null, error: null });
       }
     } catch (e) {
-      this.setStatus({ state: "error", recoveryCode: null, error: e instanceof Error ? e.message : String(e) });
+      // Still in progress as far as the user is concerned — the caller retries — so the state stays a
+      // waiting one and the message rides along for the gate to show under it. A device that was
+      // `unlocked` is not any more (the daemon that held the key may have restarted), so it falls back
+      // to `locked`, the ordinary "this Mac has the key and is re-sending it" wait.
+      const message = e instanceof Error ? e.message : String(e);
+      this.log.error(`vault handoff failed (will retry): ${message}`);
+      this.setStatus({
+        state: this.status.state === "provisioning" ? "provisioning" : "locked",
+        recoveryCode: this.status.recoveryCode,
+        error: message,
+      });
+      throw e;
     }
   }
 

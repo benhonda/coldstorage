@@ -335,6 +335,7 @@ export const OnboardingWizard = ({ api, auth, vault, account, quotaBytes, subscr
           step={vault.step}
           stepSince={vault.stepSince}
           onSignOut={onSignOut}
+          onRetry={() => void api.retryVaultUnlock().catch(() => undefined)}
         />
       );
     }

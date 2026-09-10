@@ -134,14 +134,19 @@ export const VaultGate = ({
   step,
   stepSince,
   onSignOut,
+  onRetry,
 }: {
   state: "locked" | "provisioning" | "error";
+  /** The last failure. In a waiting state the handoff is retrying it on its own (main's backoff loop)
+   * and it shows under the step, with Try again to skip the wait; in `error` it is why it stopped. */
   error: string | null;
   email: string | null;
   connection: ConnectionState;
   step: string | null;
   stepSince: number | null;
   onSignOut: () => void;
+  /** Start a fresh handoff attempt now. */
+  onRetry: () => void;
 }): React.JSX.Element => (
   <div className="cs-signin">
     <div className="cs-signin-card">
@@ -149,18 +154,34 @@ export const VaultGate = ({
       {state === "error" ? (
         <>
           <h1 className="cs-signin-title">Couldn&apos;t unlock your encryption</h1>
-          <p className="cs-signin-text">
-            {error ?? "Something went wrong."} It&apos;ll try again on its own — check your connection.
-          </p>
-          <Button variant="ghost" onClick={onSignOut}>
-            Sign out
-          </Button>
+          {/* A terminal failure — nothing is retrying. Say what happened in the failing side's own
+              words, and offer the two things that can change it. (The old line here promised a retry
+              that never ran and blamed the network for a local socket — 2026-09-10.) */}
+          <p className="cs-signin-text">{error ?? "Something went wrong."}</p>
+          <div className="cs-signin-actions">
+            <Button variant="primary" onClick={onRetry}>
+              Try again
+            </Button>
+            <Button variant="ghost" onClick={onSignOut}>
+              Sign out
+            </Button>
+          </div>
         </>
       ) : (
         <>
           <h1 className="cs-signin-title">{GATE_COPY[state].title}</h1>
           <p className="cs-signin-text">{GATE_COPY[state].body}</p>
           <HandoffStep connection={connection} step={step} stepSince={stepSince} />
+          {/* The wait is a RETRY: the last attempt failed, main is backing off, and the user can see
+              why and go now rather than sit out the wait. */}
+          {error && (
+            <>
+              <p className="cs-signin-error">Last try: {error}</p>
+              <Button variant="secondary" size="sm" onClick={onRetry}>
+                Try again now
+              </Button>
+            </>
+          )}
         </>
       )}
     </div>

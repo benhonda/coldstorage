@@ -104,9 +104,9 @@ describe("VaultManager.provision", () => {
     const logged: string[] = [];
     const failing = { get: () => Promise.reject(new Error("account server unreachable")), put: () => Promise.resolve() } as unknown as KeyBlobClient;
     const vault = new VaultManager(client, makeStore(), failing, undefined, { info: () => {}, error: (m) => logged.push(m) });
-    await vault.provision(tokenFor("user-1"));
-    expect(vault.vaultStatus().state).toBe("error");
-    expect(logged).toEqual(["vault handoff failed: account server unreachable"]);
+    await expect(vault.provision(tokenFor("user-1"))).rejects.toThrow("account server unreachable");
+    expect(vault.vaultStatus().error).toBe("account server unreachable");
+    expect(logged).toEqual(["vault handoff failed (will retry): account server unreachable"]);
   });
 
   test("no cache + no key-blob (new account) → mint, PUT the blob, escrow the MK, show the code once", async () => {
@@ -158,15 +158,41 @@ describe("VaultManager.provision", () => {
     expect(t.last().state).toBe("unlocked");
   });
 
-  test("backend failure surfaces as an error status (retryable), not a throw", async () => {
+  test("a backend failure is recorded on the status AND rejects, so the caller's retry loop runs", async () => {
     const store = makeStore();
     const failing = { get: () => Promise.reject(new Error("network down")) } as unknown as KeyBlobClient;
     const vault = new VaultManager(makeClient({}, []), store, failing);
     const t = track(vault);
 
-    await vault.provision(tokenFor("user-1"));
-    expect(t.last().state).toBe("error");
+    await expect(vault.provision(tokenFor("user-1"))).rejects.toThrow("network down");
+    // Not terminal: still the waiting state it was in, with the failure shown under it.
+    expect(t.last().state).toBe("provisioning");
     expect(t.last().error).toContain("network down");
+  });
+
+  test("a cached-key unlock that times out rejects and stays `locked` — the wait the retry narrates", async () => {
+    const store = makeStore({ "user-1": "bWs=" });
+    const client = {
+      request: () => Promise.reject(new Error("request 'unlockVault' (id 14) timed out after 10000ms")),
+    } as unknown as DaemonClient;
+    const vault = new VaultManager(client, store, makeKeyBlob(null, []));
+    const t = track(vault);
+
+    await expect(vault.provision(tokenFor("user-1"))).rejects.toThrow("timed out");
+    expect(t.last().state).toBe("locked");
+    expect(t.last().error).toContain("unlockVault");
+    // The next attempt is the same silent unlock — nothing about a timeout changes the path.
+    const calls: Array<[string, unknown]> = [];
+    const okVault = new VaultManager(makeClient({ unlockVault: { ok: true } }, calls), store, makeKeyBlob(null, []));
+    await okVault.provision(tokenFor("user-1"));
+    expect(calls.map(([m]) => m)).toEqual(["unlockVault"]);
+    expect(okVault.vaultStatus().state).toBe("unlocked");
+  });
+
+  test("a token with no account id is terminal: `error`, and no rejection to retry", async () => {
+    const vault = new VaultManager(makeClient({}, []), makeStore(), makeKeyBlob(null, []));
+    await vault.provision("eyJhbGciOiJub25lIn0.e30.sig");
+    expect(vault.vaultStatus().state).toBe("error");
   });
 
   test("relock tells the daemon to lock and resets status", async () => {

@@ -89,7 +89,7 @@ const vault = new VaultManager(
   () => auth.getFreshIdToken(),
   updaterLog, // every handoff step + failure → main.log
 );
-const disposeVaultIpc = registerVaultIpc(vault);
+const disposeVaultIpc = registerVaultIpc(vault, () => retryProvisionNow());
 
 // Subscription entitlement (billing gate on deposits). Shares the account backend + the signed-in ID
 // token; drives Paddle checkout in the system browser and polls until the webhook flips it active.
@@ -221,8 +221,9 @@ const onProvisionFailure = (e: unknown): void => {
 // later. For that hour the daemon held no session and answered every read with an empty-but-successful
 // nothing — which the app showed as an empty vault (2026-08-25). So: retry with backoff (2 s → 60 s
 // cap) until it succeeds, a newer token supersedes it, or the socket drops (the reconnect handler
-// starts a fresh attempt). The first failure is still surfaced (`onProvisionFailure`) so the UI shows
-// what is being retried rather than a silent spinner.
+// starts a fresh attempt). The vault half (`vault.provision`) rejects on its own retryable failures —
+// an `unlockVault` that timed out behind a busy daemon, a backend that couldn't be reached — so this
+// one loop covers the whole handoff; the gate narrates each wait and shows the last failure under it.
 let provisionAttempt = 0;
 let provisionTimer: ReturnType<typeof setTimeout> | null = null;
 const cancelProvisionRetry = (): void => {
@@ -244,12 +245,19 @@ const provisionWithRetry = (idToken: string): void => {
       // than flashing "Couldn't set up encryption" while a retry is already scheduled 2s out (PILLAR5 —
       // don't show a terminal error for work that's still in flight). The failure is still logged.
       updaterLog.error(`daemon provision failed (retrying in ${delayMs / 1000}s): ${msg}`);
-      vault.setStep("Reconnecting to set up encryption…");
+      vault.setStep(`Trying again in ${delayMs / 1000}s…`);
       provisionTimer = setTimeout(tryOnce, delayMs);
       delayMs = Math.min(delayMs * 2, 60_000);
     });
   };
   tryOnce();
+};
+// The gate's **Try again**: don't wait out the backoff — start a fresh attempt now with a fresh token.
+// A no-op when signed out (there is nothing to provision); the loop's own supersession handles the
+// attempt this cancels.
+const retryProvisionNow = async (): Promise<void> => {
+  const idToken = await auth.getFreshIdToken();
+  if (idToken) provisionWithRetry(idToken);
 };
 const offIdToken = auth.onIdToken((idToken) => {
   provisionWithRetry(idToken);

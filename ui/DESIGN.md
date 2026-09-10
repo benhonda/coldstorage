@@ -637,7 +637,14 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   store the key-blob + show the recovery code once; new device → prompt + `unlockVaultWithRecoveryCode`.
   `keyblob-client.ts` = blind GET/PUT at the account backend; `storage.ts` = per-account MK escrow in
   safeStorage. Renderer sees only `VaultStatus` (never key material, except the one-time code to show).
-  Gate UI: `views/RecoveryCodeView.tsx`. The daemon handoff runs `authenticate` THEN vault `provision`.
+  Gate UI: `views/RecoveryCodeView.tsx`. The daemon handoff runs `authenticate` THEN vault `provision`,
+  under ONE retry loop (`index.ts` `provisionWithRetry`, 2 s → 60 s backoff): `provision` records a
+  retryable failure on the status and REJECTS, so the loop covers the vault half too (it used to swallow
+  into `state: "error"` and resolve — the loop never fired, and the gate promised a retry that never ran,
+  2026-09-10). The gate shows the last failure under the step with **Try again now** (`retryVaultUnlock`
+  IPC → a fresh attempt, skipping the backoff); `state: "error"` is reserved for the terminal case (a
+  token with no account id) and offers Try again + Sign out, with no "check your connection" — the cached
+  path is a local socket.
 - `ui/src/main/entitlement/` — subscription billing: `manager.ts` fetches
   `GET /entitlement`, serves the plan catalog (`getCatalog()` → the backend's live `GET /catalog`),
   and drives `subscribe(priceId)` (POST `/checkout-session` with the chosen plan → open Paddle
