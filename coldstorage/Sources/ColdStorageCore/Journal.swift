@@ -484,7 +484,25 @@ public final class Journal: @unchecked Sendable {
     /// `depositId` is the explicit deposit these items ride in (nil for a watched folder's scan). It is
     /// COALESCEd like `sourcePath`: a new deposit claims the row; a scan that re-finds a dropped file must
     /// not strip it of the batch it belongs to.
+    ///
+    /// **Written in bounded chunks, releasing the lock between them.** Every item is its own independent
+    /// row edit, so one transaction per `upsertChunk` items loses nothing — and one transaction for the
+    /// whole scan was holding `lock` for as long as 140k row writes take. The daemon actor reads this
+    /// journal under the same lock (`listFiles` on every app connect), and that wait is a *blocking* one:
+    /// while it waited, the actor answered nothing at all — the app's `unlockVault`, a no-op that only
+    /// loads a key, timed out behind it at sign-in, and the user saw "Couldn't unlock your encryption"
+    /// (2026-09-10). A reader now waits for one chunk at most.
     public func upsert(_ items: [IngestItem], reviving: Bool = false, depositId: String? = nil) throws {
+        for start in stride(from: 0, to: items.count, by: Self.upsertChunk) {
+            try upsertChunk(Array(items[start..<min(start + Self.upsertChunk, items.count)]), reviving: reviving, depositId: depositId)
+        }
+    }
+
+    /// Rows per `upsert` transaction — small enough that a reader queued behind one waits milliseconds,
+    /// large enough that a scan's write isn't dominated by commit fsyncs.
+    static let upsertChunk = 1_000
+
+    private func upsertChunk(_ items: [IngestItem], reviving: Bool, depositId: String?) throws {
         lock.lock(); defer { lock.unlock() }
         try transaction {
         if reviving { try reviveFilesLocked(ids: items.map(\.id)) }

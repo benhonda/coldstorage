@@ -18,6 +18,22 @@ import Foundation
                    open: { AsyncThrowingStream { $0.finish() } })
     }
 
+    /// A scan bigger than one write chunk lands whole, and a revive scoped to the scan's ids reaches the ids
+    /// in every chunk — chunking is a lock-hold bound, never a change in what a scan means.
+    @Test func upsertChunksAreInvisibleToTheResult() throws {
+        let j = try tempJournal()
+        let n = Journal.upsertChunk * 2 + 7
+        let items = (0..<n).map { item("f\($0)", path: "dir/f\($0)", size: 1) }
+        try j.upsert(items)
+        #expect(try j.listFiles().count == n)
+        // Tombstone one row from the first chunk and one from the last; an explicit re-deposit revives both.
+        try j.deletePath("dir/f1")
+        try j.deletePath("dir/f\(n - 1)")
+        #expect(try j.listFiles().count == n - 2)
+        try j.upsert(items, reviving: true, depositId: "d1")
+        #expect(try j.listFiles().count == n)
+    }
+
     @Test func emptyJournalListsNothing() throws {
         #expect(try tempJournal().listFiles().isEmpty)
     }

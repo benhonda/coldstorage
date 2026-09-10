@@ -212,6 +212,10 @@ objects carrying them.
 > table off disk on every `getStatus`, under the one journal lock, stalling every command for tens of
 > seconds right after sign-in on a big vault (the 2026-08-25 "Couldn't load your files" incident — the tree
 > was intact; the daemon was lock-starved). Measured after: `summary()` ~10 ms, the reap join ~50 µs at 141k.
+> The same starvation from the write side: a scan's `Journal.upsert` was ONE transaction for every row it
+> found, holding the lock for as long as 140k writes take while the actor's `listFiles` blocked on it — and
+> `unlockVault`, a no-op, timed out queued behind that at sign-in (2026-09-10). `upsert` now commits in
+> chunks of `Journal.upsertChunk` rows and releases the lock between them; a reader waits one chunk at most.
 
 ## 5. Resume protocol — survive anything
 
