@@ -467,9 +467,49 @@ describe("the tree revision — stale reads never regress the tree", () => {
     expect(reducer(fresh, listed(6, "Archive/b.jpg")).files[0]?.relativePath).toBe("Archive/b.jpg");
   });
 
+  test("the sign-in resync: a tree event that outruns the held read flips it back to pending (2026-09-10)", () => {
+    // Pre-auth: the daemon answers listFiles with `[]` SUCCESSFULLY at revision 0, and we hold it as loaded.
+    const preAuth = run({ type: "filesLoaded", listed: { revision: 0, files: [] } });
+    expect(preAuth.filesLoad).toEqual({ state: "loaded" });
+    // beginSession announces revision 1. getStatus (cheap) will beat the 140k-row listFiles home with
+    // `filesTotal > 0` — the held `[]` must NOT read as a loaded, empty tree in that window.
+    const announced = reducer(preAuth, { type: "event", name: "filesChanged", data: { signedIn: "x", revision: "1" } });
+    expect(announced.filesLoad).toEqual({ state: "pending" });
+    expect(announced.treeRevision).toBe(1);
+    // The re-read lands at (or past) the announced revision → a fact again.
+    expect(reducer(announced, listed(1, "a")).filesLoad).toEqual({ state: "loaded" });
+    // A duplicate of the pre-auth reply (revision 0, `[]`) landing late changes nothing: still pending.
+    expect(reducer(announced, { type: "filesLoaded", listed: { revision: 0, files: [] } }).filesLoad).toEqual({ state: "pending" });
+  });
+
+  test("a read behind the announced revision is shown but not yet a fact", () => {
+    const s = run(listed(1, "a"), { type: "event", name: "filesChanged", data: { created: "B", revision: "3" } });
+    expect(s.filesLoad).toEqual({ state: "pending" });
+    const partway = reducer(s, listed(2, "b"));
+    expect(partway.files[0]?.relativePath).toBe("b"); // newer than held → shown
+    expect(partway.filesLoad).toEqual({ state: "pending" }); // still behind revision 3
+    expect(reducer(partway, listed(3, "c")).filesLoad).toEqual({ state: "loaded" });
+  });
+
+  test("runFinished announces its revision too — the first deposit into an empty vault", () => {
+    const s = run({ type: "filesLoaded", listed: { revision: 0, files: [] } }, {
+      type: "event",
+      name: "runFinished",
+      data: { depositId: "d1", filesArchived: "1", filesTotal: "1", blobsFailed: "0", filesStopped: "0", revision: "2" },
+    });
+    expect(s.filesLoad).toEqual({ state: "pending" });
+    expect(s.treeRevision).toBe(2);
+  });
+
+  test("a failed read stays failed through a tree event — the retry is the user's", () => {
+    const s = run({ type: "filesLoadFailed", error: "timed out" }, { type: "event", name: "filesChanged", data: { created: "B", revision: "3" } });
+    expect(s.filesLoad).toEqual({ state: "failed", error: "timed out" });
+  });
+
   test("a (re)connect zeroes it — the revision counts per daemon process", () => {
     const s = run(listed(9, "a"), { type: "connection", state: "disconnected" }, { type: "connection", state: "connected" });
     expect(s.filesRevision).toBe(0);
+    expect(s.treeRevision).toBe(0);
     expect(reducer(s, listed(1, "b")).files[0]?.relativePath).toBe("b");
   });
 

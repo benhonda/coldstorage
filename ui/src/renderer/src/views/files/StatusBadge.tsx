@@ -96,11 +96,44 @@ export const StatusBadges = ({
   badges,
   reason = null,
   size = 20,
+  onOpen = null,
 }: {
   badges: RowBadges;
   reason?: string | null;
   size?: number;
+  /** Where this badge LEADS — set on a ⚠, it makes the badge the button that opens the Uploads page on
+   * the row's batch. A failure that can only be hovered sends the user hunting for the page that explains
+   * it (2026-09-10); a failure you can click is one hop from "why" and "what now". Not a `<button>`: a
+   * gallery tile is already one, and a button inside a button is invalid HTML. */
+  onOpen?: (() => void) | null;
 }): React.JSX.Element | null => {
+  const badgesEl = <Stack badges={badges} reason={reason} size={size} />;
+  if (!onOpen) return badgesEl;
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      className="cs-statusbadges-link"
+      title="See in Uploads"
+      onClick={(e) => {
+        e.stopPropagation(); // the row underneath selects/opens on click; this click is for the badge
+        onOpen();
+      }}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          e.stopPropagation();
+          onOpen();
+        }
+      }}
+    >
+      {badgesEl}
+    </span>
+  );
+};
+
+const Stack = ({ badges, reason, size }: { badges: RowBadges; reason: string | null; size: number }): React.JSX.Element | null => {
   const { primary, secondary } = badges;
   if (!secondary) return <StatusIcon status={primary} reason={reason} size={size} />;
   const s = STATUS[secondary.status];

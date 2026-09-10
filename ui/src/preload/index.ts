@@ -29,7 +29,7 @@ const api: ColdstoreApi = {
     return () => ipcRenderer.removeListener(IPC.lifecycle, handler);
   },
 
-  chooseFolder: (defaultPath?: string) => ipcRenderer.invoke(IPC.chooseFolder, defaultPath),
+  chooseFolder: (defaultPath?: string, title?: string) => ipcRenderer.invoke(IPC.chooseFolder, defaultPath, title),
   chooseUploads: (defaultPath?: string) => ipcRenderer.invoke(IPC.chooseUploads, defaultPath),
   chooseFile: (name: string) => ipcRenderer.invoke(IPC.chooseFile, name),
   getDownloadsDir: () => ipcRenderer.invoke(IPC.downloadsDir),

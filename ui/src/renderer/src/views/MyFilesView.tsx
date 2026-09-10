@@ -15,7 +15,7 @@ import type { Exec } from "./types.ts";
 import { type FilesApi, settleWith } from "./files/useFiles.ts";
 import type { RunProgress } from "../state/reducer.ts";
 import type { PendingDrops } from "./uploads/pendingDrops.ts";
-import { DepositProgress } from "./DepositProgress.tsx";
+import { DepositProgress, type RunFailed } from "./DepositProgress.tsx";
 import {
   type ArchivedFile,
   type Row,
@@ -112,6 +112,13 @@ interface Props {
   onRetryUploads: (scope: ArchivedFile[]) => void;
   /** A failed row we don't know where to find on disk: ask the user, then retry from there. */
   onLocateUpload: (file: ArchivedFile) => void;
+  /** A ⚠ was clicked: open the Uploads page on the batch (or watched folder) that explains `file` — for a
+   * folder row, the first failed file under it stands for the folder. */
+  onShowUploadsFor: (file: ArchivedFile) => void;
+  /** The run that just ended with its batch unfinished — the "couldn't upload" banner over the browser,
+   * with {@link onShowUploadsBatch} as its action. Null when the last run finished clean (or was a scan). */
+  runFailed: RunFailed | null;
+  onShowUploadsBatch: (depositId: string) => void;
   /** Files the Downloads page asked us to re-open the request dialog for (a download that needs buying
    * again — the whole list at once for a grouped row). Null most of the time. */
   requestFileIds?: string[] | null;
@@ -146,6 +153,9 @@ export const MyFilesView = ({
   onDepositBlocked,
   onRetryUploads,
   onLocateUpload,
+  onShowUploadsFor,
+  runFailed,
+  onShowUploadsBatch,
   requestFileIds,
   onRequestOpened,
   onShowDownloads,
@@ -536,6 +546,18 @@ export const MyFilesView = ({
     onDragEnded: settleFileDrag, // the frame comes down on ANY end — drop, Esc, off-window — not just a drop here
   });
 
+  // A ⚠ badge is a link to the Uploads row that explains it: the row's own file, or for a folder the first
+  // failed file under it (the folder's ⚠ is a rollup of exactly those). Null on any other badge — only a
+  // failure has somewhere to go.
+  const uploadsLinkFor = (row: Row): (() => void) | null => {
+    if (rowBadges(row).primary !== "failed") return null;
+    // Resolved on click, not on render: a failed folder's "first failed file" is a walk over the tree.
+    return () => {
+      const failed = filesForTargets([targetOf(row)]).find((f) => f.status === "failed");
+      if (failed) onShowUploadsFor(failed);
+    };
+  };
+
   // ── context menu ──
   const openMenu = (e: React.MouseEvent, row?: Row): void => {
     e.preventDefault();
@@ -559,11 +581,15 @@ export const MyFilesView = ({
     const failed = filesForTargets(targets).filter((f) => f.status === "failed");
     const retryable = failed.filter((f) => f.sourcePath !== null);
     const locatable = single?.type === "file" && single.file.status === "failed" && single.file.sourcePath === null ? single.file : null;
+    // Every failure leads somewhere: the batch that explains it, with the batch-level actions (Try again
+    // on the whole thing, Locate folder…) that a row menu can't offer.
+    const firstFailed = failed[0];
     const uploadActions: MenuEntry[] = [
       ...(retryable.length > 0
         ? [{ label: retryable.length > 1 ? `Try again (${retryable.length})` : "Try again", icon: "refresh", onClick: () => onRetryUploads(retryable) }]
         : []),
       ...(locatable ? [{ label: "Locate…", icon: "search", onClick: () => onLocateUpload(locatable) }] : []),
+      ...(firstFailed ? [{ label: "See in Uploads", icon: "cloud_upload", onClick: () => onShowUploadsFor(firstFailed) }] : []),
     ];
     const items: MenuEntry[] = targets.length
       ? [
@@ -1035,8 +1061,10 @@ export const MyFilesView = ({
             run={run}
             drops={drops.drops}
             paused={uploadsPaused}
+            failed={runFailed}
             onStop={() => exec(() => api.request("cancelRun"))}
             onResume={() => exec(() => api.request("resumeUploads"))}
+            onShowUploads={onShowUploadsBatch}
           />
           {/* FirstRun (the drop-zone hero) is the onboarding state for a genuinely empty vault — root with
               nothing in it. A drilled-into empty folder just shows the empty file list, not the hero. And
@@ -1088,6 +1116,7 @@ export const MyFilesView = ({
                     selected={selected}
                     renaming={renaming}
                     drag={drag}
+                    uploadsLinkFor={uploadsLinkFor}
                     onRowClick={onRowClick}
                     onRowOpen={openRow}
                     onRowContext={openMenu}
@@ -1105,6 +1134,7 @@ export const MyFilesView = ({
                     rows={rows}
                     selected={selected}
                     drag={drag}
+                    uploadsLinkFor={uploadsLinkFor}
                     onRowClick={onRowClick}
                     onRowOpen={openRow}
                     onRowContext={openMenu}
@@ -1270,6 +1300,7 @@ const FileList = ({
   onSort,
   scrollRef,
   revealIndex,
+  uploadsLinkFor,
 }: {
   rows: Row[];
   selected: Set<string>;
@@ -1277,6 +1308,8 @@ const FileList = ({
   drag: MoveDrag;
   sort: SortSpec;
   onSort: (key: SortKey) => void;
+  /** Where a row's ⚠ leads (the Uploads page, on its batch), or null for any other badge. */
+  uploadsLinkFor: (row: Row) => (() => void) | null;
   /** The scroll box, owned by the parent so its keyboard handler can page it. */
   scrollRef: React.RefObject<HTMLDivElement | null>;
   /** Row index to keep in view (the keyboard cursor); null = leave the scroll alone. */
@@ -1416,7 +1449,7 @@ const FileList = ({
                 row can say WHY on hover instead of leaving the user to guess. Folders roll up a status but
                 not a reason — a folder has no single fault to name. */}
             {!isEmptyFolder(row) && (
-              <StatusBadges badges={badges} reason={row.type === "file" ? failureReason(row.file) : null} />
+              <StatusBadges badges={badges} reason={row.type === "file" ? failureReason(row.file) : null} onOpen={uploadsLinkFor(row)} />
             )}
             <IconButton
               icon="more_horiz"
@@ -1545,10 +1578,13 @@ const Gallery = ({
   scrollRef,
   revealIndex,
   onColumns,
+  uploadsLinkFor,
 }: {
   rows: Row[];
   selected: Set<string>;
   drag: MoveDrag;
+  /** Where a tile's ⚠ leads (the Uploads page, on its batch), or null for any other badge. */
+  uploadsLinkFor: (row: Row) => (() => void) | null;
   onRowClick: (e: React.MouseEvent, row: Row, index: number) => void;
   onRowOpen: (row: Row) => void;
   /** Right-click handler — pass a tile's row for a row menu, omit it for the empty-area menu. */
@@ -1626,7 +1662,7 @@ const Gallery = ({
               <span className="cs-tile-foot">
                 <span className="cs-tile-name" title={row.name}>{row.name}</span>
                 {!isEmptyFolder(row) && (
-                  <StatusBadges badges={rowBadges(row)} reason={row.type === "file" ? failureReason(row.file) : null} />
+                  <StatusBadges badges={rowBadges(row)} reason={row.type === "file" ? failureReason(row.file) : null} onOpen={uploadsLinkFor(row)} />
                 )}
               </span>
             </button>

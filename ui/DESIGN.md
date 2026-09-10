@@ -103,7 +103,12 @@ it had worked.
   download, with a **See downloads** action · a completed download, with **Show in Finder**.
 - **Not** for uploads. Deposits have their own surfaces (the progress banner, per-row badges, the
   **Uploads** page and its nav badge) and the daemon auto-runs on a timer — toasting those would be noise.
-  A failed upload is a persistent fact and gets a persistent surface: a one-shot toast gets missed.
+  A failed upload is a persistent fact and gets a persistent surface: a one-shot toast gets missed. That
+  surface has to have a way IN, though: until 2026-09-10 a run that ended with failures simply lost its
+  banner, and the only trace was the nav count — which the user had to notice, then go find. Now the run
+  banner is replaced by a **"N files from X couldn't upload"** banner (`DepositProgress` `FailedBanner`,
+  derived from the Uploads fold, never the event's blob count — that includes transient snags still
+  retrying) with **See what happened**, which opens Uploads on that batch, expanded; dismissable per batch.
 
 ```
 ┌────────────┬────────────────────────────────────────────────────────┐
@@ -133,7 +138,10 @@ it had worked.
   **Locate…** (no source known — a pre-`sourcePath` row, or a drive that's gone: the user points at the
   file, same command with `sourcePath`; a Photos row retries by re-resolving its `photos:<id>` source, so
   it never needs Locate; a retry that can't find the source writes that verdict onto the row as a
-  `failureKind`, so the reason is journal truth, not app memory), **Remove**. The row's tooltip and Get
+  `failureKind`, so the reason is journal truth, not app memory), **Remove**. **The ⚠ itself is a link**
+  (`StatusBadges` `onOpen`, list row and gallery tile alike; a folder's rolled-up ⚠ too): it opens
+  Uploads on the batch — or watched folder — that owns the row (`uploads/model.ts` `focusFor`), expanded
+  and scrolled to; the context menu's **See in Uploads** does the same. The row's tooltip and Get
   info say WHY from the row's `failureKind` through `views/uploads/failure.ts` — the app owns the words,
   the journal holds only the kind (see the Uploads page below) ·
   amber ⧗ **waiting on deep storage** (the thaw — nothing is moving yet) · blue ↓ **Downloading**
@@ -234,10 +242,23 @@ files sat ⚠ with a truncated sentence and nothing to do about them.
 - **Expanding a row** shows its failures **grouped by cause** (`failureKind`, worst-for-the-user first),
   each with its words and count; per-file rows with Try again / Locate… / Remove only when a cause is
   small enough to act on one at a time (20). Nothing on the page ever draws 56k lines.
-- **Batch actions:** Try again (N) · **Remove these** (tombstone the failed rows —
+- **Batch actions:** Try again (N) · **Locate folder…** · **Remove these** (tombstone the failed rows —
   confirmed, since it's tens of thousands of rows in a click) · Remove (a finished batch leaves the list;
   its files stay put — the daemon refuses while any file is still failed). No per-row Stop: a run is one
   thing and stopping "this batch" would stop every batch in flight — the deposit banner owns Stop.
+- **Try again is never gated on what the app knows.** It shows for every failed row, on a batch and on a
+  watched-folder row alike; the daemon is the judge of what it can find, and writes `missingSource` onto
+  what it can't. The button says "Trying again…" (Locate folder…: "Locating…") until the daemon answers —
+  it stats every row's source first, and a batch with no sources has no rows to flip meanwhile. Gating it on rows having a
+  recorded source left a batch of pre-`sourcePath` rows (every failure from before 2026-08-25, i.e. the
+  migrated "interrupted" batches) with nothing but Remove these — and per-file Locate… hides once a cause
+  has more than 20 files (2026-09-10).
+- **Locate folder… is Locate for a whole batch** (`retryFiles` with `depositId` + `sourceRoot`): the user
+  points at the folder the drop came from — the dropped folder itself or its parent both work — and the
+  daemon resolves each failed row to a file under it by the path it had inside the drop, records that as
+  the row's source, and retries; rows it can't find there get the same `missingSource` verdict. Shown when
+  a batch has rows with no source or a missing one (`counts.unlocated`); never on a Photos batch. A pick
+  that finds nothing says so in a toast, since the rows can't say it any louder than they already do.
 - **Load state is honest:** `listDeposits` has the same pending / loaded / failed slice as the tree
   (`depositsLoad`), so a failed read shows "Couldn't load your uploads" + Retry, never the "nothing
   uploaded yet" hero over an empty list.

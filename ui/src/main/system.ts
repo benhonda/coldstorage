@@ -82,8 +82,8 @@ export const registerSystemHandlers = (accountApiBaseUrl: string): (() => void) 
   };
 
   // Single directory — a watched-folder source or a restore destination (also offers "New Folder…").
-  ipcMain.handle(IPC.chooseFolder, async (_e, defaultPath?: string) => {
-    const paths = await openPanel(defaultPath, "Choose a folder", ["openDirectory", "createDirectory"]);
+  ipcMain.handle(IPC.chooseFolder, async (_e, defaultPath?: string, title?: string) => {
+    const paths = await openPanel(defaultPath, title ?? "Choose a folder", ["openDirectory", "createDirectory"]);
     return paths[0] ?? null;
   });
   // The deposit picker: any mix of files AND folders, multi-select. `openFile` + `openDirectory` in one

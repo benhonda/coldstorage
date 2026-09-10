@@ -428,8 +428,9 @@ export interface ColdstoreApi {
   /** Subscribe to connection-state changes. */
   onLifecycle(listener: (state: ConnectionState) => void): () => void;
   /** Open the native folder picker (a window sheet on macOS). Resolves to the chosen absolute path, or
-   * null if cancelled. `defaultPath` seeds where it opens. */
-  chooseFolder(defaultPath?: string): Promise<string | null>;
+   * null if cancelled. `defaultPath` seeds where it opens; `title` names what the user is looking for
+   * (the sheet's own title), so a "Locate folder…" doesn't read as a generic "Choose a folder". */
+  chooseFolder(defaultPath?: string, title?: string): Promise<string | null>;
   /** Reveal an absolute path in Finder (selecting it in its enclosing folder). The natural end of a
    * finished transfer: the copy landed, so hand the user the actual file rather than a path to read out.
    * Silent no-op if the file has since been moved or deleted — a stale row must not raise an error. */

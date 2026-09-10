@@ -25,7 +25,7 @@ export const FAILURE = {
   },
   missingSource: {
     label: "Can't find the file",
-    explain: "It isn't where it was when you added it. Plug the drive back in and try again, or use Locate… to point at it.",
+    explain: "It isn't where it was when you added it. Plug the drive back in and try again, or use Locate folder… to point at where it is now.",
   },
   permanent: {
     label: "Couldn't upload",

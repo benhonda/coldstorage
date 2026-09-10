@@ -14,7 +14,7 @@
  * under Get info, never as the headline. A batch's counts are derived from the same rows My Files draws,
  * so this page and the tree cannot disagree.
  */
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ColdstoreApi } from "../../../shared/ipc.ts";
 import type { AppState } from "../state/reducer.ts";
 import { Badge, Button, EmptyState, Icon, Modal } from "../ui/primitives.tsx";
@@ -22,7 +22,7 @@ import { Page } from "../ui/layout.tsx";
 import { when } from "../ui/when.ts";
 import { baseName, parentOf, type ArchivedFile } from "./files/model.ts";
 import { FAILURE } from "./uploads/failure.ts";
-import type { BatchState, FailureGroup, FolderState, UploadBatch, UploadsModel, WatchedFolder } from "./uploads/model.ts";
+import type { BatchState, FailureGroup, FolderState, UploadBatch, UploadsFocus, UploadsModel, WatchedFolder } from "./uploads/model.ts";
 import type { Exec } from "./types.ts";
 
 type Tone = "neutral" | "accent" | "warning" | "success" | "danger";
@@ -99,6 +99,13 @@ export interface UploadActions {
   onRetryFolder: (f: WatchedFolder) => void;
   onRetryFiles: (files: ArchivedFile[]) => void;
   onLocate: (file: ArchivedFile) => void;
+  /** Locate folder…: the user points at the folder a whole batch came from, and the daemon finds each
+   * row under it. The batch form of {@link onLocate} — a 56k-row drop can't be located one file at a time. */
+  onLocateBatch: (b: UploadBatch) => void;
+  /** Which row-level action is in flight on this row (batch id / source id), so its button can say so and
+   * not fire twice — the daemon stats every row's source before it replies, which on a big batch is
+   * seconds, and a batch whose rows have no source has nothing to flip optimistically meanwhile. */
+  busyOn: (id: string) => "retry" | "locate" | null;
   onRemoveFile: (file: ArchivedFile) => void;
   /** Take a batch's failed files out of the backup — nothing landed for them. */
   onRemoveFailed: (b: UploadBatch) => void;
@@ -151,13 +158,25 @@ const Cause = ({ g, a }: { g: FailureGroup; a: UploadActions }): React.JSX.Eleme
   );
 };
 
-const BatchActions = ({ b, a }: { b: UploadBatch; a: UploadActions }): React.JSX.Element => (
+const BatchActions = ({ b, a }: { b: UploadBatch; a: UploadActions }): React.JSX.Element => {
+  const busy = a.busyOn(b.id);
+  return (
   <div className="cs-download-actions">
     {/* No per-row Stop: a run is one thing, and stopping "this batch" would stop every batch in flight.
         The deposit banner on My Files owns Stop, where the bar it stops is right there. */}
-    {b.counts.retryable > 0 && (
-      <Button variant="secondary" size="sm" icon="refresh" onClick={() => a.onRetryBatch(b)}>
-        Try again{b.counts.retryable > 1 ? ` (${b.counts.retryable.toLocaleString()})` : ""}
+    {/* Try again is offered for EVERY failed row, not only the ones with a recorded source: the daemon is
+        the judge of what it can find, and it writes its verdict onto each row it can't. Gating this on the
+        app's own knowledge left a batch of pre-source rows with nothing but "Remove these" (2026-09-10). */}
+    {b.counts.failed > 0 && (
+      <Button variant="secondary" size="sm" icon="refresh" disabled={busy !== null} onClick={() => a.onRetryBatch(b)}>
+        {busy === "retry" ? "Trying again…" : `Try again${b.counts.failed > 1 ? ` (${b.counts.failed.toLocaleString()})` : ""}`}
+      </Button>
+    )}
+    {/* Rows the daemon doesn't know where to find. A Photos batch never needs this: its rows re-resolve
+        from the library, so a folder has nothing to say about them. */}
+    {b.kind === "files" && b.counts.unlocated > 0 && (
+      <Button variant="secondary" size="sm" icon="folder_open" disabled={busy !== null} onClick={() => a.onLocateBatch(b)}>
+        {busy === "locate" ? "Locating…" : "Locate folder…"}
       </Button>
     )}
     {b.state === "didntFinish" && (
@@ -171,7 +190,8 @@ const BatchActions = ({ b, a }: { b: UploadBatch; a: UploadActions }): React.JSX
       </Button>
     )}
   </div>
-);
+  );
+};
 
 /** The one row shape — a batch and a watched folder differ only in what they say, not how they're drawn:
  * name + badge, a meta line, an optional note, an action strip, and (when something didn't upload) an
@@ -184,6 +204,7 @@ const UploadRow = ({
   failures,
   actions,
   a,
+  focused,
 }: {
   name: string;
   badge: { label: string; tone: Tone; icon: string };
@@ -192,11 +213,18 @@ const UploadRow = ({
   failures: FailureGroup[];
   actions: ReactNode;
   a: UploadActions;
+  /** This row is what the user came here for (a ⚠ they clicked in My Files): it opens on its causes and
+   * scrolls into view, so the row and its "why + what to do" are one click apart. */
+  focused: boolean;
 }): React.JSX.Element => {
-  const [open, setOpen] = useState(false);
   const expandable = failures.length > 0;
+  const [open, setOpen] = useState(focused && expandable);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (focused) ref.current?.scrollIntoView({ block: "center" });
+  }, [focused]);
   return (
-    <div className="cs-download-request">
+    <div ref={ref} className={focused ? "cs-download-request cs-download-request--focused" : "cs-download-request"}>
       <div className="cs-download">
         {expandable ? (
           <button
@@ -235,8 +263,9 @@ const UploadRow = ({
   );
 };
 
-const BatchRow = ({ b, a }: { b: UploadBatch; a: UploadActions }): React.JSX.Element => (
+const BatchRow = ({ b, a, focused = false }: { b: UploadBatch; a: UploadActions; focused?: boolean }): React.JSX.Element => (
   <UploadRow
+    focused={focused}
     name={b.name}
     badge={BATCH[b.state]}
     meta={[countsLine(b.counts), b.dest ? `in ${b.dest}` : "", `added ${when(b.createdAt)}`, b.state === "done" && b.finishedAt ? `finished ${when(b.finishedAt)}` : ""]
@@ -249,8 +278,9 @@ const BatchRow = ({ b, a }: { b: UploadBatch; a: UploadActions }): React.JSX.Ele
   />
 );
 
-const FolderRow = ({ f, a }: { f: WatchedFolder; a: UploadActions }): React.JSX.Element => (
+const FolderRow = ({ f, a, focused = false }: { f: WatchedFolder; a: UploadActions; focused?: boolean }): React.JSX.Element => (
   <UploadRow
+    focused={focused}
     name={f.name}
     badge={FOLDER[f.state]}
     meta={[countsLine(f.counts) || "Nothing found yet", f.source.lastScanAt ? `last checked ${when(f.source.lastScanAt)}` : ""]
@@ -260,9 +290,10 @@ const FolderRow = ({ f, a }: { f: WatchedFolder; a: UploadActions }): React.JSX.
     failures={f.failures}
     actions={
       <div className="cs-download-actions">
-        {f.counts.retryable > 0 && (
-          <Button variant="secondary" size="sm" icon="refresh" onClick={() => a.onRetryFolder(f)}>
-            Try again{f.counts.retryable > 1 ? ` (${f.counts.retryable.toLocaleString()})` : ""}
+        {/* Same rule as a batch: every failed row gets the button, the daemon says what it can find. */}
+        {f.counts.failed > 0 && (
+          <Button variant="secondary" size="sm" icon="refresh" disabled={a.busyOn(f.source.id) !== null} onClick={() => a.onRetryFolder(f)}>
+            {a.busyOn(f.source.id) === "retry" ? "Trying again…" : `Try again${f.counts.failed > 1 ? ` (${f.counts.failed.toLocaleString()})` : ""}`}
           </Button>
         )}
       </div>
@@ -281,20 +312,30 @@ export const UploadsView = ({
   onRetryFolder,
   onRetryFiles,
   onLocate,
+  onLocateBatch,
   onRemoveFile,
   onRemoveFailed,
+  focus,
+  onFocusShown,
 }: {
   api: ColdstoreApi;
   exec: Exec;
   model: UploadsModel;
+  /** The row the user came for — the batch or watched folder behind a ⚠ they clicked elsewhere. Read
+   * once, when the page opens: it decides which row starts expanded and scrolled to, and nothing after. */
+  focus: UploadsFocus | null;
+  /** We've taken {@link focus} — the owner clears it, so a later plain visit opens the page unfocused. */
+  onFocusShown: () => void;
   /** Whether the batch list is a truth yet (`AppState.depositsLoad`) — a failed read must not paint the
    * "nothing uploaded yet" hero, which would send the user off to drop files that are already here. */
   load: AppState["depositsLoad"];
   onRetryLoad: () => void;
-  onRetryBatch: (b: UploadBatch) => void;
-  onRetryFolder: (f: WatchedFolder) => void;
+  /** The row-level actions resolve when the daemon has answered (rejections are the caller's to toast). */
+  onRetryBatch: (b: UploadBatch) => Promise<void>;
+  onRetryFolder: (f: WatchedFolder) => Promise<void>;
   onRetryFiles: (files: ArchivedFile[]) => void;
   onLocate: (file: ArchivedFile) => void;
+  onLocateBatch: (b: UploadBatch) => Promise<void>;
   onRemoveFile: (file: ArchivedFile) => void;
   /** Tombstone a batch's failed files — App owns this so the optimistic tree edit and the daemon call
    * happen in one place, like every other tree mutation. */
@@ -303,12 +344,37 @@ export const UploadsView = ({
   // Removing tens of thousands of rows is reversible in principle (re-drop the folder) but not in a
   // click, so it gets a confirm; forgetting a finished batch changes nothing in My Files and doesn't.
   const [removing, setRemoving] = useState<UploadBatch | null>(null);
+  // The focus is consumed at mount: held here so the owner clearing it doesn't un-focus the row a render
+  // later, and cleared upstream so the next visit to this page is a plain one.
+  const [focused] = useState(focus);
+  useEffect(() => {
+    if (focus) onFocusShown();
+  }, []); // once, on open: see above
+  const isFocused = (kind: UploadsFocus["kind"], id: string): boolean => focused?.kind === kind && focused.id === id;
+
+  // Honest pending state for the row-level actions (PILLAR5): the daemon stats every source before it
+  // replies, and a batch whose rows have nothing to flip optimistically would otherwise show a button
+  // that did nothing for seconds. One in flight per row; `exec` owns the error toast.
+  const [busy, setBusy] = useState<Record<string, "retry" | "locate">>({});
+  const track = (id: string, kind: "retry" | "locate", run: () => Promise<void>): void => {
+    setBusy((b) => ({ ...b, [id]: kind }));
+    exec(() =>
+      run().finally(() =>
+        setBusy((b) => {
+          const { [id]: _done, ...rest } = b;
+          return rest;
+        }),
+      ),
+    );
+  };
 
   const actions: UploadActions = {
-    onRetryBatch,
-    onRetryFolder,
+    onRetryBatch: (b) => track(b.id, "retry", () => onRetryBatch(b)),
+    onRetryFolder: (f) => track(f.source.id, "retry", () => onRetryFolder(f)),
     onRetryFiles,
     onLocate,
+    onLocateBatch: (b) => track(b.id, "locate", () => onLocateBatch(b)),
+    busyOn: (id) => busy[id] ?? null,
     onRemoveFile,
     onRemoveFailed: setRemoving,
     onForget: (b) => exec(() => api.request("forgetDeposit", { depositId: b.id })),
@@ -346,7 +412,7 @@ export const UploadsView = ({
             <section className="cs-downloads-group">
               <h2 className="cs-downloads-heading">In progress</h2>
               {inProgress.map((b) => (
-                <BatchRow key={b.id} b={b} a={actions} />
+                <BatchRow key={b.id} b={b} a={actions} focused={isFocused("batch", b.id)} />
               ))}
             </section>
           )}
@@ -354,7 +420,7 @@ export const UploadsView = ({
             <section className="cs-downloads-group">
               <h2 className="cs-downloads-heading">Needs attention</h2>
               {attention.map((b) => (
-                <BatchRow key={b.id} b={b} a={actions} />
+                <BatchRow key={b.id} b={b} a={actions} focused={isFocused("batch", b.id)} />
               ))}
             </section>
           )}
@@ -362,7 +428,7 @@ export const UploadsView = ({
             <section className="cs-downloads-group">
               <h2 className="cs-downloads-heading">Watched folders</h2>
               {model.folders.map((f) => (
-                <FolderRow key={f.source.id} f={f} a={actions} />
+                <FolderRow key={f.source.id} f={f} a={actions} focused={isFocused("folder", f.source.id)} />
               ))}
             </section>
           )}
@@ -370,7 +436,7 @@ export const UploadsView = ({
             <section className="cs-downloads-group">
               <h2 className="cs-downloads-heading">Earlier</h2>
               {earlier.map((b) => (
-                <BatchRow key={b.id} b={b} a={actions} />
+                <BatchRow key={b.id} b={b} a={actions} focused={isFocused("batch", b.id)} />
               ))}
             </section>
           )}

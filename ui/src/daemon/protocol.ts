@@ -467,7 +467,17 @@ export interface Commands {
    * records where the user just said the bytes are. Replies at once with counts; each row's batch is
    * reopened (`mode: "retry"`, survives a restart) and runs, reporting through the usual run events. */
   retryFiles: {
-    params: { ids?: string; all?: "true"; depositId?: string; sourceMount?: string; sourcePath?: string };
+    params: {
+      ids?: string;
+      all?: "true";
+      depositId?: string;
+      sourceMount?: string;
+      sourcePath?: string;
+      /** Locate folder…: the folder the user says the rows in scope came from. The daemon resolves each
+       * row to a file under it (by the path it had inside the drop) and records that as its source before
+       * retrying; rows it can't find there get the `missingSource` verdict like any other. */
+      sourceRoot?: string;
+    };
     result: RetryFilesResult;
   };
   /** Every batch this Mac has dropped or picked, newest first — the Uploads page's list. Empty when

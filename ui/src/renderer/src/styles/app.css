@@ -818,6 +818,12 @@ button.cs-kv:hover { background: var(--surface-hover); }
    font-size the component sets on the stack, so it tracks the badge size instead of assuming one. */
 .cs-statusbadges > .cs-statusicon:first-child { z-index: 2; }
 .cs-statusbadges > .cs-statusicon + .cs-statusicon { z-index: 1; margin-left: -0.45em; }
+/* A ⚠ badge is a link to the Uploads row that explains it (StatusBadges `onOpen`). It keeps the badge's
+   size and place — the affordance is the cursor and a ring, not a different shape — so a failed row reads
+   exactly like any other row until the pointer says otherwise. */
+.cs-statusbadges-link { display: inline-flex; cursor: pointer; border-radius: var(--radius-pill); }
+.cs-statusbadges-link:hover { box-shadow: 0 0 0 2px var(--surface-hover); }
+.cs-statusbadges-link:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 /* sortable column header: a text button that keeps the header's look; the caret marks the active column */
 .cs-fl-sort {
   display: inline-flex;
@@ -1795,6 +1801,9 @@ button.cs-kv:hover { background: var(--surface-hover); }
   border-radius: var(--radius-lg);
   background: var(--accent-subtle);
 }
+/* The "N couldn't upload" banner: the same card, on the danger tint the ⚠ badge uses, so the two say
+   the same thing in the same colour. */
+.cs-deposit--failed { background: rgba(222, 77, 59, 0.1); border-color: rgba(222, 77, 59, 0.3); }
 .cs-deposit-head {
   display: flex;
   align-items: center;
@@ -1950,6 +1959,9 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-download--child + .cs-download--child { margin-top: 0; border-top: 1px solid var(--border-subtle); }
 /* A row with nothing to expand keeps the chevron's width so names line up down the page. */
 .cs-download-expand--none { width: 20px; }
+/* The row the user came for (a ⚠ clicked in My Files): a ring that marks it as the one to read, without
+   restyling the row itself — it opens expanded and scrolled into view, and this is only "here". */
+.cs-download-request--focused > .cs-download { box-shadow: var(--focus-ring); }
 
 /* ── Uploads: one cause inside an expanded batch ────────────────
    The words for the cause, its count, then (few enough to act on one at a time) the files with their own

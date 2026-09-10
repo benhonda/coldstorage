@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Deposit, Source } from "../../../../shared/ipc.ts";
 import type { ArchivedFile } from "../files/model.ts";
-import { batchName, buildUploads, groupFailures } from "./model.ts";
+import { batchName, buildUploads, focusFor, groupFailures } from "./model.ts";
 
 const file = (
   id: string,
@@ -32,7 +32,7 @@ describe("buildUploads", () => {
     expect(m.batches).toHaveLength(1);
     const b = m.batches[0]!;
     expect(b.name).toBe("drop");
-    expect(b.counts).toEqual({ stored: 2, inFlight: 0, failed: 2, retryable: 1 });
+    expect(b.counts).toEqual({ stored: 2, inFlight: 0, failed: 2, unlocated: 1 });
     expect(b.state).toBe("didntFinish");
     // Worst-for-the-user first, and every failed row lands in a group.
     expect(b.failures.map((g) => [g.kind, g.files.length])).toEqual([["interrupted", 1], ["permanent", 1]]);
@@ -57,12 +57,30 @@ describe("buildUploads", () => {
     const m = buildUploads([deposit("d1")], files, [source("Camera")], false);
     const f = m.folders[0]!;
     expect(f.name).toBe("Camera");
-    expect(f.counts).toEqual({ stored: 1, inFlight: 0, failed: 1, retryable: 1 });
+    expect(f.counts).toEqual({ stored: 1, inFlight: 0, failed: 1, unlocated: 0 });
     expect(f.state).toBe("didntFinish");
     expect(m.batches[0]!.counts.failed).toBe(1);
     // The sibling's failure counts on the badge (the tree marks it) even though no row here owns it yet —
     // the daemon adopts it into a batch on its next pass, and the page catches up.
     expect(m.failedTotal).toBe(3);
+  });
+
+  test("unlocated counts the rows a retry alone can only re-fail: no source, or a source that wasn't there", () => {
+    const files = [
+      file("drop/a.jpg", "failed", { depositId: "d1", failureKind: "interrupted", sourcePath: null }),
+      file("drop/b.jpg", "failed", { depositId: "d1", failureKind: "missingSource" }), // has a source; it's gone
+      file("drop/c.jpg", "failed", { depositId: "d1", failureKind: "permanent" }),
+    ];
+    expect(buildUploads([deposit("d1")], files, [], false).batches[0]!.counts).toEqual({ stored: 0, inFlight: 0, failed: 3, unlocated: 2 });
+  });
+
+  test("focusFor names the Uploads row that explains a file: its batch, else its watched folder, else nothing", () => {
+    const m = buildUploads([deposit("d1")], [], [source("Photos"), source("Photos/2024")], false);
+    expect(focusFor({ depositId: "d1", relativePath: "drop/a.jpg" }, m)).toEqual({ kind: "batch", id: "d1" });
+    expect(focusFor({ depositId: "gone", relativePath: "drop/a.jpg" }, m)).toBeNull(); // a batch the page doesn't list
+    expect(focusFor({ depositId: null, relativePath: "Photos/2024/x.jpg" }, m)).toEqual({ kind: "folder", id: "/Photos/2024" });
+    expect(focusFor({ depositId: null, relativePath: "Photos/x.jpg" }, m)).toEqual({ kind: "folder", id: "/Photos" });
+    expect(focusFor({ depositId: null, relativePath: "Elsewhere/x.jpg" }, m)).toBeNull();
   });
 
   test("a folder watched inside another owns its own files — the outer one never counts them twice", () => {
@@ -73,8 +91,8 @@ describe("buildUploads", () => {
     ];
     const m = buildUploads([], files, [source("Photos"), source("Photos/2024")], false);
     const byName = Object.fromEntries(m.folders.map((f) => [f.name, f.counts]));
-    expect(byName["Photos"]).toEqual({ stored: 0, inFlight: 0, failed: 1, retryable: 1 });
-    expect(byName["Photos/2024"]).toEqual({ stored: 1, inFlight: 0, failed: 1, retryable: 1 });
+    expect(byName["Photos"]).toEqual({ stored: 0, inFlight: 0, failed: 1, unlocated: 0 });
+    expect(byName["Photos/2024"]).toEqual({ stored: 1, inFlight: 0, failed: 1, unlocated: 0 });
     expect(m.folders.reduce((n, f) => n + f.counts.failed, 0)).toBe(m.failedTotal);
   });
 

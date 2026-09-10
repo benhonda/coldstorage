@@ -27,14 +27,33 @@ import type { PendingDrop } from "./uploads/pendingDrops.ts";
  *     answer to "what did pressing Stop do?": nothing already stored is undone, and here's how many
  *     files still aren't.
  */
+/** The run that just ended with its batch unfinished — what {@link FailedBanner} says. Derived by the
+ *  owner from the Uploads fold (the batch's failed-row count), never from the run event's blob count,
+ *  which includes transient snags that are still retrying and are not failures. */
+export interface RunFailed {
+  depositId: string;
+  /** Identifies THIS run of the batch (the batch id + the tree revision its run finished at), so a
+   *  dismissed banner stays dismissed for this outcome only: a retry that fails again is news again. */
+  runKey: string;
+  /** The batch's name, as the Uploads page shows it. */
+  name: string;
+  failed: number;
+}
+
 export function DepositProgress({
   run,
   drops,
   paused,
+  failed,
   onStop,
   onResume,
+  onShowUploads,
 }: {
   run: RunProgress | null;
+  /** The last run's unfinished batch, or null — see {@link RunFailed}. */
+  failed: RunFailed | null;
+  /** Open the Uploads page on this batch — the failed banner's action. */
+  onShowUploads: (depositId: string) => void;
   /** The drops taken but not yet running (`usePendingDrops`) — one banner each, from release to
    *  `runStarted`. Empty when nothing is waiting. */
   drops: readonly PendingDrop[];
@@ -64,6 +83,7 @@ export function DepositProgress({
       ))}
       {paused ? <PausedBanner onResume={onResume} /> : <RunBanner run={run} onStop={onStop} />}
       <StoppedBanner run={run} />
+      <FailedBanner failed={failed} onShowUploads={onShowUploads} />
     </>
   );
 }
@@ -113,6 +133,36 @@ function StoppedBanner({ run }: { run: RunProgress | null }): React.JSX.Element 
       <div className="cs-bar-meta">
         {stopped === 1 ? "1 file wasn't" : `${stopped} files weren't`} uploaded. What was already stored is
         safe. Drop them again, or a watched folder picks them up on its next pass.
+      </div>
+    </div>
+  );
+}
+
+/** What a run left un-uploaded — shown from the moment the batch settles unfinished until the user acts
+ *  on it or dismisses it. The run banner used to simply vanish here, and the only trace of the failure was
+ *  a small count on the sidebar's Uploads item that the user had to notice and go find (2026-09-10). A
+ *  failed upload is a persistent fact, so this is a persistent surface with a way in — not a toast. */
+function FailedBanner({ failed, onShowUploads }: { failed: RunFailed | null; onShowUploads: (depositId: string) => void }): React.JSX.Element | null {
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  // Keyed on the run, not the batch: dismissing one outcome must not swallow the next one's banner.
+  if (!failed || dismissed === failed.runKey) return null;
+  return (
+    <div className="cs-deposit cs-deposit--failed" role="status" aria-live="polite">
+      <div className="cs-deposit-head">
+        <span className="cs-deposit-title">
+          {failed.failed === 1 ? "1 file" : `${failed.failed.toLocaleString()} files`} from {failed.name} couldn't upload
+        </span>
+        <span className="cs-deposit-side">
+          <Button variant="secondary" size="sm" onClick={() => onShowUploads(failed.depositId)}>
+            See what happened
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setDismissed(failed.runKey)}>
+            OK
+          </Button>
+        </span>
+      </div>
+      <div className="cs-bar-meta">
+        What was already stored is safe. The Uploads page says why these didn't make it, and what to do.
       </div>
     </div>
   );

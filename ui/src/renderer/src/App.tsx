@@ -30,11 +30,12 @@ import { baseName, fileFromJournal, isFolderMarker, isUploadOutstanding, parentO
 import { isOptimisticId, settleWith, useFiles } from "./views/files/useFiles.ts";
 import { usePendingDrops } from "./views/uploads/pendingDrops.ts";
 import { UploadsView } from "./views/UploadsView.tsx";
-import { buildUploads, type UploadBatch, type WatchedFolder } from "./views/uploads/model.ts";
+import { buildUploads, focusFor, type UploadBatch, type UploadsFocus, type WatchedFolder } from "./views/uploads/model.ts";
 import { eventAction } from "./state/reducer.ts";
 import { bytesAvailable } from "./state/entitlement.ts";
 import { formatBytes } from "./views/files/model.ts";
 import { MyFilesView, type TreeState } from "./views/MyFilesView.tsx";
+import type { RunFailed } from "./views/DepositProgress.tsx";
 import { SettingsView, type SettingsApi, type SettingsTab } from "./views/SettingsView.tsx";
 import { DownloadsView } from "./views/DownloadsView.tsx";
 import { groupDownloads } from "./views/downloads/model.ts";
@@ -132,7 +133,9 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
   // our session yet (`status.signedIn` false — its reads are empty-but-successful until `authenticate`
   // lands); or the read itself failed. And one cross-check against the daemon's own count: if `getStatus`
   // says the vault holds files and the list came back empty, something is wrong and we say so rather than
-  // show a hero over 140k files (2026-08-25).
+  // show a hero over 140k files (2026-08-25). That cross-check trusts `filesLoad`: a list the daemon has
+  // announced a newer revision past reads as `pending`, not `loaded` (see `AppState.treeRevision`) — which
+  // is what stops the sign-in resync flashing "Couldn't load your files" while the real read is in flight.
   const treeState: TreeState = (() => {
     // Not connected to the daemon yet → genuinely still connecting.
     if (state.connection !== "connected") return { state: "connecting" };
@@ -284,10 +287,30 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
   ];
 
   /** Tell the user what a retry could NOT do. The rows already carry the daemon's verdict (it wrote the
-   * kind onto each one — `missingSource`), so this is the headline only. */
+   * kind onto each one — `missingSource`), so this is the headline, and the one thing that fixes it. */
   const reportMissing = (missing: number): void => {
-    if (missing > 0) toast.error(`${missing.toLocaleString()} ${missing === 1 ? "file" : "files"} couldn’t be found on disk — see the row for what to do.`);
+    if (missing > 0) toast.error(`${missing.toLocaleString()} ${missing === 1 ? "file" : "files"} couldn’t be found on disk. Use Locate folder… on the batch to point at where they are now.`);
   };
+
+  // Where a ⚠ leads: the Uploads row (batch or watched folder) that explains it. Set by a click on a
+  // failed row's badge in My Files or on the "couldn't upload" banner, consumed by the Uploads page when it
+  // opens — so the page lands expanded on the thing the user was just looking at, not on a list to scan.
+  const [uploadsFocus, setUploadsFocus] = useState<UploadsFocus | null>(null);
+  const showUploads = (focus: UploadsFocus | null): void => {
+    setUploadsFocus(focus);
+    setRoute("uploads");
+  };
+
+  // The run that just ended, if it left its batch unfinished — the "N couldn't upload" banner on My Files.
+  // Derived from the same fold as the page and the badge (never from the event's blob count, which
+  // includes transient snags that are still retrying and are not failures).
+  const runFailed = useMemo((): RunFailed | null => {
+    const r = state.run;
+    if (!r || r.active || !r.depositId) return null;
+    const b = uploads.batches.find((x) => x.id === r.depositId);
+    if (!b || b.state !== "didntFinish") return null;
+    return { depositId: b.id, runKey: `${b.id}@${state.depositRuns[b.id] ?? 0}`, name: b.name, failed: b.counts.failed };
+  }, [state.run, state.depositRuns, uploads]);
 
   /** What a retry covers: a handful of rows, one batch, or one watched folder. The last two are resolved
    * by the daemon from the journal — never a 56k-id list from here; the rows are only needed locally to
@@ -304,16 +327,28 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
   /** Re-upload failed rows from their recorded sources. A journal row goes through `retryFiles` (the
    * daemon requeues it and reopens its batch); an optimistic row the daemon never saw re-issues its
    * original `deposit`. */
-  const retryUploads = (scope: RetryScope): void => {
+  const retryUploads = (scope: RetryScope): Promise<void> => {
+    // Each command is its own `exec` (its own toast on rejection); the returned promise is only a "these
+    // have all settled" signal for a button's pending state, so it never rejects.
+    const pending: Promise<unknown>[] = [];
+    const run = (fn: () => Promise<unknown>): void => {
+      const p = fn();
+      exec(() => p);
+      pending.push(p.catch(() => undefined));
+    };
     const targets = retryTargets(scope);
     const withSource = targets.filter((f) => f.status === "failed" && f.sourcePath !== null);
-    if (withSource.length === 0) return;
+    // A batch or folder retry goes to the daemon even when WE know no source for any of its rows: the
+    // daemon is the judge, and its verdict (`missingSource`, written onto each row) is what turns a mute
+    // ⚠ into "Can't find the file" + Locate folder…. A row-level retry is only ever offered on rows with
+    // a source, so an empty set there is nothing to do.
+    if (withSource.length === 0 && Array.isArray(scope)) return Promise.resolve();
     // Bytes that never landed are incoming again — gate them like any deposit.
     const incoming = withSource.reduce((sum, f) => sum + f.size, 0);
     if (!hasRoomFor(incoming)) {
       if (subscribed) setBlockedBytes(incoming);
       else setPaywallReason("quotaReached");
-      return;
+      return Promise.resolve();
     }
     const optimistic = withSource.filter((f) => isOptimisticId(f.id));
     const journal = withSource.filter((f) => !isOptimisticId(f.id));
@@ -324,7 +359,7 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
       const src = f.sourcePath;
       if (src === null) continue; // filtered above; narrows the type without a cast
       const flip = filesApi.setDepositStatus([f.id], "uploading");
-      exec(async () => {
+      run(async () => {
         const ack = await api.request("deposit", { src, dest: parentOf(f.relativePath) }).catch((e: unknown) => {
           flip.rollback();
           throw e;
@@ -335,13 +370,34 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
         filesApi.depositAccepted([f.id], ack.depositId);
       });
     }
-    if (journal.length > 0) {
-      const flip = filesApi.setDepositStatus(journal.map((f) => f.id), "uploading");
-      exec(async () => {
-        const r = await settleWith(flip, api.request("retryFiles", retryParams(scope, journal)));
+    if (journal.length > 0 || !Array.isArray(scope)) {
+      // Flip only the rows we expect to queue; the rest keep their ⚠ until the daemon's verdict re-reads.
+      const flip = journal.length > 0 ? filesApi.setDepositStatus(journal.map((f) => f.id), "uploading") : null;
+      run(async () => {
+        const command = api.request("retryFiles", retryParams(scope, journal));
+        const r = flip ? await settleWith(flip, command) : await command;
         reportMissing(r.missing); // the rows themselves re-read with the daemon's verdict (`filesChanged`)
       });
     }
+    return Promise.all(pending).then(() => undefined);
+  };
+
+  /** "Locate folder…" on a batch: the user points at the folder it came from, and the daemon finds each
+   * failed row under it (by the path it had inside the drop), records that, and retries. No optimistic
+   * flip — which rows it will find is exactly what we don't know; the read after its verdict says. */
+  const locateBatch = async (b: UploadBatch): Promise<void> => {
+    const picked = await api.chooseFolder(undefined, `Find the folder “${b.name}” came from`);
+    if (!picked) return;
+    const failed = b.failures.flatMap((g) => g.files);
+    const incoming = failed.reduce((sum, f) => sum + f.size, 0);
+    if (!hasRoomFor(incoming)) {
+      if (subscribed) setBlockedBytes(incoming);
+      else setPaywallReason("quotaReached");
+      return;
+    }
+    const r = await api.request("retryFiles", { depositId: b.id, sourceRoot: picked });
+    if (r.queued === 0) toast.error(`None of the ${failed.length.toLocaleString()} ${failed.length === 1 ? "file" : "files"} from ${b.name} ${failed.length === 1 ? "is" : "are"} in that folder. Try the folder that contains it, or the one you dropped.`);
+    else reportMissing(r.missing);
   };
 
   /** "Locate…": the user points at where the file is, and it retries from there — recorded on the row, so
@@ -626,6 +682,9 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
           }
           onRetryUploads={retryUploads}
           onLocateUpload={locateUpload}
+          onShowUploadsFor={(file) => showUploads(focusFor(file, uploads))}
+          runFailed={runFailed}
+          onShowUploadsBatch={(depositId) => showUploads({ kind: "batch", id: depositId })}
           requestFileIds={requestFileIds}
           onRequestOpened={() => setRequestFileIds(null)}
           onShowDownloads={() => setRoute("downloads")}
@@ -642,8 +701,11 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
           onRetryFolder={(f: WatchedFolder) => retryUploads({ sourceMount: f.source.mountPath })}
           onRetryFiles={retryUploads}
           onLocate={locateUpload}
+          onLocateBatch={locateBatch}
           onRemoveFile={removeUpload}
           onRemoveFailed={removeFailedBatch}
+          focus={uploadsFocus}
+          onFocusShown={() => setUploadsFocus(null)}
         />
       )}
       {route === "downloads" && (

@@ -19,8 +19,10 @@ export interface Counts {
   /** Queued, uploading, or retrying against a snag. */
   inFlight: number;
   failed: number;
-  /** Failed rows the daemon can retry by itself — a recorded source, so "Try again" has something to read. */
-  retryable: number;
+  /** Failed rows the daemon does NOT know where to find: no recorded source (a row from before sources
+   * were kept), or a source it looked for and didn't find (`missingSource`). What "Locate folder…" is
+   * for — the retry buttons alone can only re-fail these. */
+  unlocated: number;
 }
 
 /** The failed rows of one batch, one bucket per cause, worst-for-the-user first. */
@@ -78,11 +80,11 @@ const COUNT_STATUSES: Partial<Record<ArchivedFile["status"], keyof Counts>> = {
 };
 
 const count = (files: readonly ArchivedFile[]): Counts => {
-  const c: Counts = { stored: 0, inFlight: 0, failed: 0, retryable: 0 };
+  const c: Counts = { stored: 0, inFlight: 0, failed: 0, unlocated: 0 };
   for (const f of files) {
     const key = COUNT_STATUSES[f.status];
     if (key) c[key] += 1;
-    if (f.status === "failed" && f.sourcePath !== null) c.retryable += 1;
+    if (f.status === "failed" && (f.sourcePath === null || f.failureKind === "missingSource")) c.unlocated += 1;
   }
   return c;
 };
@@ -135,6 +137,19 @@ const underMount = (path: string, mount: string): boolean => path === mount || p
  * inside another watched folder owns its own files and the outer one doesn't count them twice. */
 const ownerOf = (path: string, folders: readonly Source[]): Source | undefined =>
   folders.find((s) => underMount(path, s.mountPath));
+
+/** Where a failed row is explained: the batch that claimed it, or the watched folder that covers it. What
+ * the tree's ⚠ opens when clicked, so the row and its "why + what to do" are one hop apart. */
+export type UploadsFocus = { kind: "batch"; id: string } | { kind: "folder"; id: string };
+
+/** The Uploads row that owns `file` — its batch by `depositId`, else the innermost watched folder whose
+ * mount covers it; null for a row nothing on the page owns (an optimistic drop the daemon hasn't claimed
+ * yet, or an orphan the daemon's next sweep will adopt). */
+export const focusFor = (file: Pick<ArchivedFile, "depositId" | "relativePath">, model: UploadsModel): UploadsFocus | null => {
+  if (file.depositId !== null) return model.batches.some((b) => b.id === file.depositId) ? { kind: "batch", id: file.depositId } : null;
+  const owner = ownerOf(file.relativePath, model.folders.map((f) => f.source).sort((a, b) => b.mountPath.length - a.mountPath.length));
+  return owner ? { kind: "folder", id: owner.id } : null;
+};
 
 export interface UploadsModel {
   batches: UploadBatch[];

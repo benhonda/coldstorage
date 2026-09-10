@@ -137,6 +137,14 @@ export interface AppState {
    * is discarded — replies don't arrive in execution order, and a stale read must never regress the tree.
    * Also the clock the file browser settles its optimistic edits against. Reset with the slice. */
   filesRevision: number;
+  /** The newest tree revision ANY daemon event has announced (`filesChanged`/`runFinished` carry one). While
+   * `filesRevision` sits behind it, `files` describes a tree the daemon has since moved past — and `filesLoad`
+   * says `pending`, not `loaded`, until a read at or past it lands. Without this the sign-in resync lied:
+   * the pre-auth `listFiles` (signed out ⇒ `[]`, successfully) was held as "loaded", `getStatus` (cheap) then
+   * beat the real `listFiles` (140k rows) home with `filesTotal > 0`, and the browser's empty-list-vs-count
+   * cross-check called the gap "Couldn't load your files — Try again" (2026-09-10). Same shape for the first
+   * deposit into an empty vault at `runFinished`. Reset with `filesRevision` on (re)connect. */
+  treeRevision: number;
   /** Tree revision at which each deposit's run finished, by batch id (`runFinished.depositId`/`revision`) —
    * the moment a deposit's optimistic rows can go, once a read at or past it has landed. Bounded. */
   depositRuns: Record<string, number>;
@@ -144,7 +152,8 @@ export interface AppState {
    * answers `[]` successfully, and a failed read leaves whatever was there. All three rendered as "your
    * vault is empty, drop something" over a 140k-file vault (2026-08-25). So the load carries its own state
    * — `pending` until a read lands, `failed` with the daemon's/socket's own words when it rejects — and
-   * the browser shows THAT rather than the empty-vault hero. Reset to `pending` by the account wipe. */
+   * the browser shows THAT rather than the empty-vault hero. Reset to `pending` by the account wipe, and by
+   * any tree event that outruns the held read (see `treeRevision`). */
   filesLoad: { state: "pending" } | { state: "loaded" } | { state: "failed"; error: string };
   /** Exclude patterns (daemon `listExcludes`) — Settings' "Don't back up" chips. Authoritative; the
    * daemon seeds defaults on first run + applies them at scan time. */
@@ -191,6 +200,7 @@ export const initialState: AppState = {
   status: null,
   files: [],
   filesRevision: 0,
+  treeRevision: 0,
   depositRuns: {},
   filesLoad: { state: "pending" },
   excludes: [],
@@ -338,7 +348,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
       // A (re)connect is a fresh daemon process as far as the tree revision goes — it counts from zero per
       // process — so what we hold must not outrank the first read the new connection makes.
       return action.state === "connected" && state.connection !== "connected"
-        ? { ...state, connection: action.state, filesRevision: 0, depositRuns: {} }
+        ? { ...state, connection: action.state, filesRevision: 0, treeRevision: 0, depositRuns: {} }
         : { ...state, connection: action.state };
 
     case "initialized":
@@ -362,6 +372,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
         status: null,
         files: [],
         filesRevision: 0,
+        treeRevision: 0,
         depositRuns: {},
         filesLoad: { state: "pending" },
         excludes: [],
@@ -403,7 +414,10 @@ export const reducer = (state: AppState, action: Action): AppState => {
       // (Equal is accepted: the same revision read twice is the same tree, and the load state may need it.)
       const { revision, files } = action.listed;
       if (revision < state.filesRevision) return state;
-      return { ...state, files, filesRevision: revision, filesLoad: { state: "loaded" } };
+      // Newer than what we held, so show it — but it is only a FACT once it has caught up with the newest
+      // revision the daemon announced; behind that, the controller's re-read is still in flight.
+      const caughtUp = revision >= state.treeRevision;
+      return { ...state, files, filesRevision: revision, filesLoad: { state: caughtUp ? "loaded" : "pending" } };
     }
     case "filesLoadFailed":
       // Keep the last good tree (stale beats blank); only the load state says it couldn't be refreshed.
@@ -438,6 +452,14 @@ export const reducer = (state: AppState, action: Action): AppState => {
     case "event":
       return foldEvent(state, action);
   }
+};
+
+/** A daemon event announced tree revision `revision`: anything we hold that was read before it is no longer
+ * a fact (see `AppState.treeRevision`). A failed read stays failed — the retry is the user's, not ours. */
+const treeAnnounced = (state: AppState, revision: number): AppState => {
+  if (revision <= state.treeRevision) return state;
+  const behind = state.filesRevision < revision && state.filesLoad.state === "loaded";
+  return { ...state, treeRevision: revision, filesLoad: behind ? { state: "pending" } : state.filesLoad };
 };
 
 const foldEvent = (state: AppState, action: EventAction): AppState => {
@@ -519,7 +541,9 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
         ? Object.fromEntries([...Object.entries(state.depositRuns), [d.depositId, num(d.revision)]].slice(-DEPOSIT_RUN_CAP))
         : state.depositRuns;
       return {
-        ...state,
+        // A finished run rewrote rows, so the held list is behind its revision (the first deposit into an
+        // empty vault is the case that matters: `[]` must read as pending, not "empty", until the re-read).
+        ...treeAnnounced(state, num(d.revision)),
         depositRuns,
         run: {
           active: false,
@@ -596,7 +620,8 @@ const foldEvent = (state: AppState, action: EventAction): AppState => {
       return state;
 
     case "filesChanged":
-      // A reorganize/delete edited the journal tree; the controller re-reads listFiles. No fold here.
-      return state;
+      // The tree moved (an edit, or a sign-in/out). The controller re-reads listFiles; here we only note
+      // that what we hold is behind — see `treeRevision`.
+      return treeAnnounced(state, num(action.data.revision));
   }
 };
