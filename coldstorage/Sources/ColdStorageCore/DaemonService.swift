@@ -335,7 +335,12 @@ public actor DaemonService {
     /// is an action ON the batch the rows belong to, never a new batch: the same row reopens, its counts
     /// move, and the Uploads page keeps one line per thing the user did. Rows a watched folder owns have no
     /// deposit to reopen — their folder's next scan re-plans them by itself, and we bring that pass forward.
-    func retryFiles(_ scope: RetryScope, sourcePath: String?) throws -> RetryFilesResultDTO {
+    ///
+    /// **Locate folder…** is the batch form of Locate: `sourceRoot` is the folder the user says the rows
+    /// came from, and every row in scope that can be found under it gets its source rewritten before the
+    /// split above runs (`relocate`). The rows that can't are left to the same `.missingSource` verdict,
+    /// so pointing at the wrong folder is answered on the rows, not swallowed.
+    func retryFiles(_ scope: RetryScope, sourcePath: String?, sourceRoot: String? = nil) throws -> RetryFilesResultDTO {
         let session = try requireSession("retryFiles")
         if let sourcePath {
             guard case .ids(let ids) = scope, ids.count == 1, let id = ids.first else {
@@ -343,20 +348,25 @@ public actor DaemonService {
             }
             try session.journal.setSourcePath(id: id, sourcePath)
         }
-        let rows: [FileRow]
-        switch scope {
-        case .ids(let ids): rows = try session.journal.files(ids: ids).filter { $0.status == .failed }
-        case .all: rows = try session.journal.failedFiles()
-        case .deposit(let id): rows = try session.journal.depositFiles(id, statuses: [.failed])
-        case .source(let mount): rows = try session.journal.failedFiles(underMount: mount)
+        let load: () throws -> [FileRow] = {
+            switch scope {
+            case .ids(let ids): return try session.journal.files(ids: ids).filter { $0.status == .failed }
+            case .all: return try session.journal.failedFiles()
+            case .deposit(let id): return try session.journal.depositFiles(id, statuses: [.failed])
+            case .source(let mount): return try session.journal.failedFiles(underMount: mount)
+            }
+        }
+        var rows = try load()
+        if let sourceRoot {
+            try relocate(rows, under: sourceRoot, session: session)
+            rows = try load()   // re-read: the split below keys off each row's (now rewritten) source
         }
         let retryable = rows.filter { r in
             guard let p = r.sourcePath else { return false }
             // A Photos asset can't be stat'd; it's retryable wherever a resolver exists (a stale id is
             // dropped at resolve time and the orphan sweep reports it). A path must be a file, here, now.
             if IngestItem.photoAssetId(fromSource: p) != nil { return photoResolver != nil }
-            var isDir: ObjCBool = false
-            return FileManager.default.fileExists(atPath: p, isDirectory: &isDir) && !isDir.boolValue
+            return Self.isRegularFile(p)
         }
         let queued = try session.journal.requeueFailedFiles(ids: retryable.map(\.id))
         let queuedSet = Set(queued)
@@ -394,6 +404,41 @@ public actor DaemonService {
         // The revision after BOTH edits above (requeue + missing-source verdicts), so the app's optimistic
         // "uploading" flip on these rows holds until a read that reflects them.
         return RetryFilesResultDTO(queued: queued.count, missing: missing.count, revision: treeRevision)
+    }
+
+    /// The user pointed at a folder for a batch's rows (`retryFiles` with `sourceRoot`): resolve each row
+    /// to a file under it and record that as the row's source. A row's vault path is its batch's `dest`
+    /// plus the path it had inside the drop, so the source is `root/<path inside the drop>` — and because
+    /// a dropped folder lands under its own name, the user may reasonably point at that folder itself
+    /// rather than its parent, so `root/<path minus the leading folder>` is tried too when the names
+    /// agree. Only a path that is a regular file right now is written; everything else keeps its old
+    /// source (or none) and falls to the missing-source verdict. Photos rows are never relocated: their
+    /// source is a library asset, not a path.
+    private func relocate(_ rows: [FileRow], under root: String, session: UserSession) throws {
+        let root = root.hasSuffix("/") && root.count > 1 ? String(root.dropLast()) : root
+        let rootName = URL(fileURLWithPath: root).lastPathComponent
+        var destByDeposit: [String: String] = [:]
+        var found: [(id: String, path: String)] = []
+        for r in rows {
+            if let p = r.sourcePath, IngestItem.photoAssetId(fromSource: p) != nil { continue }
+            var rel = Substring(r.relativePath)
+            if let d = r.depositId {
+                if destByDeposit[d] == nil { destByDeposit[d] = try session.journal.deposit(id: d)?.dest ?? "" }
+                if let dest = destByDeposit[d], !dest.isEmpty, rel.hasPrefix(dest + "/") { rel = rel.dropFirst(dest.count + 1) }
+            }
+            var candidates = ["\(root)/\(rel)"]
+            if let slash = rel.firstIndex(of: "/"), rel[..<slash] == rootName {
+                candidates.append("\(root)/\(rel[rel.index(after: slash)...])")
+            }
+            if let hit = candidates.first(where: Self.isRegularFile) { found.append((r.id, hit)) }
+        }
+        try session.journal.setSourcePaths(found)
+    }
+
+    /// A path that is a file, here, now — not a directory, not a dangling entry.
+    private static func isRegularFile(_ path: String) -> Bool {
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && !isDir.boolValue
     }
 
     /// Run one recorded deposit and settle its row. **Must be called under `withRunLock`.** The row is
@@ -1624,7 +1669,9 @@ public actor DaemonService {
             // The user's Try again / Locate… on failed rows. ONE of: `ids` (newline-joined journal file
             // ids), `all: "true"` (every failed row), `depositId` (a batch), `sourceMount` (a watched
             // folder's mount path) — the last three are resolved from the journal, never sent as a list.
-            // `sourcePath` (optional, `ids` with a single id only) is where they just told us the bytes are.
+            // `sourcePath` (optional, `ids` with a single id only) is where they just told us the bytes are;
+            // `sourceRoot` (optional, any scope) is the FOLDER they said a whole batch came from — Locate
+            // folder… — resolved per row before the retry (see `relocate`).
             let scope: RetryScope
             if p["all"] == "true" {
                 scope = .all
@@ -1636,7 +1683,7 @@ public actor DaemonService {
                 guard let raw = p["ids"], !raw.isEmpty else { throw ColdStorageError.invalidRequest("retryFiles requires one of params.ids (newline-joined file ids), params.all = \"true\", params.depositId, params.sourceMount") }
                 scope = .ids(raw.split(separator: "\n").map(String.init).filter { !$0.isEmpty })
             }
-            return AnyEncodable(try retryFiles(scope, sourcePath: p["sourcePath"]))
+            return AnyEncodable(try retryFiles(scope, sourcePath: p["sourcePath"], sourceRoot: p["sourceRoot"]))
         case "depositPhotos":
             _ = try requireSession("depositPhotos")
             try refuseIfUploadsPaused("depositPhotos")

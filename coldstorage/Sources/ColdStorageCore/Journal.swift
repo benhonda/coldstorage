@@ -213,7 +213,8 @@ public final class Journal: @unchecked Sendable {
         }
         // Where each file's bytes live on this Mac, so a failed upload can be retried from the row itself
         // (`retryFiles`). Nullable, not backfilled: a legacy row genuinely doesn't know, and the app offers
-        // "Locate…" for exactly that case rather than us guessing a path.
+        // "Locate…" (one file) and "Locate folder…" (a whole batch, `retryFiles` with `sourceRoot`) for
+        // exactly that case rather than us guessing a path.
         if !fileCols.contains("sourcePath") {
             try exec("ALTER TABLE files ADD COLUMN sourcePath TEXT")
         }
@@ -1113,6 +1114,20 @@ public final class Journal: @unchecked Sendable {
     public func setSourcePath(id: String, _ path: String) throws {
         lock.lock(); defer { lock.unlock() }
         try run("UPDATE files SET sourcePath=?1 WHERE id=?2", [.text(path), .text(id)])
+    }
+
+    /// The batch form of `setSourcePath` — one transaction, however many rows. The user's **Locate
+    /// folder…** on a whole batch resolves a source for every row it can (`DaemonService.retryFiles`),
+    /// and tens of thousands of single autocommit writes is exactly the SQLite pattern that turns a click
+    /// into a minute.
+    public func setSourcePaths(_ paths: [(id: String, path: String)]) throws {
+        guard !paths.isEmpty else { return }
+        lock.lock(); defer { lock.unlock() }
+        try transaction {
+            for (id, path) in paths {
+                try run("UPDATE files SET sourcePath=?1 WHERE id=?2", [.text(path), .text(id)])
+            }
+        }
     }
 
     /// Relocate the subtree rooted at `from` to `to` — the journal edit behind a file/folder **move OR

@@ -133,6 +133,51 @@ import Crypto
         #expect(try f.session.journal.depositFiles(batch.id, statuses: [.archived]).count == 4)
     }
 
+    /// "Locate folder…" on a batch: the user points at the folder the rows came from, and every row found
+    /// under it gets that source and is retried; a row that isn't there keeps the missing-source verdict.
+    /// Both natural picks work — the dropped folder itself, or the folder that contains it.
+    @Test func locateFolderResolvesABatchsRowsUnderThePickedFolder() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        await f.daemon.beginSession(f.session)
+        await f.daemon.deposit(paths: [f.drop.path], into: "")
+        let batch = try #require(try f.session.journal.listDeposits().first)
+        // Two rows from before sources were recorded: one whose file is on disk, one whose isn't.
+        let extra = f.drop.appendingPathComponent("d3/f3.bin")
+        try FileManager.default.createDirectory(at: extra.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 9, count: 40_000).write(to: extra)
+        try f.session.journal.upsert([Self.item("drop/d3/f3.bin", sourcePath: nil), Self.item("drop/d4/gone.bin", sourcePath: nil)], depositId: batch.id)
+        try f.session.journal.markFilesFailed(["drop/d3/f3.bin", "drop/d4/gone.bin"], kind: .interrupted)
+
+        // The wrong folder: nothing found, nothing rewritten, both rows told so.
+        let wrong = try await f.daemon.retryFiles(.deposit(batch.id), sourcePath: nil, sourceRoot: f.root.appendingPathComponent("elsewhere").path)
+        #expect(wrong.queued == 0 && wrong.missing == 2)
+        #expect(try f.session.journal.files(ids: ["drop/d3/f3.bin"]).first?.sourcePath == nil)
+
+        // The dropped folder itself (its name matches the rows' leading folder).
+        let r = try await f.daemon.retryFiles(.deposit(batch.id), sourcePath: nil, sourceRoot: f.drop.path)
+        #expect(r.queued == 1 && r.missing == 1)
+        #expect(try f.session.journal.files(ids: ["drop/d3/f3.bin"]).first?.sourcePath == extra.path)
+        #expect(try f.session.journal.files(ids: ["drop/d4/gone.bin"]).first?.failureKind == .missingSource)
+
+        // Let the retry's background run settle before staging the row again (a deterministic wait, as in
+        // the retry test above), then make it a lost row once more.
+        try await f.daemon.runOnce()
+        var settled = try #require(try f.session.journal.deposit(id: batch.id))
+        for _ in 0..<50 where settled.state != .done {
+            try await Task.sleep(for: .milliseconds(50))
+            settled = try #require(try f.session.journal.deposit(id: batch.id))
+        }
+        // The lost row turns up on disk, and the user points at the folder that CONTAINS the drop this
+        // time: resolved by the row's full vault path under it.
+        let back = f.drop.appendingPathComponent("d4/gone.bin")
+        try FileManager.default.createDirectory(at: back.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 7, count: 40_000).write(to: back)
+        let parent = try await f.daemon.retryFiles(.deposit(batch.id), sourcePath: nil, sourceRoot: f.drop.deletingLastPathComponent().path)
+        #expect(parent.queued == 1 && parent.missing == 0)
+        #expect(try f.session.journal.files(ids: ["drop/d4/gone.bin"]).first?.sourcePath == back.path)
+    }
+
     /// "Try again" on a batch that is still OWED never reopens it: it is already going to be replayed, and
     /// rewriting its mode to `.retry` would stop that replay re-enumerating the drop. The rows are requeued
     /// and the pass is brought forward instead.
