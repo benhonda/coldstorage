@@ -724,6 +724,21 @@ public final class Journal: @unchecked Sendable {
         }
     }
 
+    /// Drop every settled deposit that no live row rides in any more. A batch is only ever the rows that
+    /// carry its id: when a re-drop reclaims them (`upsert` hands a row to the new batch) or the user
+    /// removes the last of them, what is left is a name over nothing — "Done" with no counts on the
+    /// Uploads page. Pending deposits are untouched: an owed drop legitimately has no rows until it runs.
+    /// Returns how many were retired.
+    @discardableResult
+    public func retireEmptyDeposits() throws -> Int {
+        lock.lock(); defer { lock.unlock() }
+        try run("""
+            DELETE FROM deposits WHERE state=?1
+               AND NOT EXISTS (SELECT 1 FROM files WHERE files.depositId=deposits.id AND files.deletedAt IS NULL)
+            """, [.text(Deposit.State.done.rawValue)])
+        return try changed()
+    }
+
     /// Every deposit, newest first — the Uploads page's list.
     public func listDeposits() throws -> [Deposit] {
         lock.lock(); defer { lock.unlock() }
@@ -1008,14 +1023,20 @@ public final class Journal: @unchecked Sendable {
         try run("DELETE FROM restores WHERE id=?1", [.text(id)])
     }
 
-    /// The set of vault-relative paths currently occupied by a LIVE row (file OR folder marker; tombstoned
-    /// rows excluded). The SSOT for deposit collision detection — a dropped item collides iff its target
-    /// `relativePath` is in this set — and the "taken" set the `keepBoth` uniquifier avoids. One read; the
-    /// caller probes membership in-memory (the vault tree is personal-scale, so a full snapshot beats N
-    /// per-path queries).
-    public func livePaths() throws -> Set<String> {
+    /// The set of vault-relative paths a dropped item would COLLIDE with: every live row (file OR folder
+    /// marker; tombstoned rows excluded) **except a `failed` one**. The SSOT for deposit collision
+    /// detection and the "taken" set the `keepBoth` uniquifier avoids. One read; the caller probes
+    /// membership in-memory (the vault tree is personal-scale, so a full snapshot beats N per-path queries).
+    ///
+    /// A failed row holds no bytes — `markFilesFailed` never flips an archived file — so there is nothing
+    /// at that path to keep, replace, or skip. Counting it used to turn "drop the folder in again", the one
+    /// action that heals a stranded upload, into a "56,930 items already exist" prompt whose default
+    /// (Keep Both) uploaded renamed copies beside the ghosts and whose obvious answer (Skip) uploaded
+    /// nothing (2026-09-14). A re-drop now reclaims the row in place: `upsert` overwrites it under the same
+    /// id with the fresh source and batch.
+    public func occupiedPaths() throws -> Set<String> {
         lock.lock(); defer { lock.unlock() }
-        return Set(try run("SELECT relativePath FROM files WHERE deletedAt IS NULL")
+        return Set(try run("SELECT relativePath FROM files WHERE deletedAt IS NULL AND status != ?1", [.text(FileStatus.failed.rawValue)])
             .compactMap { $0["relativePath"] as? String })
     }
 

@@ -21,7 +21,7 @@ public enum ConflictPolicy: String, Sendable {
 /// deposits — both produce path-keyed `IngestItem`s — so collision handling lives in ONE place.
 public struct CollisionResolvingSource: IngestSource {
     let inner: any IngestSource
-    /// Vault paths already taken by a live row — `Journal.livePaths()` at deposit time. The uniquifier avoids
+    /// Vault paths a drop collides with — `Journal.occupiedPaths()` at deposit time (live rows, failed ones excluded). The uniquifier avoids
     /// these (plus the incoming batch's own surviving paths) so a `keepBoth` rename can't re-collide.
     let existing: Set<String>
     /// relativePath → chosen policy. Keys match `IngestItem.relativePath` exactly (same encoding the UI got

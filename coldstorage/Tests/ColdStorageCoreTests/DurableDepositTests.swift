@@ -134,7 +134,8 @@ import Crypto
     }
 
     /// "Locate folder…" on a batch: the user points at the folder the rows came from, and every row found
-    /// under it gets that source and is retried; a row that isn't there keeps the missing-source verdict.
+    /// under it gets that source and is retried; a row that isn't there is left as it was — it never had a
+    /// source, so "can't find the file" would be a claim about nothing — and counted as `noSource`.
     /// Both natural picks work — the dropped folder itself, or the folder that contains it.
     @Test func locateFolderResolvesABatchsRowsUnderThePickedFolder() async throws {
         let f = try fixture()
@@ -149,16 +150,16 @@ import Crypto
         try f.session.journal.upsert([Self.item("drop/d3/f3.bin", sourcePath: nil), Self.item("drop/d4/gone.bin", sourcePath: nil)], depositId: batch.id)
         try f.session.journal.markFilesFailed(["drop/d3/f3.bin", "drop/d4/gone.bin"], kind: .interrupted)
 
-        // The wrong folder: nothing found, nothing rewritten, both rows told so.
+        // The wrong folder: nothing found, nothing rewritten, both rows still without a source.
         let wrong = try await f.daemon.retryFiles(.deposit(batch.id), sourcePath: nil, sourceRoot: f.root.appendingPathComponent("elsewhere").path)
-        #expect(wrong.queued == 0 && wrong.missing == 2)
+        #expect(wrong.queued == 0 && wrong.missing == 0 && wrong.noSource == 2)
         #expect(try f.session.journal.files(ids: ["drop/d3/f3.bin"]).first?.sourcePath == nil)
 
         // The dropped folder itself (its name matches the rows' leading folder).
         let r = try await f.daemon.retryFiles(.deposit(batch.id), sourcePath: nil, sourceRoot: f.drop.path)
-        #expect(r.queued == 1 && r.missing == 1)
+        #expect(r.queued == 1 && r.missing == 0 && r.noSource == 1)
         #expect(try f.session.journal.files(ids: ["drop/d3/f3.bin"]).first?.sourcePath == extra.path)
-        #expect(try f.session.journal.files(ids: ["drop/d4/gone.bin"]).first?.failureKind == .missingSource)
+        #expect(try f.session.journal.files(ids: ["drop/d4/gone.bin"]).first?.failureKind == .interrupted)
 
         // Let the retry's background run settle before staging the row again (a deterministic wait, as in
         // the retry test above), then make it a lost row once more.
@@ -176,6 +177,32 @@ import Crypto
         let parent = try await f.daemon.retryFiles(.deposit(batch.id), sourcePath: nil, sourceRoot: f.drop.deletingLastPathComponent().path)
         #expect(parent.queued == 1 && parent.missing == 0)
         #expect(try f.session.journal.files(ids: ["drop/d4/gone.bin"]).first?.sourcePath == back.path)
+    }
+
+    /// **The Documents case, via Locate.** A batch the orphan sweep minted has no `dest`, and its rows are
+    /// named by their full vault path (`bens-mbp/Documents/…`) — the vault folder the drop landed in, then
+    /// the dropped folder's name. The user points at the real Documents folder. That is a tail of the vault
+    /// path, not its head, so it is found by the shorter tails — and a same-named file of a different size
+    /// found at a shorter tail is NOT taken: it is not the file that was dropped.
+    @Test func locateFolderFindsRowsByTheTailOfTheirVaultPathWhenSizesAgree() async throws {
+        let f = try fixture(fileCount: 0)
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        await f.daemon.beginSession(f.session)
+        let docs = f.root.appendingPathComponent("Documents")
+        try FileManager.default.createDirectory(at: docs.appendingPathComponent("notes"), withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 40_000).write(to: docs.appendingPathComponent("notes/a.bin"))   // the row's size
+        try Data(repeating: 2, count: 5).write(to: docs.appendingPathComponent("notes/b.bin"))        // wrong size
+        let ghost = Deposit(id: "ghost", kind: .files, src: ["bens-mbp"], dest: "", conflicts: [:], excludeExtra: [],
+                            createdAt: 1, state: .done, mode: .retry, finishedAt: 2)
+        try f.session.journal.addDeposit(ghost)
+        let ids = ["bens-mbp/Documents/notes/a.bin", "bens-mbp/Documents/notes/b.bin"]
+        try f.session.journal.upsert(ids.map { Self.item($0, sourcePath: nil) }, depositId: ghost.id)
+        try f.session.journal.markFilesFailed(ids, kind: .interrupted)
+
+        let r = try await f.daemon.retryFiles(.deposit(ghost.id), sourcePath: nil, sourceRoot: docs.path)
+        #expect(r.queued == 1 && r.missing == 0 && r.noSource == 1)
+        #expect(try f.session.journal.files(ids: [ids[0]]).first?.sourcePath == docs.appendingPathComponent("notes/a.bin").path)
+        #expect(try f.session.journal.files(ids: [ids[1]]).first?.sourcePath == nil)
     }
 
     /// "Try again" on a batch that is still OWED never reopens it: it is already going to be replayed, and
@@ -200,6 +227,49 @@ import Crypto
         try await f.daemon.runOnce()
         for i in 0..<3 { #expect(try f.session.journal.isFileArchived("drop/d\(i)/f\(i).bin")) }
         #expect(try f.session.journal.deposit(id: pending.id)?.state == .done)
+    }
+
+    /// **The Documents case (2026-09-14).** Rows a pre-source build left stranded — failed, no source
+    /// recorded, shown under a batch the orphan sweep minted — are healed by dropping the folder in again:
+    /// no collision prompt (a failed row occupies nothing), the rows are reclaimed in place under the new
+    /// batch and archived, and the minted batch, now a name over nothing, is retired.
+    @Test func aReDropReclaimsStrandedRowsAndRetiresTheEmptiedBatch() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        await f.daemon.beginSession(f.session)
+        let ids = (0..<3).map { "drop/d\($0)/f\($0).bin" }
+        let ghost = Deposit(id: "ghost", kind: .files, src: ["drop"], dest: "", conflicts: [:], excludeExtra: [],
+                            createdAt: 1, state: .done, mode: .retry, finishedAt: 2)
+        try f.session.journal.addDeposit(ghost)
+        try f.session.journal.upsert(ids.map { Self.item($0, sourcePath: nil) }, depositId: ghost.id)
+        try f.session.journal.markFilesFailed(ids, kind: .interrupted)
+        #expect(try f.session.journal.occupiedPaths().isEmpty)   // nothing for the drop to collide with
+
+        await f.daemon.deposit(paths: [f.drop.path], into: "")
+        for id in ids { #expect(try f.session.journal.isFileArchived(id)) }
+        let batches = try f.session.journal.listDeposits()
+        let batch = try #require(batches.first)
+        #expect(batches.count == 1 && batch.id != ghost.id && batch.state == .done)
+        #expect(try f.session.journal.files(ids: ids).allSatisfy { $0.depositId == batch.id && $0.sourcePath != nil })
+    }
+
+    /// "Try again" on a row with NO recorded source leaves it exactly as it was and says so in its own
+    /// count — it never had a path to look for, so "can't find the file" would be a claim about a folder
+    /// that never moved.
+    @Test func aRetryLeavesRowsWithNoRecordedSourceAlone() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        await f.daemon.beginSession(f.session)
+        await f.daemon.deposit(paths: [f.drop.path], into: "")
+        let batch = try #require(try f.session.journal.listDeposits().first)
+        try f.session.journal.upsert([Self.item("drop/d9/legacy.bin", sourcePath: nil)], depositId: batch.id)
+        try f.session.journal.markFilesFailed(["drop/d9/legacy.bin"], kind: .interrupted)
+
+        let r = try await f.daemon.retryFiles(.deposit(batch.id), sourcePath: nil)
+        #expect(r.queued == 0 && r.missing == 0 && r.noSource == 1)
+        let row = try #require(try f.session.journal.files(ids: ["drop/d9/legacy.bin"]).first)
+        #expect(row.status == .failed && row.failureKind == .interrupted)
+        #expect(try f.session.journal.deposit(id: batch.id)?.state == .done)   // nothing to reopen for
     }
 
     /// A batch with nothing left to retry can be dropped from the history; one still holding a failed file

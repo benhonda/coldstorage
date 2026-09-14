@@ -228,6 +228,7 @@ public actor DaemonService {
             _ = try await performRun(session: session, source: try currentSource(session))
             await replayPendingDeposits(session)
             reconcileOrphanedUploads(session)
+            retireEmptyDeposits(session)
         }
     }
 
@@ -324,10 +325,12 @@ public actor DaemonService {
     }
 
     /// The user's **Try again** (and **Locate…**, when `sourcePath` is given) on failed uploads. Splits the
-    /// scope into the rows we can actually retry — a recorded source that is on disk right now — and the
-    /// ones we can't (no source, or it's gone). The latter get that verdict WRITTEN TO THEIR ROW as
-    /// `.missingSource`, so it reaches the tree and the Uploads page as journal truth on the next read
-    /// rather than as something the app has to remember; the reply carries only counts.
+    /// scope three ways: the rows we can retry — a recorded source that is on disk right now; the rows
+    /// whose recorded source is NOT there, which get that verdict WRITTEN TO THEIR ROW as `.missingSource`
+    /// so it reaches the tree and the Uploads page as journal truth on the next read; and the rows with no
+    /// recorded source at all (`noSource`), which are left exactly as they were. Those last never had a
+    /// path to look for — a drop from before sources were kept — and marking them "missing" told the user
+    /// their folder had moved when nothing had (2026-09-14). The reply carries only counts.
     ///
     /// The retryable ones are requeued AND their deposit is reopened (`.retry` mode) before this replies —
     /// in that order, and both before the run — so no pass can ever see them as planned-with-nobody-owning-
@@ -370,7 +373,8 @@ public actor DaemonService {
         }
         let queued = try session.journal.requeueFailedFiles(ids: retryable.map(\.id))
         let queuedSet = Set(queued)
-        let missing = rows.map(\.id).filter { !queuedSet.contains($0) }
+        let noSource = rows.filter { $0.sourcePath == nil }.map(\.id)
+        let missing = rows.filter { $0.sourcePath != nil && !queuedSet.contains($0.id) }.map(\.id)
         try session.journal.markFilesFailed(missing, kind: .missingSource)
         if !missing.isEmpty { treeChanged(["missingSource": "\(missing.count)"]) }
         if !queued.isEmpty {
@@ -403,20 +407,21 @@ public actor DaemonService {
         }
         // The revision after BOTH edits above (requeue + missing-source verdicts), so the app's optimistic
         // "uploading" flip on these rows holds until a read that reflects them.
-        return RetryFilesResultDTO(queued: queued.count, missing: missing.count, revision: treeRevision)
+        return RetryFilesResultDTO(queued: queued.count, missing: missing.count, noSource: noSource.count, revision: treeRevision)
     }
 
     /// The user pointed at a folder for a batch's rows (`retryFiles` with `sourceRoot`): resolve each row
     /// to a file under it and record that as the row's source. A row's vault path is its batch's `dest`
-    /// plus the path it had inside the drop, so the source is `root/<path inside the drop>` — and because
-    /// a dropped folder lands under its own name, the user may reasonably point at that folder itself
-    /// rather than its parent, so `root/<path minus the leading folder>` is tried too when the names
-    /// agree. Only a path that is a regular file right now is written; everything else keeps its old
-    /// source (or none) and falls to the missing-source verdict. Photos rows are never relocated: their
-    /// source is a library asset, not a path.
+    /// plus the path it had inside the drop, so `root/<path inside the drop>` is the exact answer and is
+    /// taken as found whenever it is a regular file. But the user may reasonably point at any folder ON
+    /// the way down — the dropped folder itself rather than its parent, or, for a batch the orphan sweep
+    /// minted (no `dest` of its own, rows named by their full vault path such as `bens-mbp/Documents/…`),
+    /// the real Documents folder — so every shorter tail of the path is tried too, longest first. Those
+    /// are guesses, and a guess is accepted only when the file's byte size matches the row's: a same-named
+    /// different file is not the one that was dropped (2026-09-14). Everything unfound keeps its old
+    /// source (or none). Photos rows are never relocated: their source is a library asset, not a path.
     private func relocate(_ rows: [FileRow], under root: String, session: UserSession) throws {
         let root = root.hasSuffix("/") && root.count > 1 ? String(root.dropLast()) : root
-        let rootName = URL(fileURLWithPath: root).lastPathComponent
         var destByDeposit: [String: String] = [:]
         var found: [(id: String, path: String)] = []
         for r in rows {
@@ -426,13 +431,24 @@ public actor DaemonService {
                 if destByDeposit[d] == nil { destByDeposit[d] = try session.journal.deposit(id: d)?.dest ?? "" }
                 if let dest = destByDeposit[d], !dest.isEmpty, rel.hasPrefix(dest + "/") { rel = rel.dropFirst(dest.count + 1) }
             }
-            var candidates = ["\(root)/\(rel)"]
-            if let slash = rel.firstIndex(of: "/"), rel[..<slash] == rootName {
-                candidates.append("\(root)/\(rel[rel.index(after: slash)...])")
+            if Self.isRegularFile("\(root)/\(rel)") { found.append((r.id, "\(root)/\(rel)")); continue }
+            var tail = rel
+            while let slash = tail.firstIndex(of: "/") {
+                tail = tail[tail.index(after: slash)...]
+                let candidate = "\(root)/\(tail)"
+                if Self.isRegularFile(candidate), Self.fileSize(candidate) == r.size {
+                    found.append((r.id, candidate))
+                    break
+                }
             }
-            if let hit = candidates.first(where: Self.isRegularFile) { found.append((r.id, hit)) }
         }
         try session.journal.setSourcePaths(found)
+    }
+
+    /// Byte size of a file on disk, or nil when it can't be read — never equal to a row's size, so a guess
+    /// the disk won't vouch for is not taken.
+    private static func fileSize(_ path: String) -> Int? {
+        (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int
     }
 
     /// A path that is a file, here, now — not a directory, not a dangling entry.
@@ -470,6 +486,9 @@ public actor DaemonService {
         // place (same id, same path) — re-applying "keep both" there would rename a file beside itself.
         let source = d.mode == .retry ? base : resolveCollisions(session, base, conflicts)
         let failures = try await performRun(session: session, source: source, explicitDeposit: explicit, depositId: d.id)
+        // This run may have reclaimed another batch's rows (a re-drop over failed ones): that batch is now a
+        // name over nothing, so it goes before anyone lists it.
+        retireEmptyDeposits(session)
         // Keep a files-deposit whose source is currently UNREACHABLE (every path missing — an unplugged
         // drive, a folder not yet remounted): we can't confirm its files are settled, so the empty run this
         // produced is "nothing to do right now", not "done". Retry next pass. A photos deposit has no path
@@ -492,6 +511,18 @@ public actor DaemonService {
         } else {
             log("DaemonService: deposit \(d.id) kept for the next pass — \(sourceReachable ? "\(failures.filter { !$0.kind.isPermanent }.count) blob(s) still owed" : "source unreachable")")
         }
+    }
+
+    /// Drop every settled batch no live row rides in (`Journal.retireEmptyDeposits`) and say so. Called
+    /// after a run that may have reclaimed rows, and on every pass for the rows the user removed by hand.
+    private func retireEmptyDeposits(_ session: UserSession) {
+        do {
+            let n = try session.journal.retireEmptyDeposits()
+            if n > 0 {
+                log("DaemonService: \(n) empty batch(es) retired")
+                bus.publish(DaemonEvent("depositsChanged"))
+            }
+        } catch { log("DaemonService: retiring empty batches failed — \(error)") }
     }
 
     /// Flip files stuck "Uploading" that nothing will ever drive to an honest `failed` state (see
@@ -542,11 +573,11 @@ public actor DaemonService {
 
     /// Wrap a deposit source so the user's collision choices are honored (Keep Both / Replace / Skip). A
     /// no-op pass-through when there's nothing to resolve, so the common (no-collision) deposit is unchanged.
-    /// Snapshots `livePaths()` once here — the "taken" set the keepBoth uniquifier avoids.
+    /// Snapshots `occupiedPaths()` once here — the "taken" set the keepBoth uniquifier avoids.
     private func resolveCollisions(_ session: UserSession, _ source: any IngestSource,
                                    _ conflicts: [String: ConflictPolicy]) -> any IngestSource {
         guard !conflicts.isEmpty else { return source }
-        let existing = (try? session.journal.livePaths()) ?? []
+        let existing = (try? session.journal.occupiedPaths()) ?? []
         return CollisionResolvingSource(inner: source, existing: existing, conflicts: conflicts)
     }
 
@@ -992,7 +1023,9 @@ public actor DaemonService {
     /// `retryFiles`' answer: how many rows are back in the queue, and how many we could not retry (no source
     /// on disk — those rows are now `failed` as `.missingSource`). Counts, not ids: the rows themselves are
     /// the record, and a mass retry must not echo 56k ids back over the wire.
-    struct RetryFilesResultDTO: Encodable { let queued: Int; let missing: Int; let revision: Int }
+    /// `retryFiles`' answer: rows requeued, rows whose recorded source wasn't on disk (now `.missingSource`),
+    /// and rows that never had a source recorded (untouched — only a re-drop can supply one).
+    struct RetryFilesResultDTO: Encodable { let queued: Int; let missing: Int; let noSource: Int; let revision: Int }
 
     /// The answer to "will this come back?", so the client can say so instead of letting the user find out.
     /// `isWatched` = the file is still on disk inside a watched folder, so the folder would keep re-finding
@@ -1723,7 +1756,7 @@ public actor DaemonService {
             } else {
                 throw ColdStorageError.invalidRequest("previewDeposit requires params.src (paths) or params.assetIds")
             }
-            let live = try session.journal.livePaths()
+            let live = try session.journal.occupiedPaths()
             return AnyEncodable(DepositPreviewDTO(
                 items: preview.paths.map {
                     DepositPreviewItemDTO(relativePath: $0.relativePath, size: $0.size, exists: live.contains($0.relativePath),

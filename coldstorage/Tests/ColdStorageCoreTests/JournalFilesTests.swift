@@ -113,6 +113,22 @@ import Foundation
         #expect(try #require(try j.listFiles().first).status == .archived)
     }
 
+    /// A failed row holds no bytes, so it occupies nothing: a drop over its path is a plain upload that
+    /// reclaims the row, not a collision to Keep Both / Replace / Skip. Live rows and folder markers still
+    /// collide; tombstones never did.
+    @Test func aFailedRowDoesNotOccupyItsPath() throws {
+        let j = try tempJournal()
+        try j.upsert([item("f", path: "f.jpg", size: 1), item("a", path: "a.jpg", size: 1), item("g", path: "g.jpg", size: 1)])
+        try j.markFilesFailed(["f"], kind: .interrupted)
+        try j.deletePath("g.jpg")
+        #expect(try j.occupiedPaths() == ["a.jpg"])
+        // Re-dropping over the failed row reclaims it in place: same id, planned again, source recorded.
+        try j.upsert([IngestItem(id: "f", relativePath: "f.jpg", size: 1, content: .sha256("h-f"), isFavorite: false, sourcePath: "/Users/me/f.jpg",
+                                 open: { AsyncThrowingStream { $0.finish() } })], depositId: "d-new")
+        let f = try #require(try j.files(ids: ["f"]).first)
+        #expect(f.status == .planned && f.failureKind == nil && f.sourcePath == "/Users/me/f.jpg" && f.depositId == "d-new")
+    }
+
     // MARK: - retry from the row (`retryFiles`)
 
     /// `sourcePath` rides on the row and is COALESCEd on re-upsert: a source that knows the path sets it,
