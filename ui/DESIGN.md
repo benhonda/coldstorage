@@ -207,7 +207,10 @@ it had worked.
    **Skip** + apply-to-all, defaulting to Keep Both. Mechanics: `previewDeposit` (no-upload dry-run via
    the real source, so picked-photo names resolve) → modal → `deposit`/`depositPhotos` with a
    `conflicts` map the daemon's `CollisionResolvingSource` applies authoritatively. Copies re-upload
-   bytes (content-addressed dedup is a deferred, UX-invisible optimization).
+   bytes (content-addressed dedup is a deferred, UX-invisible optimization). **A failed row is not an
+   existing name** (`Journal.occupiedPaths`): it holds no bytes, so re-dropping the folder is a plain
+   upload that reclaims the row in place — the one action that heals a stranded batch must never be
+   met with a "56,930 items already exist" prompt (2026-09-14).
 6. **A drop is never silent, from the instant it lands:** `previewDeposit` recursively stats everything
    dropped, which on a big folder takes real time — so the drop draws a *Reading "X"…* banner
    (`DepositProgress`) immediately, and it sits alongside (never replaces) a run already uploading. The
@@ -242,21 +245,28 @@ files sat ⚠ with a truncated sentence and nothing to do about them.
 - **Expanding a row** shows its failures **grouped by cause** (`failureKind`, worst-for-the-user first),
   each with its words and count; per-file rows with Try again / Locate… / Remove only when a cause is
   small enough to act on one at a time (20). Nothing on the page ever draws 56k lines.
-- **Batch actions:** Try again (N) · **Locate folder…** · **Remove these** (tombstone the failed rows —
+- **Batch actions:** Try again · **Locate folder…** · **Remove these** (tombstone the failed rows —
   confirmed, since it's tens of thousands of rows in a click) · Remove (a finished batch leaves the list;
   its files stay put — the daemon refuses while any file is still failed). No per-row Stop: a run is one
   thing and stopping "this batch" would stop every batch in flight — the deposit banner owns Stop.
-- **Try again is never gated on what the app knows.** It shows for every failed row, on a batch and on a
-  watched-folder row alike; the daemon is the judge of what it can find, and writes `missingSource` onto
-  what it can't. The button says "Trying again…" (Locate folder…: "Locating…") until the daemon answers —
-  it stats every row's source first, and a batch with no sources has no rows to flip meanwhile. Gating it on rows having a
-  recorded source left a batch of pre-`sourcePath` rows (every failure from before 2026-08-25, i.e. the
-  migrated "interrupted" batches) with nothing but Remove these — and per-file Locate… hides once a cause
-  has more than 20 files (2026-09-10).
+- **Try again shows whenever some failed row has a source to look for**, on a batch and on a
+  watched-folder row alike; the daemon is the judge of what is on disk, and writes `missingSource` onto
+  a recorded source it can't find. A row with NO recorded source (a drop from before 2026-08-25, i.e.
+  the migrated "interrupted" batches) is left exactly as it was and counted as `noSource` in the reply:
+  it never had a path to look for, and calling it "missing" told the user their folder had moved when
+  nothing had. A batch where no row has a source gets no button — its note says what supplies one:
+  drop the folder in again (see collisions above). The button says "Trying again…" (Locate folder…:
+  "Locating…") until the daemon answers — it stats every row's source first. Per-file Locate… hides
+  once a cause has more than 20 files.
+- **A settled batch no row rides in is retired** (`Journal.retireEmptyDeposits`, after a run and on
+  every pass): a re-drop reclaims rows into the new batch, and the old one is a name over nothing.
+  `views/uploads/model.ts` skips such a batch meanwhile, so the page never shows "Done" over no counts.
 - **Locate folder… is Locate for a whole batch** (`retryFiles` with `depositId` + `sourceRoot`): the user
   points at the folder the drop came from — the dropped folder itself or its parent both work — and the
-  daemon resolves each failed row to a file under it by the path it had inside the drop, records that as
-  the row's source, and retries; rows it can't find there get the same `missingSource` verdict. Shown when
+  daemon resolves each failed row to a file under it by the path it had inside the drop — exactly, or by
+  any shorter tail of its vault path when the file's byte size matches the row's (a batch the orphan
+  sweep minted has no `dest`, so its rows are found from the real Documents folder that way) — records
+  that as the row's source, and retries. Rows it can't find there keep what they had. Shown when
   a batch has rows with no source or a missing one (`counts.unlocated`); never on a Photos batch. A pick
   that finds nothing says so in a toast, since the rows can't say it any louder than they already do.
 - **Load state is honest:** `listDeposits` has the same pending / loaded / failed slice as the tree

@@ -32,7 +32,7 @@ describe("buildUploads", () => {
     expect(m.batches).toHaveLength(1);
     const b = m.batches[0]!;
     expect(b.name).toBe("drop");
-    expect(b.counts).toEqual({ stored: 2, inFlight: 0, failed: 2, unlocated: 1 });
+    expect(b.counts).toEqual({ stored: 2, inFlight: 0, failed: 2, unlocated: 1, noSource: 1 });
     expect(b.state).toBe("didntFinish");
     // Worst-for-the-user first, and every failed row lands in a group.
     expect(b.failures.map((g) => [g.kind, g.files.length])).toEqual([["interrupted", 1], ["permanent", 1]]);
@@ -47,6 +47,14 @@ describe("buildUploads", () => {
     expect(buildUploads([deposit("d1")], [file("x", "frozen", { depositId: "d1" })], [], false).batches[0]!.state).toBe("done");
   });
 
+  test("a settled batch no row rides in is not a row — a re-drop reclaimed its files, or the user removed them", () => {
+    const reclaimed = [file("drop/a.jpg", "uploading", { depositId: "d2" })];
+    const m = buildUploads([deposit("d1"), deposit("d2", { state: "pending", finishedAt: null })], reclaimed, [], true);
+    expect(m.batches.map((b) => b.id)).toEqual(["d2"]);
+    // An OWED batch with no rows yet is still a row: it hasn't run.
+    expect(buildUploads([deposit("d3", { state: "pending", finishedAt: null })], [], [], false).batches.map((b) => b.id)).toEqual(["d3"]);
+  });
+
   test("a watched folder owns the unclaimed rows under its mount, and nothing else", () => {
     const files = [
       file("Camera/a.jpg", "frozen"),
@@ -57,7 +65,7 @@ describe("buildUploads", () => {
     const m = buildUploads([deposit("d1")], files, [source("Camera")], false);
     const f = m.folders[0]!;
     expect(f.name).toBe("Camera");
-    expect(f.counts).toEqual({ stored: 1, inFlight: 0, failed: 1, unlocated: 0 });
+    expect(f.counts).toEqual({ stored: 1, inFlight: 0, failed: 1, unlocated: 0, noSource: 0 });
     expect(f.state).toBe("didntFinish");
     expect(m.batches[0]!.counts.failed).toBe(1);
     // The sibling's failure counts on the badge (the tree marks it) even though no row here owns it yet —
@@ -71,11 +79,11 @@ describe("buildUploads", () => {
       file("drop/b.jpg", "failed", { depositId: "d1", failureKind: "missingSource" }), // has a source; it's gone
       file("drop/c.jpg", "failed", { depositId: "d1", failureKind: "permanent" }),
     ];
-    expect(buildUploads([deposit("d1")], files, [], false).batches[0]!.counts).toEqual({ stored: 0, inFlight: 0, failed: 3, unlocated: 2 });
+    expect(buildUploads([deposit("d1")], files, [], false).batches[0]!.counts).toEqual({ stored: 0, inFlight: 0, failed: 3, unlocated: 2, noSource: 1 });
   });
 
   test("focusFor names the Uploads row that explains a file: its batch, else its watched folder, else nothing", () => {
-    const m = buildUploads([deposit("d1")], [], [source("Photos"), source("Photos/2024")], false);
+    const m = buildUploads([deposit("d1")], [file("drop/a.jpg", "frozen", { depositId: "d1" })], [source("Photos"), source("Photos/2024")], false);
     expect(focusFor({ depositId: "d1", relativePath: "drop/a.jpg" }, m)).toEqual({ kind: "batch", id: "d1" });
     expect(focusFor({ depositId: "gone", relativePath: "drop/a.jpg" }, m)).toBeNull(); // a batch the page doesn't list
     expect(focusFor({ depositId: null, relativePath: "Photos/2024/x.jpg" }, m)).toEqual({ kind: "folder", id: "/Photos/2024" });
@@ -91,8 +99,8 @@ describe("buildUploads", () => {
     ];
     const m = buildUploads([], files, [source("Photos"), source("Photos/2024")], false);
     const byName = Object.fromEntries(m.folders.map((f) => [f.name, f.counts]));
-    expect(byName["Photos"]).toEqual({ stored: 0, inFlight: 0, failed: 1, unlocated: 0 });
-    expect(byName["Photos/2024"]).toEqual({ stored: 1, inFlight: 0, failed: 1, unlocated: 0 });
+    expect(byName["Photos"]).toEqual({ stored: 0, inFlight: 0, failed: 1, unlocated: 0, noSource: 0 });
+    expect(byName["Photos/2024"]).toEqual({ stored: 1, inFlight: 0, failed: 1, unlocated: 0, noSource: 0 });
     expect(m.folders.reduce((n, f) => n + f.counts.failed, 0)).toBe(m.failedTotal);
   });
 

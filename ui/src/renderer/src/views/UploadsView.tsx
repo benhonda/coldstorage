@@ -22,7 +22,7 @@ import { Page } from "../ui/layout.tsx";
 import { when } from "../ui/when.ts";
 import { baseName, parentOf, type ArchivedFile } from "./files/model.ts";
 import { FAILURE } from "./uploads/failure.ts";
-import type { BatchState, FailureGroup, FolderState, UploadBatch, UploadsFocus, UploadsModel, WatchedFolder } from "./uploads/model.ts";
+import type { BatchState, Counts, FailureGroup, FolderState, UploadBatch, UploadsFocus, UploadsModel, WatchedFolder } from "./uploads/model.ts";
 import type { Exec } from "./types.ts";
 
 type Tone = "neutral" | "accent" | "warning" | "success" | "danger";
@@ -59,6 +59,28 @@ const countsLine = (c: UploadBatch["counts"]): string => {
   return parts.join(" · ");
 };
 
+/** The collapsed row's account of what went wrong: the worst cause NAMED, with its count when it isn't
+ * the whole batch, then its explanation — and a pointer at the rest when there is more than one cause.
+ * The explanation alone ("It isn't where it was when you added it.") had no subject: a reader couldn't
+ * tell what "it" was or that this was the diagnosis rather than a hint (2026-09-14). */
+const failureNote = (failures: readonly FailureGroup[], counts: Counts): string | null => {
+  const worst = failures[0];
+  if (!worst) return null;
+  const copy = FAILURE[worst.kind];
+  const head = worst.files.length === counts.failed ? copy.label : `${copy.label} (${plural(worst.files.length, "file")})`;
+  const others = failures.length - 1;
+  const tail = others > 0 ? ` Plus ${others === 1 ? "one more reason" : `${others} more reasons`} — open the row to see each.` : "";
+  // Rows with no recorded source: the one fact a retry needs is the one the app never wrote down (a drop
+  // from before sources were kept), so say so and name the action that supplies it.
+  const supply =
+    counts.noSource === 0
+      ? ""
+      : counts.noSource === counts.failed
+        ? " ColdStorage never recorded where these came from. Drop the folder in again and they'll upload."
+        : ` ColdStorage never recorded where ${counts.noSource.toLocaleString()} of them came from — drop the folder in again for those.`;
+  return `${head}. ${copy.explain}${tail}${supply}`;
+};
+
 /** The one-line explanation under a batch. Says something only when there IS something to say. */
 const batchNote = (b: UploadBatch): string | null => {
   switch (b.state) {
@@ -66,10 +88,8 @@ const batchNote = (b: UploadBatch): string | null => {
       return null;
     case "waiting":
       return "Still to do. It picks back up on its own the next time ColdStorage runs.";
-    case "didntFinish": {
-      const worst = b.failures[0];
-      return worst ? FAILURE[worst.kind].explain : null;
-    }
+    case "didntFinish":
+      return failureNote(b.failures, b.counts);
     case "done":
       return null;
   }
@@ -81,10 +101,8 @@ const folderNote = (f: WatchedFolder): string | null => {
       return "Not being scanned. Resume it in Settings to pick up where it left off.";
     case "unreachable":
       return f.source.error;
-    case "didntFinish": {
-      const worst = f.failures[0];
-      return worst ? FAILURE[worst.kind].explain : null;
-    }
+    case "didntFinish":
+      return failureNote(f.failures, f.counts);
     case "uploading":
     case "watching":
       return null;
@@ -164,12 +182,13 @@ const BatchActions = ({ b, a }: { b: UploadBatch; a: UploadActions }): React.JSX
   <div className="cs-download-actions">
     {/* No per-row Stop: a run is one thing, and stopping "this batch" would stop every batch in flight.
         The deposit banner on My Files owns Stop, where the bar it stops is right there. */}
-    {/* Try again is offered for EVERY failed row, not only the ones with a recorded source: the daemon is
-        the judge of what it can find, and it writes its verdict onto each row it can't. Gating this on the
-        app's own knowledge left a batch of pre-source rows with nothing but "Remove these" (2026-09-10). */}
-    {b.counts.failed > 0 && (
+    {/* Try again whenever some failed row has a source to look for: the daemon is the judge of what it can
+        find, and it writes its verdict onto each row it can't. A batch where NO row has a source (a drop
+        from before sources were kept) gets no button — there is nothing to judge, and the note above says
+        what supplies one: drop the folder in again. */}
+    {b.counts.failed > b.counts.noSource && (
       <Button variant="secondary" size="sm" icon="refresh" disabled={busy !== null} onClick={() => a.onRetryBatch(b)}>
-        {busy === "retry" ? "Trying again…" : `Try again${b.counts.failed > 1 ? ` (${b.counts.failed.toLocaleString()})` : ""}`}
+        {busy === "retry" ? "Trying again…" : "Try again"}
       </Button>
     )}
     {/* Rows the daemon doesn't know where to find. A Photos batch never needs this: its rows re-resolve
@@ -244,7 +263,9 @@ const UploadRow = ({
         </span>
         <div className="cs-download-main">
           <div className="cs-download-head">
-            <span className="cs-download-name">{name}</span>
+            <span className="cs-download-name" title={name}>
+              {name}
+            </span>
             <Badge tone={badge.tone}>{badge.label}</Badge>
           </div>
           <div className="cs-download-meta">{meta}</div>
@@ -290,10 +311,10 @@ const FolderRow = ({ f, a, focused = false }: { f: WatchedFolder; a: UploadActio
     failures={f.failures}
     actions={
       <div className="cs-download-actions">
-        {/* Same rule as a batch: every failed row gets the button, the daemon says what it can find. */}
-        {f.counts.failed > 0 && (
+        {/* Same rule as a batch: the button exists when there is a source for the daemon to judge. */}
+        {f.counts.failed > f.counts.noSource && (
           <Button variant="secondary" size="sm" icon="refresh" disabled={a.busyOn(f.source.id) !== null} onClick={() => a.onRetryFolder(f)}>
-            {a.busyOn(f.source.id) === "retry" ? "Trying again…" : `Try again${f.counts.failed > 1 ? ` (${f.counts.failed.toLocaleString()})` : ""}`}
+            {a.busyOn(f.source.id) === "retry" ? "Trying again…" : "Try again"}
           </Button>
         )}
       </div>

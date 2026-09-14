@@ -19,7 +19,7 @@ import { Modal, Button } from "./ui/primitives.tsx";
 import { Sidebar, type NavItem } from "./ui/layout.tsx";
 import { useToast } from "./ui/toast.tsx";
 import type { Store } from "./state/store.ts";
-import type { Commands } from "../../shared/ipc.ts";
+import type { Commands, RetryFilesResult } from "../../shared/ipc.ts";
 import type { ColdstoreApi, ConnectionState, SubscriptionInfo } from "../../shared/ipc.ts";
 import { billingState, subscriptionOf, type Loadable } from "./state/billing.ts";
 import { isActiveRestore } from "../../shared/ipc.ts";
@@ -286,10 +286,13 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
     { id: "settings", label: "Settings", icon: "settings" },
   ];
 
-  /** Tell the user what a retry could NOT do. The rows already carry the daemon's verdict (it wrote the
-   * kind onto each one — `missingSource`), so this is the headline, and the one thing that fixes it. */
-  const reportMissing = (missing: number): void => {
-    if (missing > 0) toast.error(`${missing.toLocaleString()} ${missing === 1 ? "file" : "files"} couldn’t be found on disk. Use Locate folder… on the batch to point at where they are now.`);
+  /** Tell the user what a retry could NOT do, and the one thing that fixes each case. `missing` rows carry
+   * the daemon's verdict (`missingSource`, written onto each one); `noSource` rows were never given a
+   * source to look for, so only a fresh drop can supply one — the daemon leaves them as they were. */
+  const reportMissing = ({ missing, noSource }: Pick<RetryFilesResult, "missing" | "noSource">): void => {
+    const files = (n: number): string => `${n.toLocaleString()} ${n === 1 ? "file" : "files"}`;
+    if (missing > 0) toast.error(`${files(missing)} couldn’t be found on disk. Use Locate folder… on the batch to point at where they are now.`);
+    if (noSource > 0) toast.error(`ColdStorage never recorded where ${files(noSource)} came from. Drop the folder in again and they’ll upload.`);
   };
 
   // Where a ⚠ leads: the Uploads row (batch or watched folder) that explains it. Set by a click on a
@@ -338,10 +341,11 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
     };
     const targets = retryTargets(scope);
     const withSource = targets.filter((f) => f.status === "failed" && f.sourcePath !== null);
-    // A batch or folder retry goes to the daemon even when WE know no source for any of its rows: the
-    // daemon is the judge, and its verdict (`missingSource`, written onto each row) is what turns a mute
-    // ⚠ into "Can't find the file" + Locate folder…. A row-level retry is only ever offered on rows with
-    // a source, so an empty set there is nothing to do.
+    // A batch or folder retry goes to the daemon whatever WE know about sources: the daemon is the judge
+    // of what is on disk, and its verdict (`missingSource`, written onto each row) is what turns a mute ⚠
+    // into "Can't find the file" + Locate folder…. (The page hides the button when no row has a source —
+    // there is nothing for the daemon to judge.) A row-level retry is only ever offered on rows with a
+    // source, so an empty set there is nothing to do.
     if (withSource.length === 0 && Array.isArray(scope)) return Promise.resolve();
     // Bytes that never landed are incoming again — gate them like any deposit.
     const incoming = withSource.reduce((sum, f) => sum + f.size, 0);
@@ -376,7 +380,7 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
       run(async () => {
         const command = api.request("retryFiles", retryParams(scope, journal));
         const r = flip ? await settleWith(flip, command) : await command;
-        reportMissing(r.missing); // the rows themselves re-read with the daemon's verdict (`filesChanged`)
+        reportMissing(r); // the rows themselves re-read with the daemon's verdict (`filesChanged`)
       });
     }
     return Promise.all(pending).then(() => undefined);
@@ -396,8 +400,11 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
       return;
     }
     const r = await api.request("retryFiles", { depositId: b.id, sourceRoot: picked });
+    // Locate has its own vocabulary: a row not found under the pick "wasn't in that folder", whether it
+    // had a source before or not — the general retry verdicts would send the user elsewhere mid-Locate.
+    const left = r.missing + r.noSource;
     if (r.queued === 0) toast.error(`None of the ${failed.length.toLocaleString()} ${failed.length === 1 ? "file" : "files"} from ${b.name} ${failed.length === 1 ? "is" : "are"} in that folder. Try the folder that contains it, or the one you dropped.`);
-    else reportMissing(r.missing);
+    else if (left > 0) toast.error(`${left.toLocaleString()} of the files from ${b.name} ${left === 1 ? "wasn't" : "weren't"} in that folder.`);
   };
 
   /** "Locate…": the user points at where the file is, and it retries from there — recorded on the row, so
@@ -417,7 +424,7 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
         return;
       }
       const r = await settleWith(flip, api.request("retryFiles", { ids: file.id, sourcePath: picked }));
-      reportMissing(r.missing); // only a folder pick or a race with the disk can land here
+      reportMissing(r); // only a folder pick or a race with the disk can land here
     });
   };
 

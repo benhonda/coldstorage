@@ -1882,8 +1882,12 @@ button.cs-kv:hover { background: var(--surface-hover); }
 }
 .cs-download {
   display: flex;
+  /* The text column keeps a readable width and the action strip wraps under it when the two don't fit
+     side by side — an Uploads batch carries three buttons and a four-line note, and on one line the
+     buttons ate the row: "bens-mb…" and a note wrapped six words wide (2026-09-14). */
+  flex-wrap: wrap;
   align-items: flex-start;
-  gap: var(--space-3);
+  gap: var(--space-2) var(--space-3);
   padding: var(--dl-row-pad-y) var(--space-3);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
@@ -1896,7 +1900,7 @@ button.cs-kv:hover { background: var(--surface-hover); }
 .cs-download-icon--success { color: var(--positive); }
 .cs-download-icon--danger  { color: var(--negative); }
 .cs-download-icon--neutral { color: var(--text-tertiary); }
-.cs-download-main { flex: 1; min-width: 0; }
+.cs-download-main { flex: 1 1 22rem; min-width: 0; }
 .cs-download-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
 .cs-download-name {
   font: var(--type-body-strong);
@@ -1933,7 +1937,8 @@ button.cs-kv:hover { background: var(--surface-hover); }
   gap: var(--space-1);
   margin-top: var(--space-2);
 }
-.cs-download-actions { flex: 0 0 auto; display: flex; align-items: center; gap: var(--space-2); }
+/* Right-aligned whether it shares the text's line or wraps beneath it. */
+.cs-download-actions { flex: 0 0 auto; display: flex; align-items: center; gap: var(--space-2); margin-left: auto; }
 /* A grouped request row ("Photos · 300 files"): chevron to expand, children indented beneath the parent
    card — quieter (no card border) so the request stays the visual unit and the files read as its detail. */
 .cs-download-expand {

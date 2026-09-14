@@ -182,7 +182,11 @@ export interface Deposit {
  *  a mass retry must not echo 56k of them back over the wire. */
 export interface RetryFilesResult {
   queued: number;
+  /** Rows whose recorded source wasn't on disk — now `missingSource` on the row; Locate folder… is the fix. */
   missing: number;
+  /** Rows with no recorded source at all (a drop from before sources were kept). Left as they were: only
+   *  dropping the folder in again can supply a source, so that is what the app says. */
+  noSource: number;
   /** The tree revision after the requeue — the app's optimistic "uploading" flip on these rows holds
    *  until a read at or past it. */
   revision: number;

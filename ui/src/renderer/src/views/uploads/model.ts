@@ -23,6 +23,10 @@ export interface Counts {
    * were kept), or a source it looked for and didn't find (`missingSource`). What "Locate folder…" is
    * for — the retry buttons alone can only re-fail these. */
   unlocated: number;
+  /** Failed rows with NO recorded source at all — a drop from before sources were kept. Try again has
+   * nothing to look for on these; only dropping the folder in again supplies a source (the journal then
+   * reclaims the row in place). A subset of `unlocated`. */
+  noSource: number;
 }
 
 /** The failed rows of one batch, one bucket per cause, worst-for-the-user first. */
@@ -80,11 +84,12 @@ const COUNT_STATUSES: Partial<Record<ArchivedFile["status"], keyof Counts>> = {
 };
 
 const count = (files: readonly ArchivedFile[]): Counts => {
-  const c: Counts = { stored: 0, inFlight: 0, failed: 0, unlocated: 0 };
+  const c: Counts = { stored: 0, inFlight: 0, failed: 0, unlocated: 0, noSource: 0 };
   for (const f of files) {
     const key = COUNT_STATUSES[f.status];
     if (key) c[key] += 1;
     if (f.status === "failed" && (f.sourcePath === null || f.failureKind === "missingSource")) c.unlocated += 1;
+    if (f.status === "failed" && f.sourcePath === null) c.noSource += 1;
   }
   return c;
 };
@@ -187,10 +192,13 @@ export const buildUploads = (
     if (list) list.push(f);
     else map.set(key, [f]);
   }
-  const batches: UploadBatch[] = deposits.map((d) => {
+  const batches: UploadBatch[] = deposits.flatMap((d) => {
     const rows = byDeposit.get(d.id) ?? [];
+    // A settled batch no row rides in is a name over nothing (a re-drop reclaimed its rows, or the user
+    // removed the last of them) — the daemon retires it on its next pass; until then, it isn't a row.
+    if (d.state === "done" && rows.length === 0) return [];
     const counts = count(rows);
-    return {
+    return [{
       type: "batch",
       id: d.id,
       name: batchName(d),
@@ -201,7 +209,7 @@ export const buildUploads = (
       finishedAt: d.finishedAt,
       counts,
       failures: groupFailures(rows),
-    };
+    }];
   });
   const folders: WatchedFolder[] = sources
     .filter((s) => s.kind === "folder" && s.mountPath !== "")
