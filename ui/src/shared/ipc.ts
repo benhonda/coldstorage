@@ -155,6 +155,14 @@ export const IPC = {
   appInfo: "app:info",
 } as const;
 
+/**
+ * What {@link IPC.request} answers with — a value either way, never a rejected invoke. Electron re-wraps a
+ * rejection as "Error invoking remote method 'daemon:request': Error: <message>", and that string ended up
+ * on screen verbatim under "Couldn't load your files" (2026-09-27). The preload turns `ok: false` back into
+ * an Error carrying just `error`, the daemon's (or the socket's) own words.
+ */
+export type DaemonReply = { ok: true; result: unknown } | { ok: false; error: string };
+
 /** Whether the main process currently holds a live socket to `coldstored`. */
 export type ConnectionState = "connecting" | "connected" | "disconnected";
 

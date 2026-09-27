@@ -173,12 +173,12 @@ describe("VaultManager.provision", () => {
   test("a cached-key unlock that times out rejects and stays `locked` — the wait the retry narrates", async () => {
     const store = makeStore({ "user-1": "bWs=" });
     const client = {
-      request: () => Promise.reject(new Error("request 'unlockVault' (id 14) timed out after 10000ms")),
+      request: () => Promise.reject(new Error("the background service didn't answer within 10 seconds (unlockVault)")),
     } as unknown as DaemonClient;
     const vault = new VaultManager(client, store, makeKeyBlob(null, []));
     const t = track(vault);
 
-    await expect(vault.provision(tokenFor("user-1"))).rejects.toThrow("timed out");
+    await expect(vault.provision(tokenFor("user-1"))).rejects.toThrow("didn't answer");
     expect(t.last().state).toBe("locked");
     expect(t.last().error).toContain("unlockVault");
     // The next attempt is the same silent unlock — nothing about a timeout changes the path.

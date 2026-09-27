@@ -166,7 +166,9 @@ export class DaemonClient {
       const params: Record<string, string | undefined> | undefined = args[0];
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`request '${method}' (id ${id}) timed out after ${timeoutMs}ms`));
+        // Shown as-is ("…this is the list that failed to load: <this>.", "Last try: <this>"), so it reads
+        // as a sentence; the command name stays on for whoever reads main.log.
+        reject(new Error(`the background service didn't answer within ${timeoutMs / 1000} seconds (${method})`));
       }, timeoutMs);
       this.pending.set(id, {
         resolve: resolve as (r: unknown) => void,

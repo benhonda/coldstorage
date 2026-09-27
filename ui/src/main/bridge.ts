@@ -2,8 +2,8 @@
  * The main-process bridge: the only place the renderer's IPC contract meets the layer-1 client.
  * Owns no state beyond the current {@link ConnectionState}; everything else lives in the daemon.
  *
- *   - commands   `ipcMain.handle(IPC.request)` → `client.request(...)` (reply or reject travels back
- *                over the same invoke; daemon errors surface as a rejected promise in the renderer).
+ *   - commands   `ipcMain.handle(IPC.request)` → `client.request(...)`, answered as a {@link DaemonReply}
+ *                (the preload rejects on `ok: false`, so daemon errors still surface as a rejected promise).
  *   - events     `client.onAnyEvent` → broadcast `IPC.event` to every window.
  *   - lifecycle  `client.on('connect'|'disconnect')` → track + broadcast `IPC.lifecycle`.
  *
@@ -12,7 +12,7 @@
  */
 import { BrowserWindow, ipcMain } from "electron";
 import type { DaemonClient } from "../daemon/client.ts";
-import { IPC, type ConnectionState } from "../shared/ipc.ts";
+import { IPC, type ConnectionState, type DaemonReply } from "../shared/ipc.ts";
 
 /** Wire a client to IPC. Returns a disposer that tears down all handlers/subscriptions. */
 export const registerBridge = (client: DaemonClient): (() => void) => {
@@ -30,9 +30,13 @@ export const registerBridge = (client: DaemonClient): (() => void) => {
     method: string,
     params?: Record<string, string>,
   ) => Promise<unknown>;
-  ipcMain.handle(IPC.request, (_e, method: string, params?: Record<string, string>) =>
-    call(method, params),
-  );
+  ipcMain.handle(IPC.request, async (_e, method: string, params?: Record<string, string>): Promise<DaemonReply> => {
+    try {
+      return { ok: true, result: await call(method, params) };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
   ipcMain.handle(IPC.connectionState, () => state);
 
   // Pushes.

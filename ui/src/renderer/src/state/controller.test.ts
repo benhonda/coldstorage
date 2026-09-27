@@ -207,6 +207,41 @@ describe("controller sync policy", () => {
     expect(store.getState().files).toHaveLength(2);
   });
 
+  test("asks that arrive while the tree is being read collapse into ONE follow-up read", async () => {
+    // Each runFinished / tree edit / reconnect used to send its own whole-tree listFiles behind the last —
+    // the socket had reached request id 325 by the time "Couldn't load your files" showed (2026-09-27).
+    const f = makeApi("connected");
+    const held: Array<() => void> = [];
+    const slowTree = {
+      ...f.api,
+      request: ((m: string) => {
+        const answer = f.api.request(m as never); // recorded now; the fake numbers each tree read 1, 2, …
+        return m === "listFiles" ? new Promise((resolve) => held.push(() => resolve(answer))) : answer;
+      }) as ColdstoreApi["request"],
+    };
+    const store = createStore();
+    connectController(slowTree, store);
+    await tick();
+    const reads = (): number => f.calls.filter((c) => c === "listFiles").length;
+    expect(reads()).toBe(1); // first paint's read, still out
+
+    f.fireEvent("runFinished", { filesArchived: "1", filesTotal: "1", blobsFailed: "0", depositId: "", revision: "2" });
+    f.fireEvent("filesChanged", { created: "A", revision: "2" });
+    f.fireEvent("runFinished", { filesArchived: "1", filesTotal: "1", blobsFailed: "0", depositId: "", revision: "2" });
+    await tick();
+    expect(reads()).toBe(1); // none of the three sent a read of its own
+
+    held.shift()?.(); // the first read lands (revision 1 — behind what the events announced)…
+    await tick();
+    expect(store.getState().filesLoad).toEqual({ state: "pending" });
+    expect(reads()).toBe(2); // …and exactly one more goes out, for all three asks
+
+    held.shift()?.(); // that one is read at revision 2, so the tree is caught up
+    await tick();
+    expect(reads()).toBe(2);
+    expect(store.getState().filesLoad).toEqual({ state: "loaded" });
+  });
+
   test("a plain tree edit re-reads status + files ONLY; the owner change is the full resync", async () => {
     const f = makeApi("connected");
     const store = createStore();

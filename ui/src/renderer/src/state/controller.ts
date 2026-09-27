@@ -10,6 +10,33 @@ import type { ColdstoreApi } from "../../../shared/ipc.ts";
 import { eventAction } from "./reducer.ts";
 import type { Store } from "./store.ts";
 
+/**
+ * At most one read in flight per slice. A refresh asked for while one is out isn't sent — it marks the
+ * slice stale, and exactly one more read goes when the current one lands, so the newest ask is still
+ * honored. Without this every `runFinished`, tree edit and reconnect sent another whole-tree `listFiles`
+ * behind the last (the socket had reached request id 325), and a read the app had already given up on
+ * still ran to the end in the daemon (2026-09-27). `read` must not reject — `syncing` guarantees that.
+ */
+const coalesced = (read: () => Promise<void>): (() => Promise<void>) => {
+  let inFlight: Promise<void> | null = null;
+  let stale = false;
+  const run = (): Promise<void> => {
+    if (inFlight) {
+      stale = true;
+      return inFlight;
+    }
+    inFlight = read().finally(() => {
+      inFlight = null;
+      if (stale) {
+        stale = false;
+        void run();
+      }
+    });
+    return inFlight;
+  };
+  return run;
+};
+
 /** Wire an api to a store. Returns a disposer that detaches all subscriptions. */
 /** What `connectController` hands back: the teardown, plus the one refetch a view may ask for by hand
  * (the file browser's "Retry" when a tree read failed). Everything else stays event-driven. */
@@ -39,15 +66,17 @@ export const connectController = (api: ColdstoreApi, store: Store): Controller =
     }
   };
 
-  const refreshStatus = (): Promise<void> =>
-    syncing("status", async () => store.dispatch({ type: "statusLoaded", status: await api.request("getStatus") }));
+  const refreshStatus = coalesced(() =>
+    syncing("status", async () => store.dispatch({ type: "statusLoaded", status: await api.request("getStatus") })),
+  );
 
-  const refreshSources = (): Promise<void> =>
-    syncing("sources", async () => store.dispatch({ type: "sourcesLoaded", sources: await api.request("listSources") }));
+  const refreshSources = coalesced(() =>
+    syncing("sources", async () => store.dispatch({ type: "sourcesLoaded", sources: await api.request("listSources") })),
+  );
 
   // The one read whose failure is ALSO state: the browser has to be able to say "couldn't load your files"
   // instead of rendering the empty-vault hero over a stale or empty slice (see `AppState.filesLoad`).
-  const refreshFiles = (): Promise<void> =>
+  const refreshFiles = coalesced(() =>
     syncing("files", async () => {
       try {
         store.dispatch({ type: "filesLoaded", listed: await api.request("listFiles") });
@@ -55,26 +84,30 @@ export const connectController = (api: ColdstoreApi, store: Store): Controller =
         store.dispatch({ type: "filesLoadFailed", error: e instanceof Error ? e.message : String(e) });
         throw e; // `syncing` still logs it
       }
-    });
+    }),
+  );
 
-  const refreshExcludes = (): Promise<void> =>
-    syncing("excludes", async () => store.dispatch({ type: "excludesLoaded", excludes: await api.request("listExcludes") }));
+  const refreshExcludes = coalesced(() =>
+    syncing("excludes", async () => store.dispatch({ type: "excludesLoaded", excludes: await api.request("listExcludes") })),
+  );
 
   // The opt-in exclude packs. A STATIC catalogue (it has no user state in it — whether a pack is on is
   // derived from `excludes`), so unlike every other read here it can't go stale: fetched once per
   // connection, never re-read on an event.
-  const refreshExcludeSuggestions = (): Promise<void> =>
+  const refreshExcludeSuggestions = coalesced(() =>
     syncing("excludeSuggestions", async () =>
       store.dispatch({ type: "excludeSuggestionsLoaded", suggestions: await api.request("listExcludeSuggestions") }),
-    );
+    ),
+  );
 
-  const refreshRestores = (): Promise<void> =>
-    syncing("restores", async () => store.dispatch({ type: "restoresLoaded", restores: await api.request("listRestores") }));
+  const refreshRestores = coalesced(() =>
+    syncing("restores", async () => store.dispatch({ type: "restoresLoaded", restores: await api.request("listRestores") })),
+  );
 
   // Same shape as `refreshFiles`: a failed read is STATE, so the Uploads page can say "couldn't load"
   // instead of rendering the "nothing uploaded yet" hero — which would tell the user to go drop files —
   // over an empty slice.
-  const refreshDeposits = (): Promise<void> =>
+  const refreshDeposits = coalesced(() =>
     syncing("deposits", async () => {
       try {
         store.dispatch({ type: "depositsLoaded", deposits: await api.request("listDeposits") });
@@ -82,7 +115,8 @@ export const connectController = (api: ColdstoreApi, store: Store): Controller =
         store.dispatch({ type: "depositsLoadFailed", error: e instanceof Error ? e.message : String(e) });
         throw e;
       }
-    });
+    }),
+  );
 
 
   const offEvent = api.onEvent((name, data) => {

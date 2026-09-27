@@ -7,11 +7,14 @@
  * wire, re-typed against the contract exactly once, right here.
  */
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
-import { IPC, type ColdstoreApi } from "../shared/ipc.ts";
+import { IPC, type ColdstoreApi, type DaemonReply } from "../shared/ipc.ts";
 
 const api: ColdstoreApi = {
-  request: ((method: string, params?: Record<string, string>) =>
-    ipcRenderer.invoke(IPC.request, method, params)) as ColdstoreApi["request"],
+  request: (async (method: string, params?: Record<string, string>) => {
+    const reply = (await ipcRenderer.invoke(IPC.request, method, params)) as DaemonReply;
+    if (!reply.ok) throw new Error(reply.error);
+    return reply.result;
+  }) as ColdstoreApi["request"],
 
   getConnectionState: () => ipcRenderer.invoke(IPC.connectionState),
 

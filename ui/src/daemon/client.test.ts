@@ -88,7 +88,7 @@ describe("DaemonClient per-method timeouts", () => {
 
   test("an ordinary command is bound by the default timeout", async () => {
     const client = await mute();
-    await expect(client.request("listFiles")).rejects.toThrow(/timed out after 20ms/);
+    await expect(client.request("listFiles")).rejects.toThrow("didn't answer within 0.02 seconds (listFiles)");
     client.close();
   });
 
