@@ -40,7 +40,7 @@ import Foundation
         for i in 0..<5 { try write("photo-\(i).jpg", to: f.root) }
         _ = try await f.engine.run(source: source, prefix: .dev)
 
-        let before = try f.journal.listFiles().reduce(into: [String: String?]()) { $0[$1.id] = $1.blobId }
+        let before = try await f.journal.listFiles().reduce(into: [String: String?]()) { $0[$1.id] = $1.blobId }
         let keysAfterFirst = f.store.createdKeys.count
         #expect(keysAfterFirst > 0)                       // sanity: the first pass really uploaded something
 
@@ -48,7 +48,7 @@ import Foundation
         try write("photo-new.jpg", to: f.root)
         _ = try await f.engine.run(source: source, prefix: .dev)
 
-        let after = try f.journal.listFiles().reduce(into: [String: String?]()) { $0[$1.id] = $1.blobId }
+        let after = try await f.journal.listFiles().reduce(into: [String: String?]()) { $0[$1.id] = $1.blobId }
         let moved = before.filter { after[$0.key] != $0.value }
         #expect(moved.isEmpty, "\(moved.count) already-archived file(s) were re-planned into a different blob — that re-uploads stored bytes and orphans the old object")
         #expect(f.store.createdKeys.count == keysAfterFirst + 1, "the deposit should have created exactly one new blob")
@@ -68,17 +68,17 @@ import Foundation
         // that actually separates fixed from broken. A blob COUNT of 10 does not: these files all fit one
         // bucket, so the old behaviour also produced one new blob per pass (it just rewrote the previous
         // one each time and stranded it), and counting alone would call that a pass.
-        let firstBlob = try #require(try f.journal.listFiles().first?.blobId)
+        let firstBlob = try #require(try await f.journal.listFiles().first?.blobId)
 
         for i in 1..<10 {
             try write("drip-\(i).jpg", to: f.root)
             _ = try await f.engine.run(source: source, prefix: .dev)
         }
 
-        let home = try f.journal.listFiles().first { $0.id.hasSuffix("drip-0.jpg") }?.blobId
+        let home = try await f.journal.listFiles().first { $0.id.hasSuffix("drip-0.jpg") }?.blobId
         #expect(home == firstBlob, "the first file was rewritten into a new blob by later deposits — nine times over, orphaning its predecessor each time")
         #expect(f.store.createdKeys.count == 10)
-        #expect(try f.journal.listFiles().filter { $0.status == .archived }.count == 10)
+        #expect(try await f.journal.listFiles().filter { $0.status == .archived }.count == 10)
     }
 
     /// A file whose bytes are verified in S3 is archived, full stop — a *later* blob's failure says nothing
@@ -91,12 +91,12 @@ import Foundation
 
         try write("safe.jpg", to: f.root)
         _ = try await f.engine.run(source: LocalDirSource(root: f.root), prefix: .dev)
-        let id = try #require(try f.journal.listFiles().first).id
+        let id = try #require(try await f.journal.listFiles().first).id
         #expect(try f.journal.isFileArchived(id) == true)
 
         try f.journal.markFilesFailed([id], kind: .overQuota)
 
         #expect(try f.journal.isFileArchived(id) == true, "an archived file was flipped to failed — the tree now claims a stored backup didn't happen")
-        #expect(try f.journal.listFiles().first?.blobId != nil)   // and still resolves to its blob
+        #expect(try await f.journal.listFiles().first?.blobId != nil)   // and still resolves to its blob
     }
 }

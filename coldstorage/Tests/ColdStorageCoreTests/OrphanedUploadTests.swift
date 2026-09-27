@@ -34,7 +34,7 @@ import Crypto
         let batch = try #require(try f.session.journal.listDeposits().first)
         #expect(batch.state == .done && batch.mode == .retry && batch.src == ["Photos"])
         for id in ["Photos/a.jpg", "Photos/b.jpg"] {
-            let row = try #require(try f.session.journal.listFiles().first { $0.id == id })
+            let row = try #require(try await f.session.journal.listFiles().first { $0.id == id })
             #expect(row.status == .failed)
             #expect(row.failureKind == .interrupted && row.error == nil)
             #expect(row.depositId == batch.id)
@@ -53,9 +53,9 @@ import Crypto
         await f.daemon.beginSession(f.session)
         try await f.daemon.runOnce()
 
-        let camera = try #require(try f.session.journal.listFiles().first { $0.id == "Camera/live.jpg" })
+        let camera = try #require(try await f.session.journal.listFiles().first { $0.id == "Camera/live.jpg" })
         #expect(camera.status == .planned)   // under a source → untouched
-        let orphan = try #require(try f.session.journal.listFiles().first { $0.id == "Photos/orphan.jpg" })
+        let orphan = try #require(try await f.session.journal.listFiles().first { $0.id == "Photos/orphan.jpg" })
         #expect(orphan.status == .failed)    // not under any source → needs attention
     }
 
@@ -70,7 +70,7 @@ import Crypto
             id: "d1", kind: .photos, src: ["asset-1"], dest: "", conflicts: [:], excludeExtra: [], createdAt: 1))
         await f.daemon.beginSession(f.session)
         try await f.daemon.runOnce()
-        let row = try #require(try f.session.journal.listFiles().first { $0.id == "Photos/a.jpg" })
+        let row = try #require(try await f.session.journal.listFiles().first { $0.id == "Photos/a.jpg" })
         #expect(row.status == .planned)   // not condemned while a deposit is pending
         #expect(try f.session.journal.pendingDeposits().count == 1) // and the deposit is still owed
     }

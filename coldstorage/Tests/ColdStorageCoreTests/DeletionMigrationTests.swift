@@ -47,7 +47,7 @@ import Csqlite3
         return path
     }
 
-    @Test func tombstonesSurviveTheMoveToDeletedAt() throws {
+    @Test func tombstonesSurviveTheMoveToDeletedAt() async throws {
         let path = try legacyJournal([
             (id: "a.jpg", path: "a.jpg", status: "archived", blobId: "b1"),
             (id: "gone.jpg", path: "gone.jpg", status: "deleted", blobId: "b1"),
@@ -55,27 +55,27 @@ import Csqlite3
            members: [(blobId: "b1", fileId: "a.jpg"), (blobId: "b1", fileId: "gone.jpg")])
 
         let j = try Journal(path: path)
-        #expect(try j.listFiles().map(\.relativePath) == ["a.jpg"], "a tombstoned file came back through the migration")
+        #expect(try await j.listFiles().map(\.relativePath) == ["a.jpg"], "a tombstoned file came back through the migration")
         // Still deleted, and still settled — so nothing re-plans and re-uploads it.
-        #expect(try j.settledFileIds() == ["a.jpg", "gone.jpg"])
+        #expect(try await j.settledFileIds() == ["a.jpg", "gone.jpg"])
         // And its recovered status is the one its blob link implies, so reviving it keeps those bytes.
         try j.reviveFiles(ids: ["gone.jpg"])
-        #expect(try j.listFiles().first { $0.relativePath == "gone.jpg" }?.status == .archived)
+        #expect(try await j.listFiles().first { $0.relativePath == "gone.jpg" }?.status == .archived)
     }
 
-    @Test func aLegacyFolderMarkerTombstoneComesBackAsAMarker() throws {
+    @Test func aLegacyFolderMarkerTombstoneComesBackAsAMarker() async throws {
         let path = try legacyJournal([
             (id: "folder:8B2C-DEAD", path: "Empty", status: "deleted", blobId: nil),
         ])
         let j = try Journal(path: path)
         try j.reviveFiles(ids: ["folder:8B2C-DEAD"])
-        #expect(try j.listFiles().map(\.status) == [.folder])
+        #expect(try await j.listFiles().map(\.status) == [.folder])
     }
 
     /// THE REPAIR. `discovered` was only ever written by the old path-prefix revive, so every one of these
     /// rows is a file the user deleted that the bug brought back — visible, permanently "uploading", and
     /// holding its blob's bytes hostage because a live member blocks reclamation.
-    @Test func phantomRowsFromTheReviveBugAreReDeletedAndTheirBytesFreed() throws {
+    @Test func phantomRowsFromTheReviveBugAreReDeletedAndTheirBytesFreed() async throws {
         let path = try legacyJournal([
             (id: "Photos/a.jpg", path: "Photos/a.jpg", status: "archived", blobId: "b1"),
             (id: "Photos/b.jpg", path: "Photos/b.jpg", status: "discovered", blobId: nil),  // phantom
@@ -85,33 +85,33 @@ import Csqlite3
                      (blobId: "b2", fileId: "Photos/b.jpg"), (blobId: "b2", fileId: "Photos/c.jpg")])
 
         let j = try Journal(path: path)
-        #expect(try j.listFiles().map(\.relativePath) == ["Photos/a.jpg"],
+        #expect(try await j.listFiles().map(\.relativePath) == ["Photos/a.jpg"],
                 "phantom rows survived — they'd sit on 'uploading' for ever, since nothing on disk feeds them")
-        #expect(try j.summary().total == 1, "the file count still includes rows that can never be archived")
+        #expect(try await j.summary().total == 1, "the file count still includes rows that can never be archived")
         #expect(try j.reclaimableBlobIds() == ["b2"],
                 "the phantoms' blob is still not reclaimable — those bytes bill for ever with nothing pointing at them")
     }
 
     /// A file the user genuinely re-deposited after deleting it was `planned`, not `discovered` — the repair
     /// must not touch it.
-    @Test func aGenuinelyReDepositedFileIsNotSweptUpByTheRepair() throws {
+    @Test func aGenuinelyReDepositedFileIsNotSweptUpByTheRepair() async throws {
         let path = try legacyJournal([
             (id: "back.jpg", path: "back.jpg", status: "planned", blobId: nil),
         ])
         let j = try Journal(path: path)
-        #expect(try j.listFiles().map(\.relativePath) == ["back.jpg"])
-        #expect(try j.settledFileIds().isEmpty, "a file waiting to upload was marked settled and will never be uploaded")
+        #expect(try await j.listFiles().map(\.relativePath) == ["back.jpg"])
+        #expect(try await j.settledFileIds().isEmpty, "a file waiting to upload was marked settled and will never be uploaded")
     }
 
     /// The migration runs once and is idempotent — re-opening the same journal must not re-do anything.
-    @Test func reOpeningAMigratedJournalChangesNothing() throws {
+    @Test func reOpeningAMigratedJournalChangesNothing() async throws {
         let path = try legacyJournal([
             (id: "a.jpg", path: "a.jpg", status: "archived", blobId: "b1"),
             (id: "gone.jpg", path: "gone.jpg", status: "deleted", blobId: "b1"),
         ], blobs: [(id: "b1", status: "verified")])
 
-        let before = try Journal(path: path).listFiles().map { "\($0.relativePath):\($0.status)" }
-        let after = try Journal(path: path).listFiles().map { "\($0.relativePath):\($0.status)" }
+        let before = try await Journal(path: path).listFiles().map { "\($0.relativePath):\($0.status)" }
+        let after = try await Journal(path: path).listFiles().map { "\($0.relativePath):\($0.status)" }
         #expect(before == after)
     }
 }

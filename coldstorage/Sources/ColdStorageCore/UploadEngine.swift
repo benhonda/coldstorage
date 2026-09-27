@@ -209,7 +209,7 @@ public actor UploadEngine {
         // `isBlobVerified` short-circuit in `archive`, and re-uploads the whole group — orphaning the old
         // objects, which nothing ever deletes and which still consume the user's quota. One new photo in a
         // folder used to re-upload the entire folder for exactly this reason.
-        let settled = try journal.settledFileIds()
+        let settled = try await journal.settledFileIds()
         let pending = items.filter { !settled.contains($0.id) }
         let plan = BlobPlanner().plan(pending, prefix: prefix)
         // Diagnostic: the batching shape (how N files map to M blobs) — a single failing blob sinks every file

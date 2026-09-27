@@ -38,7 +38,7 @@ import Foundation
 
     // MARK: - bug 1: the folder marker came back as a file
 
-    @Test func reDepositingADeletedFolderDoesNotLeaveAPhantomFileNamedAfterIt() throws {
+    @Test func reDepositingADeletedFolderDoesNotLeaveAPhantomFileNamedAfterIt() async throws {
         let j = try tempJournal()
         try j.createFolder(path: "Photos")            // UI "New folder" → a marker row
         try j.upsert([item("Photos/a.jpg")])
@@ -48,25 +48,25 @@ import Foundation
         // The user drags the folder back in: the deposit enumerates the FILE, not the marker.
         try j.upsert([item("Photos/a.jpg")], reviving: true)
 
-        let atFolderPath = try j.listFiles().filter { $0.relativePath == "Photos" }
+        let atFolderPath = try await j.listFiles().filter { $0.relativePath == "Photos" }
         #expect(atFolderPath.allSatisfy { $0.status == .folder },
                 "a folder marker came back as a file — the folder shows twice and the fake one never finishes uploading")
-        #expect(try j.listFiles().count == 1)
+        #expect(try await j.listFiles().count == 1)
     }
 
     /// A marker that IS explicitly restored must come back as a marker, not as a file.
-    @Test func revivingAFolderMarkerKeepsItAMarker() throws {
+    @Test func revivingAFolderMarkerKeepsItAMarker() async throws {
         let j = try tempJournal()
         try j.createFolder(path: "Empty")
-        let markerId = try #require(try j.listFiles().first?.id)
+        let markerId = try #require(try await j.listFiles().first?.id)
         try j.deletePath("Empty")
         try j.reviveFiles(ids: [markerId])
-        #expect(try j.listFiles().map(\.status) == [.folder])
+        #expect(try await j.listFiles().map(\.status) == [.folder])
     }
 
     // MARK: - bug 2: files that weren't re-dropped came back stranded
 
-    @Test func reDepositingAChangedFolderLeavesTheFilesYouDidNotDropDeleted() throws {
+    @Test func reDepositingAChangedFolderLeavesTheFilesYouDidNotDropDeleted() async throws {
         let j = try tempJournal()
         try j.upsert([item("Photos/a.jpg"), item("Photos/b.jpg"), item("Photos/c.jpg")])
         try archive(j, ["Photos/a.jpg", "Photos/b.jpg", "Photos/c.jpg"])
@@ -75,7 +75,7 @@ import Foundation
         // The folder on disk has changed since the delete: b and c are gone, d is new.
         try j.upsert([item("Photos/a.jpg"), item("Photos/d.jpg")], reviving: true)
 
-        #expect(try j.listFiles().map(\.relativePath) == ["Photos/a.jpg", "Photos/d.jpg"],
+        #expect(try await j.listFiles().map(\.relativePath) == ["Photos/a.jpg", "Photos/d.jpg"],
                 "files that were never re-dropped came back — nothing on disk feeds them, so they can never finish uploading")
     }
 
@@ -100,21 +100,21 @@ import Foundation
     // MARK: - what a revive restores
 
     /// The bytes never left S3, so a revived file is `archived` — not miming an upload that isn't happening.
-    @Test func revivingAFileWhoseBlobIsIntactKeepsItArchived() throws {
+    @Test func revivingAFileWhoseBlobIsIntactKeepsItArchived() async throws {
         let j = try tempJournal()
         try j.upsert([item("a.jpg")])
         try archive(j, ["a.jpg"])
         try j.deletePath("a.jpg")
 
         try j.upsert([item("a.jpg")], reviving: true)
-        let row = try #require(try j.listFiles().first)
+        let row = try #require(try await j.listFiles().first)
         #expect(row.status == .archived)
         #expect(row.blobId == "blob1", "a revived file lost its link to bytes that are still in S3")
-        #expect(try j.settledFileIds().contains("a.jpg"), "an intact file was re-planned — that re-uploads what's already stored")
+        #expect(try await j.settledFileIds().contains("a.jpg"), "an intact file was re-planned — that re-uploads what's already stored")
     }
 
     /// …but if its bytes were reclaimed, it must re-upload rather than point at an object on its way out.
-    @Test func revivingAFileWhoseBlobWasReapedRePlansIt() throws {
+    @Test func revivingAFileWhoseBlobWasReapedRePlansIt() async throws {
         let j = try tempJournal()
         try j.upsert([item("a.jpg")])
         try archive(j, ["a.jpg"])
@@ -122,32 +122,32 @@ import Foundation
         try j.markBlobReaped("blob1")
 
         try j.upsert([item("a.jpg")], reviving: true)
-        let row = try #require(try j.listFiles().first)
+        let row = try #require(try await j.listFiles().first)
         #expect(row.status == .planned)
         #expect(row.blobId == nil)
-        #expect(try j.settledFileIds().isEmpty, "a file whose bytes are gone was left settled — it would never be re-uploaded")
+        #expect(try await j.settledFileIds().isEmpty, "a file whose bytes are gone was left settled — it would never be re-uploaded")
     }
 
     /// A file edited between the delete and the re-drop must re-upload, not silently keep the old bytes.
-    @Test func revivingAFileWhoseContentChangedRePlansIt() throws {
+    @Test func revivingAFileWhoseContentChangedRePlansIt() async throws {
         let j = try tempJournal()
         try j.upsert([item("a.jpg", hash: "old")])
         try archive(j, ["a.jpg"])
         try j.deletePath("a.jpg")
 
         try j.upsert([item("a.jpg", hash: "new")], reviving: true)
-        #expect(try j.listFiles().first?.status == .planned,
+        #expect(try await j.listFiles().first?.status == .planned,
                 "a changed file was revived as archived — the vault would keep serving the bytes it had before")
     }
 
     /// The rule the revive exists to protect: a watched folder's re-scan must NEVER undo a delete.
-    @Test func aRescanStillCannotReviveADeletedFile() throws {
+    @Test func aRescanStillCannotReviveADeletedFile() async throws {
         let j = try tempJournal()
         try j.upsert([item("a.jpg")])
         try archive(j, ["a.jpg"])
         try j.deletePath("a.jpg")
 
         try j.upsert([item("a.jpg")])   // the scanner can still see it on disk — not the user asking
-        #expect(try j.listFiles().isEmpty)
+        #expect(try await j.listFiles().isEmpty)
     }
 }

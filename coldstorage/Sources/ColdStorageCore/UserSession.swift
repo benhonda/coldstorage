@@ -43,7 +43,7 @@ public enum SessionIdentity: Sendable, Equatable {
 ///   - `scratch/`         — where a PUSH source (PhotoKit) materializes an asset while it streams. **Per-user
 ///                          because it holds plaintext bytes.** The upload engine writes nothing here — it
 ///                          encrypts straight into the multipart parts. Swept when the session is built.
-///   - `status.json`      — the run summary this user's app reads
+///   - `status.json`      — a run summary, written after each run (the app reads the socket, not this)
 ///
 /// One-way: a session is CONSTRUCTED at `authenticate` and DESTROYED at `deauthenticate`. It is never
 /// mutated to point at a different user — a different user means a different session.

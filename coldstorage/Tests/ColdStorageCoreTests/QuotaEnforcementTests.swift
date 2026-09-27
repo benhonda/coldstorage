@@ -114,7 +114,7 @@ import Crypto
 
         await daemon.deposit(paths: [drop.path], into: "")
 
-        let row = try session.journal.listFiles().first { $0.relativePath.hasSuffix("big.bin") }
+        let row = try await session.journal.listFiles().first { $0.relativePath.hasSuffix("big.bin") }
         #expect(row != nil)                          // it's IN the tree (listFiles returns it)…
         #expect(row?.status == .failed)              // …as `.failed`, not `.discovered` → the row leaves "uploading"
     }

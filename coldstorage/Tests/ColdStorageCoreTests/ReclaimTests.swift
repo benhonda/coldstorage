@@ -38,10 +38,10 @@ import Foundation
 
         try write("a.jpg", to: f.root); try write("b.jpg", to: f.root)
         _ = try await f.engine.run(source: LocalDirSource(root: f.root), prefix: .dev)
-        let blobId = try #require(try f.journal.listFiles().first?.blobId)
+        let blobId = try #require(try await f.journal.listFiles().first?.blobId)
         let key = try #require(try f.journal.blobS3Key(blobId))
 
-        for row in try f.journal.listFiles() { try f.journal.deletePath(row.relativePath) }
+        for row in try await f.journal.listFiles() { try f.journal.deletePath(row.relativePath) }
         await f.engine.reapDeleted()
 
         #expect(f.store.reclaimableKeys.contains(key), "every file was deleted but the blob's bytes were never reclaimed — they keep consuming the user's quota forever")
@@ -56,9 +56,9 @@ import Foundation
 
         try write("gone.jpg", to: f.root); try write("kept.jpg", to: f.root)
         _ = try await f.engine.run(source: LocalDirSource(root: f.root), prefix: .dev)
-        let blobId = try #require(try f.journal.listFiles().first?.blobId)
+        let blobId = try #require(try await f.journal.listFiles().first?.blobId)
         // Sanity: these really do share one blob, or the test proves nothing.
-        #expect(Set(try f.journal.listFiles().map(\.blobId)) == [blobId])
+        #expect(Set(try await f.journal.listFiles().map(\.blobId)) == [blobId])
 
         try f.journal.deletePath("gone.jpg")
         await f.engine.reapDeleted()
@@ -75,7 +75,7 @@ import Foundation
 
         try write("a.jpg", to: f.root)
         _ = try await f.engine.run(source: LocalDirSource(root: f.root), prefix: .dev)
-        for row in try f.journal.listFiles() { try f.journal.deletePath(row.relativePath) }
+        for row in try await f.journal.listFiles() { try f.journal.deletePath(row.relativePath) }
 
         await f.engine.reapDeleted()
         #expect(try f.journal.reclaimableBlobIds().isEmpty, "a reclaimed blob is still being offered for reclamation — the next pass will tag it again")
@@ -96,11 +96,11 @@ import Foundation
         try write("a.jpg", to: f.root)
         _ = try await f.engine.run(source: source, prefix: .dev)
         try f.journal.deletePath("a.jpg")
-        #expect(try f.journal.listFiles().isEmpty)          // gone from the tree
+        #expect(try await f.journal.listFiles().isEmpty)          // gone from the tree
 
         _ = try await f.engine.run(source: source, prefix: .dev)   // the file is STILL on disk
 
-        #expect(try f.journal.listFiles().isEmpty, "a deleted file was resurrected by the next scan — deleting from the vault does not stick")
+        #expect(try await f.journal.listFiles().isEmpty, "a deleted file was resurrected by the next scan — deleting from the vault does not stick")
         #expect(f.store.createdKeys.count == 1, "the deleted file was re-uploaded")
     }
 
@@ -117,12 +117,12 @@ import Foundation
         _ = try await f.engine.run(source: source, prefix: .dev)
         try f.journal.deletePath("a.jpg")
         _ = try await f.engine.run(source: source, prefix: .dev)
-        #expect(try f.journal.listFiles().isEmpty)          // a rescan alone leaves it deleted
+        #expect(try await f.journal.listFiles().isEmpty)          // a rescan alone leaves it deleted
 
         try f.journal.reviveFiles(ids: ["a.jpg"])           // what an explicit re-deposit does
         _ = try await f.engine.run(source: source, prefix: .dev)
 
-        #expect(try f.journal.listFiles().count == 1, "re-depositing a deleted file did not bring it back")
+        #expect(try await f.journal.listFiles().count == 1, "re-depositing a deleted file did not bring it back")
         #expect(try f.journal.isFileArchived("a.jpg") == true)
     }
 
@@ -136,8 +136,8 @@ import Foundation
 
         try write("a.jpg", to: f.root)
         _ = try await f.engine.run(source: LocalDirSource(root: f.root), prefix: .dev)
-        let blobId = try #require(try f.journal.listFiles().first?.blobId)
-        for row in try f.journal.listFiles() { try f.journal.deletePath(row.relativePath) }
+        let blobId = try #require(try await f.journal.listFiles().first?.blobId)
+        for row in try await f.journal.listFiles() { try f.journal.deletePath(row.relativePath) }
         await f.engine.reapDeleted()
         #expect(try f.journal.isBlobVerified(blobId) == false)   // tagged
 
@@ -159,7 +159,7 @@ import Foundation
 
         try write("a.jpg", to: f.root)
         _ = try await f.engine.run(source: LocalDirSource(root: f.root), prefix: .dev)
-        for row in try f.journal.listFiles() { try f.journal.deletePath(row.relativePath) }
+        for row in try await f.journal.listFiles() { try f.journal.deletePath(row.relativePath) }
         await f.engine.reapDeleted()
 
         let day = 86_400.0
@@ -206,7 +206,7 @@ import Foundation
 
         try write("a.jpg", to: f.root)
         _ = try await f.engine.run(source: source, prefix: .dev)
-        let blobId = try #require(try f.journal.listFiles().first?.blobId)
+        let blobId = try #require(try await f.journal.listFiles().first?.blobId)
         let key = try #require(try f.journal.blobS3Key(blobId))
         try f.journal.deletePath("a.jpg")
 
@@ -239,14 +239,14 @@ import Foundation
 
         try write("a.jpg", to: f.root)
         _ = try await f.engine.run(source: source, prefix: .dev)
-        let firstBlob = try #require(try f.journal.listFiles().first?.blobId)
+        let firstBlob = try #require(try await f.journal.listFiles().first?.blobId)
         try f.journal.deletePath("a.jpg")
 
         try Data(String(repeating: "edited while it was out of the vault. ", count: 40).utf8)
             .write(to: f.root.appendingPathComponent("a.jpg"))
         _ = try await f.engine.run(source: source, prefix: .dev, explicitDeposit: true)
 
-        let row = try #require(try f.journal.listFiles().first)
+        let row = try #require(try await f.journal.listFiles().first)
         #expect(row.status == .archived)
         #expect(row.blobId != firstBlob, "the vault would hand back the bytes this file had BEFORE it was edited")
     }
@@ -259,8 +259,8 @@ import Foundation
 
         try write("a.jpg", to: f.root)
         _ = try await f.engine.run(source: LocalDirSource(root: f.root), prefix: .dev)
-        let blobId = try #require(try f.journal.listFiles().first?.blobId)
-        for row in try f.journal.listFiles() { try f.journal.deletePath(row.relativePath) }
+        let blobId = try #require(try await f.journal.listFiles().first?.blobId)
+        for row in try await f.journal.listFiles() { try f.journal.deletePath(row.relativePath) }
 
         // A member the journal has no file row for — a lost row, a partially restored journal, a bug. Built
         // through the real API: `ensureBlob` records membership, and its blob-row insert is a no-op on
@@ -286,14 +286,14 @@ import Foundation
 
         try write("a.jpg", to: f.root)
         _ = try await f.engine.run(source: source, prefix: .dev)
-        let oldBlob = try #require(try f.journal.listFiles().first?.blobId)
+        let oldBlob = try #require(try await f.journal.listFiles().first?.blobId)
         let oldKey = try #require(try f.journal.blobS3Key(oldBlob))
 
         try Data(String(repeating: "edited in place, never deleted. ", count: 40).utf8)
             .write(to: f.root.appendingPathComponent("a.jpg"))
         _ = try await f.engine.run(source: source, prefix: .dev)
 
-        let row = try #require(try f.journal.listFiles().first)
+        let row = try #require(try await f.journal.listFiles().first)
         #expect(row.status == .archived)
         #expect(row.blobId != oldBlob, "the edited file was re-linked to the blob sealed from its OLD bytes")
         #expect(f.store.reclaimableKeys.contains(oldKey),
@@ -314,7 +314,7 @@ import Foundation
 
         try write("a.jpg", to: f.root)
         _ = try await f.engine.run(source: source, prefix: .dev)
-        let oldBlob = try #require(try f.journal.listFiles().first?.blobId)
+        let oldBlob = try #require(try await f.journal.listFiles().first?.blobId)
         try Data(String(repeating: "edited in place. ", count: 40).utf8)
             .write(to: f.root.appendingPathComponent("a.jpg"))
         _ = try await f.engine.run(source: source, prefix: .dev)   // supersedes + reaps oldBlob
@@ -341,7 +341,7 @@ import Foundation
 
         try write("a.jpg", to: f.root)
         _ = try await f.engine.run(source: source, prefix: .dev)
-        let oldBlob = try #require(try f.journal.listFiles().first?.blobId)
+        let oldBlob = try #require(try await f.journal.listFiles().first?.blobId)
         let oldKey = try #require(try f.journal.blobS3Key(oldBlob))
         try Data(String(repeating: "edited in place. ", count: 40).utf8)
             .write(to: f.root.appendingPathComponent("a.jpg"))
@@ -351,7 +351,7 @@ import Foundation
         try write("a.jpg", to: f.root)                             // the ORIGINAL bytes come back
         _ = try await f.engine.run(source: source, prefix: .dev)
 
-        let row = try #require(try f.journal.listFiles().first)
+        let row = try #require(try await f.journal.listFiles().first)
         #expect(row.status == .archived)
         #expect(row.blobId == oldBlob, "the original content re-derives the original blob id — that IS the resume key")
         // A relink uploads NOTHING — so fresh parts landing is the proof this was a real re-upload that

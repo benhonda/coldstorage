@@ -57,31 +57,31 @@ import Foundation
     /// An empty folder is anchored by a `folder`-status marker row so it survives a reload (the tree is
     /// otherwise derived from file paths). It shows in `listFiles`, doesn't count as a file, and is
     /// idempotent on the path. `movePath` renames it and `deletePath` tombstones it like any other row.
-    @Test func emptyFolderMarkerPersistsCountsAndSweeps() throws {
+    @Test func emptyFolderMarkerPersistsCountsAndSweeps() async throws {
         let j = try tempJournal()
         try j.createFolder(path: "Photos")
         try j.createFolder(path: "Photos")                       // idempotent on the path — no duplicate
 
-        let listed = try j.listFiles()
+        let listed = try await j.listFiles()
         #expect(listed.filter { $0.relativePath == "Photos" }.count == 1)
         #expect(listed.first(where: { $0.relativePath == "Photos" })?.status == .folder)
-        #expect(try j.summary().total == 0)                      // a marker is not a file
+        #expect(try await j.summary().total == 0)                      // a marker is not a file
 
         try j.movePath(from: "Photos", to: "Memories")           // rename sweeps the marker
-        #expect(try j.listFiles().map(\.relativePath) == ["Memories"])
+        #expect(try await j.listFiles().map(\.relativePath) == ["Memories"])
 
         try j.deletePath("Memories")                             // delete tombstones it → gone from listFiles
-        #expect(try j.listFiles().isEmpty)
+        #expect(try await j.listFiles().isEmpty)
     }
 
     /// A marker is a no-op when a real file already implies the folder — we never stack a redundant marker.
-    @Test func createFolderIsNoOpWhenPathAlreadyHasAFile() throws {
+    @Test func createFolderIsNoOpWhenPathAlreadyHasAFile() async throws {
         let j = try tempJournal()
         try j.upsert([IngestItem(id: "f1", relativePath: "Photos/a.jpg", size: 10, content: .sha256("h1"),
                                  isFavorite: false,
                                  open: { AsyncThrowingStream { $0.finish() } })])
         try j.createFolder(path: "Photos")
-        #expect(try j.listFiles().filter { $0.relativePath == "Photos" }.isEmpty)   // no marker added
+        #expect(try await j.listFiles().filter { $0.relativePath == "Photos" }.isEmpty)   // no marker added
     }
 
     /// Per-source pause is journal-backed (persists), defaults false, and toggles without re-adding.

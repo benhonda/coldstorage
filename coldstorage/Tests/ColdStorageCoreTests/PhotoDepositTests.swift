@@ -98,7 +98,7 @@ import Foundation
             resolver: resolver, assetIds: ["asset-1", "asset-2"], destDir: "Photos/Trip", scratchDir: FileManager.default.temporaryDirectory), prefix: .dev)
 
         #expect(failures.isEmpty)
-        let rows = try journal.listFiles()
+        let rows = try await journal.listFiles()
         #expect(rows.allSatisfy { $0.status == .archived })                       // both archived end-to-end
         #expect(Set(rows.map(\.relativePath)) == ["Photos/Trip/IMG_0001.jpg", "Photos/Trip/IMG_0002.jpg"])
         #expect(Set(rows.map(\.id)) == Set(rows.map(\.relativePath)))             // path-keyed, like files
@@ -122,7 +122,7 @@ import Foundation
         try await engine.run(source: PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "B", scratchDir: FileManager.default.temporaryDirectory), prefix: .dev)
         try await engine.run(source: PhotoDepositSource(resolver: resolver, assetIds: ["asset-1"], destDir: "A", scratchDir: FileManager.default.temporaryDirectory), prefix: .dev)  // re-pick into A
 
-        let rows = try journal.listFiles()
+        let rows = try await journal.listFiles()
         #expect(Set(rows.map(\.relativePath)) == ["A/IMG_0001.jpg", "B/IMG_0001.jpg"])  // two copies, not one moved row
         #expect(rows.count == 2)                                                        // the A re-deposit didn't duplicate
     }

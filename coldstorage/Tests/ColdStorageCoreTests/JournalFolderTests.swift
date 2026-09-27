@@ -15,8 +15,8 @@ import Foundation
         return try Journal(path: path)
     }
 
-    private func folders(_ j: Journal) throws -> [String] {
-        try j.listFiles().filter { $0.status == .folder }.map(\.relativePath).sorted()
+    private func folders(_ j: Journal) async throws -> [String] {
+        try await j.listFiles().filter { $0.status == .folder }.map(\.relativePath).sorted()
     }
 
     /// THE REGRESSION: create a folder, rename it, then create another folder whose path equals the FIRST
@@ -24,22 +24,22 @@ import Foundation
     /// INSERT collides → the new folder vanishes. With a unique id, both coexist. (Reproduces the real flow:
     /// every "New folder" defaults to "untitled folder", so the 2nd one onward collided once the 1st was
     /// renamed away.)
-    @Test func recreatingARenamedFoldersPathKeepsBothMarkers() throws {
+    @Test func recreatingARenamedFoldersPathKeepsBothMarkers() async throws {
         let j = try tempJournal()
         try j.createFolder(path: "untitled folder")            // marker #1
         try j.movePath(from: "untitled folder", to: "Keepers") // id stays, relativePath → "Keepers"
         try j.createFolder(path: "untitled folder")            // marker #2 — must NOT collide on the id
-        #expect(try folders(j) == ["Keepers", "untitled folder"])
+        #expect(try await folders(j) == ["Keepers", "untitled folder"])
     }
 
     /// Re-creating a folder at a path that was DELETED (tombstoned) must work too — the tombstoned row keeps
     /// its old id and the fresh marker gets its own, so no PK collision and no silently-dropped INSERT.
-    @Test func recreatingADeletedFoldersPathWorks() throws {
+    @Test func recreatingADeletedFoldersPathWorks() async throws {
         let j = try tempJournal()
         try j.createFolder(path: "Scratch")
         try j.deletePath("Scratch")                            // tombstone (row kept, status=deleted)
-        #expect(try folders(j).isEmpty)
+        #expect(try await folders(j).isEmpty)
         try j.createFolder(path: "Scratch")                    // a brand-new empty folder at the same path
-        #expect(try folders(j) == ["Scratch"])
+        #expect(try await folders(j) == ["Scratch"])
     }
 }

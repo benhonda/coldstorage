@@ -3,7 +3,8 @@ import Csqlite3
 
 // Durable, crash-safe state — SQLite/WAL via the system library directly (no ORM dependency).
 // The resumability guarantee AND the metadata-index SPOF (§6.6). "Archived" is written only after
-// a blob verifies. Access is serialized (an internal lock; callers are single-actor anyway).
+// a blob verifies. Two connections: `db` for every write and the short reads (serialized by `lock`), and
+// the read lane (`reader`) for the reads that grow with the vault — see `Journal.reader`.
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
@@ -49,16 +50,20 @@ public struct FileRow: Sendable {
     /// WHY a `failed` row failed — the closed set the app renders copy from (see `FileFailureKind`). Nil
     /// on every other status, and cleared the moment the row is re-planned or archived.
     public let failureKind: FileFailureKind?
-    /// The file beyond its bytes (dates, mode, flags, xattrs, Photos facts) as captured at ingest — what
-    /// restore puts back. Nil for a row from before the column existed.
-    public let metadata: FileMetadata?
+    /// The file's own dates (Unix seconds) from its captured `FileMetadata` — what the browser sorts and
+    /// labels by. Just these two: the rest of the metadata (every xattr, up to 256 KiB each) is restore's
+    /// business and is read by id (`Journal.fileMetadata`), never with the tree. Nil where unknown.
+    public let modifiedAt: Int?
+    public let createdAt: Int?
     public init(id: String, relativePath: String, size: Int, status: FileStatus, blobId: String?,
                 lastAttemptAt: Int? = nil, error: String? = nil, sourcePath: String? = nil,
-                depositId: String? = nil, failureKind: FileFailureKind? = nil, metadata: FileMetadata? = nil) {
+                depositId: String? = nil, failureKind: FileFailureKind? = nil,
+                modifiedAt: Int? = nil, createdAt: Int? = nil) {
         self.id = id; self.relativePath = relativePath; self.size = size
         self.status = status; self.blobId = blobId
         self.lastAttemptAt = lastAttemptAt; self.error = error; self.sourcePath = sourcePath
-        self.depositId = depositId; self.failureKind = failureKind; self.metadata = metadata
+        self.depositId = depositId; self.failureKind = failureKind
+        self.modifiedAt = modifiedAt; self.createdAt = createdAt
     }
 }
 
@@ -78,6 +83,16 @@ public struct MistaggedBlob: Sendable {
 public final class Journal: @unchecked Sendable {
     private let db: OpaquePointer
     private let lock = NSLock()
+    /// **The read lane: a second, read-only connection with its own serial queue**, for the reads whose cost
+    /// grows with the whole vault (`listFiles`, `occupiedPaths`, `settledFileIds`, `summary`). They are `async` so that
+    /// no caller can run one inline: the daemon actor did, under `lock`, and at sign-in on a 250k-file vault
+    /// four whole-tree reads (the app's `listFiles` + `listRestores`, twice) held every command behind them —
+    /// `unlockVault`, a no-op, timed out, and "Couldn't load your files" survived a reboot (2026-09-27, the
+    /// third stall of this shape; coldstorage/DESIGN.md §4). WAL lets this connection read the last commit
+    /// while `db` writes, so neither waits on the other; the queue keeps the work off the caller's executor,
+    /// so an actor awaiting a read goes on serving everything else.
+    private let reader: OpaquePointer
+    private let readLane = DispatchQueue(label: "coldstorage.journal.read-lane")
 
     public init(path: String) throws {
         var handle: OpaquePointer?
@@ -85,7 +100,14 @@ public final class Journal: @unchecked Sendable {
         guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK, let h = handle else {
             throw ColdStorageError.invalidRequest("cannot open journal at \(path)")
         }
+        var readHandle: OpaquePointer?
+        guard sqlite3_open_v2(path, &readHandle, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK,
+              let r = readHandle else {
+            sqlite3_close_v2(h)
+            throw ColdStorageError.invalidRequest("cannot open the journal's read connection at \(path)")
+        }
         db = h
+        reader = r
         try exec("PRAGMA journal_mode=WAL;")
         try exec("PRAGMA busy_timeout=5000;")
         // **Sizing for a big vault.** A 141k-file journal made every `getStatus` (three `count(*)` scans of
@@ -103,6 +125,26 @@ public final class Journal: @unchecked Sendable {
         // and it's what makes the planner actually PREFER `files_live_status` over a scan on the first
         // getStatus after this upgrade rather than after enough writes to trigger auto-analyze.
         try? exec("ANALYZE;")
+        // The read lane gets the same sizing (the settings are per connection). It is only ever used from
+        // `readLane`, one statement at a time, so it needs no lock of its own.
+        for pragma in ["busy_timeout=5000", "cache_size=-65536", "mmap_size=268435456"] {
+            try exec("PRAGMA \(pragma);", on: reader)
+        }
+    }
+
+    deinit {
+        // `_v2` defers the close past any statement still being finalized rather than failing on it.
+        sqlite3_close_v2(reader)
+        sqlite3_close_v2(db)
+    }
+
+    /// Run `body` against the read connection on the read lane, and resume the caller with its result. The
+    /// caller suspends instead of blocking — the whole point (see `reader`). Reads queue in the order they
+    /// were asked for, so a later read never reflects an older state than an earlier one did.
+    private func read<T: Sendable>(_ body: @escaping @Sendable (OpaquePointer) throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            readLane.async { continuation.resume(with: Result { try body(self.reader) }) }
+        }
     }
 
     /// Smart default excludes — the junk a non-technical user never means to upload. Seeded into the
@@ -402,9 +444,9 @@ public final class Journal: @unchecked Sendable {
     // MARK: - tiny SQLite layer
     private enum Bind { case text(String), int(Int), blob(Data), null }
 
-    private func exec(_ sql: String) throws {
+    private func exec(_ sql: String, on conn: OpaquePointer? = nil) throws {
         var err: UnsafeMutablePointer<CChar>?
-        guard sqlite3_exec(db, sql, nil, nil, &err) == SQLITE_OK else {
+        guard sqlite3_exec(conn ?? db, sql, nil, nil, &err) == SQLITE_OK else {
             let m = err.map { String(cString: $0) } ?? "unknown"; sqlite3_free(err)
             throw ColdStorageError.invalidRequest("sqlite exec: \(m)")
         }
@@ -431,25 +473,13 @@ public final class Journal: @unchecked Sendable {
         }
     }
 
+    /// Rows as `[column name: value]` — the convenient shape for the many small queries. For a read that
+    /// returns the whole tree, use `each`: building a dictionary per row (a String per column NAME, every
+    /// value boxed) was most of what a 250k-row `listFiles` cost (2026-09-27).
     @discardableResult
     private func run(_ sql: String, _ binds: [Bind] = []) throws -> [[String: Any]] {
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw ColdStorageError.invalidRequest("sqlite prepare: \(String(cString: sqlite3_errmsg(db)))")
-        }
-        defer { sqlite3_finalize(stmt) }
-        for (i, b) in binds.enumerated() {
-            let idx = Int32(i + 1)
-            switch b {
-            case .text(let s): sqlite3_bind_text(stmt, idx, s, -1, SQLITE_TRANSIENT)
-            case .int(let n):  sqlite3_bind_int64(stmt, idx, Int64(n))
-            case .blob(let d): _ = d.withUnsafeBytes { sqlite3_bind_blob(stmt, idx, $0.baseAddress, Int32(d.count), SQLITE_TRANSIENT) }
-            case .null:        sqlite3_bind_null(stmt, idx)
-            }
-        }
         var rows: [[String: Any]] = []
-        var rc = sqlite3_step(stmt)
-        while rc == SQLITE_ROW {
+        try each(sql, binds, on: db) { stmt in
             var row: [String: Any] = [:]
             for col in 0..<sqlite3_column_count(stmt) {
                 let nm = String(cString: sqlite3_column_name(stmt, col))
@@ -461,6 +491,31 @@ public final class Journal: @unchecked Sendable {
                 }
             }
             rows.append(row)
+        }
+        return rows
+    }
+
+    /// Step `sql` on `conn`, handing each result row's statement to `row`, which reads it by column index
+    /// (`text`/`int`). The one prepare → bind → step → finalize path; `run` is built on it.
+    private func each(_ sql: String, _ binds: [Bind] = [], on conn: OpaquePointer,
+                      _ row: (OpaquePointer) throws -> Void) throws {
+        var prepared: OpaquePointer?
+        guard sqlite3_prepare_v2(conn, sql, -1, &prepared, nil) == SQLITE_OK, let stmt = prepared else {
+            throw ColdStorageError.invalidRequest("sqlite prepare: \(String(cString: sqlite3_errmsg(conn)))")
+        }
+        defer { sqlite3_finalize(stmt) }
+        for (i, b) in binds.enumerated() {
+            let idx = Int32(i + 1)
+            switch b {
+            case .text(let s): sqlite3_bind_text(stmt, idx, s, -1, SQLITE_TRANSIENT)
+            case .int(let n):  sqlite3_bind_int64(stmt, idx, Int64(n))
+            case .blob(let d): _ = d.withUnsafeBytes { sqlite3_bind_blob(stmt, idx, $0.baseAddress, Int32(d.count), SQLITE_TRANSIENT) }
+            case .null:        sqlite3_bind_null(stmt, idx)
+            }
+        }
+        var rc = sqlite3_step(stmt)
+        while rc == SQLITE_ROW {
+            try row(stmt)
             rc = sqlite3_step(stmt)
         }
         // A write (INSERT/UPDATE/DELETE) yields SQLITE_DONE on the first step and never enters the loop; a
@@ -468,9 +523,16 @@ public final class Journal: @unchecked Sendable {
         // real failure — surface it. The journal is the SPOF: a silently-swallowed write is how a marker (or
         // any row) can vanish without a trace, so we refuse to report success on a step that didn't finish.
         guard rc == SQLITE_DONE else {
-            throw ColdStorageError.invalidRequest("sqlite step: \(String(cString: sqlite3_errmsg(db)))")
+            throw ColdStorageError.invalidRequest("sqlite step: \(String(cString: sqlite3_errmsg(conn)))")
         }
-        return rows
+    }
+
+    /// Column `i` of the current row as text / an integer; nil when it is NULL.
+    private static func text(_ stmt: OpaquePointer, _ i: Int32) -> String? {
+        sqlite3_column_text(stmt, i).map { String(cString: $0) }
+    }
+    private static func int(_ stmt: OpaquePointer, _ i: Int32) -> Int? {
+        sqlite3_column_type(stmt, i) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, i))
     }
 
     // MARK: - operations
@@ -782,8 +844,8 @@ public final class Journal: @unchecked Sendable {
     public func depositFiles(_ id: String, statuses: [FileStatus]) throws -> [FileRow] {
         guard !statuses.isEmpty else { return [] }
         lock.lock(); defer { lock.unlock() }
-        return try run("SELECT \(Self.fileRowColumns) FROM files WHERE deletedAt IS NULL AND depositId=? AND status IN (\(Self.marks(statuses.map(\.rawValue)))) ORDER BY relativePath",
-                       [.text(id)] + statuses.map { .text($0.rawValue) }).map(Self.fileRow)
+        return try fileRows("WHERE deletedAt IS NULL AND depositId=? AND status IN (\(Self.marks(statuses.map(\.rawValue)))) ORDER BY relativePath",
+                            [.text(id)] + statuses.map { .text($0.rawValue) })
     }
 
     /// Tombstone every `failed` row of a deposit — the Uploads page's "Remove these" on a batch that
@@ -1034,18 +1096,23 @@ public final class Journal: @unchecked Sendable {
     /// (Keep Both) uploaded renamed copies beside the ghosts and whose obvious answer (Skip) uploaded
     /// nothing (2026-09-14). A re-drop now reclaims the row in place: `upsert` overwrites it under the same
     /// id with the fresh source and batch.
-    public func occupiedPaths() throws -> Set<String> {
-        lock.lock(); defer { lock.unlock() }
-        return Set(try run("SELECT relativePath FROM files WHERE deletedAt IS NULL AND status != ?1", [.text(FileStatus.failed.rawValue)])
-            .compactMap { $0["relativePath"] as? String })
+    /// On the read lane (see `reader`): a whole-table read, run for every drop's collision check.
+    public func occupiedPaths() async throws -> Set<String> {
+        try await read { conn in
+            var paths = Set<String>()
+            try self.each("SELECT relativePath FROM files WHERE deletedAt IS NULL AND status != ?1",
+                          [.text(FileStatus.failed.rawValue)], on: conn) { paths.insert(Self.text($0, 0) ?? "") }
+            return paths
+        }
     }
 
     /// The browsable file tree (design: the journal is the tree SSOT). A pure metadata `SELECT` — no S3,
     /// no thaw. Ordered by path so the client renders a stable tree. Unknown/garbage status defaults to
     /// `.discovered` rather than dropping the row (the file still exists; the UI coarsens status anyway).
-    public func listFiles() throws -> [FileRow] {
-        lock.lock(); defer { lock.unlock() }
-        return try run("SELECT \(Self.fileRowColumns) FROM files WHERE deletedAt IS NULL ORDER BY relativePath").map(Self.fileRow)
+    /// On the read lane (see `reader`): the read that grows with the whole vault, run on every app connect
+    /// and after every tree change.
+    public func listFiles() async throws -> [FileRow] {
+        try await read { conn in try self.fileRows("WHERE deletedAt IS NULL ORDER BY relativePath", on: conn) }
     }
 
     /// The same rows, by id — for `retryFiles`, which acts on a handful of rows the user pointed at and
@@ -1055,8 +1122,7 @@ public final class Journal: @unchecked Sendable {
         guard !ids.isEmpty else { return [] }
         lock.lock(); defer { lock.unlock() }
         return try Self.chunks(ids).flatMap { chunk in
-            try run("SELECT \(Self.fileRowColumns) FROM files WHERE deletedAt IS NULL AND id IN (\(Self.marks(chunk)))",
-                    chunk.map { .text($0) }).map(Self.fileRow)
+            try fileRows("WHERE deletedAt IS NULL AND id IN (\(Self.marks(chunk)))", chunk.map { .text($0) })
         }
     }
 
@@ -1064,8 +1130,7 @@ public final class Journal: @unchecked Sendable {
     /// list (56k ids is a 2 MB request and past SQLite's bind limit; the journal already knows the set).
     public func failedFiles() throws -> [FileRow] {
         lock.lock(); defer { lock.unlock() }
-        return try run("SELECT \(Self.fileRowColumns) FROM files WHERE deletedAt IS NULL AND status=? ORDER BY relativePath",
-                       [.text(FileStatus.failed.rawValue)]).map(Self.fileRow)
+        return try fileRows("WHERE deletedAt IS NULL AND status=? ORDER BY relativePath", [.text(FileStatus.failed.rawValue)])
     }
 
     /// The `failed` rows a watched folder owns: under its mount, and claimed by no deposit. "Try again" on
@@ -1074,11 +1139,10 @@ public final class Journal: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         var binds: [Bind] = [.text(FileStatus.failed.rawValue)]
         let covered = Self.coverageClause([mount], into: &binds)
-        return try run("""
-            SELECT \(Self.fileRowColumns) FROM files
-             WHERE deletedAt IS NULL AND status=? AND depositId IS NULL AND (\(covered))
-             ORDER BY relativePath
-            """, binds).map(Self.fileRow)
+        return try fileRows("""
+            WHERE deletedAt IS NULL AND status=? AND depositId IS NULL AND (\(covered))
+            ORDER BY relativePath
+            """, binds)
     }
 
     /// `id IN (…)` batches. SQLite caps bound variables (32,766 by default) and a mass failure — one cause
@@ -1088,19 +1152,35 @@ public final class Journal: @unchecked Sendable {
     }
     private static func marks(_ chunk: [String]) -> String { chunk.map { _ in "?" }.joined(separator: ",") }
 
-    private static let fileRowColumns = "id, relativePath, size, status, blobId, lastAttemptAt, error, sourcePath, depositId, failureKind, metadata"
-    private static func fileRow(_ r: [String: Any]) -> FileRow {
-        FileRow(id: r["id"] as? String ?? "",
-                relativePath: r["relativePath"] as? String ?? "",
-                size: r["size"] as? Int ?? 0,
-                status: FileStatus(rawValue: r["status"] as? String ?? "") ?? .discovered,
-                blobId: r["blobId"] as? String,
-                lastAttemptAt: r["lastAttemptAt"] as? Int,
-                error: r["error"] as? String,
-                sourcePath: r["sourcePath"] as? String,
-                depositId: r["depositId"] as? String,
-                failureKind: (r["failureKind"] as? String).flatMap(FileFailureKind.init(rawValue:)),
-                metadata: FileMetadata.from(json: r["metadata"] as? String))
+    /// Every `FileRow` read: `SELECT fileRowColumns FROM files <tail>`, decoded by `fileRow` — one column
+    /// list, one decoder. `tail` is the `WHERE …`/`ORDER BY …`; `conn` defaults to the write connection.
+    private func fileRows(_ tail: String, _ binds: [Bind] = [], on conn: OpaquePointer? = nil) throws -> [FileRow] {
+        var rows: [FileRow] = []
+        try each("SELECT \(Self.fileRowColumns) FROM files \(tail)", binds, on: conn ?? db) { rows.append(Self.fileRow($0)) }
+        return rows
+    }
+
+    /// The dates come out of `metadata` in SQL, not by decoding the JSON in Swift: the tree needs two numbers,
+    /// and a fresh `JSONDecoder` per row over the whole column — every xattr included — was the other half of
+    /// what a 250k-row `listFiles` cost (2026-09-27). The column only ever holds `FileMetadata.json()` or NULL.
+    /// `fileRow` reads these by position — keep the two in step.
+    private static let fileRowColumns = """
+        id, relativePath, size, status, blobId, lastAttemptAt, error, sourcePath, depositId, failureKind,
+        json_extract(metadata, '$.modifiedAt'), json_extract(metadata, '$.createdAt')
+        """
+    private static func fileRow(_ s: OpaquePointer) -> FileRow {
+        FileRow(id: text(s, 0) ?? "",
+                relativePath: text(s, 1) ?? "",
+                size: int(s, 2) ?? 0,
+                status: FileStatus(rawValue: text(s, 3) ?? "") ?? .discovered,
+                blobId: text(s, 4),
+                lastAttemptAt: int(s, 5),
+                error: text(s, 6),
+                sourcePath: text(s, 7),
+                depositId: text(s, 8),
+                failureKind: text(s, 9).flatMap(FileFailureKind.init(rawValue:)),
+                modifiedAt: int(s, 10),
+                createdAt: int(s, 11))
     }
 
     /// One-time: fold the pre-metadata `files.createdAt` column into `metadata`, then drop it. The column held
@@ -1377,11 +1457,15 @@ public final class Journal: @unchecked Sendable {
     /// - **tombstoned** — the user removed it. Skipping it in `upsert` is not enough on its own: the row
     ///   would still be planned, uploaded, and marked `archived` again, resurrecting it through the back
     ///   door. A deletion has to hold all the way through the pipeline, not just at discovery.
-    public func settledFileIds() throws -> Set<String> {
-        lock.lock(); defer { lock.unlock() }
-        return Set(try run("SELECT id FROM files WHERE status = ?1 OR deletedAt IS NOT NULL",
-                           [.text(FileStatus.archived.rawValue)])
-            .compactMap { $0["id"] as? String })
+    ///
+    /// On the read lane (see `reader`): every archived id in the vault, read on every pass.
+    public func settledFileIds() async throws -> Set<String> {
+        try await read { conn in
+            var ids = Set<String>()
+            try self.each("SELECT id FROM files WHERE status = ?1 OR deletedAt IS NOT NULL",
+                          [.text(FileStatus.archived.rawValue)], on: conn) { ids.insert(Self.text($0, 0) ?? "") }
+            return ids
+        }
     }
 
     public func uploadId(of blobId: String) throws -> String? {
@@ -1419,14 +1503,22 @@ public final class Journal: @unchecked Sendable {
         return (try run("SELECT status FROM files WHERE id=?1", [.text(id)]).first?["status"] as? String) == FileStatus.archived.rawValue
     }
 
-    /// Snapshot counts for the daemon status surface.
-    public func summary() throws -> (total: Int, archived: Int, blobsVerified: Int) {
-        lock.lock(); defer { lock.unlock() }
-        func count(_ sql: String) -> Int { (try? run(sql).first?["c"] as? Int) ?? 0 }
-        // `folder` markers anchor empty folders — they aren't files, so they don't count toward the total.
-        return (count("SELECT count(*) c FROM files WHERE deletedAt IS NULL AND status != 'folder'"),
-                count("SELECT count(*) c FROM files WHERE deletedAt IS NULL AND status='archived'"),
-                count("SELECT count(*) c FROM blobs WHERE status='verified'"))
+    /// Snapshot counts for the daemon status surface. On the read lane (see `reader`) — three counts over the
+    /// whole vault, read on nearly every app event — in one read transaction, so they describe one moment.
+    public func summary() async throws -> (total: Int, archived: Int, blobsVerified: Int) {
+        try await read { conn in
+            try self.exec("BEGIN;", on: conn)
+            defer { try? self.exec("COMMIT;", on: conn) }
+            func count(_ sql: String) throws -> Int {
+                var n = 0
+                try self.each(sql, on: conn) { n = Self.int($0, 0) ?? 0 }
+                return n
+            }
+            // `folder` markers anchor empty folders — they aren't files, so they don't count toward the total.
+            return (try count("SELECT count(*) FROM files WHERE deletedAt IS NULL AND status != 'folder'"),
+                    try count("SELECT count(*) FROM files WHERE deletedAt IS NULL AND status='archived'"),
+                    try count("SELECT count(*) FROM blobs WHERE status='verified'"))
+        }
     }
 
     public func setUploadId(_ blobId: String, _ uploadId: String) throws {

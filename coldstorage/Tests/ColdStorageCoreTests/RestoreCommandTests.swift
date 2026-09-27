@@ -204,7 +204,7 @@ import Crypto
         let failures = try await session.engine.run(source: LocalDirSource(root: src), prefix: session.prefix)
         #expect(failures.isEmpty)
 
-        let fileId = try #require(try session.journal.listFiles().first?.id)
+        let fileId = try #require(try await session.journal.listFiles().first?.id)
         let dest = f.root.appendingPathComponent("beach-restored.jpg").path
         _ = try await reply(f.daemon, "requestRestore", ["file": fileId, "out": dest])
 

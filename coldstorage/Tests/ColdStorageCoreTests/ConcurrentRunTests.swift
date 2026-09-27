@@ -84,7 +84,7 @@ import Crypto
         #expect(f.tracker.startedCount == 2)   // neither deposit was dropped
         #expect(f.tracker.maxOverlap == 1)     // …and they never ran at the same time
         // Both landed in the tree, under their respective folders.
-        let files = try f.session.journal.listFiles().map(\.relativePath)
+        let files = try await f.session.journal.listFiles().map(\.relativePath)
         #expect(files.contains { $0.hasPrefix("A/") })
         #expect(files.contains { $0.hasPrefix("B/") })
     }

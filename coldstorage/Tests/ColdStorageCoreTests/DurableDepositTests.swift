@@ -43,7 +43,7 @@ import Crypto
         // The row is history now, not a to-do: done, stamped, and every file points back at it.
         let batch = try #require(try f.session.journal.listDeposits().first)
         #expect(batch.state == .done && batch.finishedAt != nil && batch.mode == .ingest)
-        #expect(try f.session.journal.listFiles().filter { $0.status == .archived }.allSatisfy { $0.depositId == batch.id })
+        #expect(try await f.session.journal.listFiles().filter { $0.status == .archived }.allSatisfy { $0.depositId == batch.id })
     }
 
     @Test func aStoppedDepositIsFinishedByTheNextPass() async throws {
@@ -243,7 +243,7 @@ import Crypto
         try f.session.journal.addDeposit(ghost)
         try f.session.journal.upsert(ids.map { Self.item($0, sourcePath: nil) }, depositId: ghost.id)
         try f.session.journal.markFilesFailed(ids, kind: .interrupted)
-        #expect(try f.session.journal.occupiedPaths().isEmpty)   // nothing for the drop to collide with
+        #expect(try await f.session.journal.occupiedPaths().isEmpty)   // nothing for the drop to collide with
 
         await f.daemon.deposit(paths: [f.drop.path], into: "")
         for id in ids { #expect(try f.session.journal.isFileArchived(id)) }
@@ -287,8 +287,8 @@ import Crypto
         #expect(try f.session.journal.removeFailedFiles(inDeposit: batch.id) == 1)
         try f.session.journal.forgetDeposit(batch.id)
         #expect(try f.session.journal.listDeposits().isEmpty)
-        #expect(try f.session.journal.listFiles().count == 3)
-        #expect(try f.session.journal.listFiles().allSatisfy { $0.depositId == nil })
+        #expect(try await f.session.journal.listFiles().count == 3)
+        #expect(try await f.session.journal.listFiles().allSatisfy { $0.depositId == nil })
     }
 
     private static func item(_ path: String, sourcePath: String?) -> IngestItem {

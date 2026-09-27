@@ -27,7 +27,7 @@ import Crypto
         let (journal, vault, keys, dir) = try await archive(files)
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        let rows = try journal.listFiles()
+        let rows = try await journal.listFiles()
         let blobId = try #require(rows.first?.blobId)
         #expect(rows.allSatisfy { $0.blobId == blobId }, "small files batch into one blob")
         let key = try #require(try journal.blobS3Key(blobId))
@@ -67,7 +67,7 @@ import Crypto
     @Test func footerParsesFromASuffixOfTheObject() async throws {
         let (journal, vault, keys, dir) = try await archive(["x.txt": Data("x".utf8)])
         defer { try? FileManager.default.removeItem(at: dir) }
-        let blobId = try #require(try journal.listFiles().first?.blobId)
+        let blobId = try #require(try await journal.listFiles().first?.blobId)
         let key = try #require(try journal.blobS3Key(blobId))
         let object = try #require(vault.object(key))
         let whole = try BlobTrailer.footer(of: object)

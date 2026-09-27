@@ -7,7 +7,7 @@ import Csqlite3
 /// file's mtime OR a photo's capture date, depending on the source. The migration files it under the name
 /// that was true for that row and drops the column — so the date has exactly one home afterwards.
 @Suite struct CreatedAtMigrationTests {
-    @Test func theOldDateColumnFoldsIntoMetadataUnderItsHonestName() throws {
+    @Test func theOldDateColumnFoldsIntoMetadataUnderItsHonestName() async throws {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("cs-legacy-ca-\(UUID().uuidString).sqlite").path
         var handle: OpaquePointer?
@@ -26,10 +26,13 @@ import Csqlite3
         sqlite3_close(handle)
 
         let j = try Journal(path: path)
-        let rows = Dictionary(uniqueKeysWithValues: try j.listFiles().map { ($0.id, $0) })
-        #expect(rows["f"]?.metadata == FileMetadata(modifiedAt: 1_700_000_000))   // a file's date was its mtime
-        #expect(rows["p"]?.metadata == FileMetadata(createdAt: 1_600_000_000))    // a photo's was its capture date
-        #expect(rows["n"]?.metadata == nil)                                        // unknown stays unknown
+        #expect(try j.fileMetadata("f") == FileMetadata(modifiedAt: 1_700_000_000))   // a file's date was its mtime
+        #expect(try j.fileMetadata("p") == FileMetadata(createdAt: 1_600_000_000))    // a photo's was its capture date
+        #expect(try j.fileMetadata("n") == nil)                                        // unknown stays unknown
+        // …and the tree reads each date under that same name.
+        let rows = Dictionary(uniqueKeysWithValues: try await j.listFiles().map { ($0.id, $0) })
+        #expect(rows["f"]?.modifiedAt == 1_700_000_000 && rows["f"]?.createdAt == nil)
+        #expect(rows["p"]?.createdAt == 1_600_000_000 && rows["p"]?.modifiedAt == nil)
         // The column is gone — nothing can write a second copy of the date again.
         var h2: OpaquePointer?
         try #require(sqlite3_open_v2(path, &h2, SQLITE_OPEN_READONLY, nil) == SQLITE_OK)

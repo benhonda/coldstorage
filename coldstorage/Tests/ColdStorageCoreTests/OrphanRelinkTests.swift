@@ -74,13 +74,13 @@ import Foundation
         let file = f.base.appendingPathComponent("data/f.bin")
 
         _ = try await f.engine.run(source: f.source, prefix: .dev)
-        let sealedBlob = try #require(try f.journal.listFiles().first?.blobId)
+        let sealedBlob = try #require(try await f.journal.listFiles().first?.blobId)
 
         // Edit it — much longer, so a span measured over the new bytes cannot describe the old object.
         try Data(String(repeating: "rewritten, and far longer than before. ", count: 40).utf8).write(to: file)
         _ = try await f.engine.run(source: f.source, prefix: .dev)
 
-        let row = try #require(try f.journal.listFiles().first)
+        let row = try #require(try await f.journal.listFiles().first)
         #expect(row.status == .archived)
         #expect(row.blobId != sealedBlob,
                 "the edited file was re-linked to the blob sealed from its OLD bytes — its recorded span points into ciphertext that never held it, and the corruption only shows up at restore")

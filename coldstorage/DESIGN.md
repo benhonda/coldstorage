@@ -113,7 +113,7 @@ objects carrying them.
   ```
   <dataRoot>/users/<sub>/coldstore.sqlite   # journal: file index, watched-folder registry, excludes, transfers
   <dataRoot>/users/<sub>/scratch/           # PUSH-source landing zone (a Photos asset mid-stream) — plaintext
-  <dataRoot>/users/<sub>/status.json        # run summary this user's app reads
+  <dataRoot>/users/<sub>/status.json        # run summary, written after each run (the app reads the socket)
   <dataRoot>/coldstored.sock                # the ONE machine-level file (COLDSTORE_SOCKET)
   ```
   A local-dev identity gets the same layout at `users/dev-<name>/`, so dev exercises the real path.
@@ -216,6 +216,16 @@ objects carrying them.
 > found, holding the lock for as long as 140k writes take while the actor's `listFiles` blocked on it — and
 > `unlockVault`, a no-op, timed out queued behind that at sign-in (2026-09-10). `upsert` now commits in
 > chunks of `Journal.upsertChunk` rows and releases the lock between them; a reader waits one chunk at most.
+> **And from the read side — the third stall of this shape, and why there is now a rule (2026-09-27).**
+> `listFiles` ran inline on the actor: ~2.5 s at 250k rows (a dictionary and a fresh `JSONDecoder` per row,
+> to get two dates out of `metadata`), and `listRestores` read the whole tree again to name a few
+> transfers. The app's sign-in burst is four of those; `unlockVault` timed out behind them even after a
+> reboot. **Rule: a journal read whose cost grows with the vault is `async` on the read lane** — a second,
+> read-only connection with its own serial queue (`Journal.reader`). WAL lets it read the last commit while
+> the write connection writes, and the actor suspends instead of blocking, so it keeps answering while a
+> tree is read. `listFiles` is now ~0.47 s there (typed columns, dates via `json_extract`; measured in the
+> Linux container, debug), `listRestores` looks up only its own files, and `TreeReadNonBlockingTests`
+> replays the burst at 250k rows.
 
 ## 5. Resume protocol — survive anything
 
@@ -365,7 +375,8 @@ Secrets live in Keychain, never in the UI.
   revalidate: a stale cache kicks a background listing and `usageChanged` announces the new number);
   `null` only when signed out or nothing has been listed yet.
 - **Tree revision (`DaemonService.treeRevision`):** bumped in the same actor turn as every journal edit
-  that changes `listFiles`; `listFiles` answers `{revision, files}`, tree-editing acks (`movePath` /
+  that changes `listFiles`; `listFiles` answers `{revision, files}` (the revision is taken just before the
+  read, so the rows reflect at least it), tree-editing acks (`movePath` /
   `createFolder` / `deletePath` / `removeFailedFiles` / `retryFiles`) carry `revision`, `deposit` /
   `depositPhotos` ack the minted `depositId`, and `runStarted` / `runFinished` carry `depositId` (+
   `revision` at the finish). The app reconciles its optimistic edits against this, not arrival order

@@ -42,7 +42,7 @@ import Csqlite3
         return path
     }
 
-    @Test func oldSentencesBecomeKindsAndOrphansGetABatch() throws {
+    @Test func oldSentencesBecomeKindsAndOrphansGetABatch() async throws {
         let path = try legacyJournal([
             (id: "Drop/a.jpg", status: "failed", error: "Upload didn\u{2019}t finish. Add this to your backup again to complete it."),
             (id: "Drop/b.jpg", status: "failed", error: "Upload didn\u{2019}t finish."),
@@ -53,7 +53,7 @@ import Csqlite3
             (id: "Camera/ok.jpg", status: "archived", error: nil),
         ], mounts: ["Camera"])
         let j = try Journal(path: path)
-        let rows = Dictionary(uniqueKeysWithValues: try j.listFiles().map { ($0.id, $0) })
+        let rows = Dictionary(uniqueKeysWithValues: try await j.listFiles().map { ($0.id, $0) })
         // Both wordings of the interrupted sentence → one kind, and the sentence is gone (the app says it now).
         #expect(rows["Drop/a.jpg"]?.failureKind == .interrupted && rows["Drop/a.jpg"]?.error == nil)
         #expect(rows["Drop/b.jpg"]?.failureKind == .interrupted)
@@ -75,7 +75,7 @@ import Csqlite3
         // Idempotent: a second open changes nothing — one batch, same kinds.
         let again = try Journal(path: path)
         #expect(try again.listDeposits().map(\.id) == [batch.id])
-        #expect(try again.listFiles().first { $0.id == "Drop/a.jpg" }?.failureKind == .interrupted)
+        #expect(try await again.listFiles().first { $0.id == "Drop/a.jpg" }?.failureKind == .interrupted)
     }
 
     /// The previous build's "Try again" recorded a deposit of `kind='retry'` — a list of file ids. A retry

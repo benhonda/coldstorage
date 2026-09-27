@@ -133,6 +133,15 @@ public actor DaemonService {
         return session
     }
 
+    /// For a read that suspended (the journal's read lane, a disk walk): the account may have signed out or
+    /// switched while it waited, and its answer belongs to whoever was signed in when it began — so it is
+    /// refused rather than handed to whoever is signed in now (see `UserSession`).
+    private func requireStillCurrent(_ asked: UserSession, _ command: String) throws {
+        guard session === asked else {
+            throw ColdStorageError.invalidRequest("\(command): the signed-in account changed while reading")
+        }
+    }
+
     /// The clean refusal for upload-starting commands while the user has uploads paused (PAUSE.md): the
     /// message is what the app surfaces, so it names the fix. Scans, restores and reads are never gated.
     private func refuseIfUploadsPaused(_ command: String) throws {
@@ -484,7 +493,7 @@ public actor DaemonService {
         }
         // Drop-time collision answers apply to the DROP. A retry re-ingests rows that already exist, in
         // place (same id, same path) — re-applying "keep both" there would rename a file beside itself.
-        let source = d.mode == .retry ? base : resolveCollisions(session, base, conflicts)
+        let source = d.mode == .retry ? base : try await resolveCollisions(session, base, conflicts)
         let failures = try await performRun(session: session, source: source, explicitDeposit: explicit, depositId: d.id)
         // This run may have reclaimed another batch's rows (a re-drop over failed ones): that batch is now a
         // name over nothing, so it goes before anyone lists it.
@@ -574,10 +583,12 @@ public actor DaemonService {
     /// Wrap a deposit source so the user's collision choices are honored (Keep Both / Replace / Skip). A
     /// no-op pass-through when there's nothing to resolve, so the common (no-collision) deposit is unchanged.
     /// Snapshots `occupiedPaths()` once here — the "taken" set the keepBoth uniquifier avoids.
+    /// Throws when the taken set can't be read: resolving against an empty one would let "Keep Both" land on
+    /// an existing path and overwrite that file's row. The deposit stays owed and the next pass retries it.
     private func resolveCollisions(_ session: UserSession, _ source: any IngestSource,
-                                   _ conflicts: [String: ConflictPolicy]) -> any IngestSource {
+                                   _ conflicts: [String: ConflictPolicy]) async throws -> any IngestSource {
         guard !conflicts.isEmpty else { return source }
-        let existing = (try? session.journal.occupiedPaths()) ?? []
+        let existing = try await session.journal.occupiedPaths()
         return CollisionResolvingSource(inner: source, existing: existing, conflicts: conflicts)
     }
 
@@ -660,7 +671,7 @@ public actor DaemonService {
         do {
             failures = try await task.value
         } catch {
-            let s = try? session.journal.summary()
+            let s = try? await session.journal.summary()
             // The run may have planned rows before it threw — a read must reflect them.
             bus.publish(DaemonEvent("runFinished", ["filesArchived": "\(s?.archived ?? 0)",
                                                     "filesTotal": "\(s?.total ?? 0)", "blobsFailed": "0",
@@ -705,20 +716,23 @@ public actor DaemonService {
                 try? session.journal.recordFileFault(f.files.map(\.id), error: f.kind.message)
             }
         }
-        try writeStatus(session)
+        // One count for the status file and the event. A failed read is logged, never thrown: throwing here
+        // skipped `runFinished`, and the app sat on "syncing" for a run that had ended.
+        let s: (total: Int, archived: Int, blobsVerified: Int)?
+        do { s = try await session.journal.summary() } catch { s = nil; log("DaemonService: run summary unavailable — \(error)") }
+        if let s { writeStatus(session, s) }
         // A run just changed what's in S3, so the cached usage total is now stale — EXPIRE it, don't drop
         // it. The next read (a getStatus poll, or the NEXT run's quota ceiling) then does a fresh listing
         // rather than enforcing against a pre-deposit number; meanwhile `getStatus` keeps serving the last
         // figure (see `cachedUsageBytes`) instead of blanking the storage meter after every run.
         expireCachedUsage()
-        let s = try session.journal.summary()
         // `blobsFailed` counts FAULTS; a Stop is reported separately so the UI can say "stopped" rather than
         // "N couldn't upload" about work the user ended on purpose.
         let stopped = failures.filter(\.kind.isStopped)
         // The run rewrote rows (planned → archived/failed), so it is a tree edit like any other: bump the
         // revision and send it along, so the app's optimistic rows for THIS deposit hold until a read that
         // has the run's outcome in it — and not a moment longer.
-        bus.publish(DaemonEvent("runFinished", ["filesArchived": "\(s.archived)", "filesTotal": "\(s.total)",
+        bus.publish(DaemonEvent("runFinished", ["filesArchived": "\(s?.archived ?? 0)", "filesTotal": "\(s?.total ?? 0)",
                                                 "blobsFailed": "\(failures.count - stopped.count)",
                                                 "filesStopped": "\(stopped.reduce(0) { $0 + $1.files.count })",
                                                 "depositId": depositId ?? "", "revision": "\(nextTreeRevision())"]))
@@ -743,9 +757,6 @@ public actor DaemonService {
         // Recorded so `restoreRowDTOs` can derive `staleAfterSeconds` from the REAL cadence — the app must
         // not have to guess at (or hardcode) how often we promise to look at a transfer.
         self.intervalSeconds = Int(intervalSeconds)
-        // Seed status.json so the UI has something on first connect — only when signed in; a signed-out
-        // daemon has no user whose status it could write.
-        if let session { try writeStatus(session) }
         // Restores get their OWN beat, in a child task — not a turn after the upload pass in this loop.
         // Sharing the loop meant a stuck-or-slow upload pass delayed every restore tick by its own
         // duration, and the daemon-level pause (PAUSE.md) turned that delay unbounded: a run parked on the
@@ -854,10 +865,12 @@ public actor DaemonService {
         return MultiSource(folders + platform)
     }
 
-    func writeStatus(_ session: UserSession) throws {
-        let s = try session.journal.summary()
+    /// This user's run-summary file. Best-effort: the socket is the live source, so a failed write is logged
+    /// rather than allowed to cut a run short.
+    private func writeStatus(_ session: UserSession, _ s: (total: Int, archived: Int, blobsVerified: Int)) {
         let json = "{\"filesTotal\":\(s.total),\"filesArchived\":\(s.archived),\"blobsVerified\":\(s.blobsVerified)}\n"
-        try json.write(toFile: session.statusPath, atomically: true, encoding: .utf8)
+        do { try json.write(toFile: session.statusPath, atomically: true, encoding: .utf8) }
+        catch { log("DaemonService: couldn't write \(session.statusPath) — \(error)") }
     }
 
     // MARK: - wakeable sleep (interval, or sooner on trigger)
@@ -1015,7 +1028,8 @@ public actor DaemonService {
     /// The ack of a command that EDITED THE TREE — carries the revision the edit landed at, so the app knows
     /// which `listFiles` read is the first that reflects it (see `treeRevision`).
     private struct TreeAckDTO: Encodable { let ok: Bool; let revision: Int }
-    /// `listFiles`' answer: the rows, and the revision they were read at (taken in the same actor turn).
+    /// `listFiles`' answer: the rows, and the revision taken just before they were read — they reflect at
+    /// least that revision (see the `listFiles` handler).
     private struct FilesDTO: Encodable { let revision: Int; let files: [FileDTO] }
     /// `deposit`/`depositPhotos`' ack. The batch id is minted BEFORE the fire-and-forget run so the app can
     /// tie its optimistic rows to the `runStarted`/`runFinished` that will carry the same id.
@@ -1304,13 +1318,17 @@ public actor DaemonService {
     }
 
     private func restoreRowDTOs(_ session: UserSession) throws -> [RestoreRowDTO] {
-        // One read of the tree, then an in-memory lookup — a vault is personal-scale, and this beats a
-        // per-row query. A row whose file was since deleted keeps its recorded destination as its name, so
-        // a completed transfer never disappears from history just because the vault copy was tidied away.
-        let paths = Dictionary(try session.journal.listFiles().map { ($0.id, $0.relativePath) },
+        // Each transfer is named by its file's CURRENT vault path (rows are keyed by id, and a file can be
+        // renamed mid-transfer), looked up for just these files. It used to read the whole tree to find a
+        // handful of names — on every Transfers refresh, inline on this actor, which at sign-in on a big vault
+        // was half of what held `unlockVault` past its deadline (2026-09-27). A row whose file was since
+        // deleted keeps its recorded destination as its name, so a completed transfer never disappears from
+        // history just because the vault copy was tidied away.
+        let restores = try session.journal.listRestores()
+        let paths = Dictionary(try session.journal.files(ids: Array(Set(restores.map(\.fileId)))).map { ($0.id, $0.relativePath) },
                                uniquingKeysWith: { a, _ in a })
         let now = Int(Date().timeIntervalSince1970)
-        return try session.journal.listRestores().map { r in
+        return restores.map { r in
             RestoreRowDTO(id: r.id, fileId: r.fileId,
                           relativePath: paths[r.fileId] ?? URL(fileURLWithPath: r.out).lastPathComponent,
                           out: r.out, state: r.state.rawValue, tier: r.tier.rawValue, jobId: r.jobId,
@@ -1471,7 +1489,8 @@ public actor DaemonService {
                                               permanentlyFailedBlobs: 0, sources: [], bytesStored: nil,
                                               staleAfterSeconds: RestoreRow.staleAfter(intervalSeconds: intervalSeconds)))
             }
-            let s = try session.journal.summary()
+            let s = try await session.journal.summary()
+            try requireStillCurrent(session, "getStatus")
             // Keep `bytesStored` eventually-correct without ever waiting on S3: if the cache is cold/stale,
             // start a background listing that fills it for the NEXT getStatus. This one answers now.
             if cachedUsageIfFresh(session.prefix) == nil { refreshUsageInBackground(session) }
@@ -1500,14 +1519,22 @@ public actor DaemonService {
             return AnyEncodable(try sourceDTOs(session))
         case "listFiles":
             // The browsable tree, straight from THIS USER'S journal — paths/sizes/status, no S3, no thaw.
-            // Rows + the revision they were read at, in ONE actor turn — so the revision is exactly the
-            // tree's state these rows describe (see `treeRevision`). Signed out ⇒ empty, revision still real.
+            // Signed out ⇒ empty, revision still real.
             guard let session else { return AnyEncodable(FilesDTO(revision: treeRevision, files: [])) }
-            return AnyEncodable(FilesDTO(revision: treeRevision, files: try session.journal.listFiles().map {
+            // The revision is taken BEFORE the read, which runs on the journal's read lane while this actor
+            // serves everything else (see `Journal.reader`). Every edit at or below it committed before the
+            // read began, so the rows reflect at least that revision — possibly an edit or two past it. That
+            // is the direction the app's overlay tolerates (re-applying an edit a tree already shows is a
+            // no-op); the reverse, a revision newer than its rows, is the one that snapped moved folders back
+            // (2026-09-03).
+            let revision = treeRevision
+            let rows = try await session.journal.listFiles()
+            try requireStillCurrent(session, "listFiles")
+            return AnyEncodable(FilesDTO(revision: revision, files: rows.map {
                 FileDTO(id: $0.id, relativePath: $0.relativePath, size: $0.size, status: $0.status.rawValue, blobId: $0.blobId,
                         lastAttemptAt: $0.lastAttemptAt, error: $0.error, sourcePath: $0.sourcePath,
                         depositId: $0.depositId, failureKind: $0.failureKind?.rawValue,
-                        modifiedAt: $0.metadata?.modifiedAt, createdAt: $0.metadata?.createdAt)
+                        modifiedAt: $0.modifiedAt, createdAt: $0.createdAt)
             }))
         case "listDeposits":
             // Every batch the user has dropped or picked, newest first — the Uploads page's list. Signed
@@ -1756,7 +1783,8 @@ public actor DaemonService {
             } else {
                 throw ColdStorageError.invalidRequest("previewDeposit requires params.src (paths) or params.assetIds")
             }
-            let live = try session.journal.occupiedPaths()
+            let live = try await session.journal.occupiedPaths()
+            try requireStillCurrent(session, "previewDeposit")
             return AnyEncodable(DepositPreviewDTO(
                 items: preview.paths.map {
                     DepositPreviewItemDTO(relativePath: $0.relativePath, size: $0.size, exists: live.contains($0.relativePath),

@@ -71,8 +71,8 @@ import Foundation
         #expect(bFiles?.isEmpty == true)      // ← the leak. B must see an EMPTY vault.
 
         // A's row is not gone — it is still safely in A's own journal, where it belongs.
-        #expect(try a.journal.listFiles().count == 1)
-        #expect(try b.journal.listFiles().isEmpty)
+        #expect(try await a.journal.listFiles().count == 1)
+        #expect(try await b.journal.listFiles().isEmpty)
     }
 
     /// The consequence I nearly missed: B also inherited A's **watched folders**, and the run loop kept

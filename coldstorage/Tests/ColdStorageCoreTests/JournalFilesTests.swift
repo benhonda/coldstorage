@@ -20,31 +20,31 @@ import Foundation
 
     /// A scan bigger than one write chunk lands whole, and a revive scoped to the scan's ids reaches the ids
     /// in every chunk — chunking is a lock-hold bound, never a change in what a scan means.
-    @Test func upsertChunksAreInvisibleToTheResult() throws {
+    @Test func upsertChunksAreInvisibleToTheResult() async throws {
         let j = try tempJournal()
         let n = Journal.upsertChunk * 2 + 7
         let items = (0..<n).map { item("f\($0)", path: "dir/f\($0)", size: 1) }
         try j.upsert(items)
-        #expect(try j.listFiles().count == n)
+        #expect(try await j.listFiles().count == n)
         // Tombstone one row from the first chunk and one from the last; an explicit re-deposit revives both.
         try j.deletePath("dir/f1")
         try j.deletePath("dir/f\(n - 1)")
-        #expect(try j.listFiles().count == n - 2)
+        #expect(try await j.listFiles().count == n - 2)
         try j.upsert(items, reviving: true, depositId: "d1")
-        #expect(try j.listFiles().count == n)
+        #expect(try await j.listFiles().count == n)
     }
 
-    @Test func emptyJournalListsNothing() throws {
-        #expect(try tempJournal().listFiles().isEmpty)
+    @Test func emptyJournalListsNothing() async throws {
+        #expect(try await tempJournal().listFiles().isEmpty)
     }
 
-    @Test func listsUpsertedFilesPathOrdered() throws {
+    @Test func listsUpsertedFilesPathOrdered() async throws {
         let j = try tempJournal()
         try j.upsert([
             item("b", path: "Photos/sunset.jpg", size: 30),
             item("a", path: "Documents/lease.pdf", size: 10),
         ])
-        let rows = try j.listFiles()
+        let rows = try await j.listFiles()
         #expect(rows.map(\.relativePath) == ["Documents/lease.pdf", "Photos/sunset.jpg"])  // ORDER BY relativePath
         let lease = try #require(rows.first)
         #expect(lease.id == "a")
@@ -53,11 +53,11 @@ import Foundation
         #expect(lease.blobId == nil)        // no blob until archived
     }
 
-    @Test func archivedFileSurfacesBlobAndStatus() throws {
+    @Test func archivedFileSurfacesBlobAndStatus() async throws {
         let j = try tempJournal()
         try j.upsert([item("x", path: "a/b.jpg", size: 42)])
         try j.markFileArchived("x", blobId: "blob-1", offset: 0, length: 58, firstFrame: 0, plaintextSha256: "sha", size: 42)
-        let row = try #require(try j.listFiles().first)
+        let row = try #require(try await j.listFiles().first)
         #expect(row.status == .archived)
         #expect(row.blobId == "blob-1")
     }
@@ -66,16 +66,17 @@ import Foundation
     /// `markFileArchived` MUST overwrite it with the real plaintext byte count measured during staging —
     /// otherwise the browser shows "0 B" for every photo. `length` is the larger ciphertext span and must
     /// NOT leak into `size`.
-    @Test func archiveOverwritesUnknownSizeWithRealPlaintextBytes() throws {
+    @Test func archiveOverwritesUnknownSizeWithRealPlaintextBytes() async throws {
         let j = try tempJournal()
         try j.upsert([item("p", path: "Photos/IMG_8111.HEIC", size: 0)])   // 0 = unknown at discovery
-        #expect(try #require(try j.listFiles().first).size == 0)
+        #expect(try #require(try await j.listFiles().first).size == 0)
         try j.markFileArchived("p", blobId: "b", offset: 0, length: 2_097_168, firstFrame: 0, plaintextSha256: "sha", size: 2_097_152)
-        #expect(try #require(try j.listFiles().first).size == 2_097_152)    // real plaintext, not the 0 nor the ciphertext length
+        #expect(try #require(try await j.listFiles().first).size == 2_097_152)    // real plaintext, not the 0 nor the ciphertext length
     }
 
-    /// The file's metadata captured at upsert survives to `listFiles` intact; a source with none → empty.
-    @Test func metadataRoundTrips() throws {
+    /// The file's metadata captured at upsert survives intact for restore (`fileMetadata`), and the tree
+    /// carries its two dates (read out of the JSON in SQL) — nil where the source had none.
+    @Test func metadataRoundTrips() async throws {
         let j = try tempJournal()
         let m = FileMetadata(modifiedAt: 1_700_000_000, createdAt: 1_600_000_000, mode: 0o644, xattrs: ["user.tag": Data([1, 2])])
         try j.upsert([
@@ -83,19 +84,22 @@ import Foundation
                        isFavorite: false, metadata: m, open: { AsyncThrowingStream { $0.finish() } }),
             item("plain", path: "b.jpg", size: 1),
         ])
-        let rows = try j.listFiles()
-        #expect(rows.first(where: { $0.id == "dated" })?.metadata == m)
-        #expect(rows.first(where: { $0.id == "plain" })?.metadata == FileMetadata())
+        let rows = try await j.listFiles()
+        let dated = try #require(rows.first { $0.id == "dated" })
+        #expect(dated.modifiedAt == 1_700_000_000 && dated.createdAt == 1_600_000_000)
+        let plain = try #require(rows.first { $0.id == "plain" })
+        #expect(plain.modifiedAt == nil && plain.createdAt == nil)
         #expect(try j.fileMetadata("dated") == m)
+        #expect(try j.fileMetadata("plain") == FileMetadata())
     }
 
     /// A permanently-failed blob marks its files `failed` so the UI's ⚠ is journal truth, not a UI guess —
     /// it survives the next `listFiles` refresh (and a restart). Mirrors `DaemonService.performRun`.
-    @Test func markFilesFailedPersistsFailedStatus() throws {
+    @Test func markFilesFailedPersistsFailedStatus() async throws {
         let j = try tempJournal()
         try j.upsert([item("x", path: "a/b.jpg", size: 1), item("y", path: "a/c.jpg", size: 2)])
         try j.markFilesFailed(["x", "y"], kind: .permanent, error: "S3 AccessDenied")
-        let rows = try j.listFiles()
+        let rows = try await j.listFiles()
         #expect(rows.allSatisfy { $0.status == .failed })
         // The KIND is what the app renders; the message stays as developer detail.
         #expect(rows.allSatisfy { $0.failureKind == .permanent && $0.error == "S3 AccessDenied" })
@@ -103,25 +107,25 @@ import Foundation
 
     /// A later successful re-archive overwrites a prior `failed` back to `archived` (self-correcting after a
     /// transient-looking config fix on restart). And an empty id set is a no-op.
-    @Test func reArchiveClearsFailedAndEmptyIsNoop() throws {
+    @Test func reArchiveClearsFailedAndEmptyIsNoop() async throws {
         let j = try tempJournal()
         try j.upsert([item("x", path: "a/b.jpg", size: 1)])
         try j.markFilesFailed([], kind: .permanent, error: "ignored")              // no-op, doesn't throw
-        #expect(try #require(try j.listFiles().first).status == .planned)
+        #expect(try #require(try await j.listFiles().first).status == .planned)
         try j.markFilesFailed(["x"], kind: .permanent, error: "S3 AccessDenied")
         try j.markFileArchived("x", blobId: "blob-1", offset: 0, length: 1, firstFrame: 0, plaintextSha256: "sha", size: 1)
-        #expect(try #require(try j.listFiles().first).status == .archived)
+        #expect(try #require(try await j.listFiles().first).status == .archived)
     }
 
     /// A failed row holds no bytes, so it occupies nothing: a drop over its path is a plain upload that
     /// reclaims the row, not a collision to Keep Both / Replace / Skip. Live rows and folder markers still
     /// collide; tombstones never did.
-    @Test func aFailedRowDoesNotOccupyItsPath() throws {
+    @Test func aFailedRowDoesNotOccupyItsPath() async throws {
         let j = try tempJournal()
         try j.upsert([item("f", path: "f.jpg", size: 1), item("a", path: "a.jpg", size: 1), item("g", path: "g.jpg", size: 1)])
         try j.markFilesFailed(["f"], kind: .interrupted)
         try j.deletePath("g.jpg")
-        #expect(try j.occupiedPaths() == ["a.jpg"])
+        #expect(try await j.occupiedPaths() == ["a.jpg"])
         // Re-dropping over the failed row reclaims it in place: same id, planned again, source recorded.
         try j.upsert([IngestItem(id: "f", relativePath: "f.jpg", size: 1, content: .sha256("h-f"), isFavorite: false, sourcePath: "/Users/me/f.jpg",
                                  open: { AsyncThrowingStream { $0.finish() } })], depositId: "d-new")
@@ -134,26 +138,26 @@ import Foundation
     /// `sourcePath` rides on the row and is COALESCEd on re-upsert: a source that knows the path sets it,
     /// one that doesn't (a Photos asset, a synthetic item) must not erase it — that path is the only thing
     /// that makes a later "Try again" possible without asking the user where the file went.
-    @Test func sourcePathPersistsAndSurvivesAPathlessUpsert() throws {
+    @Test func sourcePathPersistsAndSurvivesAPathlessUpsert() async throws {
         let j = try tempJournal()
         try j.upsert([IngestItem(id: "x", relativePath: "a/b.jpg", size: 1, content: .sha256("h"), isFavorite: false, sourcePath: "/Users/me/b.jpg",
                                  open: { AsyncThrowingStream { $0.finish() } })])
-        #expect(try #require(try j.listFiles().first).sourcePath == "/Users/me/b.jpg")
+        #expect(try #require(try await j.listFiles().first).sourcePath == "/Users/me/b.jpg")
         try j.upsert([item("x", path: "a/b.jpg", size: 1)])   // helper carries no sourcePath
-        #expect(try #require(try j.listFiles().first).sourcePath == "/Users/me/b.jpg")
+        #expect(try #require(try await j.listFiles().first).sourcePath == "/Users/me/b.jpg")
         try j.setSourcePath(id: "x", "/Volumes/T7/b.jpg")     // the user's Locate…
         #expect(try #require(try j.files(ids: ["x"]).first).sourcePath == "/Volumes/T7/b.jpg")
     }
 
     /// "Try again" requeues ONLY failed rows, as a fresh claim (no stale error, no attempt clock) — an
     /// archived file has nothing to retry and a queued one is already in flight. Returns exactly what flipped.
-    @Test func requeueFailedFilesFlipsOnlyFailedRowsClean() throws {
+    @Test func requeueFailedFilesFlipsOnlyFailedRowsClean() async throws {
         let j = try tempJournal()
         try j.upsert([item("f", path: "f.jpg", size: 1), item("a", path: "a.jpg", size: 1), item("q", path: "q.jpg", size: 1)])
         try j.markFilesFailed(["f"], kind: .permanent, error: "boom")
         try j.markFileArchived("a", blobId: "b", offset: 0, length: 1, firstFrame: 0, plaintextSha256: "s", size: 1)
         #expect(try j.requeueFailedFiles(ids: ["f", "a", "q", "nope"]) == ["f"])
-        let byId = Dictionary(uniqueKeysWithValues: try j.listFiles().map { ($0.id, $0) })
+        let byId = Dictionary(uniqueKeysWithValues: try await j.listFiles().map { ($0.id, $0) })
         #expect(byId["f"]?.status == .planned)
         #expect(byId["f"]?.error == nil)
         #expect(byId["f"]?.lastAttemptAt == nil)

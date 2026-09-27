@@ -21,31 +21,31 @@ import Foundation
 
     /// id = the original relativePath at ingest. The browser's reorganize must rewrite the PATH while
     /// keeping that id — so we key lookups by id and assert the path moved under it.
-    private func path(of j: Journal, id: String) throws -> String? {
-        try j.listFiles().first { $0.id == id }?.relativePath
+    private func path(of j: Journal, id: String) async throws -> String? {
+        try await j.listFiles().first { $0.id == id }?.relativePath
     }
 
     // MARK: - move == rename (single file)
 
-    @Test func renameFileRewritesPathKeepsId() throws {
+    @Test func renameFileRewritesPathKeepsId() async throws {
         let j = try tempJournal()
         try j.upsert([item("Photos/sunset.jpg", path: "Photos/sunset.jpg")])
         try j.movePath(from: "Photos/sunset.jpg", to: "Photos/beach.jpg")
         // Path moved, but the stable id (the dedup key) is unchanged — a rescan won't re-upload it.
-        #expect(try path(of: j, id: "Photos/sunset.jpg") == "Photos/beach.jpg")
-        #expect(try j.listFiles().count == 1)
+        #expect(try await path(of: j, id: "Photos/sunset.jpg") == "Photos/beach.jpg")
+        #expect(try await j.listFiles().count == 1)
     }
 
-    @Test func moveFileToAnotherFolder() throws {
+    @Test func moveFileToAnotherFolder() async throws {
         let j = try tempJournal()
         try j.upsert([item("a/x.jpg", path: "a/x.jpg")])
         try j.movePath(from: "a/x.jpg", to: "b/x.jpg")
-        #expect(try path(of: j, id: "a/x.jpg") == "b/x.jpg")
+        #expect(try await path(of: j, id: "a/x.jpg") == "b/x.jpg")
     }
 
     // MARK: - folder move/rename (prefix sweep over descendants)
 
-    @Test func renameFolderSweepsDescendantsOnly() throws {
+    @Test func renameFolderSweepsDescendantsOnly() async throws {
         let j = try tempJournal()
         try j.upsert([
             item("Photos/2024/a.jpg", path: "Photos/2024/a.jpg"),
@@ -53,22 +53,22 @@ import Foundation
             item("Photos/2023/c.jpg", path: "Photos/2023/c.jpg"),   // sibling — must NOT move
         ])
         try j.movePath(from: "Photos/2024", to: "Photos/archive")
-        #expect(try path(of: j, id: "Photos/2024/a.jpg") == "Photos/archive/a.jpg")
-        #expect(try path(of: j, id: "Photos/2024/sub/b.jpg") == "Photos/archive/sub/b.jpg")
-        #expect(try path(of: j, id: "Photos/2023/c.jpg") == "Photos/2023/c.jpg")  // untouched
+        #expect(try await path(of: j, id: "Photos/2024/a.jpg") == "Photos/archive/a.jpg")
+        #expect(try await path(of: j, id: "Photos/2024/sub/b.jpg") == "Photos/archive/sub/b.jpg")
+        #expect(try await path(of: j, id: "Photos/2023/c.jpg") == "Photos/2023/c.jpg")  // untouched
     }
 
     /// A folder name that is a string PREFIX of a sibling ("a" vs "ab/…") must not bleed across — the sweep
     /// keys on the `from/` boundary, not a bare `startsWith`.
-    @Test func prefixBoundaryDoesNotBleed() throws {
+    @Test func prefixBoundaryDoesNotBleed() async throws {
         let j = try tempJournal()
         try j.upsert([
             item("a/one.jpg", path: "a/one.jpg"),
             item("ab/two.jpg", path: "ab/two.jpg"),
         ])
         try j.movePath(from: "a", to: "z")
-        #expect(try path(of: j, id: "a/one.jpg") == "z/one.jpg")
-        #expect(try path(of: j, id: "ab/two.jpg") == "ab/two.jpg")  // "ab" is not under "a/"
+        #expect(try await path(of: j, id: "a/one.jpg") == "z/one.jpg")
+        #expect(try await path(of: j, id: "ab/two.jpg") == "ab/two.jpg")  // "ab" is not under "a/"
     }
 
     @Test func moveIntoSelfThrows() throws {
@@ -77,28 +77,28 @@ import Foundation
         #expect(throws: ColdStorageError.self) { try j.movePath(from: "docs", to: "docs/inner") }
     }
 
-    @Test func moveToSameIsNoop() throws {
+    @Test func moveToSameIsNoop() async throws {
         let j = try tempJournal()
         try j.upsert([item("a/x.jpg", path: "a/x.jpg")])
         try j.movePath(from: "a/x.jpg", to: "a/x.jpg")  // no-op, no throw
-        #expect(try path(of: j, id: "a/x.jpg") == "a/x.jpg")
+        #expect(try await path(of: j, id: "a/x.jpg") == "a/x.jpg")
     }
 
     // MARK: - delete (tombstone)
 
-    @Test func deleteFileTombstonesButKeepsRowAndBlob() throws {
+    @Test func deleteFileTombstonesButKeepsRowAndBlob() async throws {
         let j = try tempJournal()
         try j.upsert([item("a/x.jpg", path: "a/x.jpg")])
         try j.markFileArchived("a/x.jpg", blobId: "blob-1", offset: 0, length: 1, firstFrame: 0, plaintextSha256: "sha", size: 1)
         try j.deletePath("a/x.jpg")
         // Gone from the browse tree + the count…
-        #expect(try j.listFiles().isEmpty)
-        #expect(try j.summary().total == 0)
+        #expect(try await j.listFiles().isEmpty)
+        #expect(try await j.summary().total == 0)
         // …but the row + its blob mapping survive (so the blob can be reclaimed once every member is deleted): restore can still locate it.
         #expect(try j.fileMapping("a/x.jpg")?.blobId == "blob-1")
     }
 
-    @Test func deleteFolderTombstonesSubtreeOnly() throws {
+    @Test func deleteFolderTombstonesSubtreeOnly() async throws {
         let j = try tempJournal()
         try j.upsert([
             item("trash/a.jpg", path: "trash/a.jpg"),
@@ -106,6 +106,6 @@ import Foundation
             item("keep/c.jpg", path: "keep/c.jpg"),
         ])
         try j.deletePath("trash")
-        #expect(try j.listFiles().map(\.relativePath) == ["keep/c.jpg"])
+        #expect(try await j.listFiles().map(\.relativePath) == ["keep/c.jpg"])
     }
 }
