@@ -103,7 +103,7 @@ import Crypto
         await f.daemon.beginSession(f.session)
         await f.daemon.deposit(paths: [f.drop.path], into: "")
         let batch = try #require(try f.session.journal.listDeposits().first)
-        #expect(try f.session.journal.depositFiles(batch.id, statuses: [.archived]).count == 3)
+        #expect(try await f.session.journal.depositFiles(batch.id, statuses: [.archived]).count == 3)
         // A fourth file of the same batch that a permanent fault left behind (journaled the way the engine
         // would have: claimed by the batch, with its source on disk, then marked failed).
         let extra = f.drop.appendingPathComponent("d3/f3.bin")
@@ -129,8 +129,8 @@ import Crypto
         }
         #expect(settled.state == .done && settled.mode == .retry)
         #expect(try f.session.journal.isFileArchived(failedId))
-        #expect(try f.session.journal.depositFiles(batch.id, statuses: [.failed]).isEmpty)
-        #expect(try f.session.journal.depositFiles(batch.id, statuses: [.archived]).count == 4)
+        #expect(try await f.session.journal.depositFiles(batch.id, statuses: [.failed]).isEmpty)
+        #expect(try await f.session.journal.depositFiles(batch.id, statuses: [.archived]).count == 4)
     }
 
     /// "Locate folder…" on a batch: the user points at the folder the rows came from, and every row found

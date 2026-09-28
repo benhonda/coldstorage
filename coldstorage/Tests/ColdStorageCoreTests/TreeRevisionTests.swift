@@ -22,7 +22,7 @@ import Crypto
     private func json(_ daemon: DaemonService, _ id: Int, _ method: String, _ params: [String: String] = [:]) async throws -> [String: Any] {
         let line = await daemon.respond(to: ControlRequest(id: id, method: method, params: params))
         #expect(line.error == nil, "\(method): \(line.error ?? "")")
-        return try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(line.result)) as? [String: Any])
+        return try #require(try line.wireResult() as? [String: Any])
     }
 
     @Test func acksAndReadsAgreeOnTheRevision() async throws {

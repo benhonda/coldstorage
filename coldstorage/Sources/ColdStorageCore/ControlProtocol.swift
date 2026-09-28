@@ -22,20 +22,29 @@ public struct AnyEncodable: Encodable, @unchecked Sendable {
     public func encode(to encoder: Encoder) throws { try _encode(encoder) }
 }
 
-/// Reply to one request. `result` XOR `error`; nil keys are omitted from the wire JSON.
-public struct ControlResponseLine: Encodable, Sendable {
+/// Reply to one request: a result XOR `error`; nil keys are omitted from the wire JSON. Not `Encodable` —
+/// `encoded()` is the one way onto the wire, so a `resultJSON` can't be silently dropped by a `JSONEncoder`.
+public struct ControlResponseLine: Sendable {
     public let id: Int
     public let result: AnyEncodable?
+    /// A result that is already JSON, written into the line as-is — for a reply `JSONEncoder` is too slow to
+    /// write (a `listFiles` page; see `FilesPageJSON`).
+    public let resultJSON: Data?
     public let error: String?
     public init(id: Int, result: AnyEncodable?, error: String?) {
-        self.id = id; self.result = result; self.error = error
+        self.id = id; self.result = result; self.resultJSON = nil; self.error = error
     }
-    private enum K: String, CodingKey { case id, result, error }
-    public func encode(to enc: Encoder) throws {
-        var c = enc.container(keyedBy: K.self)
-        try c.encode(id, forKey: .id)
-        if let result { try c.encode(result, forKey: .result) }
-        if let error { try c.encode(error, forKey: .error) }
+    public init(id: Int, resultJSON: Data) {
+        self.id = id; self.result = nil; self.resultJSON = resultJSON; self.error = nil
+    }
+
+    /// The line as it goes on the wire, without the newline.
+    public func encoded() throws -> Data {
+        var line = Data("{\"id\":\(id)".utf8)
+        if let resultJSON { line += Data(",\"result\":".utf8) + resultJSON }
+        else if let result { line += Data(",\"result\":".utf8) + (try JSONEncoder().encode(result)) }
+        if let error { line += Data(",\"error\":".utf8) + (try JSONEncoder().encode(error)) }
+        return line + Data("}".utf8)
     }
 }
 

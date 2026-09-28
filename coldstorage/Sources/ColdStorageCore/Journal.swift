@@ -344,6 +344,31 @@ public final class Journal: @unchecked Sendable {
             CREATE INDEX IF NOT EXISTS blob_members_fileId ON blob_members(fileId);
             CREATE INDEX IF NOT EXISTS files_depositId ON files(depositId);
             """)
+
+        // **The tree's change feed** (2026-09-27). Every row write stamps `rev` with the next number, so "what
+        // changed since I last looked" is one indexed range read (`filesPage`): the app loads the tree once, a
+        // page at a time, then fetches only what moved. Shipping the whole tree on every refresh stopped
+        // working at 903,751 files — a 556 MiB line, past what the app's JavaScript can even hold as a string.
+        // Stamped by TRIGGERS, not by each write path: there are two dozen of those, and one that forgot would
+        // be a change the app never sees. Rows are never physically deleted (a deletion is `deletedAt`), so a
+        // tombstone is just another stamped change. Rows from before this start at 0; a fresh read starts at
+        // -1 (`FileCursor.start`).
+        if !(try run("PRAGMA table_info(files)").contains { ($0["name"] as? String) == "rev" }) {
+            try exec("ALTER TABLE files ADD COLUMN rev INTEGER NOT NULL DEFAULT 0")
+        }
+        // Moves, renames, deletes and new folders find a subtree through this (`subtreeClause`) instead of
+        // testing every row: ~14 ms for a 177k-file folder on a 960k-row journal, where the scan was ~370 ms
+        // inside every one of those edits.
+        try exec("CREATE INDEX IF NOT EXISTS files_relativePath ON files(relativePath)")
+        try exec("""
+            CREATE INDEX IF NOT EXISTS files_rev ON files(rev);
+            CREATE TRIGGER IF NOT EXISTS files_rev_insert AFTER INSERT ON files BEGIN
+              UPDATE files SET rev = (SELECT max(rev) FROM files) + 1 WHERE rowid = NEW.rowid;
+            END;
+            CREATE TRIGGER IF NOT EXISTS files_rev_update AFTER UPDATE ON files WHEN NEW.rev = OLD.rev BEGIN
+              UPDATE files SET rev = (SELECT max(rev) FROM files) + 1 WHERE rowid = NEW.rowid;
+            END;
+            """)
     }
 
     /// Give every existing failure a kind and a batch. One-shot, gated on `files.failureKind`'s absence.
@@ -697,12 +722,10 @@ public final class Journal: @unchecked Sendable {
     public func createFolder(path: String) throws {
         lock.lock(); defer { lock.unlock() }
         // Skip if any LIVE row already sits AT the path (the marker exists) or UNDER it (a real file already
-        // implies the folder) — so we never stack a redundant marker. `substr(...,1,len+1)` is the same
-        // prefix test movePath/deletePath use (no LIKE-wildcard escaping).
-        let exists = try run("""
-            SELECT 1 FROM files
-            WHERE (relativePath=?1 OR substr(relativePath, 1, length(?1) + 1) = ?2) AND deletedAt IS NULL LIMIT 1
-            """, [.text(path), .text("\(path)/")])
+        // implies the folder) — so we never stack a redundant marker.
+        var binds: [Bind] = []
+        let subtree = Self.subtreeClause(path, into: &binds)
+        let exists = try run("SELECT 1 FROM files WHERE \(subtree) AND deletedAt IS NULL LIMIT 1", binds)
         guard exists.isEmpty else { return }
         try run("""
             INSERT INTO files(id, relativePath, size, contentHash, status) VALUES(?1,?2,0,'',?3)
@@ -840,12 +863,14 @@ public final class Journal: @unchecked Sendable {
     }
 
     /// A deposit's own rows in the given statuses — what a `.retry`-mode replay re-ingests (`planned`: the
-    /// rows "Try again" just requeued, or an interrupted retry left mid-way).
-    public func depositFiles(_ id: String, statuses: [FileStatus]) throws -> [FileRow] {
+    /// rows "Try again" just requeued, or an interrupted retry left mid-way). On the read lane (see `reader`):
+    /// a batch can be a whole 56k-file drop.
+    public func depositFiles(_ id: String, statuses: [FileStatus]) async throws -> [FileRow] {
         guard !statuses.isEmpty else { return [] }
-        lock.lock(); defer { lock.unlock() }
-        return try fileRows("WHERE deletedAt IS NULL AND depositId=? AND status IN (\(Self.marks(statuses.map(\.rawValue)))) ORDER BY relativePath",
-                            [.text(id)] + statuses.map { .text($0.rawValue) })
+        return try await read { conn in
+            try self.fileRows("WHERE deletedAt IS NULL AND depositId=? AND status IN (\(Self.marks(statuses.map(\.rawValue)))) ORDER BY relativePath",
+                              [.text(id)] + statuses.map { .text($0.rawValue) }, on: conn)
+        }
     }
 
     /// Tombstone every `failed` row of a deposit — the Uploads page's "Remove these" on a batch that
@@ -1115,6 +1140,84 @@ public final class Journal: @unchecked Sendable {
         try await read { conn in try self.fileRows("WHERE deletedAt IS NULL ORDER BY relativePath", on: conn) }
     }
 
+    /// A reader's place in the tree's change feed: the last row it has, as (rev, rowid). Rows are read in
+    /// that order, so everything after the cursor is exactly what changed since the reader last looked — or,
+    /// from `.start`, the whole tree. Only rows from before the feed existed share a `rev` (0); the rowid
+    /// is what orders them.
+    public struct FileCursor: Sendable, Equatable {
+        public let rev: Int
+        public let rowid: Int
+        public init(rev: Int, rowid: Int) { self.rev = rev; self.rowid = rowid }
+        public static let start = FileCursor(rev: -1, rowid: 0)
+    }
+
+    /// One page of the change feed (`filesPage`).
+    public struct FilesPage: Sendable {
+        /// Live rows written after the cursor, oldest change first.
+        public let files: [FileRow]
+        /// Ids tombstoned after the cursor: a reader holding them drops them.
+        public let removed: [String]
+        /// Where this page ends, and the next read starts. The cursor asked with, when nothing changed.
+        public let cursor: FileCursor
+        /// More rows are waiting past `cursor`.
+        public let more: Bool
+        /// The newest stamp in the tree as this page was read.
+        public let head: Int
+    }
+
+    /// Up to `limit` rows written after `after`, oldest change first — on the read lane, in one snapshot.
+    /// Each page is at most two seeks (the rest of the pre-feed group, then everything newer), so a page deep
+    /// into a 900k-row tree costs what the first one does.
+    ///
+    /// Tombstones matter only to a reader that may hold the row. A fresh load (from `.start`) skips every
+    /// tombstone stamped at or before the head it began at, and passes that head back as `knownDeletedUpTo`
+    /// on its later pages; a catch-up read passes nil and hears about every deletion.
+    public func filesPage(after: FileCursor, knownDeletedUpTo: Int?, limit: Int) async throws -> FilesPage {
+        try await read { conn in
+            try self.exec("BEGIN;", on: conn)
+            defer { try? self.exec("COMMIT;", on: conn) }
+            var head = 0
+            try self.each("SELECT coalesce(max(rev), 0) FROM files", on: conn) { head = Self.int($0, 0) ?? 0 }
+            let skipDeletedUpTo = knownDeletedUpTo ?? (after == .start ? head : -1)
+            var files: [FileRow] = []
+            var removed: [String] = []
+            var cursor = after
+            var seen = 0
+            // `fileRowColumns` (0–11), then the row's place in the feed and whether it is a tombstone.
+            let columns = "\(Self.fileRowColumns), rev, rowid, deletedAt IS NOT NULL"
+            let take: (OpaquePointer) -> Void = { s in
+                seen += 1
+                guard seen <= limit else { return }   // the one extra row only says there is more
+                cursor = FileCursor(rev: Self.int(s, 12) ?? 0, rowid: Self.int(s, 13) ?? 0)
+                if Self.int(s, 14) == 1 {
+                    if cursor.rev > skipDeletedUpTo { removed.append(Self.text(s, 0) ?? "") }
+                } else {
+                    files.append(Self.fileRow(s))
+                }
+            }
+            // Only rows from before the feed share a rev (0): the triggers give every later write its own. So the
+            // rowid tiebreak is needed only inside that group — and asking for `rev = ?` with any other value let
+            // the planner, misled by that one ~900k-row group, walk the whole index and sort it (~300 ms per
+            // read on a 903k-row vault, to find nothing).
+            if after.rev == 0 {
+                try self.each("SELECT \(columns) FROM files WHERE rev = 0 AND rowid > ?1 ORDER BY rowid LIMIT ?2",
+                              [.int(after.rowid), .int(limit + 1)], on: conn, take)
+            }
+            if seen <= limit {
+                try self.each("SELECT \(columns) FROM files WHERE rev > ?1 ORDER BY rev, rowid LIMIT ?2",
+                              [.int(after.rev), .int(limit + 1 - seen)], on: conn, take)
+            }
+            return FilesPage(files: files, removed: removed, cursor: cursor, more: seen > limit, head: head)
+        }
+    }
+
+    /// The newest change stamp in the tree — the revision a tree edit's ack names, which the app's
+    /// optimistic overlay settles on once its reads have caught up to it (see `filesPage`).
+    public func maxRev() throws -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return (try run("SELECT coalesce(max(rev), 0) AS r FROM files").first?["r"] as? Int) ?? 0
+    }
+
     /// The same rows, by id — for `retryFiles`, which acts on a handful of rows the user pointed at and
     /// must not pay for (or lock around) a whole-tree read to find them. Tombstoned rows are excluded, as in
     /// `listFiles`: a file the user deleted is not something "Try again" may quietly bring back.
@@ -1128,21 +1231,24 @@ public final class Journal: @unchecked Sendable {
 
     /// Every live `failed` row — "retry everything" reads its scope from here, never from a client-sent id
     /// list (56k ids is a 2 MB request and past SQLite's bind limit; the journal already knows the set).
-    public func failedFiles() throws -> [FileRow] {
-        lock.lock(); defer { lock.unlock() }
-        return try fileRows("WHERE deletedAt IS NULL AND status=? ORDER BY relativePath", [.text(FileStatus.failed.rawValue)])
+    /// On the read lane (see `reader`), for the same reason: that set can be most of the vault.
+    public func failedFiles() async throws -> [FileRow] {
+        try await read { conn in
+            try self.fileRows("WHERE deletedAt IS NULL AND status=? ORDER BY relativePath", [.text(FileStatus.failed.rawValue)], on: conn)
+        }
     }
 
     /// The `failed` rows a watched folder owns: under its mount, and claimed by no deposit. "Try again" on
-    /// a watched-folder row on the Uploads page reads its scope from here.
-    public func failedFiles(underMount mount: String) throws -> [FileRow] {
-        lock.lock(); defer { lock.unlock() }
-        var binds: [Bind] = [.text(FileStatus.failed.rawValue)]
-        let covered = Self.coverageClause([mount], into: &binds)
-        return try fileRows("""
-            WHERE deletedAt IS NULL AND status=? AND depositId IS NULL AND (\(covered))
-            ORDER BY relativePath
-            """, binds)
+    /// a watched-folder row on the Uploads page reads its scope from here. On the read lane (see `reader`).
+    public func failedFiles(underMount mount: String) async throws -> [FileRow] {
+        try await read { conn in
+            var binds: [Bind] = [.text(FileStatus.failed.rawValue)]
+            let covered = Self.coverageClause([mount], into: &binds)
+            return try self.fileRows("""
+                WHERE deletedAt IS NULL AND status=? AND depositId IS NULL AND (\(covered))
+                ORDER BY relativePath
+                """, binds, on: conn)
+        }
     }
 
     /// `id IN (…)` batches. SQLite caps bound variables (32,766 by default) and a mass failure — one cause
@@ -1255,8 +1361,8 @@ public final class Journal: @unchecked Sendable {
     /// `upsert` dedup key — changing it would re-upload the file on the next scan) and the encrypted blob
     /// never move, only where the file appears in the browser. Sweeps `from` AND every descendant (`from/…`)
     /// in one statement. No-op when `from == to`; throws on an into-self move (a folder can't move under
-    /// itself). All `length`/`substr` run in SQLite so prefix math is consistent regardless of encoding;
-    /// the `substr(...,1,length+1)` test (vs `LIKE`) sidesteps wildcard escaping.
+    /// itself). The rewrite's `length`/`substr` run in SQLite so the prefix math is consistent regardless of
+    /// encoding; which rows it applies to is `subtreeClause`.
     public func movePath(from: String, to: String) throws {
         guard from != to else { return }
         guard !to.hasPrefix("\(from)/") else {
@@ -1265,10 +1371,9 @@ public final class Journal: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         // For the exact row, substr(path, length+1) is "" one past the end → maps to `to`; for "from/x" it
         // is "/x" → maps to "to/x". One expression covers the file-rename and the whole-folder sweep.
-        try run("""
-            UPDATE files SET relativePath = ?1 || substr(relativePath, length(?2) + 1)
-            WHERE relativePath = ?2 OR substr(relativePath, 1, length(?2) + 1) = ?3
-            """, [.text(to), .text(from), .text("\(from)/")])
+        var binds: [Bind] = [.text(to), .text(from)]
+        let subtree = Self.subtreeClause(from, into: &binds)
+        try run("UPDATE files SET relativePath = ? || substr(relativePath, length(?) + 1) WHERE \(subtree)", binds)
     }
 
     /// Tombstone the subtree rooted at `path` (`deletedAt` → now) — the journal edit behind a file/folder
@@ -1283,10 +1388,9 @@ public final class Journal: @unchecked Sendable {
     /// lifecycle, which stays true of a deleted file and is exactly what `reviveFiles` needs if it comes back.
     public func deletePath(_ path: String) throws {
         lock.lock(); defer { lock.unlock() }
-        try run("""
-            UPDATE files SET deletedAt = ?1
-            WHERE (relativePath = ?2 OR substr(relativePath, 1, length(?2) + 1) = ?3) AND deletedAt IS NULL
-            """, [.int(Int(Date().timeIntervalSince1970)), .text(path), .text("\(path)/")])
+        var binds: [Bind] = [.int(Int(Date().timeIntervalSince1970))]
+        let subtree = Self.subtreeClause(path, into: &binds)
+        try run("UPDATE files SET deletedAt = ? WHERE \(subtree) AND deletedAt IS NULL", binds)
     }
 
     /// Create the blob row **and record its membership**, in one transaction. Membership is written here —
@@ -1665,15 +1769,21 @@ public final class Journal: @unchecked Sendable {
         return rows.count
     }
 
-    /// Coverage: the file is at a mount root, or nested under it. Uses the SAME prefix test as
-    /// `movePath`/`deletePath`/`createFolder` — `substr(relativePath, 1, length(m)+1) = m + "/"` — NOT
-    /// `LIKE`, whose `_`/`%` are wildcards: a mount named `My_Photos` would otherwise "cover" a sibling
-    /// `MyXPhotos` and leave its files spinning forever. `0` (never covered) when there are no mounts.
-    /// Appends its binds to `binds`, in the order the returned clause consumes them.
+    /// Coverage: the file is at a mount root, or nested under it — `subtreeClause` for each mount. `0` (never
+    /// covered) when there are no mounts. Appends its binds to `binds`, in the order the clause consumes them.
     private static func coverageClause(_ mountPaths: [String], into binds: inout [Bind]) -> String {
         guard !mountPaths.isEmpty else { return "0" }
-        for m in mountPaths { binds.append(.text(m)); binds.append(.text(m)); binds.append(.text("\(m)/")) }
-        return mountPaths.map { _ in "(relativePath = ? OR substr(relativePath, 1, length(?) + 1) = ?)" }.joined(separator: " OR ")
+        return mountPaths.map { subtreeClause($0, into: &binds) }.joined(separator: " OR ")
+    }
+
+    /// The row is `path` or lies under it — the one "this path and everything below it" test (moves, deletes,
+    /// new folders, watched-folder coverage). A range the `files_relativePath` index answers, not a function of
+    /// every row: `0` is the byte after `/`, so `path/` ..< `path0` holds exactly the descendants — never a
+    /// sibling like `path 2`, `path.zip` or `path-old`. Not `LIKE`, whose `_`/`%` are wildcards: a mount named
+    /// `My_Photos` would "cover" `MyXPhotos`. Appends its binds to `binds`, in the order the clause consumes them.
+    private static func subtreeClause(_ path: String, into binds: inout [Bind]) -> String {
+        binds += [.text(path), .text("\(path)/"), .text("\(path)0")]
+        return "(relativePath = ? OR (relativePath >= ? AND relativePath < ?))"
     }
 
     /// Mark logical files `failed`, with WHY as a kind (what the app renders) and, optionally, the
@@ -1698,6 +1808,21 @@ public final class Journal: @unchecked Sendable {
                 WHERE status!=? AND id IN (\(Self.marks(chunk)))
                 """, [.text(FileStatus.failed.rawValue), .text(kind.rawValue), error.map(Bind.text) ?? .null,
                       .text(FileStatus.archived.rawValue)] + chunk.map { .text($0) })
+        } }
+    }
+
+    /// "Try again"'s verdict on failed rows whose recorded source is no longer on disk: still `failed`, now as
+    /// `.missingSource`. Only rows that are STILL failed: the retry read them and checked the disk off the
+    /// daemon actor, so by the time this lands a second Try again may have requeued one, or it may have been
+    /// archived — neither is this verdict's to overwrite.
+    public func markSourcesMissing(_ ids: [String]) throws {
+        guard !ids.isEmpty else { return }
+        lock.lock(); defer { lock.unlock() }
+        try transaction { for chunk in Self.chunks(ids) {
+            try run("""
+                UPDATE files SET failureKind=?, error=NULL, lastAttemptAt=CAST(strftime('%s','now') AS INTEGER)
+                WHERE status=? AND id IN (\(Self.marks(chunk)))
+                """, [.text(FileFailureKind.missingSource.rawValue), .text(FileStatus.failed.rawValue)] + chunk.map { .text($0) })
         } }
     }
 

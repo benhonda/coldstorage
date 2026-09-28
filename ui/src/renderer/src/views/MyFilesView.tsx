@@ -76,7 +76,11 @@ import { Page } from "../ui/layout.tsx";
 
 /** Whether `files` is a fact yet (derived in App from connection + daemon session + the read's own
  * state). Only `ready` may render the empty-vault hero; the others render what they are. */
-export type TreeState = { state: "connecting" } | { state: "failed"; reason: string } | { state: "ready" };
+export type TreeState =
+  | { state: "connecting" }
+  | { state: "loading"; loaded: number; total: number | null }
+  | { state: "failed"; reason: string }
+  | { state: "ready" };
 
 interface Props {
   api: ColdstoreApi;
@@ -1725,6 +1729,11 @@ const TreeStatus = ({ tree, onRetry }: { tree: TreeState; onRetry: () => void })
     ) : (
       <EmptyState icon="cloud_sync" title="Connecting to your vault…" />
     );
+  }
+  if (tree.state === "loading") {
+    // `total` counts files and `loaded` counts rows (empty-folder placeholders too), so the count is capped.
+    const so = tree.total ? `${Math.min(tree.loaded, tree.total).toLocaleString()} of ${tree.total.toLocaleString()}` : tree.loaded.toLocaleString();
+    return <EmptyState icon="cloud_sync" title="Loading your files…" description={`${so} so far.`} />;
   }
   if (tree.state === "failed") {
     return (

@@ -6,7 +6,7 @@
  * Keep this the ONLY place in the renderer that calls `api.request` for state-syncing reads, so the
  * "what triggers a refetch" policy lives in one spot.
  */
-import type { ColdstoreApi } from "../../../shared/ipc.ts";
+import { fileId, type ColdstoreApi, type ListedFile } from "../../../shared/ipc.ts";
 import { eventAction } from "./reducer.ts";
 import type { Store } from "./store.ts";
 
@@ -74,13 +74,50 @@ export const connectController = (api: ColdstoreApi, store: Store): Controller =
     syncing("sources", async () => store.dispatch({ type: "sourcesLoaded", sources: await api.request("listSources") })),
   );
 
+  // ── The tree: loaded once, a page at a time, then kept current by asking only for what changed ──
+  // Shipping the whole tree on every refresh stopped working at 903,751 files: one 556 MiB reply, past what
+  // this app's JavaScript can even hold as a string, and it was re-sent after every edit (2026-09-27). The
+  // daemon now answers `listFiles` from a change feed (see `FilesPage`). `tree` is every row it has sent, by
+  // file id; `cursor` is where the next catch-up starts, null when the next read has to be a fresh load
+  // (first connect, reconnect, a change of account). `generation` retires a load that an account change
+  // overtook midway, so its pages can never land in the next account's tree.
+  const tree = new Map<string, ListedFile>();
+  let cursor: string | null = null;
+  let generation = 0;
+  /** What the store was last handed, so a catch-up that changed nothing hands back the same array — and
+   * everything derived from it (the browser, the Uploads page) doesn't recompute over the whole vault. */
+  let shown: ListedFile[] = [];
+  const restartTree = (): void => {
+    cursor = null;
+    generation += 1;
+  };
+
   // The one read whose failure is ALSO state: the browser has to be able to say "couldn't load your files"
   // instead of rendering the empty-vault hero over a stale or empty slice (see `AppState.filesLoad`).
   const refreshFiles = coalesced(() =>
     syncing("files", async () => {
+      const gen = generation;
+      const after = cursor;
       try {
-        store.dispatch({ type: "filesLoaded", listed: await api.request("listFiles") });
+        if (after === null) tree.clear();
+        let page = await api.request("listFiles", after === null ? {} : { after });
+        const head = String(page.head);
+        let changed = after === null;
+        for (;;) {
+          if (gen !== generation) return; // overtaken — the refresh queued behind this one starts over
+          for (const f of page.files) tree.set(fileId(f), f);
+          for (const id of page.removed) tree.delete(id);
+          changed ||= page.files.length > 0 || page.removed.length > 0;
+          if (after === null) store.dispatch({ type: "filesLoading", loaded: tree.size });
+          if (!page.more) break;
+          page = await api.request("listFiles", after === null ? { after: page.cursor, head } : { after: page.cursor });
+        }
+        if (gen !== generation) return;
+        cursor = page.cursor;
+        if (changed) shown = [...tree.values()];
+        store.dispatch({ type: "filesLoaded", listed: { revision: page.revision, files: shown } });
       } catch (e) {
+        if (gen !== generation) return;
         store.dispatch({ type: "filesLoadFailed", error: e instanceof Error ? e.message : String(e) });
         throw e; // `syncing` still logs it
       }
@@ -139,14 +176,16 @@ export const connectController = (api: ColdstoreApi, store: Store): Controller =
     // nothing ever retried — the card stayed empty for the whole session. Same for an account switch,
     // where the reducer clears the slice and `beginSession` is again the only signal it's refillable.
     else if (name === "filesChanged") {
-      void refreshStatus();
-      void refreshFiles();
       // The FULL resync only when the tree changed OWNER (`beginSession`/`endSession` publish this with
       // `signedIn`/`signedOut`). A plain tree edit — a folder created, a move, a delete — touches none of
       // the excludes/downloads/batches, and re-reading all of them on every keystroke-adjacent edit was
       // five reads and five renders for one (2026-09-03: creating a folder made the rename lag).
       const e = eventAction(name, data);
       const ownerChanged = e.type === "event" && e.name === "filesChanged" && (e.data.signedIn != null || e.data.signedOut != null);
+      // A new owner's tree is a different tree: load it fresh, never catch up from the last one's cursor.
+      if (ownerChanged) restartTree();
+      void refreshStatus();
+      void refreshFiles();
       if (ownerChanged) {
         void refreshExcludes();
         // Downloads too — and this line is the fix for a real bug. `beginSession` publishes `filesChanged`,
@@ -181,6 +220,7 @@ export const connectController = (api: ColdstoreApi, store: Store): Controller =
     store.dispatch({ type: "connection", state });
     if (state === "connected") {
       void refreshStatus(); // resync the snapshot after a (re)connect
+      restartTree();
       void refreshFiles();
       void refreshExcludes();
       void refreshExcludeSuggestions();

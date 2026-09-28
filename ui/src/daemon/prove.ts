@@ -4,7 +4,7 @@
  *
  * Proves the contract the design brief asks for:
  *   1. `getStatus` round-trips (typed reply by id).
- *   2. `listFiles` round-trips (the browser's journal-backed tree read).
+ *   2. `listFiles` pages through the whole tree (the browser's journal-backed read).
  *   3. `triggerNow` produces `runStarted` … `runFinished` on the event stream.
  *   5. `listExcludes`/`addExclude`/`removeExclude` round-trip (defaults seeded; add then remove), and
  *      `listExcludeSuggestions` returns the opt-in packs with the shape `protocol.ts` promises.
@@ -17,7 +17,7 @@
  * Exit 0 = proven, 1 = failed/timeout. No assertions are faked: every check reads real daemon output.
  */
 import { DaemonClient, defaultSocketPath } from "./client.ts";
-import type { DaemonEventName } from "./protocol.ts";
+import type { DaemonEventName, ListedFile } from "./protocol.ts";
 
 const RUN_TIMEOUT_MS = 60_000;
 
@@ -64,25 +64,30 @@ log(
     `running=${status.running} permFailed=${status.permanentlyFailedBlobs}`,
 );
 
-// 2 — listFiles round-trips: the journal-backed browse tree (paths/sizes/status, no S3/no thaw).
-const listed = await client.request("listFiles");
-// `revision` is the app's reconciliation clock (see `ListedFiles`) — its absence would silently leave every
-// optimistic edit held forever, so it is proven here, not assumed.
-if (typeof listed.revision !== "number" || !Array.isArray(listed.files)) fail(`listFiles shape unexpected: ${JSON.stringify(listed)}`);
-const files = listed.files;
+// 2 — listFiles round-trips: the journal-backed browse tree, a page at a time (paths/sizes/status, no S3/no thaw).
+const files: ListedFile[] = [];
+let page = await client.request("listFiles", {});
+for (;;) {
+  // `revision` is the app's reconciliation clock and `cursor`/`more`/`head` are how it pages — a missing one
+  // would silently stall the tree, so the shape is proven here, not assumed.
+  if (typeof page.revision !== "number" || typeof page.cursor !== "string" || typeof page.more !== "boolean" ||
+      typeof page.head !== "number" || !Array.isArray(page.files) || !Array.isArray(page.removed)) {
+    fail(`listFiles page shape unexpected: ${JSON.stringify({ ...page, files: page.files?.length })}`);
+  }
+  files.push(...page.files);
+  if (!page.more) break;
+  page = await client.request("listFiles", { after: page.cursor, head: String(page.head) });
+}
+// `protocol.ts` is a hand-maintained mirror of what `FilesPageJSON.swift` writes: a field written under a name
+// the app doesn't declare is exactly the drift nothing else would notice.
+const declared = new Set(["relativePath", "id", "size", "status", "modifiedAt", "createdAt", "lastAttemptAt", "error", "sourcePath", "depositId", "failureKind"]);
 for (const f of files) {
-  if (typeof f.id !== "string" || typeof f.relativePath !== "string" || typeof f.size !== "number") {
+  if (typeof f.relativePath !== "string" || typeof f.size !== "number" || typeof f.status !== "string") {
     fail(`listFiles row malformed: ${JSON.stringify(f)}`);
   }
-  // Whole-shape check, same as the transfers one below and for the same reason: `protocol.ts` is a
-  // hand-maintained mirror of the Swift DTO. It matters most for the NULLABLE fields — Swift's synthesized
-  // encoder would omit a nil entirely while `ListedFile` declares `T | null`, so a key that quietly stops
-  // being emitted is exactly the drift nothing else would notice.
-  for (const k of ["status", "blobId", "date", "lastAttemptAt", "error"]) {
-    if (!(k in f)) fail(`listFiles row is missing '${k}' — protocol.ts and the daemon DTO have drifted`);
-  }
+  for (const k of Object.keys(f)) if (!declared.has(k)) fail(`listFiles row carries '${k}', which protocol.ts doesn't declare`);
 }
-log(`listFiles → ${files.length} file(s) at revision ${listed.revision}${files[0] ? ` (e.g. ${files[0].relativePath} ${files[0].status})` : ""}`);
+log(`listFiles → ${files.length} file(s) at revision ${page.revision}${files[0] ? ` (e.g. ${files[0].relativePath} ${files[0].status})` : ""}`);
 
 // 3 — watch the event stream, then triggerNow; expect runStarted … runFinished.
 const seen = new Set<DaemonEventName>();

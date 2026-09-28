@@ -206,8 +206,10 @@ objects carrying them.
   `restores`); file and part
   state machines are independent.
 
-> **Scale (140k+ files).** The journal is indexed for the hot interactive reads — `files(deletedAt,status)`,
-> `files(blobId)`, `blobs(status)`, `blob_members(fileId)` — and opened with `synchronous=NORMAL`, a 64 MiB
+> **Scale (140k+ files).** The journal is indexed for the hot interactive paths — `files(deletedAt,status)`,
+> `files(blobId)`, `blobs(status)`, `blob_members(fileId)`, `files(relativePath)` (a folder's subtree for a
+> move, rename, delete or new folder: sub-millisecond on a 960k-row vault, where a scan was 0.4–2.5 s),
+> `files(rev)` (the change feed, below) — and opened with `synchronous=NORMAL`, a 64 MiB
 > page cache and 256 MiB mmap. Without these, `summary()`'s three `count(*)` scans read the whole `files`
 > table off disk on every `getStatus`, under the one journal lock, stalling every command for tens of
 > seconds right after sign-in on a big vault (the 2026-08-25 "Couldn't load your files" incident — the tree
@@ -216,16 +218,18 @@ objects carrying them.
 > found, holding the lock for as long as 140k writes take while the actor's `listFiles` blocked on it — and
 > `unlockVault`, a no-op, timed out queued behind that at sign-in (2026-09-10). `upsert` now commits in
 > chunks of `Journal.upsertChunk` rows and releases the lock between them; a reader waits one chunk at most.
-> **And from the read side — the third stall of this shape, and why there is now a rule (2026-09-27).**
-> `listFiles` ran inline on the actor: ~2.5 s at 250k rows (a dictionary and a fresh `JSONDecoder` per row,
-> to get two dates out of `metadata`), and `listRestores` read the whole tree again to name a few
-> transfers. The app's sign-in burst is four of those; `unlockVault` timed out behind them even after a
-> reboot. **Rule: a journal read whose cost grows with the vault is `async` on the read lane** — a second,
+> **And from the read side — the third stall of this shape, and why there are now two rules (2026-09-27).**
+> `listFiles` ran inline on the actor, and `listRestores` read the whole tree again to name a few transfers;
+> the app's sign-in burst was four of those, and `unlockVault` timed out behind them even after a reboot.
+> **Rule 1: a journal read whose cost grows with the vault is `async` on the read lane** — a second,
 > read-only connection with its own serial queue (`Journal.reader`). WAL lets it read the last commit while
-> the write connection writes, and the actor suspends instead of blocking, so it keeps answering while a
-> tree is read. `listFiles` is now ~0.47 s there (typed columns, dates via `json_extract`; measured in the
-> Linux container, debug), `listRestores` looks up only its own files, and `TreeReadNonBlockingTests`
-> replays the burst at 250k rows.
+> the write connection writes, and the actor suspends instead of blocking (`TreeReadNonBlockingTests`).
+> **Rule 2: the tree is never shipped whole.** On the real 903,751-file vault one reply was 556 MiB — 14.8 s
+> to write and past what V8 can hold as one string — and it went out again after every edit. It is a change
+> feed now: every row write is stamped (`files.rev`, by trigger), `filesPage` serves 25k rows from any
+> cursor (written by hand, `FilesPageJSON`), and the app loads the tree once — 39 pages of ~6 MB, ~1.2 s
+> daemon-side in an optimized build — then asks only for what changed (a moved folder: 6 rows, 7 ms).
+> `FilesFeedTests` pins the feed.
 
 ## 5. Resume protocol — survive anything
 
@@ -374,9 +378,9 @@ Secrets live in Keychain, never in the UI.
   (the S3-derived storage-quota usage figure) is the LAST LISTED total, however old (stale-while-
   revalidate: a stale cache kicks a background listing and `usageChanged` announces the new number);
   `null` only when signed out or nothing has been listed yet.
-- **Tree revision (`DaemonService.treeRevision`):** bumped in the same actor turn as every journal edit
-  that changes `listFiles`; `listFiles` answers `{revision, files}` (the revision is taken just before the
-  read, so the rows reflect at least it), tree-editing acks (`movePath` /
+- **Tree revision (`DaemonService.treeRevision()`):** the journal's newest change stamp (`files.rev`, set
+  by trigger on every row write); `listFiles` answers one page of the tree's change feed (`FilesPage` in
+  `protocol.ts`: the tree as of `revision` once `more` is false), tree-editing acks (`movePath` /
   `createFolder` / `deletePath` / `removeFailedFiles` / `retryFiles`) carry `revision`, `deposit` /
   `depositPhotos` ack the minted `depositId`, and `runStarted` / `runFinished` carry `depositId` (+
   `revision` at the finish). The app reconciles its optimistic edits against this, not arrival order

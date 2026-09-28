@@ -153,8 +153,10 @@ export interface AppState {
    * vault is empty, drop something" over a 140k-file vault (2026-08-25). So the load carries its own state
    * — `pending` until a read lands, `failed` with the daemon's/socket's own words when it rejects — and
    * the browser shows THAT rather than the empty-vault hero. Reset to `pending` by the account wipe, and by
-   * any tree event that outruns the held read (see `treeRevision`). */
-  filesLoad: { state: "pending" } | { state: "loaded" } | { state: "failed"; error: string };
+   * any tree event that outruns the held read (see `treeRevision`). `loading` is a fresh load under way with
+   * nothing shown yet — `loaded` rows so far, so the first open of a 900k-file vault counts up instead of
+   * sitting on "Connecting…" for the seconds it takes. */
+  filesLoad: { state: "pending" } | { state: "loading"; loaded: number } | { state: "loaded" } | { state: "failed"; error: string };
   /** Exclude patterns (daemon `listExcludes`) — Settings' "Don't back up" chips. Authoritative; the
    * daemon seeds defaults on first run + applies them at scan time. */
   excludes: string[];
@@ -232,6 +234,7 @@ export type Action =
   | { type: "appInfoLoaded"; appInfo: AppInfo }
   | { type: "statusLoaded"; status: Status }
   | { type: "sourcesLoaded"; sources: Source[] }
+  | { type: "filesLoading"; loaded: number }
   | { type: "filesLoaded"; listed: ListedFiles }
   | { type: "filesLoadFailed"; error: string }
   | { type: "excludesLoaded"; excludes: string[] }
@@ -345,8 +348,8 @@ const num = (s: string | undefined): number => {
 export const reducer = (state: AppState, action: Action): AppState => {
   switch (action.type) {
     case "connection":
-      // A (re)connect is a fresh daemon process as far as the tree revision goes — it counts from zero per
-      // process — so what we hold must not outrank the first read the new connection makes.
+      // A (re)connect starts the tree over with a fresh load (the controller), so what we hold must not
+      // outrank the first read the new connection makes.
       return action.state === "connected" && state.connection !== "connected"
         ? { ...state, connection: action.state, filesRevision: 0, treeRevision: 0, depositRuns: {} }
         : { ...state, connection: action.state };
@@ -419,6 +422,10 @@ export const reducer = (state: AppState, action: Action): AppState => {
       const caughtUp = revision >= state.treeRevision;
       return { ...state, files, filesRevision: revision, filesLoad: { state: caughtUp ? "loaded" : "pending" } };
     }
+    case "filesLoading":
+      // Only while there's no tree to show: a fresh load under a tree already on screen (a reconnect) keeps
+      // that tree up until the new one replaces it.
+      return state.filesLoad.state === "loaded" ? state : { ...state, filesLoad: { state: "loading", loaded: action.loaded } };
     case "filesLoadFailed":
       // Keep the last good tree (stale beats blank); only the load state says it couldn't be refreshed.
       return { ...state, filesLoad: { state: "failed", error: action.error } };

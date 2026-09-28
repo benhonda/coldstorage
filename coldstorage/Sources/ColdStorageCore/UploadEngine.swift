@@ -436,14 +436,10 @@ public actor UploadEngine {
         for (i, item) in blob.items.enumerated() {
             var hasher = SHA256(); let start = offset; let itemFirstFrame = frame; var carry = Data()
             var plaintextBytes = 0   // exact plaintext size, measured as we stream (the SSOT the journal records)
-            // Sync on purpose: an `async` local function capturing `frame`/`offset`/`dek` would carry mutable
-            // locals across a suspension point, which Swift 6 rejects (rightly). Seal here, hand the bytes to
-            // the actor there — the only thing that crosses an isolation boundary is a `Data`.
-            func sealFrame(_ pt: Data) throws -> Data {
-                let sealed = try cipher.seal(pt, dek: dek, prefix: prefix, frame: frame)
-                frame += 1; offset += sealed.count
-                return sealed
-            }
+            // Each frame is sealed INLINE below, advancing `frame` and `offset` (the coordinate system spans are
+            // measured in) and timed straight onto `phases.encrypt`. Not a local function: one capturing these
+            // mutable locals, called from inside the timing closures, is a capture Swift 6.4's region checker
+            // rejects as a possible race. The only thing that crosses to the shipper is the sealed `Data`.
             log("UploadEngine: → uploading item [\(i + 1)/\(blob.items.count)] \(item.relativePath)")
             await reporter?.itemStarted(item.relativePath)   // the "now uploading …" line
             // Hand-rolled iteration (not `for try await`) so each phase of the producer can be timed
@@ -458,13 +454,19 @@ public actor UploadEngine {
                 try Task.checkCancellation()
                 phases.timedSync(\.encrypt) { hasher.update(data: chunk); carry.append(chunk); plaintextBytes += chunk.count }
                 while carry.count >= EnvelopeCipher.frameSize {
-                    let sealed = try phases.timedSync(\.encrypt) { try sealFrame(Data(carry.prefix(EnvelopeCipher.frameSize))) }
+                    let sealing = ContinuousClock.now
+                    let sealed = try cipher.seal(Data(carry.prefix(EnvelopeCipher.frameSize)), dek: dek, prefix: prefix, frame: frame)
+                    frame += 1; offset += sealed.count
+                    phases.encrypt += sealing.duration(to: .now)
                     carry.removeFirst(EnvelopeCipher.frameSize)
                     try await phases.timed(\.wait) { try await shipper.push(sealed) }   // ships any part this frame completed — memory stays flat
                 }
             }
             if !carry.isEmpty {
-                let sealed = try phases.timedSync(\.encrypt) { try sealFrame(carry) }
+                let sealing = ContinuousClock.now
+                let sealed = try cipher.seal(carry, dek: dek, prefix: prefix, frame: frame)
+                frame += 1; offset += sealed.count
+                phases.encrypt += sealing.duration(to: .now)
                 try await phases.timed(\.wait) { try await shipper.push(sealed) }
             }
 

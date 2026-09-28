@@ -80,30 +80,27 @@ public actor DaemonService {
     // identity) never serves a stale total for the wrong user.
     private var cachedUsage: (prefix: VaultPrefix, bytes: Int, at: Date)?
     private var usageRefreshing = false
-    /// **The tree's revision** — bumped inside the same actor turn as every journal edit that changes what
-    /// `listFiles` returns, and stamped onto every `listFiles` answer and every tree-editing command's ack.
-    /// It is what lets the app's optimistic edits reconcile PRECISELY: an edit is held on top of the tree
-    /// until a read arrives whose revision is at or past the ack's, and a read older than one already shown
-    /// is discarded. Without it the app could only guess from arrival order — and replies do not arrive in
-    /// execution order (each request is its own Task, and a 140k-row `listFiles` encodes long after a
-    /// one-line `movePath` ack has gone out), so a stale read landing after an edit put moved folders back
-    /// where they came from for a beat, and wiped in-flight upload rows outright (2026-09-03).
-    /// Process-local and monotonic: the app resets what it holds on every (re)connect, so a restart cannot
-    /// leave it waiting for a number this process will never reach.
-    private var treeRevision = 0
-    /// Record a tree edit: bump the revision and tell live watchers to re-read (`filesChanged`, with the
-    /// revision on it). Returns the revision, for the ack of whatever command made the edit.
+    /// **The tree's revision: the journal's newest change stamp** (`Journal.maxRev`, the `rev` every row write
+    /// gets). It is on every `listFiles` page, every tree-editing command's ack, `filesChanged` and
+    /// `runFinished`, and it is what lets the app's optimistic edits reconcile PRECISELY: an edit is held on top
+    /// of the tree until the app's reads have caught up to the ack's revision. Without it the app could only
+    /// guess from arrival order, and a stale read landing after an edit put moved folders back where they came
+    /// from for a beat (2026-09-03). The same number is the change feed's clock (`listFiles` pages resume
+    /// from it), so an ack and a read can't be on different clocks. 0 when signed out.
+    private func treeRevision() -> Int {
+        guard let session else { return 0 }
+        do { return try session.journal.maxRev() }
+        catch { log("DaemonService: couldn't read the tree revision — \(error)"); return 0 }
+    }
+    /// Record a tree edit: tell live watchers to catch up (`filesChanged`, with the revision the edit landed
+    /// at). Returns that revision, for the ack of whatever command made the edit.
     @discardableResult
     private func treeChanged(_ data: [String: String]) -> Int {
+        let revision = treeRevision()
         var d = data
-        d["revision"] = "\(nextTreeRevision())"
+        d["revision"] = "\(revision)"
         bus.publish(DaemonEvent("filesChanged", d))
-        return treeRevision
-    }
-    /// A tree edit that announces itself some other way (`runFinished`): bump only, and return the new revision.
-    private func nextTreeRevision() -> Int {
-        treeRevision += 1
-        return treeRevision
+        return revision
     }
     private let usageCacheTTL: TimeInterval = 60
     // The storage quota this account is allowed, pushed down by the app from its entitlement fetch
@@ -350,9 +347,14 @@ public actor DaemonService {
     ///
     /// **Locate folder…** is the batch form of Locate: `sourceRoot` is the folder the user says the rows
     /// came from, and every row in scope that can be found under it gets its source rewritten before the
-    /// split above runs (`relocate`). The rows that can't are left to the same `.missingSource` verdict,
+    /// split above runs (`locate`). The rows that can't are left to the same `.missingSource` verdict,
     /// so pointing at the wrong folder is answered on the rows, not swallowed.
-    func retryFiles(_ scope: RetryScope, sourcePath: String?, sourceRoot: String? = nil) throws -> RetryFilesResultDTO {
+    ///
+    /// The scope's rows, and what the disk says about their sources, are read OFF this actor — a big failed
+    /// batch is 56k rows and 56k `stat`s, and inline they held every other command behind them. The writes
+    /// come back here and touch only rows still `failed`: a second Try again, or an upload that landed, in
+    /// the meantime is left as it is.
+    func retryFiles(_ scope: RetryScope, sourcePath: String?, sourceRoot: String? = nil) async throws -> RetryFilesResultDTO {
         let session = try requireSession("retryFiles")
         if let sourcePath {
             guard case .ids(let ids) = scope, ids.count == 1, let id = ids.first else {
@@ -360,31 +362,22 @@ public actor DaemonService {
             }
             try session.journal.setSourcePath(id: id, sourcePath)
         }
-        let load: () throws -> [FileRow] = {
-            switch scope {
-            case .ids(let ids): return try session.journal.files(ids: ids).filter { $0.status == .failed }
-            case .all: return try session.journal.failedFiles()
-            case .deposit(let id): return try session.journal.depositFiles(id, statuses: [.failed])
-            case .source(let mount): return try session.journal.failedFiles(underMount: mount)
-            }
-        }
-        var rows = try load()
+        var rows = try await Self.failedRows(in: scope, journal: session.journal)
         if let sourceRoot {
-            try relocate(rows, under: sourceRoot, session: session)
-            rows = try load()   // re-read: the split below keys off each row's (now rewritten) source
+            let dests = try depositDests(of: rows, session: session)
+            let found = await Self.onDisk { [rows] in Self.locate(rows, under: sourceRoot, dests: dests) }
+            try requireStillCurrent(session, "retryFiles")
+            try session.journal.setSourcePaths(found)
+            rows = try await Self.failedRows(in: scope, journal: session.journal)   // the split keys off each row's (now rewritten) source
         }
-        let retryable = rows.filter { r in
-            guard let p = r.sourcePath else { return false }
-            // A Photos asset can't be stat'd; it's retryable wherever a resolver exists (a stale id is
-            // dropped at resolve time and the orphan sweep reports it). A path must be a file, here, now.
-            if IngestItem.photoAssetId(fromSource: p) != nil { return photoResolver != nil }
-            return Self.isRegularFile(p)
-        }
-        let queued = try session.journal.requeueFailedFiles(ids: retryable.map(\.id))
+        let photos = photoResolver != nil
+        let there = await Self.onDisk { [rows] in Set(rows.filter { Self.sourceIsThere($0.sourcePath, photos: photos) }.map(\.id)) }
+        try requireStillCurrent(session, "retryFiles")
+        let queued = try session.journal.requeueFailedFiles(ids: rows.filter { there.contains($0.id) }.map(\.id))
         let queuedSet = Set(queued)
         let noSource = rows.filter { $0.sourcePath == nil }.map(\.id)
-        let missing = rows.filter { $0.sourcePath != nil && !queuedSet.contains($0.id) }.map(\.id)
-        try session.journal.markFilesFailed(missing, kind: .missingSource)
+        let missing = rows.filter { $0.sourcePath != nil && !there.contains($0.id) }.map(\.id)
+        try session.journal.markSourcesMissing(missing)
         if !missing.isEmpty { treeChanged(["missingSource": "\(missing.count)"]) }
         if !queued.isEmpty {
             treeChanged(["retried": "\(queued.count)"])
@@ -392,7 +385,7 @@ public actor DaemonService {
             // them back to back. Everything else rides the next pass, brought forward: a watched folder's
             // rows (its scan re-plans them), a batch still `pending` (already owed — reopening it would
             // rewrite its mode and stop its replay reading `src`), and a row whose deposit is gone.
-            let byDeposit = Dictionary(grouping: retryable.filter { queuedSet.contains($0.id) }, by: \.depositId)
+            let byDeposit = Dictionary(grouping: rows.filter { queuedSet.contains($0.id) }, by: \.depositId)
             var reopened: [Deposit] = []
             var ridesAPass = byDeposit[nil]?.isEmpty == false
             for id in byDeposit.keys.compactMap({ $0 }) {
@@ -416,42 +409,72 @@ public actor DaemonService {
         }
         // The revision after BOTH edits above (requeue + missing-source verdicts), so the app's optimistic
         // "uploading" flip on these rows holds until a read that reflects them.
-        return RetryFilesResultDTO(queued: queued.count, missing: missing.count, noSource: noSource.count, revision: treeRevision)
+        return RetryFilesResultDTO(queued: queued.count, missing: missing.count, noSource: noSource.count, revision: treeRevision())
+    }
+
+    /// The `failed` rows a retry acts on, from the journal (on its read lane for the scopes that can be big).
+    private static func failedRows(in scope: RetryScope, journal: Journal) async throws -> [FileRow] {
+        switch scope {
+        case .ids(let ids): return try journal.files(ids: ids).filter { $0.status == .failed }
+        case .all: return try await journal.failedFiles()
+        case .deposit(let id): return try await journal.depositFiles(id, statuses: [.failed])
+        case .source(let mount): return try await journal.failedFiles(underMount: mount)
+        }
+    }
+
+    /// Run filesystem checks — a `stat` per row of a batch that can be 56k rows — on a background queue: not on
+    /// this actor, and not parked on a cooperative-pool thread either. Resumes with the answer.
+    private static func onDisk<T: Sendable>(_ check: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { continuation.resume(returning: check()) }
+        }
+    }
+
+    /// Whether a failed row's source can be retried right now. A Photos asset can't be stat'd; it's retryable
+    /// wherever a resolver exists (a stale id is dropped at resolve time and the orphan sweep reports it). A
+    /// path must be a file, here, now.
+    private static func sourceIsThere(_ source: String?, photos: Bool) -> Bool {
+        guard let source else { return false }
+        if IngestItem.photoAssetId(fromSource: source) != nil { return photos }
+        return isRegularFile(source)
+    }
+
+    /// Each batch's `dest`, for the batches `rows` belong to — `locate` strips it off a row's vault path.
+    private func depositDests(of rows: [FileRow], session: UserSession) throws -> [String: String] {
+        var dests: [String: String] = [:]
+        for id in Set(rows.compactMap(\.depositId)) { dests[id] = try session.journal.deposit(id: id)?.dest ?? "" }
+        return dests
     }
 
     /// The user pointed at a folder for a batch's rows (`retryFiles` with `sourceRoot`): resolve each row
-    /// to a file under it and record that as the row's source. A row's vault path is its batch's `dest`
-    /// plus the path it had inside the drop, so `root/<path inside the drop>` is the exact answer and is
-    /// taken as found whenever it is a regular file. But the user may reasonably point at any folder ON
-    /// the way down — the dropped folder itself rather than its parent, or, for a batch the orphan sweep
-    /// minted (no `dest` of its own, rows named by their full vault path such as `bens-mbp/Documents/…`),
-    /// the real Documents folder — so every shorter tail of the path is tried too, longest first. Those
-    /// are guesses, and a guess is accepted only when the file's byte size matches the row's: a same-named
-    /// different file is not the one that was dropped (2026-09-14). Everything unfound keeps its old
-    /// source (or none). Photos rows are never relocated: their source is a library asset, not a path.
-    private func relocate(_ rows: [FileRow], under root: String, session: UserSession) throws {
+    /// to a file under it, as the source to record for it. A row's vault path is its batch's `dest` plus the
+    /// path it had inside the drop, so `root/<path inside the drop>` is the exact answer and is taken as
+    /// found whenever it is a regular file. But the user may reasonably point at any folder ON the way down
+    /// — the dropped folder itself rather than its parent, or, for a batch the orphan sweep minted (no `dest`
+    /// of its own, rows named by their full vault path such as `bens-mbp/Documents/…`), the real Documents
+    /// folder — so every shorter tail of the path is tried too, longest first. Those are guesses, and a guess
+    /// is accepted only when the file's byte size matches the row's: a same-named different file is not the
+    /// one that was dropped (2026-09-14). Everything unfound keeps its old source (or none). Photos rows are
+    /// never relocated: their source is a library asset, not a path. Pure disk checks — runs `onDisk`.
+    private static func locate(_ rows: [FileRow], under root: String, dests: [String: String]) -> [(id: String, path: String)] {
         let root = root.hasSuffix("/") && root.count > 1 ? String(root.dropLast()) : root
-        var destByDeposit: [String: String] = [:]
         var found: [(id: String, path: String)] = []
         for r in rows {
             if let p = r.sourcePath, IngestItem.photoAssetId(fromSource: p) != nil { continue }
             var rel = Substring(r.relativePath)
-            if let d = r.depositId {
-                if destByDeposit[d] == nil { destByDeposit[d] = try session.journal.deposit(id: d)?.dest ?? "" }
-                if let dest = destByDeposit[d], !dest.isEmpty, rel.hasPrefix(dest + "/") { rel = rel.dropFirst(dest.count + 1) }
-            }
-            if Self.isRegularFile("\(root)/\(rel)") { found.append((r.id, "\(root)/\(rel)")); continue }
+            if let d = r.depositId, let dest = dests[d], !dest.isEmpty, rel.hasPrefix(dest + "/") { rel = rel.dropFirst(dest.count + 1) }
+            if isRegularFile("\(root)/\(rel)") { found.append((r.id, "\(root)/\(rel)")); continue }
             var tail = rel
             while let slash = tail.firstIndex(of: "/") {
                 tail = tail[tail.index(after: slash)...]
                 let candidate = "\(root)/\(tail)"
-                if Self.isRegularFile(candidate), Self.fileSize(candidate) == r.size {
+                if isRegularFile(candidate), fileSize(candidate) == r.size {
                     found.append((r.id, candidate))
                     break
                 }
             }
         }
-        try session.journal.setSourcePaths(found)
+        return found
     }
 
     /// Byte size of a file on disk, or nil when it can't be read — never equal to a row's size, so a guess
@@ -488,7 +511,7 @@ public actor DaemonService {
         case (.retry, _):
             // A reopened batch: finish its OWN owed rows in place, from each row's `sourcePath` (see
             // `Deposit.Mode`). `uploading` too — a retry interrupted mid-blob leaves rows there.
-            base = RetryFilesSource(rows: try session.journal.depositFiles(d.id, statuses: [.planned, .uploading]),
+            base = RetryFilesSource(rows: try await session.journal.depositFiles(d.id, statuses: [.planned, .uploading]),
                                     photos: photoResolver.map { (resolver: $0, scratchDir: session.scratchDir) })
         }
         // Drop-time collision answers apply to the DROP. A retry re-ingests rows that already exist, in
@@ -510,7 +533,7 @@ public actor DaemonService {
         case (.retry, _):
             // The rows' own sources, not `src`. Nothing still owed ⇒ the retry finished. Otherwise all gone
             // ⇒ keep the row owed for a remount. A Photos source counts as reachable, as for `.photos`.
-            let owed = (try? session.journal.depositFiles(d.id, statuses: [.planned, .uploading])) ?? []
+            let owed = (try? await session.journal.depositFiles(d.id, statuses: [.planned, .uploading])) ?? []
             sourceReachable = owed.isEmpty || owed.compactMap(\.sourcePath)
                 .contains { IngestItem.photoAssetId(fromSource: $0) != nil || FileManager.default.fileExists(atPath: $0) }
         }
@@ -675,7 +698,7 @@ public actor DaemonService {
             // The run may have planned rows before it threw — a read must reflect them.
             bus.publish(DaemonEvent("runFinished", ["filesArchived": "\(s?.archived ?? 0)",
                                                     "filesTotal": "\(s?.total ?? 0)", "blobsFailed": "0",
-                                                    "depositId": depositId ?? "", "revision": "\(nextTreeRevision())"]))
+                                                    "depositId": depositId ?? "", "revision": "\(treeRevision())"]))
             throw error
         }
         for f in failures {
@@ -735,7 +758,7 @@ public actor DaemonService {
         bus.publish(DaemonEvent("runFinished", ["filesArchived": "\(s?.archived ?? 0)", "filesTotal": "\(s?.total ?? 0)",
                                                 "blobsFailed": "\(failures.count - stopped.count)",
                                                 "filesStopped": "\(stopped.reduce(0) { $0 + $1.files.count })",
-                                                "depositId": depositId ?? "", "revision": "\(nextTreeRevision())"]))
+                                                "depositId": depositId ?? "", "revision": "\(treeRevision())"]))
         return failures
     }
 
@@ -895,10 +918,49 @@ public actor DaemonService {
 
     // MARK: - command surface (control socket)
 
-    /// Map a request to a wire response — the closure handed to `ControlServer`.
+    /// Map a request to a wire response — the closure handed to `ControlServer`. `listFiles` answers with JSON
+    /// written by hand (`FilesPageJSON`); every other command's result goes through `JSONEncoder`.
     public func respond(to req: ControlRequest) async -> ControlResponseLine {
-        do { return ControlResponseLine(id: req.id, result: try await handle(req.method, req.params ?? [:]), error: nil) }
-        catch { return ControlResponseLine(id: req.id, result: nil, error: "\(error)") }
+        do {
+            if req.method == "listFiles" {
+                return ControlResponseLine(id: req.id, resultJSON: try await listFilesPage(req.params ?? [:]))
+            }
+            return ControlResponseLine(id: req.id, result: try await handle(req.method, req.params ?? [:]), error: nil)
+        } catch { return ControlResponseLine(id: req.id, result: nil, error: "\(error)") }
+    }
+
+    /// Rows per `listFiles` page: ~6 MB of JSON on a real vault — far inside the app's per-request deadline, and
+    /// what its JavaScript can hold as one string many times over (a whole 903,751-row tree in one reply was
+    /// 556 MiB, past that limit).
+    static let filesPageSize = 25_000
+
+    /// `listFiles`: one page of the tree's change feed (`Journal.filesPage`). No params starts a fresh load
+    /// from the top; `after` (a page's `cursor`) resumes from there, and `head` (a fresh load's first page's)
+    /// says the reader is mid fresh load. The app keeps asking while `more`, and from then on asks with its
+    /// last cursor for just what changed. Signed out ⇒ one empty, final page.
+    private func listFilesPage(_ p: [String: String]) async throws -> Data {
+        guard let session else {
+            return FilesPageJSON.encode(Journal.FilesPage(files: [], removed: [], cursor: .start, more: false, head: 0), revision: 0)
+        }
+        let after = try p["after"].map(Self.fileCursor) ?? .start
+        let head = try p["head"].map { raw in
+            guard let n = Int(raw) else { throw ColdStorageError.invalidRequest("listFiles: head must be an integer") }
+            return n
+        }
+        let page = try await session.journal.filesPage(after: after, knownDeletedUpTo: head, limit: Self.filesPageSize)
+        try requireStillCurrent(session, "listFiles")
+        // With nothing left past the page, the reader holds the tree as of the snapshot's head; mid-load, only
+        // as far as the page reached.
+        return FilesPageJSON.encode(page, revision: page.more ? page.cursor.rev : page.head)
+    }
+
+    /// A page `cursor` off the wire (`"<rev>.<rowid>"`, as `FilesPageJSON` writes it).
+    private static func fileCursor(_ raw: String) throws -> Journal.FileCursor {
+        let parts = raw.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 2, let rev = Int(parts[0]), let rowid = Int(parts[1]) else {
+            throw ColdStorageError.invalidRequest("listFiles: malformed cursor '\(raw)'")
+        }
+        return Journal.FileCursor(rev: rev, rowid: rowid)
     }
 
     private struct StatusDTO: Encodable {
@@ -929,7 +991,7 @@ public actor DaemonService {
     /// what went wrong — so a watched folder that has stopped backing up can say so where it's listed,
     /// instead of appearing identical to a working one.
     ///
-    /// Explicit `encode(to:)` for the reason given on `FileDTO`: a synthesized encoder omits nils, while
+    /// Explicit `encode(to:)` for the reason given on `RestoreRowDTO`: a synthesized encoder omits nils, while
     /// `protocol.ts` declares these `T | null`.
     private struct SourceDTO: Encodable {
         let id, kind: String
@@ -952,65 +1014,10 @@ public actor DaemonService {
             try c.encode(error, forKey: .error)
         }
     }
-    /// One browsable file (the `listFiles` element). `status` is the raw journal `FileStatus` — the UI
-    /// coarsens it to its own browse states (frozen/uploading/…); we expose what we actually know.
-    /// `date` is the capture/creation time as Unix epoch SECONDS (nil when unknown). Epoch keeps the wire
-    /// type trivial + lossless; the renderer owns ISO/display formatting (epoch × 1000 → JS `Date`).
-    /// One row of the browsable tree.
-    ///
-    /// `lastAttemptAt` + `error` are the file's honesty pair, the upload twin of what `RestoreRow` carries:
-    /// when the upload path last tried, and what went wrong if anything. Without them the tree renders
-    /// `planned` as "Uploading" with no expiry and no reason — and `error` had been sitting in the journal
-    /// unread the whole time, so even a permanently failed file showed a ⚠ that couldn't say why.
-    ///
-    /// Hand-written `encode(to:)` for the reason spelled out on `RestoreRowDTO`: the synthesized encoder
-    /// uses `encodeIfPresent`, so every nil here would be OMITTED from the JSON, while `protocol.ts`
-    /// declares these as `T | null` — a promise that the key is always present. That drift already existed
-    /// on `blobId`/`date` (latent: the readers happen to use `!=`, which tolerates `undefined`); adding two
-    /// more optionals to a contract nobody was keeping is how latent becomes real.
-    private struct FileDTO: Encodable {
-        let id, relativePath: String
-        let size: Int
-        let status: String
-        let blobId: String?
-        let lastAttemptAt: Int?
-        let error: String?
-        /// Where the bytes live on this Mac, or null — what the app keys "Try again" vs "Locate…" off.
-        let sourcePath: String?
-        /// The batch (deposit) this row belongs to, or null for a watched folder's file.
-        let depositId: String?
-        /// Why a `failed` row failed (`FileFailureKind` raw value), or null — the app's copy key.
-        let failureKind: String?
-        /// The file's own dates (Unix seconds) from its captured metadata: mtime for a file, capture date for
-        /// a photo (`createdAt` only). Null where unknown.
-        let modifiedAt: Int?
-        let createdAt: Int?
-
-        enum CodingKeys: String, CodingKey {
-            case id, relativePath, size, status, blobId, lastAttemptAt, error, sourcePath, depositId, failureKind,
-                 modifiedAt, createdAt
-        }
-
-        func encode(to encoder: Encoder) throws {
-            var c = encoder.container(keyedBy: CodingKeys.self)
-            try c.encode(id, forKey: .id)
-            try c.encode(relativePath, forKey: .relativePath)
-            try c.encode(size, forKey: .size)
-            try c.encode(status, forKey: .status)
-            try c.encode(blobId, forKey: .blobId)              // `encode`, not `encodeIfPresent` — emits null
-            try c.encode(lastAttemptAt, forKey: .lastAttemptAt)
-            try c.encode(error, forKey: .error)
-            try c.encode(sourcePath, forKey: .sourcePath)
-            try c.encode(depositId, forKey: .depositId)
-            try c.encode(failureKind, forKey: .failureKind)
-            try c.encode(modifiedAt, forKey: .modifiedAt)
-            try c.encode(createdAt, forKey: .createdAt)
-        }
-    }
     /// One batch on the Uploads page (`listDeposits`). Counts are NOT here: the app derives them from the
     /// same `listFiles` rows the tree draws, keyed by `depositId`, so a batch's "3 of 500 couldn't upload"
     /// can never disagree with the rows underneath it. Every optional is encoded as `null`, not omitted
-    /// (see `FileDTO`).
+    /// (see `RestoreRowDTO`).
     private struct DepositDTO: Encodable {
         let id, kind, mode, state, dest: String
         let src: [String]
@@ -1026,11 +1033,8 @@ public actor DaemonService {
     }
     private struct AckDTO: Encodable { let ok: Bool }
     /// The ack of a command that EDITED THE TREE — carries the revision the edit landed at, so the app knows
-    /// which `listFiles` read is the first that reflects it (see `treeRevision`).
+    /// which `listFiles` read is the first that reflects it (see `treeRevision()`).
     private struct TreeAckDTO: Encodable { let ok: Bool; let revision: Int }
-    /// `listFiles`' answer: the rows, and the revision taken just before they were read — they reflect at
-    /// least that revision (see the `listFiles` handler).
-    private struct FilesDTO: Encodable { let revision: Int; let files: [FileDTO] }
     /// `deposit`/`depositPhotos`' ack. The batch id is minted BEFORE the fire-and-forget run so the app can
     /// tie its optimistic rows to the `runStarted`/`runFinished` that will carry the same id.
     private struct DepositAckDTO: Encodable { let ok: Bool; let depositId: String }
@@ -1517,25 +1521,6 @@ public actor DaemonService {
         case "listSources":
             guard let session else { return AnyEncodable([SourceDTO]()) }
             return AnyEncodable(try sourceDTOs(session))
-        case "listFiles":
-            // The browsable tree, straight from THIS USER'S journal — paths/sizes/status, no S3, no thaw.
-            // Signed out ⇒ empty, revision still real.
-            guard let session else { return AnyEncodable(FilesDTO(revision: treeRevision, files: [])) }
-            // The revision is taken BEFORE the read, which runs on the journal's read lane while this actor
-            // serves everything else (see `Journal.reader`). Every edit at or below it committed before the
-            // read began, so the rows reflect at least that revision — possibly an edit or two past it. That
-            // is the direction the app's overlay tolerates (re-applying an edit a tree already shows is a
-            // no-op); the reverse, a revision newer than its rows, is the one that snapped moved folders back
-            // (2026-09-03).
-            let revision = treeRevision
-            let rows = try await session.journal.listFiles()
-            try requireStillCurrent(session, "listFiles")
-            return AnyEncodable(FilesDTO(revision: revision, files: rows.map {
-                FileDTO(id: $0.id, relativePath: $0.relativePath, size: $0.size, status: $0.status.rawValue, blobId: $0.blobId,
-                        lastAttemptAt: $0.lastAttemptAt, error: $0.error, sourcePath: $0.sourcePath,
-                        depositId: $0.depositId, failureKind: $0.failureKind?.rawValue,
-                        modifiedAt: $0.modifiedAt, createdAt: $0.createdAt)
-            }))
         case "listDeposits":
             // Every batch the user has dropped or picked, newest first — the Uploads page's list. Signed
             // out ⇒ empty, like every other read here.
@@ -1731,7 +1716,7 @@ public actor DaemonService {
             // folder's mount path) — the last three are resolved from the journal, never sent as a list.
             // `sourcePath` (optional, `ids` with a single id only) is where they just told us the bytes are;
             // `sourceRoot` (optional, any scope) is the FOLDER they said a whole batch came from — Locate
-            // folder… — resolved per row before the retry (see `relocate`).
+            // folder… — resolved per row before the retry (see `locate`).
             let scope: RetryScope
             if p["all"] == "true" {
                 scope = .all
@@ -1743,7 +1728,7 @@ public actor DaemonService {
                 guard let raw = p["ids"], !raw.isEmpty else { throw ColdStorageError.invalidRequest("retryFiles requires one of params.ids (newline-joined file ids), params.all = \"true\", params.depositId, params.sourceMount") }
                 scope = .ids(raw.split(separator: "\n").map(String.init).filter { !$0.isEmpty })
             }
-            return AnyEncodable(try retryFiles(scope, sourcePath: p["sourcePath"], sourceRoot: p["sourceRoot"]))
+            return AnyEncodable(try await retryFiles(scope, sourcePath: p["sourcePath"], sourceRoot: p["sourceRoot"]))
         case "depositPhotos":
             _ = try requireSession("depositPhotos")
             try refuseIfUploadsPaused("depositPhotos")

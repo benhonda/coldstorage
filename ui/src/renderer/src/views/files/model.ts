@@ -7,7 +7,7 @@
  * The flat file list comes from the daemon's `listFiles` read (journal-backed); {@link fileFromJournal}
  * maps each raw wire row ({@link ListedFile}) into the {@link ArchivedFile} the browser draws.
  */
-import type { ConflictPolicy, FileFailureKind, ListedFile } from "../../../../shared/ipc.ts";
+import { fileId, type ConflictPolicy, type FileFailureKind, type ListedFile } from "../../../../shared/ipc.ts";
 
 /**
  * Per-file state — the journal `FileStatus` folded with the file's live transfer, if it has one.
@@ -426,18 +426,32 @@ export const childrenOf = (
   sort: SortSpec = DEFAULT_SORT,
 ): Row[] => {
   const base = segments(dir);
+  const prefix = base.length === 0 ? "" : `${base.join("/")}/`;
   const folders = new Map<string, { size: number; count: number; date: string | null; statuses: Map<FileStatus, number> }>();
   const fileRows: FileLeafRow[] = [];
 
   for (const f of files) {
-    const segs = segments(f.relativePath);
-    if (segs.length <= base.length) continue; // not deep enough to live under `dir`
-    if (base.some((seg, i) => segs[i] !== seg)) continue; // diverges from `dir`
-
-    const rest = segs.slice(base.length);
-    const head = rest[0];
-    if (head === undefined) continue; // unreachable (rest is non-empty) — satisfies noUncheckedIndexedAccess
-    if (rest.length === 1) {
+    // Which child of `dir` the file lies in (`head`), and whether inside a subfolder of it. This runs for
+    // every file in the vault on every folder open — 903,751 on a real one — so a clean path (the journal's)
+    // is placed with string arithmetic; splitting each into an array was most of the ~300 ms it took. A path
+    // with an empty segment takes the split, so the two can't disagree.
+    const p = f.relativePath;
+    let head: string;
+    let nested: boolean;
+    if (p.startsWith("/") || p.endsWith("/") || p.includes("//")) {
+      const segs = segments(p);
+      if (segs.length <= base.length || base.some((seg, i) => segs[i] !== seg)) continue;
+      const first = segs[base.length];
+      if (first === undefined) continue; // unreachable (segs is longer than base) — satisfies noUncheckedIndexedAccess
+      head = first;
+      nested = segs.length > base.length + 1;
+    } else {
+      if (p.length <= prefix.length || !p.startsWith(prefix)) continue; // not under `dir`
+      const slash = p.indexOf("/", prefix.length);
+      head = slash === -1 ? p.slice(prefix.length) : p.slice(prefix.length, slash);
+      nested = slash !== -1;
+    }
+    if (!nested) {
       fileRows.push({ type: "file", name: head, file: f });
     } else {
       const agg = folders.get(head) ?? { size: 0, count: 0, date: null, statuses: new Map<FileStatus, number>() };
@@ -649,17 +663,28 @@ const STATUS_FROM_JOURNAL: Record<string, FileStatus> = {
  */
 export const isFolderMarker = (row: ListedFile): boolean => row.status === "folder";
 
-const iso = (epochSeconds: number | null): string | null =>
-  epochSeconds != null ? new Date(epochSeconds * 1000).toISOString() : null;
+const iso = (epochSeconds: number | undefined): string | null =>
+  epochSeconds !== undefined ? new Date(epochSeconds * 1000).toISOString() : null;
 
 /**
  * Map a raw `listFiles` row to the {@link ArchivedFile} the browser draws. Dates are epoch seconds rendered
  * to ISO strings for {@link formatDate}: `modifiedAt`/`createdAt` straight from the file's metadata, and
  * `date` — the one the column shows — the modified date if known, else created, else null → "—". `kind`
  * is derived from the name.
+ *
+ * Remembered per row object: the controller hands back the same row for every file a catch-up didn't touch,
+ * so only new or changed rows are converted — converting a 903,751-file vault on every refresh took ~0.4 s.
  */
-export const fileFromJournal = (row: ListedFile): ArchivedFile => ({
-  id: row.id,
+export const fileFromJournal = (row: ListedFile): ArchivedFile => {
+  const known = converted.get(row);
+  if (known) return known;
+  const file = convert(row);
+  converted.set(row, file);
+  return file;
+};
+const converted = new WeakMap<ListedFile, ArchivedFile>();
+const convert = (row: ListedFile): ArchivedFile => ({
+  id: fileId(row),
   relativePath: row.relativePath,
   size: row.size,
   status: STATUS_FROM_JOURNAL[row.status] ?? "uploading",
@@ -667,9 +692,10 @@ export const fileFromJournal = (row: ListedFile): ArchivedFile => ({
   date: iso(row.modifiedAt ?? row.createdAt),
   modifiedAt: iso(row.modifiedAt),
   createdAt: iso(row.createdAt),
-  lastAttemptAt: row.lastAttemptAt,
-  error: row.error,
-  failureKind: row.failureKind,
-  depositId: row.depositId,
-  sourcePath: row.sourcePath,
+  // The wire leaves out a field it has no value for (`ListedFile`); the browser's model says so with null.
+  lastAttemptAt: row.lastAttemptAt ?? null,
+  error: row.error ?? null,
+  failureKind: row.failureKind ?? null,
+  depositId: row.depositId ?? null,
+  sourcePath: row.sourcePath ?? null,
 });

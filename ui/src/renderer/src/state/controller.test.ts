@@ -4,7 +4,7 @@
  * real store correctly: initial fetch, refetch-on-(re)connect, and sourcesChanged → listSources.
  */
 import { describe, expect, test } from "bun:test";
-import type { AccountStatus, AuthStatus, ColdstoreApi, ConnectionState, EntitlementStatus, ListedFile, Source, Status, UpdateStatus, VaultStatus } from "../../../shared/ipc.ts";
+import { fileId, type AccountStatus, type AuthStatus, type ColdstoreApi, type ConnectionState, type EntitlementStatus, type FilesPage, type ListedFile, type Source, type Status, type UpdateStatus, type VaultStatus } from "../../../shared/ipc.ts";
 import { connectController } from "./controller.ts";
 import { createStore } from "./store.ts";
 
@@ -43,7 +43,19 @@ const makeApi = (initial: ConnectionState) => {
   let sources: Source[] = [{ id: "s1", kind: "folder", path: "/a", mountPath: "a", paused: false, lastScanAt: null, error: null }];
   let statusOverride: Status | null = null;
   let revision = 0; // the daemon's tree revision, ticking per read like the real one
-  let files: ListedFile[] = [{ id: "f1", relativePath: "a/b.jpg", size: 10, status: "archived", blobId: "blob-1", modifiedAt: null, createdAt: null }];
+  let files: ListedFile[] = [{ id: "f1", relativePath: "a/b.jpg", size: 10, status: "archived" }];
+  // The feed, kept honest the simple way: every read is one final page that re-sends every current row and
+  // names every row the previous read had that is gone now. Each call's params are recorded.
+  let lastSent = new Set<string>();
+  const listFilesParams: Record<string, string | undefined>[] = [];
+  const listFiles = (params: Record<string, string | undefined>): FilesPage => {
+    listFilesParams.push(params);
+    revision += 1;
+    const now = new Set(files.map(fileId));
+    const removed = [...lastSent].filter((id) => !now.has(id));
+    lastSent = now;
+    return { revision, cursor: String(revision), more: false, head: revision, files, removed };
+  };
   // Seeded defaults, as a signed-IN daemon answers. Signed out it answers `[]` — successfully — which is
   // the whole trap the excludes regression test below covers.
   let excludes: string[] = ["node_modules", ".DS_Store", "*.tmp", ".git", "caches"];
@@ -57,11 +69,11 @@ const makeApi = (initial: ConnectionState) => {
   let updateCb: ((s: UpdateStatus) => void) | null = null;
 
   const api: ColdstoreApi = {
-    request: ((method: string) => {
+    request: ((method: string, params?: Record<string, string | undefined>) => {
       calls.push(method);
       if (method === "getStatus") return Promise.resolve(statusOverride ?? status(sources));
       if (method === "listSources") return Promise.resolve(sources);
-      if (method === "listFiles") return Promise.resolve({ revision: ++revision, files });
+      if (method === "listFiles") return Promise.resolve(listFiles(params ?? {}));
       if (method === "listExcludes") return Promise.resolve(excludes);
       // The real daemon answers list reads with an ARRAY (empty when signed out) — an `{ok:true}` here
       // would be a wire shape that cannot occur, and the reducer rightly chokes on it.
@@ -127,6 +139,7 @@ const makeApi = (initial: ConnectionState) => {
   return {
     api,
     calls,
+    listFilesParams,
     setSources: (s: Source[]) => (sources = s),
     setStatus: (s: Status | null) => (statusOverride = s),
     setFiles: (f: ListedFile[]) => (files = f),
@@ -198,8 +211,8 @@ describe("controller sync policy", () => {
     const before = f.calls.filter((c) => c === "listFiles").length;
 
     f.setFiles([
-      { id: "f1", relativePath: "a/b.jpg", size: 10, status: "archived", blobId: "blob-1", modifiedAt: null, createdAt: null },
-      { id: "f2", relativePath: "a/c.jpg", size: 20, status: "archived", blobId: "blob-2", modifiedAt: null, createdAt: null },
+      { id: "f1", relativePath: "a/b.jpg", size: 10, status: "archived" },
+      { id: "f2", relativePath: "a/c.jpg", size: 20, status: "archived" },
     ]);
     f.fireEvent("runFinished", { filesArchived: "2", filesTotal: "2", blobsFailed: "0", depositId: "", revision: "1" });
     await tick();
@@ -269,7 +282,7 @@ describe("controller sync policy", () => {
     await tick();
     const before = f.calls.filter((c) => c === "listFiles").length;
 
-    f.setFiles([{ id: "f1", relativePath: "moved/b.jpg", size: 10, status: "archived", blobId: "blob-1", modifiedAt: null, createdAt: null }]);
+    f.setFiles([{ id: "f1", relativePath: "moved/b.jpg", size: 10, status: "archived" }]);
     f.fireEvent("filesChanged", { moved: "a/b.jpg", to: "moved/b.jpg", revision: "1" });
     await tick();
     expect(f.calls.filter((c) => c === "listFiles").length).toBe(before + 1);
@@ -430,5 +443,106 @@ describe("controller sync policy", () => {
 
     f.fireUpdate({ state: "ready", version: "0.2.0", percent: 100, error: null });
     expect(store.getState().update).toEqual({ state: "ready", version: "0.2.0", percent: 100, error: null });
+  });
+});
+
+/**
+ * The tree's change feed (`FilesPage`): loaded once a page at a time, then kept current by asking only for
+ * what changed. The whole tree in one reply was 556 MiB on a 903,751-file vault — past what this app's
+ * JavaScript can hold as one string — and it was re-sent after every edit (2026-09-27).
+ */
+describe("the tree's change feed", () => {
+  const row = (path: string, size = 1): ListedFile => ({ relativePath: path, size, status: "archived" });
+  const page = (over: Partial<FilesPage>): FilesPage => ({ revision: 0, cursor: "0", more: false, head: 0, files: [], removed: [], ...over });
+
+  /** A connected api whose `listFiles` answers from `script`, in order — each entry a page, or a gate the
+   * test opens to hand the page over. Every call's params are recorded. */
+  const scripted = (script: Array<FilesPage | { hold: Promise<FilesPage> }>) => {
+    const f = makeApi("connected");
+    const asked: Array<Record<string, string | undefined>> = [];
+    const api = {
+      ...f.api,
+      request: ((m: string, params?: Record<string, string | undefined>) => {
+        if (m !== "listFiles") return f.api.request(m as never);
+        asked.push(params ?? {});
+        const next = script.shift();
+        if (!next) return Promise.reject(new Error("no more pages scripted"));
+        return "hold" in next ? next.hold : Promise.resolve(next);
+      }) as ColdstoreApi["request"],
+    };
+    return { f, api, asked };
+  };
+
+  test("a fresh load pages through the feed, counting as it goes, and shows the tree once it has all of it", async () => {
+    const { api, asked } = scripted([
+      page({ files: [row("a"), row("b")], cursor: "0.2", more: true, head: 9 }),
+      page({ files: [row("c")], cursor: "0.3", more: true, head: 9 }),
+      page({ files: [row("d")], cursor: "9.4", revision: 9, head: 9 }),
+    ]);
+    const store = createStore();
+    const seen: string[] = [];
+    store.subscribe(() => {
+      const l = store.getState().filesLoad;
+      seen.push(l.state === "loading" ? `loading ${l.loaded}` : l.state);
+    });
+    connectController(api, store);
+    await tick();
+    await tick();
+    expect(asked).toEqual([{}, { after: "0.2", head: "9" }, { after: "0.3", head: "9" }]);
+    expect(store.getState().files.map((f) => f.relativePath)).toEqual(["a", "b", "c", "d"]);
+    expect(store.getState().filesRevision).toBe(9);
+    expect(store.getState().filesLoad).toEqual({ state: "loaded" });
+    expect(seen).toContain("loading 2"); // it counted up rather than sitting on "Connecting…"
+    expect(seen).toContain("loading 3");
+  });
+
+  test("after it, a refresh asks only for what changed — changes land, deletions go, the rest keep their identity", async () => {
+    const { f, api, asked } = scripted([
+      page({ files: [row("a"), row("b"), row("c")], cursor: "3.3", revision: 3, head: 3 }),
+      page({ files: [row("b", 2)], removed: ["c"], cursor: "5.2", revision: 5, head: 5 }),
+    ]);
+    const store = createStore();
+    connectController(api, store);
+    await tick();
+    const a = store.getState().files.find((r) => r.relativePath === "a");
+
+    f.fireEvent("runFinished", { filesArchived: "1", filesTotal: "2", blobsFailed: "0", depositId: "", revision: "5" });
+    await tick();
+    expect(asked[1]).toEqual({ after: "3.3" }); // a catch-up: no `head`, from where the load ended
+    const files = store.getState().files;
+    expect(files.map((r) => `${r.relativePath}:${r.size}`)).toEqual(["a:1", "b:2"]);
+    expect(files.find((r) => r.relativePath === "a")).toBe(a); // untouched → the same object, so its conversion is reused
+    expect(store.getState().filesRevision).toBe(5);
+  });
+
+  test("a catch-up that changed nothing hands the store the same array — nothing derived from it recomputes", async () => {
+    const { f, api } = scripted([
+      page({ files: [row("a")], cursor: "1.1", revision: 1, head: 1 }),
+      page({ cursor: "1.1", revision: 1, head: 1 }),
+    ]);
+    const store = createStore();
+    connectController(api, store);
+    await tick();
+    const before = store.getState().files;
+    f.fireEvent("filesChanged", { created: "x", revision: "1" });
+    await tick();
+    expect(store.getState().files).toBe(before);
+  });
+
+  test("a change of account starts the tree over, and a load it overtook never lands", async () => {
+    let release: (p: FilesPage) => void = () => {};
+    const { f, api, asked } = scripted([
+      { hold: new Promise<FilesPage>((r) => (release = r)) },               // the first account's load, still out
+      page({ files: [row("theirs")], cursor: "1.1", revision: 1, head: 1 }), // the new account's fresh load
+    ]);
+    const store = createStore();
+    connectController(api, store);
+    await tick();
+    f.fireEvent("filesChanged", { signedIn: "someone-else", revision: "1" });
+    release(page({ files: [row("previous-account")], cursor: "7.7", revision: 7, head: 7 }));
+    await tick();
+    await tick();
+    expect(asked).toEqual([{}, {}]); // the second read is a fresh load, not a catch-up from the old cursor
+    expect(store.getState().files.map((r) => r.relativePath)).toEqual(["theirs"]);
   });
 });

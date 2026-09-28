@@ -25,6 +25,31 @@ import Foundation
         try await j.listFiles().first { $0.id == id }?.relativePath
     }
 
+    /// A folder's subtree is found as an index range (`Journal.subtreeClause`): `Photos/` up to `Photos0`, `0`
+    /// being the byte after `/`. The siblings that share its name as a prefix sit right at those edges —
+    /// ` ` `-` `.` sort before `/`, `0` is the bound itself — and none of them may be swept along.
+    @Test func aFoldersSiblingsThatShareItsNameAreNeverSwept() async throws {
+        let siblings = ["Photos 2/c.jpg", "Photos-old/d.jpg", "Photos.zip", "Photos0/e.jpg", "Photosx/f.jpg"]
+        let inside = ["Photos/a.jpg", "Photos/sub/b.jpg"]
+
+        let moved = try tempJournal()
+        try moved.upsert((inside + siblings).map { item($0, path: $0) })
+        try moved.movePath(from: "Photos", to: "Pics")
+        #expect(Set(try await moved.listFiles().map(\.relativePath)) == Set(["Pics/a.jpg", "Pics/sub/b.jpg"] + siblings))
+
+        let deleted = try tempJournal()
+        try deleted.upsert((inside + siblings).map { item($0, path: $0) })
+        try deleted.deletePath("Photos")
+        #expect(Set(try await deleted.listFiles().map(\.relativePath)) == Set(siblings))
+
+        // "Photos" still has live rows under it here, so it needs no marker; "Photo" (a prefix of it) does.
+        let folders = try tempJournal()
+        try folders.upsert((inside + siblings).map { item($0, path: $0) })
+        try folders.createFolder(path: "Photos")
+        try folders.createFolder(path: "Photo")
+        #expect(try await folders.listFiles().filter { $0.status == .folder }.map(\.relativePath) == ["Photo"])
+    }
+
     // MARK: - move == rename (single file)
 
     @Test func renameFileRewritesPathKeepsId() async throws {

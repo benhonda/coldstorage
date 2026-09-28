@@ -248,20 +248,16 @@ describe("aggregates", () => {
   });
 
   describe("fileFromJournal", () => {
+    // The wire's shape: fields with no value are absent (`ListedFile`).
     const row = (over: Partial<ListedFile> = {}): ListedFile => ({
       id: "f1",
       relativePath: "Photos/2019/beach.jpg",
       size: 4_100_000,
       status: "archived",
-      blobId: "blob-1",
-      modifiedAt: null,
-      createdAt: null,
-      lastAttemptAt: null,
-      error: null,
       ...over,
     });
 
-    test("maps an archived row to a frozen photo, kind from name, null date when absent", () => {
+    test("maps an archived row to a frozen photo, kind from name, null for everything absent", () => {
       const f = fileFromJournal(row());
       expect(f).toEqual({
         id: "f1",
@@ -274,7 +270,14 @@ describe("aggregates", () => {
         createdAt: null,
         lastAttemptAt: null,
         error: null,
+        failureKind: null,
+        depositId: null,
+        sourcePath: null,
       });
+    });
+
+    test("an id the wire left out is the path — they're the same until a file moves", () => {
+      expect(fileFromJournal({ relativePath: "a/b.jpg", size: 1, status: "archived" }).id).toBe("a/b.jpg");
     });
 
     test("renders the journal's epoch-seconds dates to ISO strings", () => {
@@ -288,7 +291,7 @@ describe("aggregates", () => {
       expect(f.modifiedAt).toBe("1970-01-01T00:00:03.000Z");
       expect(f.createdAt).toBe("1970-01-01T00:00:02.000Z");
       // a photo: capture date only
-      expect(fileFromJournal(row({ modifiedAt: null, createdAt: 2 })).date).toBe("1970-01-01T00:00:02.000Z");
+      expect(fileFromJournal(row({ createdAt: 2 })).date).toBe("1970-01-01T00:00:02.000Z");
       expect(fileFromJournal(row()).date).toBeNull();
     });
 

@@ -54,7 +54,7 @@ export interface Ack {
 
 /** `TreeAckDTO` — the ack of a command that EDITED THE TREE (`movePath`/`createFolder`/…): `revision` is
  *  the tree revision the edit landed at, so the app knows which `listFiles` read is the first that reflects
- *  it. See {@link ListedFiles} for the scheme. */
+ *  it. See {@link FilesPage} for the scheme. */
 export interface TreeAck extends Ack {
   revision: number;
 }
@@ -91,53 +91,74 @@ export interface Source {
 }
 
 /**
- * `FileDTO` — one browsable file from `listFiles`: the journal IS the tree SSOT (paths/sizes/status),
- * NOT S3 keys. A pure metadata read — no R2, no thaw. `status` is the RAW journal `FileStatus`
- * (`discovered | planned | uploading | verifying | archived | failed`); the renderer coarsens
- * it to its own browse states. `id` doubles as the `file` param of the `restore` command.
+ * One browsable file, as a `listFiles` page carries it (`FilesPageJSON.swift` writes it): the journal IS the
+ * tree SSOT (paths/sizes/status), NOT S3 keys. `status` is the RAW journal `FileStatus` (`discovered |
+ * planned | uploading | verifying | archived | failed | folder`); the renderer coarsens it to its own
+ * browse states. Only what the app reads is sent, and a field that would be null is simply absent — a
+ * 903,751-file vault's whole tree was 556 MiB with every field spelled out (2026-09-27).
  */
 export interface ListedFile {
-  id: string;
   relativePath: string;
+  /** The file's journal id — sent only when it differs from `relativePath` (a file moved since it landed);
+   * read it with {@link fileId}. It doubles as the `file` param of the restore commands. */
+  id?: string;
   size: number;
   status: string;
-  blobId: string | null;
   /** From the file's captured metadata (`FileMetadata`): last-modified and created (Unix seconds). A photo
-   * has only `createdAt` (its capture date); null where unknown. */
-  modifiedAt: number | null;
-  createdAt: number | null;
-  /** Unix seconds the upload path last actually TRIED this file — every outcome, success or fault. Null when
-   * no attempt has been made yet (scanned into the journal while the daemon was idle, or a legacy row).
+   * has only `createdAt` (its capture date); absent where unknown. */
+  modifiedAt?: number;
+  createdAt?: number;
+  /** Unix seconds the upload path last actually TRIED this file — every outcome, success or fault. Absent
+   * when no attempt has been made yet (scanned into the journal while the daemon was idle, or a legacy row).
    *
    * The upload twin of {@link RestoreRow.lastStepAt}, and needed for the same reason: the tree renders a
    * queued file as "Uploading", and with no clock that claim has no expiry — a file nothing has tried in
    * weeks looks exactly like one mid-flight. */
-  lastAttemptAt: number | null;
-  /** Why the last attempt failed, or null. Set on a `failed` file (permanent fault) AND on one still queued
-   * after a TRANSIENT one — those keep retrying, so the row is honestly still in flight while naming the
-   * snag. Cleared the moment an attempt succeeds. */
-  error: string | null;
+  lastAttemptAt?: number;
+  /** Why the last attempt failed. Set on a `failed` file (permanent fault) AND on one still queued after a
+   * TRANSIENT one — those keep retrying, so the row is honestly still in flight while naming the snag.
+   * Cleared the moment an attempt succeeds. */
+  error?: string;
   /** Where the bytes come from — an absolute path on this Mac, or `photos:<localIdentifier>` for a Photos
-   * asset — or null for a row from before the daemon recorded sources. What the app keys a failed row's
-   * action off: a source ⇒ **Try again** (`retryFiles`), none ⇒ **Locate…** (the user points at it, then
-   * the same command with `sourcePath`). Opaque to the app: never parse it, only test for null. */
-  sourcePath: string | null;
-  /** The batch ({@link Deposit}) that last claimed this file, or null for a file a watched folder owns.
+   * asset. Sent on a `failed` row only, because that is the one place the app reads it: a source ⇒ **Try
+   * again** (`retryFiles`), none ⇒ **Locate…** (the user points at it, then the same command with
+   * `sourcePath`). Opaque to the app: never parse it, only test whether it's there. */
+  sourcePath?: string;
+  /** The batch ({@link Deposit}) that last claimed this file; absent for a file a watched folder owns.
    * The Uploads page's group key: a batch's counts are derived from these rows, never stored. */
-  depositId: string | null;
-  /** WHY a `failed` row failed, or null on any other status. The ONLY thing the app turns into user
-   * copy — `error` is developer detail. Mirrors Swift `FileFailureKind`. */
-  failureKind: FileFailureKind | null;
+  depositId?: string;
+  /** WHY a `failed` row failed; absent on any other status. The ONLY thing the app turns into user copy —
+   * `error` is developer detail. Mirrors Swift `FileFailureKind`. */
+  failureKind?: FileFailureKind;
 }
 
+/** A row's journal id: its `id` when the daemon sent one, else its path (they're the same until it moves). */
+export const fileId = (row: ListedFile): string => row.id ?? row.relativePath;
+
 /**
- * `FilesDTO` — `listFiles`' answer: the rows and the tree `revision` they were read at (taken in one daemon
- * actor turn, so it is exactly the state these rows describe). The revision is the app's reconciliation
- * clock: a `listFiles` older than the one already shown is discarded, and an optimistic edit is held on top
- * of the tree until a read at or past its ack's revision arrives. Replies don't arrive in execution order
- * (a big `listFiles` encodes long after a one-line ack), so arrival order alone put moved folders back
- * where they came from for a beat, and wiped in-flight upload rows (2026-09-03).
+ * One page of the tree's change feed — `listFiles`' answer. The app loads the tree with no params, then
+ * `{ after: cursor, head: String(head) }` while `more`; from then on `{ after: cursor }` (again while `more`)
+ * returns only the rows that changed, and `removed` names the ones deleted. The daemon stamps every row
+ * write, so nothing it changes is missed (`Journal.filesPage`).
+ *
+ * `revision` is the app's reconciliation clock: once the last page (`more: false`) is applied, the app holds
+ * the tree as of `revision`, and an optimistic edit is held on top of the tree until the app has caught up
+ * to its ack's revision. Replies don't arrive in execution order, so arrival order alone put moved folders
+ * back where they came from for a beat, and wiped in-flight upload rows (2026-09-03).
  */
+export interface FilesPage {
+  revision: number;
+  /** Where this page ended — pass it back as `after`. Opaque. */
+  cursor: string;
+  more: boolean;
+  /** The newest change in the tree as this page was read — a fresh load passes the first page's back. */
+  head: number;
+  files: ListedFile[];
+  /** Ids of rows deleted since `after`. */
+  removed: string[];
+}
+
+/** The whole tree as the app holds it once a load or catch-up has finished: every row, at `revision`. */
 export interface ListedFiles {
   revision: number;
   files: ListedFile[];
@@ -441,7 +462,7 @@ export interface Commands {
   ping: { params: Record<string, never>; result: Ack };
   getStatus: { params: Record<string, never>; result: Status };
   listSources: { params: Record<string, never>; result: Source[] };
-  listFiles: { params: Record<string, never>; result: ListedFiles };
+  listFiles: { params: { after?: string; head?: string }; result: FilesPage };
   /** Register a watched folder. `mountPath` is the vault-relative destination its tree lands under in My
    * Files; omit/empty → the daemon defaults to the source's basename (never root, to keep mounts namespaced). */
   addSource: { params: { path: string; mountPath?: string }; result: Ack };

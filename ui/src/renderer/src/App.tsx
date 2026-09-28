@@ -144,6 +144,10 @@ export const App = ({ api, store, retryFiles, retryDeposits }: Props): React.JSX
     // the user on an eternal "Connecting to your vault…" with no recourse (2026-08-25). A rejected read is
     // the honest signal that something's wrong; surface it with its reason and a Retry.
     if (state.filesLoad.state === "failed") return { state: "failed", reason: state.filesLoad.error };
+    // A fresh load under way with nothing to show yet: count it up — a 900k-file vault takes a few seconds.
+    if (state.filesLoad.state === "loading") {
+      return { state: "loading", loaded: state.filesLoad.loaded, total: state.status?.filesTotal ?? null };
+    }
     // Connected, reads haven't failed, but the daemon hasn't reported our session yet (or the tree is still
     // loading) → a bounded "connecting". The gate escalates this to a Retry on its own after a while, so it
     // can't become the dead end it was.

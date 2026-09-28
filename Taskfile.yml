@@ -410,6 +410,115 @@ tasks:
           awk '/^Sort by top of stack/,0' "$out" | sed -n 2,8p | sed 's/^/   /'
         done; done
 
+  daemon:mac:diag:
+    desc: "Why is the app slow or timing out on THIS Mac's vault? One read-only pass that bundles what it takes to reproduce it off this Mac into .diag/<time>/ (gitignored — it holds a copy of your journal, i.e. every file name in the vault): the journal's row counts and sizes, a consistent copy of it, the whole tree loaded over the running daemon's socket page by page, the way the app loads it, timed, with a ping during it (is the daemon still answering?), a CPU sample of the daemon while it serves that, and the daemon + app log tails. Run it with the app open. APP=ColdStorage (default) or APP='ColdStorage Staging'."
+    vars:
+      APP: '{{.APP | default "ColdStorage"}}'
+    cmds:
+      - |
+        data="$HOME/Library/Application Support/{{.APP}}"
+        out="{{.ROOT_DIR}}/.diag/$(date +%Y%m%d-%H%M%S)"
+        mkdir -p "$out"
+        echo "── {{.APP}} → $out"
+        sqlite3 --version > "$out/sqlite-version.txt"
+        cat > "$out/stats.sql" <<'SQL'
+        SELECT 'files live', count(*) FROM files WHERE deletedAt IS NULL;
+        SELECT 'files deleted', count(*) FROM files WHERE deletedAt IS NOT NULL;
+        SELECT 'status ' || status, count(*) FROM files WHERE deletedAt IS NULL GROUP BY status;
+        SELECT 'metadata MiB | avg B | max B', round(sum(length(metadata)) / 1048576.0, 1), round(avg(length(metadata))), max(length(metadata)) FROM files WHERE deletedAt IS NULL;
+        SELECT 'metadata rows over 4 KiB', count(*) FROM files WHERE deletedAt IS NULL AND length(metadata) > 4096;
+        SELECT 'relativePath avg | max', round(avg(length(relativePath))), max(length(relativePath)) FROM files WHERE deletedAt IS NULL;
+        SELECT 'sourcePath avg | max', round(avg(length(sourcePath))), max(length(sourcePath)) FROM files WHERE deletedAt IS NULL;
+        SELECT 'error rows | avg | max', count(error), round(avg(length(error))), max(length(error)) FROM files WHERE deletedAt IS NULL;
+        SELECT 'deposits ' || state, count(*) FROM deposits GROUP BY state;
+        SELECT 'restores', count(*) FROM restores;
+        SELECT 'blobs ' || status, count(*) FROM blobs GROUP BY status;
+        SELECT 'parts', count(*) FROM parts;
+        SELECT 'pages | freelist | page size', (SELECT page_count FROM pragma_page_count), (SELECT freelist_count FROM pragma_freelist_count), (SELECT page_size FROM pragma_page_size);
+        SQL
+        # 1) Every signed-in user's journal: counts + sizes, then a copy via SQLite's backup API — a
+        #    consistent snapshot even while the daemon keeps writing.
+        for db in "$data"/users/*/coldstore.sqlite; do
+          [ -f "$db" ] || continue
+          sub=$(basename "$(dirname "$db")")
+          ls -l "$db" "$db-wal" > "$out/journal-$sub-files.txt" 2>&1 || true   # no -wal between checkpoints is normal
+          sqlite3 -readonly -cmd ".timer on" "$db" < "$out/stats.sql" > "$out/journal-$sub-stats.txt" 2>&1 \
+            || echo "   ✗ stats failed ($sub) — see journal-$sub-stats.txt"
+          if sqlite3 -readonly "$db" ".backup '$out/journal-$sub.sqlite'"; then echo "   journal copied ($sub)"; else echo "   ✗ journal copy failed ($sub)"; fi
+        done
+        # 2) The live round trip, while sampling the daemon serving it.
+        cat > "$out/rtt.py" <<'PY'
+        import json, re, socket, sys, threading, time
+        PATH = sys.argv[1]
+        def call(method, rid, params=None):
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(180)
+            s.connect(PATH)
+            t0 = time.monotonic()
+            s.sendall(json.dumps({"id": rid, "method": method, "params": params or {}}).encode() + b"\n")
+            tag = re.compile(rb'"id"\s*:\s*%d\b' % rid)   # the reply's id, however the encoder spaced it
+            buf, scan = bytearray(), 0
+            try:
+                while True:
+                    chunk = s.recv(1 << 20)
+                    if not chunk:
+                        return time.monotonic() - t0, None
+                    buf += chunk
+                    while True:
+                        nl = buf.find(b"\n", scan)
+                        if nl < 0:
+                            scan = len(buf)
+                            break
+                        line = bytes(buf[:nl])
+                        del buf[:nl + 1]
+                        scan = 0
+                        if tag.search(line):
+                            return time.monotonic() - t0, line
+            except socket.timeout:
+                return time.monotonic() - t0, None
+            finally:
+                s.close()
+        def load():
+            # The whole tree, paged exactly as the app loads it (FilesPage in ui/src/daemon/protocol.ts).
+            params, pages, rows, size, slowest, total = {}, 0, 0, 0, 0.0, 0.0
+            while True:
+                t, line = call("listFiles", 987651 + pages, params)
+                total += t; slowest = max(slowest, t)
+                if line is None:
+                    return "no answer to page %d after %.1f s" % (pages + 1, t)
+                reply = json.loads(line)
+                if "result" not in reply:
+                    return "page %d failed: %s" % (pages + 1, reply.get("error"))
+                page = reply["result"]
+                pages += 1; rows += len(page["files"]); size += len(line)
+                if not page["more"]:
+                    return "%.2f s for %d rows in %d page(s), %.1f MiB, slowest page %.2f s" % (total, rows, pages, size / 1048576, slowest)
+                params = {"after": page["cursor"], "head": str(page["head"])}
+        tree = {}
+        worker = threading.Thread(target=lambda: tree.update(result=load()))
+        worker.start()
+        time.sleep(1)
+        t, line = call("ping", 987650)
+        print("ping during the tree load: %.3f s%s" % (t, "" if line else " (no answer)"))
+        worker.join()
+        print("tree load (listFiles):", tree["result"])
+        PY
+        sock="$data/coldstored.app.sock"
+        pid=$(pgrep -f "/{{.APP}}.app/Contents/Resources/bin/coldstored" | head -1)
+        if [ -S "$sock" ] && [ -n "$pid" ]; then
+          sample "$pid" 12 -file "$out/sample.txt" >/dev/null 2>&1 &
+          python3 "$out/rtt.py" "$sock" | tee "$out/roundtrip.txt"
+          wait || true
+        else
+          echo "   {{.APP}} isn't running (no socket or daemon process) — skipped the live timing" | tee "$out/roundtrip.txt"
+        fi
+        # 3) Log tails: the daemon's own, and the app's (main.log carries renderer errors too).
+        for f in coldstored.app.err.log coldstored.app.out.log coldstored.err.log coldstored.out.log; do
+          if [ -f "$data/$f" ]; then tail -n 5000 "$data/$f" > "$out/$f"; fi
+        done
+        if [ -f "$HOME/Library/Logs/{{.APP}}/main.log" ]; then tail -n 5000 "$HOME/Library/Logs/{{.APP}}/main.log" > "$out/main.log"; fi
+        echo "── done: .diag/$(basename "$out")"
+
   daemon:mac:memory:
     desc: "Watch the installed daemon's memory while it uploads — the SHAPE is the diagnosis. It should stay FLAT (~100-200 MB) no matter how many files or how big; the engine holds one 64 MiB part at a time and writes nothing to disk. A 1000-file deposit peaked at 1.7 GB on 2026-07-14, which is what this exists to explain. Reads the RSS the daemon logs after the scan and after every part, so you never have to squint at Activity Monitor. Ctrl-C to stop."
     dir: coldstorage
@@ -771,7 +880,7 @@ tasks:
       - ': > "{{.DATA_DIR}}/coldstored.out.log"; : > "{{.DATA_DIR}}/coldstored.err.log"'
       # 5. Restart — the daemon recreates an empty journal at the next sign-in (RunAtLoad).
       - launchctl bootstrap "gui/$(id -u)" "{{.PLIST}}"
-      - 'echo "✓ reset — empty tree, no watched folders, fresh logs. Verify: task daemon:mac:live -- listFiles (expect [])"'
+      - 'echo "✓ reset — empty tree, no watched folders, fresh logs. Verify: task daemon:mac:live -- listFiles (expect no files)"'
 
   # ------------------------------------------------------------------ ui (domain: ui/)
   # Electron/React control panel — a THIN client over the daemon's control socket. Layer 1 = Node IPC

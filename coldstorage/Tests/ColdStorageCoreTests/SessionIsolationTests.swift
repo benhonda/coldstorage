@@ -36,8 +36,7 @@ import Foundation
                        _ params: [String: String] = [:]) async throws -> (result: Any?, error: String?) {
         let line = await daemon.respond(to: request(method, params))
         guard line.error == nil else { return (nil, line.error) }
-        let data = try JSONEncoder().encode(line.result)
-        return (try JSONSerialization.jsonObject(with: data), nil)
+        return (try line.wireResult(), nil)
     }
 
     /// **The regression.** Sign in as A, deposit a file into A's journal, sign out, sign in as B — B must see

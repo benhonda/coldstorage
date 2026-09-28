@@ -83,7 +83,7 @@ describe("account switch clears vault-derived state", () => {
   const withVaultState = (...pre: Parameters<typeof reducer>[1][]): AppState =>
     run(...pre, { type: "statusLoaded", status }, {
       type: "filesLoaded",
-      listed: { revision: 1, files: [{ id: "f1", relativePath: "Taxes/2025.pdf", size: 4096, status: "archived", blobId: "b1", modifiedAt: null, createdAt: null }] },
+      listed: { revision: 1, files: [{ id: "f1", relativePath: "Taxes/2025.pdf", size: 4096, status: "archived" }] },
     }, { type: "excludesLoaded", excludes: ["*.secret"] });
 
   test("signing out drops the previous account's files, sources and excludes", () => {
@@ -456,7 +456,7 @@ describe("download progress fold (the transferring row's bar)", () => {
 describe("the tree revision — stale reads never regress the tree", () => {
   const listed = (revision: number, path: string) => ({
     type: "filesLoaded" as const,
-    listed: { revision, files: [{ id: "f", relativePath: path, size: 1, status: "archived", blobId: "b", modifiedAt: null, createdAt: null }] },
+    listed: { revision, files: [{ id: "f", relativePath: path, size: 1, status: "archived" }] },
   });
 
   test("a listFiles older than the one shown is discarded (replies don't arrive in execution order)", () => {

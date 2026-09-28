@@ -602,14 +602,20 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   publishes `filesChanged` with `{signedIn}`, and the controller re-reads status/files/excludes/**restores**/
   deposits on THAT payload only — a plain tree edit (`{created}`/`{moved}`/`{deleted}`…) re-reads just
   status + files (five reads per keystroke-adjacent edit made the folder rename lag, 2026-09-03).
-- **Tree revision — how optimistic edits reconcile (SSOT: `DaemonService.treeRevision` + `views/files/
-  overlay.ts`).** `listFiles` answers `{revision, files}`; every tree-editing ack (`movePath`/`createFolder`/
-  `deletePath`/`removeFailedFiles`/`retryFiles`) carries the `revision` its edit landed at; `deposit`/
-  `depositPhotos` ack `{depositId}` and `runStarted`/`runFinished` carry it back (`runFinished` with the
-  post-run `revision`). The renderer discards a `listFiles` older than the one shown, and holds each
-  optimistic edit ON TOP of every read until the read at or past its ack's revision (a drop's rows: past
-  its run's `runFinished`). Replies don't arrive in execution order, so "let the next read win" put moved
-  folders back for a beat and wiped uploading rows (2026-09-03) — this is the fix.
+- **The tree is a change feed (SSOT: `Journal.filesPage` + `state/controller.ts`).** `listFiles` answers
+  one page (`FilesPage`): the controller loads the tree with no params, then `{after: cursor, head}` while
+  `more`; after that, `{after: cursor}` returns only the rows that changed plus the ids `removed`. The
+  journal stamps every row write (`rev`, by trigger), so no change is missed. The whole tree in one reply
+  stopped working at 903,751 files — a 556 MiB line, past what V8 can hold as a string, re-sent after every
+  edit (2026-09-27).
+- **Tree revision — how optimistic edits reconcile (SSOT: `DaemonService.treeRevision()` + `views/files/
+  overlay.ts`).** The revision is the journal's newest change stamp. It is on each page (the tree the app
+  holds once `more` is false), every tree-editing ack (`movePath`/`createFolder`/`deletePath`/
+  `removeFailedFiles`/`retryFiles`), and `filesChanged`/`runFinished`; `deposit`/`depositPhotos` ack
+  `{depositId}` and `runStarted`/`runFinished` carry it back. The renderer holds each optimistic edit ON TOP
+  of the tree until it has caught up to its ack's revision (a drop's rows: past its run's `runFinished`).
+  Replies don't arrive in execution order, so "let the next read win" put moved folders back for a beat and
+  wiped uploading rows (2026-09-03) — this is the fix.
 - **Events (SSOT = the `DaemonEvent(...)` call sites):** `runStarted · fileArchived · uploadProgress ·
   runProgress · runFinished · blobFailed · sourcesChanged · filesChanged · excludesChanged ·
   restoresChanged · restoreProgress · restoreCompleted · usageChanged · error`.
@@ -622,8 +628,8 @@ it talks to main over Electron IPC (`contextIsolation` + `contextBridge` → `wi
   lands per 64 MiB part). `uploadProgress` carries `{file, path, bytes, totalBytes}` — a determinate
   per-file signal for large solo-blob files, still emitted and folded into the store but no longer rendered
   (uploading rows now show a plain spinner); retained as a latent capability; `blobFailed` carries `{blob, kind, message, paths}` (newline-joined
-  relativePaths); `filesChanged` carries `{moved, to}` / `{created}` / `{deleted}` / `{retried}` / `{missingSource}` / `{interruptedUploads}` — the cue to re-read
-  `listFiles` — plus `{signedIn}` / `{signedOut}`, the cue that the tree just changed owner entirely; every
+  relativePaths); `filesChanged` carries `{moved, to}` / `{created}` / `{deleted}` / `{retried}` / `{missingSource}` / `{interruptedUploads}` — the cue to catch
+  up on `listFiles` — plus `{signedIn}` / `{signedOut}`, the cue that the tree just changed owner entirely (load it fresh); every
   one also carries `{revision}`. `runStarted` carries `{depositId}` ("" for a scan) — a deposit's banner
   shows from here; `runFinished` adds `{depositId, revision}`.
 - **Connection model:** one long-lived socket for the event tail (blocks indefinitely by design) +

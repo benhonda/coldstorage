@@ -114,9 +114,9 @@ public final class ControlServer: @unchecked Sendable {
         }
     }
 
-    /// Encode + frame a response/line and write it (a fresh encoder — JSONEncoder isn't concurrency-safe).
+    /// Encode + frame a response and write it.
     private func send(_ resp: ControlResponseLine, to conn: Conn) {
-        if let data = try? JSONEncoder().encode(resp) { conn.send(data + Data([0x0A])) }
+        if let data = try? resp.encoded() { conn.send(data + Data([0x0A])) }
     }
 
     private func broadcast(_ e: DaemonEvent) {

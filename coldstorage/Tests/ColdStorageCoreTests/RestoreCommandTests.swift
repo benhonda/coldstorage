@@ -28,8 +28,7 @@ import Crypto
                        _ params: [String: String] = [:]) async throws -> (result: Any?, error: String?) {
         let line = await daemon.respond(to: ControlRequest(id: 1, method: method, params: params))
         guard line.error == nil else { return (nil, line.error) }
-        let data = try JSONEncoder().encode(line.result)
-        return (try JSONSerialization.jsonObject(with: data), nil)
+        return (try line.wireResult(), nil)
     }
 
     private func rows(_ result: Any?) -> [[String: Any]] { result as? [[String: Any]] ?? [] }
@@ -261,27 +260,5 @@ import Crypto
         let f = Self.fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         #expect(try await reply(f.daemon, "requestRestore", ["file": "f1", "out": "/tmp/x"]).error != nil)
-    }
-}
-
-/// `listFiles` on the wire carries the file's own dates. `FileDTO` has a hand-written encoder (to emit
-/// explicit nulls), so a field added to the struct is NOT automatically a field on the wire — the two
-/// date fields were once exactly that: present in Swift, absent in the JSON the app read. This pins them.
-@Suite struct ListFilesWireTests {
-    @Test func listFilesCarriesTheFilesOwnDates() async throws {
-        let f = RestoreCommandTests.fixture()
-        defer { try? FileManager.default.removeItem(at: f.root) }
-        let s = try f.sessions.make(.user(sub: "sub-ben", identityId: "ca-central-1:ben"))
-        await f.daemon.beginSession(s)
-        try s.journal.upsert([IngestItem(id: "f1", relativePath: "a.txt", size: 1, content: .sha256("h"), isFavorite: false,
-                                        metadata: FileMetadata(modifiedAt: 1_700_000_000, createdAt: 1_600_000_000),
-                                        open: { AsyncThrowingStream { $0.finish() } })])
-        let line = await f.daemon.respond(to: ControlRequest(id: 1, method: "listFiles", params: [:]))
-        let listed = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(line.result)) as? [String: Any])
-        let rows = try #require(listed["files"] as? [[String: Any]])
-        let row = try #require(rows.first)
-        #expect(row["modifiedAt"] as? Int == 1_700_000_000)
-        #expect(row["createdAt"] as? Int == 1_600_000_000)
-        #expect(row["date"] == nil, "the legacy single date is gone from the wire")
     }
 }

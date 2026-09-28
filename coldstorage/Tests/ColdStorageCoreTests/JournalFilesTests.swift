@@ -192,16 +192,16 @@ import Foundation
     /// A mass failure is one cause across a whole drop — more rows than SQLite will bind in one `IN (…)`
     /// (32,766). The id-taking reads and the requeue must chunk, and "everything failed" must come from the
     /// journal itself rather than a client-sent list.
-    @Test func idSetsBeyondTheBindLimitAreChunked() throws {
+    @Test func idSetsBeyondTheBindLimitAreChunked() async throws {
         let j = try tempJournal()
         let n = 40_000
         try j.upsert((0..<n).map { item("f\($0)", path: "drop/\($0).bin", size: 1) })
         let ids = (0..<n).map { "f\($0)" }
         try j.markFilesFailed(ids, kind: .permanent, error: "AccessDenied")
-        #expect(try j.failedFiles().count == n)
+        #expect(try await j.failedFiles().count == n)
         #expect(try j.files(ids: ids).count == n)
         #expect(try j.requeueFailedFiles(ids: ids).count == n)
-        #expect(try j.failedFiles().isEmpty)
+        #expect(try await j.failedFiles().isEmpty)
     }
 
     /// A failed PHOTO row retries too: its `photos:<id>` source is re-resolved and the asset re-keyed onto
