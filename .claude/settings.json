@@ -14,5 +14,8 @@
   },
   "askUserQuestion": {
     "timeout": null
+  },
+  "enabledPlugins": {
+    "adpharm-extras@adpharm": true
   }
 }
